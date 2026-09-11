@@ -28,6 +28,10 @@ cargo test --all-targets
 cargo build --release
 ```
 
+## Documentation
+
+Begin with the [Sourcecraft IMAP Migrator Wiki](docs/wiki/Home.md) for illustrated, step-by-step setup and migration guidance.
+
 ## Administration
 
 - Settings live in the operating system's standard configuration directory under `forgepad/settings.conf`. You can pin Forgepad to a managed Git binary.
