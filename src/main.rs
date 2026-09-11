@@ -1,3 +1,6 @@
+#[allow(dead_code)] // The control-plane API is consumed by the next orchestration UI layer.
+mod core;
+
 use calamine::{Reader, open_workbook_auto};
 use eframe::{
     egui,

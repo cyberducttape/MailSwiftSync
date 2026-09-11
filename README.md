@@ -44,6 +44,10 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination.
 - **Redacted preview.** Passwords are hidden in the preview. Be aware that `imapsync` itself receives passwords during the active process; run it under an account with appropriate process visibility controls.
 
+### Current security boundary
+
+The current desktop runner is a prototype bridge to the local `imapsync` executable. It does not persist passwords, but imapsync receives them during its active process. The production control-plane architecture is being introduced with a no-secret SQLite project ledger; OS-keyring/OAuth credential handling and a native IMAP worker are required before treating this as an enterprise release.
+
 ## Verification
 
 ```bash
@@ -56,6 +60,8 @@ cargo build --release
 ## Documentation
 
 Begin with the [Sourcecraft IMAP Migrator Wiki](docs/wiki/Home.md) for illustrated, step-by-step setup and migration guidance.
+
+For the durable project, phase, and verification model, see the [control-plane architecture](docs/architecture.md).
 
 For batch work, see [Bulk migrations from CSV or Excel](docs/wiki/Bulk-migrations.md) and start from the included template. Never commit a populated spreadsheet containing passwords.
 
