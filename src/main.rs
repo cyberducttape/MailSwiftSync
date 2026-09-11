@@ -30,6 +30,13 @@ struct Profile {
     automap: bool,
     addheader: bool,
     justfolders: bool,
+    sync_internaldates: bool,
+    useuid: bool,
+    usecache: bool,
+    fastio1: bool,
+    fastio2: bool,
+    allowsizemismatch: bool,
+    delete2: bool,
     extra_options: String,
 }
 #[derive(Clone)]
@@ -129,6 +136,19 @@ impl Form {
         if self.profile.justfolders {
             a.push("--justfolders".into());
         }
+        for (enabled, flag) in [
+            (self.profile.sync_internaldates, "--syncinternaldates"),
+            (self.profile.useuid, "--useuid"),
+            (self.profile.usecache, "--usecache"),
+            (self.profile.fastio1, "--fastio1"),
+            (self.profile.fastio2, "--fastio2"),
+            (self.profile.allowsizemismatch, "--allowsizemismatch"),
+            (self.profile.delete2, "--delete2"),
+        ] {
+            if enabled {
+                a.push(flag.into());
+            }
+        }
         if self.dry_run {
             a.push("--dry".into());
         }
@@ -160,6 +180,7 @@ struct App {
     bulk_jobs: Vec<BulkJob>,
     bulk_open: bool,
     bulk_message: String,
+    advanced_open: bool,
 }
 impl Default for App {
     fn default() -> Self {
@@ -172,6 +193,7 @@ impl Default for App {
             bulk_jobs: Vec::new(),
             bulk_open: false,
             bulk_message: "Import a CSV, XLS, or XLSX file to build a reviewable queue.".into(),
+            advanced_open: false,
         }
     }
 }
@@ -499,6 +521,21 @@ impl App {
         });
         self.bulk_open = open;
     }
+    fn advanced_dialog(&mut self, ctx: &egui::Context) {
+        if !self.advanced_open {
+            return;
+        }
+        egui::Window::new("Advanced imapsync options").open(&mut self.advanced_open).default_width(620.0).show(ctx, |ui| {
+            ui.label(RichText::new("These controls add documented imapsync flags to the preview and active run. Keep Dry run on while testing changes.").color(MUTED));
+            ui.add_space(8.0);
+            ui.group(|ui| { ui.heading("Reliability and metadata"); ui.checkbox(&mut self.form.profile.sync_internaldates, "Sync internal dates  (--syncinternaldates)"); ui.checkbox(&mut self.form.profile.useuid, "Use message UIDs when available  (--useuid)"); ui.checkbox(&mut self.form.profile.usecache, "Use imapsync cache  (--usecache)"); ui.checkbox(&mut self.form.profile.allowsizemismatch, "Allow message-size mismatch  (--allowsizemismatch)"); });
+            ui.add_space(8.0);
+            ui.group(|ui| { ui.heading("Performance"); ui.checkbox(&mut self.form.profile.fastio1, "Fast I/O for source  (--fastio1)"); ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)"); });
+            ui.add_space(8.0);
+            ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
+            ui.add_space(8.0); ui.label("For any other documented flag, use the Extra imapsync options field in the migration plan. Each option is passed as separate whitespace-delimited arguments.");
+        });
+    }
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
@@ -526,6 +563,9 @@ impl eframe::App for App {
                     );
                     if ui.button("Batch queue").clicked() {
                         self.bulk_open = true;
+                    }
+                    if ui.button("Advanced options").clicked() {
+                        self.advanced_open = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new(&self.status).color(
@@ -555,6 +595,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { ui.heading("Migration plan"); ui.label(RichText::new("Configure two IMAP accounts, validate safely, then run a deliberate synchronization.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Profile"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Dry run — validate credentials and folder mapping without modifying destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview redacted command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run dry validation  →" } else { "Run synchronization  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. imapsync receives them only for the active process.").size(11.0).color(MUTED)); });
         self.preview(ctx);
         self.bulk_dialog(ctx);
+        self.advanced_dialog(ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }

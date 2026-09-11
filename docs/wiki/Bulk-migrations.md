@@ -2,6 +2,10 @@
 
 Sourcecraft can import a migration list from CSV, XLS, or XLSX and run each row sequentially. The queue is deliberately sequential so one migration's output stays readable and one problematic mailbox does not overload a server.
 
+![Batch migration queue interface](assets/batch-queue.png)
+
+> This is an interface illustration showing what the batch-review workflow looks like; passwords are never shown in the queue.
+
 ## Create the file
 
 Use the header row below. Column names are case-insensitive.

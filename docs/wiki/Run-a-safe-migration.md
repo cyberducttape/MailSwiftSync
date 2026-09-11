@@ -17,6 +17,8 @@ Sourcecraft exposes the most common options:
 | Add Message-ID header when needed | Adds `--addheader`; this can help imapsync identify messages that lack a usable Message-ID. |
 | Extra imapsync options | Adds advanced command-line options exactly as typed. Use only options you understand. |
 
+Click **Advanced options** for guided controls for `--syncinternaldates`, `--useuid`, `--usecache`, `--fastio1`, `--fastio2`, and `--allowsizemismatch`. The `--delete2` setting is marked destructive and should only be considered for a deliberately exact backup after a successful dry run.
+
 ## 3. Preview the command
 
 Click **Preview redacted command**. Confirm:

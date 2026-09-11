@@ -4,13 +4,38 @@
 
 Sourcecraft IMAP Sync is independently designed from scratch and does not reuse or inspect any other IMAP GUI. It configures a source and destination mailbox, produces a redacted command preview, saves non-secret profiles, runs dry validation by default, and streams `imapsync` output.
 
-## Run
+## Install
+
+### 1. Install `imapsync`
+
+Sourcecraft is a GUI for a locally installed `imapsync`; it does not download or operate a remote sync service for you.
+
+- **Ubuntu/Debian:** download the current `.deb` from the official imapsync distribution, then install it with `sudo apt install ./imapsync-*.deb`.
+- **macOS:** install imapsync using the vendor distribution or your approved package-management workflow.
+- **Windows:** install the official Windows package and enter the full path to `imapsync.exe` in Sourcecraft.
+
+Verify the installation in a terminal before configuring accounts:
+
+```bash
+imapsync --version
+```
+
+Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
+
+### 2. Build and run Sourcecraft
 
 ```bash
 cargo run --release
 ```
 
-Install `imapsync` separately and ensure it is on your PATH, or enter its absolute path in the application. Begin with **Dry run** enabled and a test destination mailbox.
+If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox.
+
+### 3. First migration
+
+1. Enter source details on the left and destination details on the right.
+2. Leave **Dry run** selected and click **Preview redacted command**.
+3. Run validation and inspect the execution journal for successful logins and folder mapping.
+4. Only then disable Dry run and launch a live migration.
 
 ## Security model
 
@@ -34,10 +59,12 @@ Begin with the [Sourcecraft IMAP Migrator Wiki](docs/wiki/Home.md) for illustrat
 
 For batch work, see [Bulk migrations from CSV or Excel](docs/wiki/Bulk-migrations.md) and start from the included template. Never commit a populated spreadsheet containing passwords.
 
-## Administration
+## Advanced options
 
-- Settings live in the operating system's standard configuration directory under `forgepad/settings.conf`. You can pin Forgepad to a managed Git binary.
-- Forgepad uses existing Git authentication (SSH agent, Git credential helpers, proxy, and certificate settings). It never stores credentials.
-- Network actions only occur when you explicitly use a Git network operation such as **Push**. Forgepad has no telemetry.
-- The optional local audit log is stored beside the settings. It records command outcomes and repository paths; commit messages are redacted.
-- Run `scripts/package.sh` on each target platform to create a host-native tarball and SHA-256 checksum. Signing and OS-native installers require your own release keys and distribution policy.
+Click **Advanced options** to add common imapsync flags with understandable descriptions: internal-date sync, UID matching, cache usage, fast I/O, and size-mismatch tolerance. The `--delete2` control is visually marked destructive because it can remove destination messages that do not exist on the source.
+
+The **Extra imapsync options** field accepts any additional documented imapsync options. Test every change using Dry run first. The command preview shows the final arguments with passwords redacted.
+
+## Packaging
+
+Run `scripts/package.sh` from the repository root to create a host-native tarball and SHA-256 checksum. Signing and platform-native installers require your own release keys and distribution policy.
