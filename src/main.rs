@@ -184,9 +184,22 @@ struct App {
     bulk_open: bool,
     bulk_message: String,
     advanced_open: bool,
+    store: core::StateStore,
+    project_id: Option<String>,
+    cockpit_open: bool,
+    preflight: Vec<(String, String, bool)>,
 }
 impl Default for App {
     fn default() -> Self {
+        let state_path = dirs_next::data_local_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("sourcecraft-imap-migrator/state.db");
+        if let Some(parent) = state_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let store = core::StateStore::open(&state_path)
+            .or_else(|_| core::StateStore::in_memory())
+            .expect("SQLite state store must be available");
         Self {
             form: Form::load(),
             output: vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
@@ -197,10 +210,111 @@ impl Default for App {
             bulk_open: false,
             bulk_message: "Import a CSV, XLS, or XLSX file to build a reviewable queue.".into(),
             advanced_open: false,
+            store,
+            project_id: None,
+            cockpit_open: false,
+            preflight: Vec::new(),
         }
     }
 }
 impl App {
+    fn assess_plan(&mut self) {
+        self.preflight = vec![
+            (
+                "Source endpoint".into(),
+                if self.form.profile.source_host.is_empty() {
+                    "Missing source server".into()
+                } else {
+                    self.form.profile.source_host.clone()
+                },
+                !self.form.profile.source_host.is_empty(),
+            ),
+            (
+                "Destination endpoint".into(),
+                if self.form.profile.destination_host.is_empty() {
+                    "Missing destination server".into()
+                } else {
+                    self.form.profile.destination_host.clone()
+                },
+                !self.form.profile.destination_host.is_empty(),
+            ),
+            (
+                "Safety mode".into(),
+                if self.form.dry_run {
+                    "Dry run enabled — destination will not be changed".into()
+                } else {
+                    "Live mode enabled — destination may be changed".into()
+                },
+                self.form.dry_run,
+            ),
+            (
+                "Destructive options".into(),
+                if self.form.profile.delete2 {
+                    "--delete2 enabled: destination-only messages may be removed".into()
+                } else {
+                    "No destination deletion option selected".into()
+                },
+                !self.form.profile.delete2,
+            ),
+            (
+                "Credential persistence".into(),
+                "Passwords are excluded from saved profiles and the SQLite ledger".into(),
+                true,
+            ),
+        ];
+    }
+    fn create_project(&mut self) {
+        self.assess_plan();
+        if self.form.profile.source_host.trim().is_empty()
+            || self.form.profile.destination_host.trim().is_empty()
+        {
+            self.status = "Enter source and destination hosts before creating a project.".into();
+            return;
+        }
+        match self.store.create_project(
+            &self.form.profile.name,
+            &self.form.profile.source_host,
+            &self.form.profile.destination_host,
+        ) {
+            Ok(project) => match self.store.add_mailbox(
+                &project.id,
+                &self.form.profile.source_user,
+                &self.form.profile.destination_user,
+            ) {
+                Ok(_) => {
+                    self.project_id = Some(project.id);
+                    self.status = "Project created; ready for preflight review".into();
+                }
+                Err(e) => self.status = format!("Could not create mailbox job: {e}"),
+            },
+            Err(e) => self.status = format!("Could not create project: {e}"),
+        }
+    }
+    fn cockpit(&mut self, ctx: &egui::Context) {
+        if !self.cockpit_open {
+            return;
+        }
+        let mut open = self.cockpit_open;
+        egui::Window::new("Migration Project Cockpit").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
+            ui.heading("Operator view"); ui.label(RichText::new("A durable migration project records phases and evidence independently of the desktop session.").color(MUTED)); ui.add_space(10.0);
+            if self.project_id.is_none() && ui.button("Create project from current migration plan").clicked() { self.create_project(); }
+            if let Some(id) = &self.project_id {
+                match self.store.project(id) {
+                    Ok(Some(project)) => {
+                        ui.group(|ui| { ui.horizontal(|ui| { ui.heading(&project.name); ui.label(RichText::new(format!("ID {}", &project.id[..8])).monospace().color(MUTED)); }); ui.label(format!("{}  →  {}", project.source_endpoint, project.destination_endpoint)); });
+                        ui.add_space(10.0); ui.label(RichText::new("MIGRATION PHASE").size(11.0).color(MUTED));
+                        ui.horizontal_wrapped(|ui| for phase in [core::Phase::Discovery, core::Phase::Preflight, core::Phase::Pilot, core::Phase::Seed, core::Phase::CatchUp, core::Phase::FinalDelta, core::Phase::Verification, core::Phase::Complete] { let active = phase == project.phase; ui.label(RichText::new(format!("{} {phase:?}", if active { "●" } else { "○" })).strong().color(if active { TEAL } else { MUTED })); });
+                        ui.add_space(10.0); if project.phase == core::Phase::Discovery && ui.button("Accept preflight review").clicked() { let _ = self.store.transition(&project.id, core::Phase::Preflight); self.status = "Phase advanced to Preflight".into(); }
+                    }
+                    Ok(None) => { self.project_id = None; }, Err(e) => self.status = format!("Could not read project: {e}"),
+                }
+            }
+            ui.add_space(12.0); ui.separator(); ui.heading("Preflight assessment"); if ui.button("Refresh assessment").clicked() { self.assess_plan(); }
+            egui::Grid::new("preflight").striped(true).show(ui, |ui| { ui.strong("Check"); ui.strong("Result"); ui.end_row(); for (name, detail, pass) in &self.preflight { ui.label(RichText::new(if *pass { "✓" } else { "!" }).color(if *pass { TEAL } else { ALERT })); ui.label(RichText::new(name).strong()); ui.label(detail); ui.end_row(); } });
+            ui.add_space(10.0); ui.label(RichText::new("Next engine milestones: server capability negotiation, folder discovery, UIDVALIDITY-aware checkpoints, and message-level verification evidence.").size(11.0).color(MUTED));
+        });
+        self.cockpit_open = open;
+    }
     fn job_from_values(
         values: &HashMap<String, String>,
         base: &Form,
@@ -570,6 +684,10 @@ impl eframe::App for App {
                     if ui.button("Advanced options").clicked() {
                         self.advanced_open = true;
                     }
+                    if ui.button("Project cockpit").clicked() {
+                        self.cockpit_open = true;
+                        self.assess_plan();
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new(&self.status).color(
                             if self.status.starts_with("Failed") {
@@ -599,6 +717,7 @@ impl eframe::App for App {
         self.preview(ctx);
         self.bulk_dialog(ctx);
         self.advanced_dialog(ctx);
+        self.cockpit(ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
