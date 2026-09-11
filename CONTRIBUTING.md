@@ -13,7 +13,7 @@ cargo build --release
 
 ## Expectations
 
-- Keep Git operations explicit and avoid background network activity.
+- Keep synchronization runs explicit and avoid background network activity.
 - Do not add secret storage, analytics, or external services without documenting the change and obtaining maintainer approval.
-- Place destructive Git actions behind a clear confirmation and describe their recovery path.
-- Add tests for parsing and command-construction logic where practical.
+- Keep dry-run mode the default and clearly identify any option that can modify a destination mailbox.
+- Add tests for profile validation and command-construction logic where practical.

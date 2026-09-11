@@ -1,5 +1,5 @@
 [package]
-name = "forgepad"
+name = "sourcecraft-imap-migrator"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,3 +7,5 @@ edition = "2024"
 eframe = "0.31"
 rfd = "0.15"
 dirs-next = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

@@ -1,768 +1,364 @@
-use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
-    process::Command,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
-
 use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
+use serde::{Deserialize, Serialize};
+use std::{
+    io::{BufRead, BufReader},
+    process::{Command, Stdio},
+    sync::mpsc::{self, Receiver},
+    thread,
+};
 
-const INK: Color32 = Color32::from_rgb(23, 30, 38);
-const PAPER: Color32 = Color32::from_rgb(246, 244, 238);
-const MOSS: Color32 = Color32::from_rgb(33, 111, 83);
-const CLAY: Color32 = Color32::from_rgb(195, 84, 54);
-const MUTED: Color32 = Color32::from_rgb(109, 117, 120);
+const NAVY: Color32 = Color32::from_rgb(17, 26, 43);
+const BLUE: Color32 = Color32::from_rgb(45, 113, 205);
+const TEAL: Color32 = Color32::from_rgb(24, 158, 166);
+const SKY: Color32 = Color32::from_rgb(235, 243, 252);
+const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
+const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 
-fn git(binary: &str, dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(binary)
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
-    }
+#[derive(Default, Serialize, Deserialize)]
+struct Profile {
+    name: String,
+    source_host: String,
+    source_user: String,
+    destination_host: String,
+    destination_user: String,
+    imapsync_path: String,
+    automap: bool,
+    addheader: bool,
+    justfolders: bool,
+    extra_options: String,
 }
-
-#[derive(Clone)]
-struct AppConfig {
-    git_binary: String,
-    auto_refresh: bool,
-    confirm_push: bool,
-    audit_enabled: bool,
+struct Form {
+    profile: Profile,
+    source_password: String,
+    destination_password: String,
+    dry_run: bool,
 }
-
-impl Default for AppConfig {
+impl Default for Form {
     fn default() -> Self {
         Self {
-            git_binary: "git".into(),
-            auto_refresh: true,
-            confirm_push: true,
-            audit_enabled: true,
+            profile: Profile {
+                name: "New migration".into(),
+                imapsync_path: "imapsync".into(),
+                automap: true,
+                ..Default::default()
+            },
+            source_password: String::new(),
+            destination_password: String::new(),
+            dry_run: true,
         }
     }
 }
-
-impl AppConfig {
-    fn path() -> PathBuf {
+impl Form {
+    fn path() -> std::path::PathBuf {
         dirs_next::config_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join("forgepad/settings.conf")
-    }
-    fn audit_path() -> PathBuf {
-        Self::path().with_file_name("audit.log")
+            .join("sourcecraft-imapsync/profile.toml")
     }
     fn load() -> Self {
-        let mut result = Self::default();
-        let Ok(text) = fs::read_to_string(Self::path()) else {
-            return result;
-        };
-        for line in text.lines() {
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            match key {
-                "git_binary" if !value.trim().is_empty() => result.git_binary = value.trim().into(),
-                "auto_refresh" => result.auto_refresh = value.trim() == "true",
-                "confirm_push" => result.confirm_push = value.trim() == "true",
-                "audit_enabled" => result.audit_enabled = value.trim() == "true",
-                _ => {}
-            }
+        let mut form = Self::default();
+        if let Ok(text) = std::fs::read_to_string(Self::path())
+            && let Ok(profile) = toml::from_str(&text)
+        {
+            form.profile = profile;
         }
-        result
+        form
     }
     fn save(&self) -> Result<(), String> {
         let path = Self::path();
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        fs::write(
+        std::fs::write(
             path,
-            format!(
-                "git_binary={}\nauto_refresh={}\nconfirm_push={}\naudit_enabled={}\n",
-                self.git_binary, self.auto_refresh, self.confirm_push, self.audit_enabled
-            ),
+            toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Change {
-    code: String,
-    path: String,
-    staged: bool,
-}
-
-#[derive(Default)]
-struct Repository {
-    root: Option<PathBuf>,
-    branch: String,
-    changes: Vec<Change>,
-    commits: Vec<String>,
-    branches: Vec<String>,
-    remote: String,
-    sync_state: String,
-}
-
-impl Repository {
-    fn load(&mut self, binary: &str, path: PathBuf) -> Result<(), String> {
-        let root = git(binary, &path, &["rev-parse", "--show-toplevel"])?;
-        self.root = Some(PathBuf::from(root));
-        self.refresh(binary)
-    }
-    fn refresh(&mut self, binary: &str) -> Result<(), String> {
-        let dir = self.root.as_ref().ok_or("Choose a repository first")?;
-        self.branch = git(binary, dir, &["branch", "--show-current"])?;
-        self.remote = git(binary, dir, &["remote", "get-url", "origin"])
-            .unwrap_or_else(|_| "No origin remote".into());
-        self.sync_state = match git(
-            binary,
-            dir,
-            &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"],
-        ) {
-            Ok(counts) => {
-                let values: Vec<_> = counts.split_whitespace().collect();
-                match values.as_slice() {
-                    [behind, ahead] => format!("{ahead} ahead · {behind} behind"),
-                    _ => "Sync status unavailable".into(),
-                }
+    fn validate(&self) -> Result<(), String> {
+        for (label, value) in [
+            ("Source IMAP host", &self.profile.source_host),
+            ("Source username", &self.profile.source_user),
+            ("Destination IMAP host", &self.profile.destination_host),
+            ("Destination username", &self.profile.destination_user),
+            ("Source password", &self.source_password),
+            ("Destination password", &self.destination_password),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("{label} is required."));
             }
-            Err(_) => "No upstream branch".into(),
-        };
-        self.branches = git(binary, dir, &["branch", "--format=%(refname:short)"])
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect();
-        self.commits = git(
-            binary,
-            dir,
-            &["log", "--pretty=format:%h  %s · %ar", "-n", "12"],
-        )
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect();
-        let status = git(binary, dir, &["status", "--porcelain"]).unwrap_or_default();
-        self.changes = changes_from_porcelain(&status);
+        }
         Ok(())
     }
-}
-
-/// Turn Git's stable porcelain status into separate index and worktree entries.
-/// A file modified both before and after staging is intentionally shown twice.
-fn changes_from_porcelain(status: &str) -> Vec<Change> {
-    let mut changes = Vec::new();
-    for line in status.lines().filter(|line| line.len() >= 4) {
-        let index = line.as_bytes()[0] as char;
-        let worktree = line.as_bytes()[1] as char;
-        let path = line[3..].to_owned();
-        if index == '?' && worktree == '?' {
-            changes.push(Change {
-                code: "??".into(),
-                path,
-                staged: false,
-            });
-            continue;
+    fn args(&self, redact: bool) -> Vec<String> {
+        let p1 = if redact {
+            "••••••••"
+        } else {
+            &self.source_password
+        };
+        let p2 = if redact {
+            "••••••••"
+        } else {
+            &self.destination_password
+        };
+        let mut a = vec![
+            "--host1".into(),
+            self.profile.source_host.clone(),
+            "--user1".into(),
+            self.profile.source_user.clone(),
+            "--password1".into(),
+            p1.into(),
+            "--host2".into(),
+            self.profile.destination_host.clone(),
+            "--user2".into(),
+            self.profile.destination_user.clone(),
+            "--password2".into(),
+            p2.into(),
+        ];
+        if self.profile.automap {
+            a.push("--automap".into());
         }
-        if index != ' ' {
-            changes.push(Change {
-                code: index.to_string(),
-                path: path.clone(),
-                staged: true,
-            });
+        if self.profile.addheader {
+            a.push("--addheader".into());
         }
-        if worktree != ' ' {
-            changes.push(Change {
-                code: worktree.to_string(),
-                path,
-                staged: false,
-            });
+        if self.profile.justfolders {
+            a.push("--justfolders".into());
         }
+        if self.dry_run {
+            a.push("--dry".into());
+        }
+        a.extend(
+            self.profile
+                .extra_options
+                .split_whitespace()
+                .map(str::to_owned),
+        );
+        a
     }
-    changes
 }
-
-enum Page {
-    Workbench,
-    Timeline,
-    Branches,
-    Settings,
+enum Event {
+    Line(String),
+    Finished(Result<(), String>),
 }
-
-enum Confirmation {
-    Discard(String),
-    UndoLastCommit,
-    Push,
+struct App {
+    form: Form,
+    output: Vec<String>,
+    receiver: Option<Receiver<Event>>,
+    status: String,
+    preview: bool,
 }
-
-struct Forgepad {
-    repo: Repository,
-    page: Page,
-    repo_input: String,
-    commit_message: String,
-    activity: Vec<String>,
-    notice: String,
-    last_refresh: Instant,
-    inspected: Option<Change>,
-    diff_text: String,
-    confirmation: Option<Confirmation>,
-    config: AppConfig,
-}
-
-impl Default for Forgepad {
+impl Default for App {
     fn default() -> Self {
-        let config = AppConfig::load();
-        let mut app = Self {
-            repo: Repository::default(),
-            page: Page::Workbench,
-            repo_input: String::new(),
-            commit_message: String::new(),
-            activity: vec!["Forgepad is ready. Select a local Git repository to begin.".into()],
-            notice: String::new(),
-            last_refresh: Instant::now(),
-            inspected: None,
-            diff_text: String::new(),
-            confirmation: None,
-            config,
-        };
-        if let Ok(dir) = std::env::current_dir() {
-            let _ = app.open(dir);
+        Self {
+            form: Form::load(),
+            output: vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
+            receiver: None,
+            status: "Idle".into(),
+            preview: false,
         }
-        app
     }
 }
-
-impl Forgepad {
-    fn open(&mut self, dir: PathBuf) -> bool {
-        match self.repo.load(&self.config.git_binary, dir.clone()) {
-            Ok(()) => {
-                self.repo_input = dir.display().to_string();
-                self.note(format!("Opened {}", self.repo.branch));
-                true
-            }
-            Err(e) => {
-                self.notice = format!("Not a Git repository: {e}");
-                false
-            }
-        }
+impl App {
+    fn running(&self) -> bool {
+        self.receiver.is_some()
     }
-    fn note(&mut self, value: String) {
-        self.activity.insert(0, value.clone());
-        self.notice = value;
-    }
-    fn run(&mut self, args: &[&str], label: &str) {
-        let Some(dir) = self.repo.root.clone() else {
-            self.notice = "Choose a repository first.".into();
-            return;
-        };
-        match git(&self.config.git_binary, &dir, args) {
-            Ok(_) => {
-                self.audit(args, "ok");
-                self.note(label.into());
-                let _ = self.repo.refresh(&self.config.git_binary);
-            }
-            Err(e) => {
-                self.audit(args, "failed");
-                self.notice = e
-            }
-        }
-    }
-    fn audit(&self, args: &[&str], outcome: &str) {
-        if !self.config.audit_enabled {
+    fn start(&mut self) {
+        if let Err(e) = self.form.validate() {
+            self.status = e;
             return;
         }
-        let path = AppConfig::audit_path();
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let command = if args.first() == Some(&"commit") {
-            "git commit -m [message redacted]".into()
+        let exe = self.form.profile.imapsync_path.clone();
+        let args = self.form.args(false);
+        let (tx, rx) = mpsc::channel();
+        self.receiver = Some(rx);
+        self.status = if self.form.dry_run {
+            "Dry run in progress".into()
         } else {
-            format!("git {}", args.join(" "))
+            "Sync in progress".into()
         };
-        let repo = self
-            .repo
-            .root
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "unknown".into());
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-            let _ = writeln!(file, "{stamp}\t{outcome}\t{repo}\t{command}");
-        }
-    }
-    fn inspect(&mut self, change: Change) {
-        let Some(dir) = self.repo.root.as_ref() else {
-            return;
-        };
-        let args = if change.staged {
-            vec!["diff", "--cached", "--", change.path.as_str()]
-        } else {
-            vec!["diff", "--", change.path.as_str()]
-        };
-        self.diff_text = git(&self.config.git_binary, dir, &args)
-            .unwrap_or_else(|e| format!("Could not show diff: {e}"));
-        if self.diff_text.is_empty() && change.code == "??" {
-            self.diff_text =
-                "This is a new, untracked file. Stage it to include it in a commit.".into();
-        } else if self.diff_text.is_empty() {
-            self.diff_text = "No textual diff is available for this file.".into();
-        }
-        self.inspected = Some(change);
-    }
-    fn confirmation_dialog(&mut self, ctx: &egui::Context) {
-        let Some(action) = self.confirmation.as_ref() else {
-            return;
-        };
-        let (title, explanation, action_label) = match action {
-            Confirmation::Discard(path) => (
-                "Discard local changes?",
-                format!("This restores {path} to its last committed version. This cannot be undone from Forgepad."),
-                "Discard changes",
-            ),
-            Confirmation::UndoLastCommit => (
-                "Undo the most recent commit?",
-                "The commit will be removed but its changes will remain staged, ready to revise and recommit.".into(),
-                "Undo commit",
-            ),
-            Confirmation::Push => (
-                "Push this branch?",
-                format!("Forgepad will push {} to its configured origin. No force options will be used.", self.repo.branch),
-                "Push branch",
-            ),
-        };
-        let mut proceed = false;
-        let mut cancel = false;
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.set_min_width(370.0);
-                ui.label(explanation);
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        cancel = true;
-                    }
-                    if ui
-                        .add(egui::Button::new(RichText::new(action_label).color(PAPER)).fill(CLAY))
-                        .clicked()
-                    {
-                        proceed = true;
-                    }
-                });
-            });
-        if cancel {
-            self.confirmation = None;
-        }
-        if proceed {
-            let action = self.confirmation.take().unwrap();
-            match action {
-                Confirmation::Discard(path) => {
-                    self.run(&["restore", "--", &path], "Local changes discarded")
-                }
-                Confirmation::UndoLastCommit => self.run(
-                    &["reset", "--soft", "HEAD~1"],
-                    "Last commit undone; changes remain staged",
-                ),
-                Confirmation::Push => {
-                    self.run(&["push", "-u", "origin", "HEAD"], "Pushed current branch")
-                }
-            }
-        }
-    }
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("FORGEPAD").strong().size(22.0).color(INK));
-            ui.label(RichText::new("a calm Git workbench").italics().color(MUTED));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("↻  Refresh").clicked()
-                    && let Err(e) = self.repo.refresh(&self.config.git_binary)
-                {
-                    self.notice = e;
-                }
-                ui.label(RichText::new(&self.notice).color(MOSS));
-            });
-        });
-        ui.add_space(8.0);
-        ui.separator();
-    }
-    fn nav(&mut self, ui: &mut egui::Ui) {
-        ui.set_min_width(178.0);
-        ui.add_space(14.0);
-        for (label, target) in [
-            ("◈  Workbench", 0),
-            ("◷  Timeline", 1),
-            ("⌘  Branches", 2),
-            ("⚙  Settings", 3),
-        ] {
-            let active = matches!(
-                (&self.page, target),
-                (Page::Workbench, 0)
-                    | (Page::Timeline, 1)
-                    | (Page::Branches, 2)
-                    | (Page::Settings, 3)
-            );
-            if ui
-                .selectable_label(active, RichText::new(label).size(15.0))
-                .clicked()
-            {
-                self.page = match target {
-                    0 => Page::Workbench,
-                    1 => Page::Timeline,
-                    2 => Page::Branches,
-                    _ => Page::Settings,
-                };
-            }
-        }
-        ui.add_space(20.0);
-        ui.separator();
-        ui.add_space(10.0);
-        ui.label(RichText::new("REPOSITORY").size(10.0).color(MUTED));
-        ui.label(
-            RichText::new(if self.repo.branch.is_empty() {
-                "No repository"
+        self.output = vec![format!(
+            "Starting {}…",
+            if self.form.dry_run {
+                "safe dry run"
             } else {
-                &self.repo.branch
-            })
-            .strong()
-            .color(MOSS),
-        );
-        if let Some(root) = &self.repo.root {
-            ui.label(
-                RichText::new(root.file_name().unwrap_or_default().to_string_lossy()).color(MUTED),
-            );
-        }
-        if self.repo.root.is_some() {
-            ui.add_space(6.0);
-            ui.label(RichText::new(&self.repo.sync_state).size(11.0).color(MUTED));
-        }
-    }
-    fn repo_picker(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Local folder");
-            ui.text_edit_singleline(&mut self.repo_input);
-            if ui.button("Browse…").clicked()
-                && let Some(path) = rfd::FileDialog::new().pick_folder()
+                "synchronization"
+            }
+        )];
+        thread::spawn(move || {
+            let mut child = match Command::new(&exe)
+                .args(&args)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
             {
-                self.open(path);
-            }
-            if ui.button("Open").clicked() {
-                self.open(PathBuf::from(&self.repo_input));
-            }
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Event::Finished(Err(format!("Could not start {exe}: {e}"))));
+                    return;
+                }
+            };
+            let out = child.stdout.take().expect("piped");
+            let err = child.stderr.take().expect("piped");
+            let a = tx.clone();
+            let t1 = thread::spawn(move || {
+                for l in BufReader::new(out).lines().map_while(Result::ok) {
+                    let _ = a.send(Event::Line(l));
+                }
+            });
+            let b = tx.clone();
+            let t2 = thread::spawn(move || {
+                for l in BufReader::new(err).lines().map_while(Result::ok) {
+                    let _ = b.send(Event::Line(format!("[stderr] {l}")));
+                }
+            });
+            let result = child.wait().map_err(|e| e.to_string()).and_then(|s| {
+                if s.success() {
+                    Ok(())
+                } else {
+                    Err(format!("imapsync exited with {s}"))
+                }
+            });
+            let _ = t1.join();
+            let _ = t2.join();
+            let _ = tx.send(Event::Finished(result));
         });
-        ui.add_space(12.0);
     }
-    fn workbench(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Workbench");
-        ui.label(
-            RichText::new("Shape your next commit with deliberate, small steps.").color(MUTED),
-        );
-        ui.add_space(14.0);
-        self.repo_picker(ui);
-        if self.repo.root.is_none() {
+    fn poll(&mut self) {
+        let mut done = None;
+        if let Some(rx) = &self.receiver {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    Event::Line(s) => self.output.push(s),
+                    Event::Finished(r) => done = Some(r),
+                }
+            }
+        }
+        if let Some(r) = done {
+            self.status = match r {
+                Ok(()) => "Completed successfully".into(),
+                Err(e) => format!("Failed: {e}"),
+            };
+            self.receiver = None;
+        }
+    }
+    fn account(
+        ui: &mut egui::Ui,
+        title: &str,
+        host: &mut String,
+        user: &mut String,
+        password: &mut String,
+        color: Color32,
+    ) {
+        ui.group(|ui| {
+            ui.heading(RichText::new(title).color(color));
+            ui.label(RichText::new("IMAP connection").size(11.0).color(MUTED));
+            ui.horizontal(|ui| {
+                ui.label("Server");
+                ui.text_edit_singleline(host);
+            });
+            ui.horizontal(|ui| {
+                ui.label("User");
+                ui.text_edit_singleline(user);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Password");
+                ui.add(egui::TextEdit::singleline(password).password(true));
+            });
+        });
+    }
+    fn preview(&mut self, ctx: &egui::Context) {
+        if !self.preview {
             return;
         }
-        ui.columns(2, |columns| {
-            columns[0].group(|ui| {
-                ui.heading("Changes");
+        egui::Window::new("Command preview")
+            .open(&mut self.preview)
+            .default_width(670.0)
+            .show(ctx, |ui| {
                 ui.label(
-                    RichText::new(format!("{} files in motion", self.repo.changes.len()))
-                        .color(MUTED),
-                );
-                ui.add_space(8.0);
-                if self.repo.changes.is_empty() {
-                    ui.label("Your working tree is clean.");
-                }
-                for change in self.repo.changes.clone() {
-                    ui.horizontal(|ui| {
-                        let col = if change.staged { MOSS } else { CLAY };
-                        ui.label(RichText::new(&change.code).monospace().color(col));
-                        ui.label(&change.path);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Diff").clicked() {
-                                self.inspect(change.clone());
-                            }
-                            let label = if change.staged { "Unstage" } else { "Stage" };
-                            if ui.small_button(label).clicked() {
-                                let path = change.path.as_str();
-                                if change.staged {
-                                    self.run(&["restore", "--staged", "--", path], "File unstaged");
-                                } else {
-                                    self.run(&["add", "--", path], "File staged");
-                                }
-                            }
-                        });
-                    });
-                    if !change.staged && change.code != "??" {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .small_button(RichText::new("Discard").color(CLAY))
-                                .clicked()
-                            {
-                                self.confirmation =
-                                    Some(Confirmation::Discard(change.path.clone()));
-                            }
-                        });
-                    }
-                }
-            });
-            columns[1].group(|ui| {
-                ui.heading("Commit note");
-                ui.label(RichText::new("Only staged files will be included.").color(MUTED));
-                ui.add_space(8.0);
-                ui.add_sized(
-                    [ui.available_width(), 86.0],
-                    egui::TextEdit::multiline(&mut self.commit_message)
-                        .hint_text("Describe the intent of this change…"),
-                );
-                ui.add_space(6.0);
-                let ready = !self.commit_message.trim().is_empty()
-                    && self.repo.changes.iter().any(|c| c.staged);
-                if ui
-                    .add_enabled(
-                        ready,
-                        egui::Button::new(RichText::new("Record commit  →").color(PAPER)),
+                    RichText::new(
+                        "Passwords are redacted. They are never written to the saved profile.",
                     )
-                    .clicked()
-                {
-                    let msg = self.commit_message.trim().to_string();
-                    self.run(&["commit", "-m", &msg], "Commit recorded");
-                    self.commit_message.clear();
-                }
-                ui.add_space(14.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.label(RichText::new("REMOTE").size(10.0).color(MUTED));
-                ui.label(RichText::new(&self.repo.remote).monospace().size(11.0));
-                ui.label(RichText::new(&self.repo.sync_state).color(MUTED));
-                if ui.button("Push current branch").clicked() {
-                    if self.config.confirm_push {
-                        self.confirmation = Some(Confirmation::Push);
-                    } else {
-                        self.run(&["push", "-u", "origin", "HEAD"], "Pushed current branch");
-                    }
-                }
-            });
-        });
-        if let Some(change) = self.inspected.clone() {
-            ui.add_space(14.0);
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Inspector");
-                    ui.label(RichText::new(&change.path).monospace().color(MUTED));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Close").clicked() {
-                            self.inspected = None;
-                        }
-                    });
-                });
-                ui.label(
-                    RichText::new(if change.staged {
-                        "Staged diff"
-                    } else {
-                        "Working-tree diff"
-                    })
-                    .size(11.0)
-                    .color(MOSS),
+                    .color(MUTED),
                 );
-                egui::ScrollArea::vertical()
-                    .max_height(190.0)
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new(&self.diff_text).monospace().size(12.0))
-                                .wrap(),
+                let mut cmd = format!(
+                    "{} {}",
+                    self.form.profile.imapsync_path,
+                    self.form.args(true).join(" ")
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut cmd)
+                        .code_editor()
+                        .desired_rows(10)
+                        .interactive(false),
+                );
+            });
+    }
+}
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.poll();
+        let mut v = egui::Visuals::light();
+        v.panel_fill = SKY;
+        v.window_fill = Color32::WHITE;
+        v.widgets.active.bg_fill = BLUE;
+        v.widgets.hovered.bg_fill = Color32::from_rgb(215, 230, 248);
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(205, 219, 235));
+        ctx.set_visuals(v);
+        egui::TopBottomPanel::top("header")
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::WHITE)
+                    .inner_margin(egui::Margin::symmetric(24, 15)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("SOURCECRAFT").strong().size(23.0).color(NAVY));
+                    ui.label(
+                        RichText::new("IMAP migration console")
+                            .italics()
+                            .color(MUTED),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(&self.status).color(
+                            if self.status.starts_with("Failed") {
+                                ALERT
+                            } else {
+                                BLUE
+                            },
+                        ));
+                        ui.separator();
+                        ui.label(
+                            RichText::new(if self.form.dry_run {
+                                "SAFE MODE"
+                            } else {
+                                "LIVE MODE"
+                            })
+                            .strong()
+                            .color(if self.form.dry_run {
+                                TEAL
+                            } else {
+                                ALERT
+                            }),
                         );
                     });
+                });
             });
-        }
-    }
-    fn timeline(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Timeline");
-        ui.label(RichText::new("Recent work on this repository.").color(MUTED));
-        ui.add_space(16.0);
-        for (i, commit) in self.repo.commits.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(if i == 0 { "●" } else { "│" })
-                        .color(MOSS)
-                        .size(18.0),
-                );
-                ui.label(RichText::new(commit).monospace().size(14.0));
-            });
-        }
-        if self.repo.commits.is_empty() {
-            ui.label("No commits found.");
-        } else {
-            ui.add_space(16.0);
-            if ui
-                .button(RichText::new("Undo most recent commit…").color(CLAY))
-                .clicked()
-            {
-                self.confirmation = Some(Confirmation::UndoLastCommit);
-            }
-        }
-    }
-    fn branches(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Branches");
-        ui.label(
-            RichText::new("Move between lines of work without leaving your desk.").color(MUTED),
-        );
-        ui.add_space(16.0);
-        for branch in self.repo.branches.clone() {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("⌘").color(MOSS));
-                ui.label(RichText::new(&branch).strong());
-                if branch == self.repo.branch {
-                    ui.label(RichText::new("CURRENT").size(10.0).color(MOSS));
-                } else if ui.button("Switch").clicked() {
-                    self.run(&["switch", &branch], "Switched branch");
-                }
-            });
-        }
-        ui.add_space(18.0);
-        ui.separator();
-        ui.add_space(8.0);
-        ui.label(RichText::new("RECENT ACTIVITY").size(10.0).color(MUTED));
-        for item in self.activity.iter().take(5) {
-            ui.label(RichText::new(item).color(MUTED));
-        }
-    }
-    fn settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Settings");
-        ui.label(RichText::new("Local controls for predictable, private Git work.").color(MUTED));
-        ui.add_space(16.0);
-        ui.group(|ui| {
-            ui.heading("Git execution");
-            ui.label(RichText::new("Use an absolute path to pin a managed Git installation, or use ‘git’ to follow PATH.").color(MUTED));
-            ui.horizontal(|ui| { ui.label("Git executable"); ui.text_edit_singleline(&mut self.config.git_binary); });
-        });
-        ui.add_space(10.0);
-        ui.group(|ui| {
-            ui.heading("Network and safety");
-            ui.checkbox(&mut self.config.auto_refresh, "Refresh local repository state every 30 seconds");
-            ui.checkbox(&mut self.config.confirm_push, "Confirm before every push");
-            ui.label(RichText::new("Forgepad has no telemetry and only contacts remotes when you initiate a Git network operation.").size(12.0).color(MUTED));
-        });
-        ui.add_space(10.0);
-        ui.group(|ui| {
-            ui.heading("Audit trail");
-            ui.checkbox(
-                &mut self.config.audit_enabled,
-                "Record Git operations locally",
-            );
-            ui.label(
-                RichText::new(format!(
-                    "Log: {}\nCommit messages are redacted; credentials are never stored.",
-                    AppConfig::audit_path().display()
-                ))
-                .size(12.0)
-                .color(MUTED),
-            );
-        });
-        ui.add_space(14.0);
-        if ui.button("Save settings").clicked() {
-            match self.config.save() {
-                Ok(()) => {
-                    self.note("Settings saved".into());
-                    let _ = self.repo.refresh(&self.config.git_binary);
-                }
-                Err(e) => self.notice = format!("Could not save settings: {e}"),
-            }
-        }
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { ui.heading("Migration plan"); ui.label(RichText::new("Configure two IMAP accounts, validate safely, then run a deliberate synchronization.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Profile"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Dry run — validate credentials and folder mapping without modifying destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview redacted command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run dry validation  →" } else { "Run synchronization  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. imapsync receives them only for the active process.").size(11.0).color(MUTED)); });
+        self.preview(ctx);
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
-
-impl eframe::App for Forgepad {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        if self.config.auto_refresh && self.last_refresh.elapsed().as_secs() > 30 {
-            let _ = self.repo.refresh(&self.config.git_binary);
-            self.last_refresh = Instant::now();
-        }
-        let mut visuals = egui::Visuals::light();
-        visuals.panel_fill = PAPER;
-        visuals.window_fill = PAPER;
-        visuals.widgets.active.bg_fill = MOSS;
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(226, 234, 226);
-        visuals.widgets.noninteractive.bg_stroke =
-            Stroke::new(1.0, Color32::from_rgb(211, 207, 196));
-        ctx.set_visuals(visuals);
-        egui::TopBottomPanel::top("top")
-            .frame(
-                egui::Frame::new()
-                    .fill(PAPER)
-                    .inner_margin(egui::Margin::symmetric(22, 14)),
-            )
-            .show(ctx, |ui| self.top_bar(ui));
-        egui::SidePanel::left("nav")
-            .frame(egui::Frame::new().fill(Color32::from_rgb(233, 231, 222)))
-            .show(ctx, |ui| self.nav(ui));
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(PAPER)
-                    .inner_margin(egui::Margin::same(26)),
-            )
-            .show(ctx, |ui| match self.page {
-                Page::Workbench => self.workbench(ui),
-                Page::Timeline => self.timeline(ui),
-                Page::Branches => self.branches(ui),
-                Page::Settings => self.settings(ui),
-            });
-        self.confirmation_dialog(ctx);
-    }
-}
-
 fn main() -> eframe::Result<()> {
     eframe::run_native(
-        "Forgepad",
+        "Sourcecraft IMAP Sync",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1000.0, 680.0])
-                .with_min_inner_size([760.0, 520.0]),
+                .with_inner_size([1040.0, 760.0])
+                .with_min_inner_size([800.0, 620.0]),
             ..Default::default()
         },
-        Box::new(|_| Ok(Box::<Forgepad>::default())),
+        Box::new(|_| Ok(Box::<App>::default())),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn porcelain_preserves_both_index_and_worktree_changes() {
-        assert_eq!(
-            changes_from_porcelain("MM src/main.rs\n?? notes.txt\n"),
-            vec![
-                Change {
-                    code: "M".into(),
-                    path: "src/main.rs".into(),
-                    staged: true
-                },
-                Change {
-                    code: "M".into(),
-                    path: "src/main.rs".into(),
-                    staged: false
-                },
-                Change {
-                    code: "??".into(),
-                    path: "notes.txt".into(),
-                    staged: false
-                },
-            ]
-        );
-    }
 }

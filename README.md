@@ -1,10 +1,8 @@
-# Forgepad
+# Sourcecraft IMAP Sync
 
-> A focused, local-first Git workbench for deliberate source control.
+> A local-first Rust desktop console for safe, deliberate `imapsync` migrations.
 
-Forgepad is an independently designed Rust desktop application for working with local Git repositories. It provides working-tree status, separate index/worktree views, file diffs, staging, commits, branch switching, history, pushing, and guarded recovery actions.
-
-Forgepad asks for confirmation before discarding a tracked file's working-tree changes or undoing the latest commit. Undoing a commit uses `git reset --soft HEAD~1`, so the commit's contents remain staged.
+Sourcecraft IMAP Sync is independently designed from scratch and does not reuse or inspect any other IMAP GUI. It configures a source and destination mailbox, produces a redacted command preview, saves non-secret profiles, runs dry validation by default, and streams `imapsync` output.
 
 ## Run
 
@@ -12,14 +10,14 @@ Forgepad asks for confirmation before discarding a tracked file's working-tree c
 cargo run --release
 ```
 
-Select a local Git repository using **Browse** or paste its path. Forgepad invokes the installed `git` executable, so Git must be available on your PATH.
+Install `imapsync` separately and ensure it is on your PATH, or enter its absolute path in the application. Begin with **Dry run** enabled and a test destination mailbox.
 
-## Product principles
+## Security model
 
-- **Local first.** Forgepad works against repositories on disk and uses the installed Git client.
-- **Explicit networking.** It does not fetch, pull, or push in the background.
-- **No credential store.** Authentication remains with SSH, Git credential helpers, and the operating system.
-- **Guarded destructive actions.** Discarding files, undoing commits, and pushing are confirmation-gated by default.
+- **Local first.** The app does not send mail data itself; it invokes your local `imapsync` executable only when you start a run.
+- **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
+- **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination.
+- **Redacted preview.** Passwords are hidden in the preview. Be aware that `imapsync` itself receives passwords during the active process; run it under an account with appropriate process visibility controls.
 
 ## Verification
 
