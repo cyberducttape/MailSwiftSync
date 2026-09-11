@@ -6,14 +6,18 @@ use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
-use native_tls::TlsConnector;
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
     process::{Command, Stdio},
-    sync::mpsc::{self, Receiver},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver},
+    },
     thread,
     time::Duration,
 };
@@ -243,11 +247,16 @@ fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String
     .map_err(|e| format!("{host}: {e}"))?;
     tcp.set_read_timeout(Some(Duration::from_secs(8)))
         .map_err(|e| e.to_string())?;
-    let connector = TlsConnector::new().map_err(|e| e.to_string())?;
     let server_name = host.split(':').next().unwrap_or(host);
-    let mut stream = connector
-        .connect(server_name, tcp)
-        .map_err(|e| format!("{host}: TLS verification failed: {e}"))?;
+    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let name = ServerName::try_from(server_name.to_owned())
+        .map_err(|e| format!("{host}: invalid TLS server name: {e}"))?;
+    let connection = ClientConnection::new(Arc::new(config), name)
+        .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
+    let mut stream = StreamOwned::new(connection, tcp);
     stream
         .write_all(b"a001 CAPABILITY\r\n")
         .map_err(|e| e.to_string())?;
