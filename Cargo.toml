@@ -1,0 +1,9 @@
+[package]
+name = "forgepad"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.31"
+rfd = "0.15"
+dirs-next = "2"

@@ -1,6 +1,8 @@
 # Forgepad
 
-An independently designed desktop Git workbench written in Rust. It provides a focused view of working-tree changes, staging, inspecting file diffs, committing, branch switching, history, pushing, and safe local recovery actions.
+> A focused, local-first Git workbench for deliberate source control.
+
+Forgepad is an independently designed Rust desktop application for working with local Git repositories. It provides working-tree status, separate index/worktree views, file diffs, staging, commits, branch switching, history, pushing, and guarded recovery actions.
 
 Forgepad asks for confirmation before discarding a tracked file's working-tree changes or undoing the latest commit. Undoing a commit uses `git reset --soft HEAD~1`, so the commit's contents remain staged.
 
@@ -11,6 +13,22 @@ cargo run --release
 ```
 
 Select a local Git repository using **Browse** or paste its path. Forgepad invokes the installed `git` executable, so Git must be available on your PATH.
+
+## Product principles
+
+- **Local first.** Forgepad works against repositories on disk and uses the installed Git client.
+- **Explicit networking.** It does not fetch, pull, or push in the background.
+- **No credential store.** Authentication remains with SSH, Git credential helpers, and the operating system.
+- **Guarded destructive actions.** Discarding files, undoing commits, and pushing are confirmation-gated by default.
+
+## Verification
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets
+cargo build --release
+```
 
 ## Administration
 
