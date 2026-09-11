@@ -6,13 +6,16 @@ use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
+use native_tls::TlsConnector;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpStream,
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread,
+    time::Duration,
 };
 
 const NAVY: Color32 = Color32::from_rgb(17, 26, 43);
@@ -188,6 +191,10 @@ struct App {
     project_id: Option<String>,
     cockpit_open: bool,
     preflight: Vec<(String, String, bool)>,
+    capability_receiver:
+        Option<Receiver<Result<(core::ServerCapabilities, core::ServerCapabilities), String>>>,
+    source_capabilities: Option<core::ServerCapabilities>,
+    destination_capabilities: Option<core::ServerCapabilities>,
 }
 impl Default for App {
     fn default() -> Self {
@@ -214,10 +221,74 @@ impl Default for App {
             project_id: None,
             cockpit_open: false,
             preflight: Vec::new(),
+            capability_receiver: None,
+            source_capabilities: None,
+            destination_capabilities: None,
         }
     }
 }
+
+fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String> {
+    let address = if host.contains(':') {
+        host.to_owned()
+    } else {
+        format!("{host}:993")
+    };
+    let tcp = TcpStream::connect_timeout(
+        &address
+            .parse()
+            .map_err(|_| format!("Invalid IMAP host: {host}"))?,
+        Duration::from_secs(8),
+    )
+    .map_err(|e| format!("{host}: {e}"))?;
+    tcp.set_read_timeout(Some(Duration::from_secs(8)))
+        .map_err(|e| e.to_string())?;
+    let connector = TlsConnector::new().map_err(|e| e.to_string())?;
+    let server_name = host.split(':').next().unwrap_or(host);
+    let mut stream = connector
+        .connect(server_name, tcp)
+        .map_err(|e| format!("{host}: TLS verification failed: {e}"))?;
+    stream
+        .write_all(b"a001 CAPABILITY\r\n")
+        .map_err(|e| e.to_string())?;
+    let mut response = String::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        if response.contains("a001 OK") || response.len() > 65_536 {
+            break;
+        }
+    }
+    let caps = core::ServerCapabilities::parse(&response);
+    if caps.values.is_empty() {
+        return Err(format!(
+            "{host}: server did not return a CAPABILITY response"
+        ));
+    }
+    Ok(caps)
+}
+
 impl App {
+    fn start_capability_probe(&mut self) {
+        let source = self.form.profile.source_host.trim().to_owned();
+        let destination = self.form.profile.destination_host.trim().to_owned();
+        if source.is_empty() || destination.is_empty() {
+            self.status = "Enter both IMAP hosts before capability discovery.".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.capability_receiver = Some(rx);
+        self.status = "Discovering TLS capabilities…".into();
+        thread::spawn(move || {
+            let result = probe_tls_capabilities(&source)
+                .and_then(|left| probe_tls_capabilities(&destination).map(|right| (left, right)));
+            let _ = tx.send(result);
+        });
+    }
     fn assess_plan(&mut self) {
         self.preflight = vec![
             (
@@ -262,6 +333,20 @@ impl App {
                 true,
             ),
         ];
+        if let Some(caps) = &self.source_capabilities {
+            self.preflight.push((
+                "Source capabilities".into(),
+                caps.strategy().join(" · "),
+                true,
+            ));
+        }
+        if let Some(caps) = &self.destination_capabilities {
+            self.preflight.push((
+                "Destination capabilities".into(),
+                caps.strategy().join(" · "),
+                true,
+            ));
+        }
     }
     fn create_project(&mut self) {
         self.assess_plan();
@@ -297,6 +382,7 @@ impl App {
         let mut open = self.cockpit_open;
         egui::Window::new("Migration Project Cockpit").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
             ui.heading("Operator view"); ui.label(RichText::new("A durable migration project records phases and evidence independently of the desktop session.").color(MUTED)); ui.add_space(10.0);
+            if ui.add_enabled(self.capability_receiver.is_none(), egui::Button::new("Discover server capabilities over verified TLS")).clicked() { self.start_capability_probe(); }
             if self.project_id.is_none() && ui.button("Create project from current migration plan").clicked() { self.create_project(); }
             if let Some(id) = &self.project_id {
                 match self.store.project(id) {
@@ -541,6 +627,20 @@ impl App {
         });
     }
     fn poll(&mut self) {
+        if let Some(receiver) = &self.capability_receiver
+            && let Ok(result) = receiver.try_recv()
+        {
+            match result {
+                Ok((source, destination)) => {
+                    self.source_capabilities = Some(source);
+                    self.destination_capabilities = Some(destination);
+                    self.status = "Capability discovery complete".into();
+                    self.assess_plan();
+                }
+                Err(error) => self.status = format!("Preflight discovery failed: {error}"),
+            }
+            self.capability_receiver = None;
+        }
         let mut done = None;
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {

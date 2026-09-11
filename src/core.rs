@@ -5,7 +5,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -83,6 +83,54 @@ impl MailboxEvidence {
         } else {
             0
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerCapabilities {
+    pub values: BTreeSet<String>,
+}
+
+impl ServerCapabilities {
+    pub fn parse(response: &str) -> Self {
+        let mut values = BTreeSet::new();
+        for line in response
+            .lines()
+            .filter(|line| line.to_ascii_uppercase().contains("CAPABILITY"))
+        {
+            let mut after_marker = false;
+            for token in line.split_whitespace() {
+                if after_marker {
+                    values.insert(
+                        token
+                            .trim_matches(|c: char| c == '\r' || c == '\n')
+                            .to_ascii_uppercase(),
+                    );
+                }
+                if token.eq_ignore_ascii_case("CAPABILITY") {
+                    after_marker = true;
+                }
+            }
+        }
+        Self { values }
+    }
+    pub fn supports(&self, capability: &str) -> bool {
+        self.values.contains(&capability.to_ascii_uppercase())
+    }
+    pub fn strategy(&self) -> Vec<&'static str> {
+        let mut plan = vec!["UID-based initial scan"];
+        if self.supports("QRESYNC") {
+            plan.push("QRESYNC delta synchronization");
+        } else if self.supports("CONDSTORE") {
+            plan.push("CONDSTORE flag-change tracking");
+        }
+        if self.supports("SPECIAL-USE") {
+            plan.push("SPECIAL-USE folder mapping");
+        }
+        if self.supports("UIDPLUS") {
+            plan.push("UIDPLUS destination acknowledgement");
+        }
+        plan
     }
 }
 
@@ -172,6 +220,14 @@ impl StateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capability_parser_selects_modern_strategy() {
+        let caps = ServerCapabilities::parse(
+            "* CAPABILITY IMAP4rev1 UIDPLUS CONDSTORE QRESYNC SPECIAL-USE\r\na1 OK",
+        );
+        assert!(caps.supports("qresync"));
+        assert!(caps.strategy().contains(&"QRESYNC delta synchronization"));
+    }
     #[test]
     fn evidence_is_durable_and_explainable() {
         let db = StateStore::in_memory().unwrap();

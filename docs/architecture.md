@@ -19,6 +19,8 @@ Preflight Scheduler Verify
 
 The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, and verification evidence. It intentionally never persists passwords or mailbox content.
 
+The Project Cockpit also performs unauthenticated IMAPS capability discovery over certificate-verified TLS. It asks each endpoint for `CAPABILITY` and translates supported extensions into an explicit strategy, such as QRESYNC delta synchronization, CONDSTORE flag tracking, SPECIAL-USE folder mapping, or UIDPLUS acknowledgement. A failed certificate check blocks discovery rather than being silently ignored.
+
 ## Migration phases
 
 `Discovery → Preflight → Pilot → Seed → Catch-up → Final delta → Verification → Complete`

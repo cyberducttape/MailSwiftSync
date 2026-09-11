@@ -37,6 +37,8 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 3. Run validation and inspect the execution journal for successful logins and folder mapping.
 4. Only then disable Dry run and launch a live migration.
 
+Use **Project cockpit → Discover server capabilities over verified TLS** before a pilot to see whether each endpoint advertises modern IMAP extensions such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE. This probe does not authenticate and does not send account passwords.
+
 ## Security model
 
 - **Local first.** The app does not send mail data itself; it invokes your local `imapsync` executable only when you start a run.
