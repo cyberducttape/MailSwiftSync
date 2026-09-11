@@ -1,0 +1,2 @@
+name,source_host,source_user,source_password,destination_host,destination_user,destination_password,extra_options
+Example migration,imap.source.example,source@example.com,REPLACE_ME,imap.destination.example,destination@example.com,REPLACE_ME,--automap

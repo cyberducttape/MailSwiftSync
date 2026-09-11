@@ -19,5 +19,6 @@ Sourcecraft is a local desktop front end for the `imapsync` command. It helps yo
 
 - [Install and first launch](Install-and-first-launch.md)
 - [Run a safe migration](Run-a-safe-migration.md)
+- [Bulk migrations from CSV or Excel](Bulk-migrations.md)
 - [Profiles, passwords, and security](Security-and-profiles.md)
 - [Troubleshooting](Troubleshooting.md)

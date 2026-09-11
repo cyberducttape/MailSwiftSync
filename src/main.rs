@@ -1,9 +1,11 @@
+use calamine::{Reader, open_workbook_auto};
 use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver},
@@ -17,7 +19,7 @@ const SKY: Color32 = Color32::from_rgb(235, 243, 252);
 const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Profile {
     name: String,
     source_host: String,
@@ -30,6 +32,7 @@ struct Profile {
     justfolders: bool,
     extra_options: String,
 }
+#[derive(Clone)]
 struct Form {
     profile: Profile,
     source_password: String,
@@ -142,12 +145,21 @@ enum Event {
     Line(String),
     Finished(Result<(), String>),
 }
+#[derive(Clone)]
+struct BulkJob {
+    label: String,
+    form: Form,
+    state: String,
+}
 struct App {
     form: Form,
     output: Vec<String>,
     receiver: Option<Receiver<Event>>,
     status: String,
     preview: bool,
+    bulk_jobs: Vec<BulkJob>,
+    bulk_open: bool,
+    bulk_message: String,
 }
 impl Default for App {
     fn default() -> Self {
@@ -157,10 +169,174 @@ impl Default for App {
             receiver: None,
             status: "Idle".into(),
             preview: false,
+            bulk_jobs: Vec::new(),
+            bulk_open: false,
+            bulk_message: "Import a CSV, XLS, or XLSX file to build a reviewable queue.".into(),
         }
     }
 }
 impl App {
+    fn job_from_values(
+        values: &HashMap<String, String>,
+        base: &Form,
+        row: usize,
+    ) -> Result<BulkJob, String> {
+        let get = |key: &str| {
+            values
+                .get(key)
+                .map(String::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_owned()
+        };
+        let mut form = base.clone();
+        form.profile.source_host = get("source_host");
+        form.profile.source_user = get("source_user");
+        form.source_password = get("source_password");
+        form.profile.destination_host = get("destination_host");
+        form.profile.destination_user = get("destination_user");
+        form.destination_password = get("destination_password");
+        if let Some(value) = values.get("extra_options") {
+            form.profile.extra_options = value.clone();
+        }
+        form.validate().map_err(|e| format!("Row {row}: {e}"))?;
+        let label = values
+            .get("name")
+            .filter(|v| !v.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| {
+                format!(
+                    "Row {row}: {} → {}",
+                    form.profile.source_user, form.profile.destination_user
+                )
+            });
+        Ok(BulkJob {
+            label,
+            form,
+            state: "Ready".into(),
+        })
+    }
+    fn import_bulk(&mut self, path: &std::path::Path) {
+        let ext = path
+            .extension()
+            .and_then(|x| x.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let result = if ext == "csv" {
+            Self::read_csv(path, &self.form)
+        } else if ext == "xls" || ext == "xlsx" {
+            Self::read_sheet(path, &self.form)
+        } else {
+            Err("Choose a .csv, .xls, or .xlsx file.".into())
+        };
+        match result {
+            Ok(jobs) => {
+                self.bulk_message = format!(
+                    "Imported {} ready jobs. Review the queue before running.",
+                    jobs.len()
+                );
+                self.bulk_jobs = jobs;
+            }
+            Err(e) => self.bulk_message = e,
+        }
+    }
+    fn read_csv(path: &std::path::Path, base: &Form) -> Result<Vec<BulkJob>, String> {
+        let mut reader = csv::Reader::from_path(path).map_err(|e| e.to_string())?;
+        let headers = reader
+            .headers()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        let mut jobs = Vec::new();
+        for (index, record) in reader.records().enumerate() {
+            let record = record.map_err(|e| e.to_string())?;
+            let values = headers
+                .iter()
+                .zip(record.iter())
+                .map(|(h, v)| (h.clone(), v.to_owned()))
+                .collect();
+            jobs.push(Self::job_from_values(&values, base, index + 2)?);
+        }
+        if jobs.is_empty() {
+            return Err("The file has no migration rows.".into());
+        }
+        Ok(jobs)
+    }
+    fn read_sheet(path: &std::path::Path, base: &Form) -> Result<Vec<BulkJob>, String> {
+        let mut book = open_workbook_auto(path).map_err(|e| e.to_string())?;
+        let range = book
+            .worksheet_range_at(0)
+            .ok_or("The workbook has no worksheets.")?
+            .map_err(|e| e.to_string())?;
+        let mut rows = range.rows();
+        let headers = rows
+            .next()
+            .ok_or("The worksheet is empty.")?
+            .iter()
+            .map(|x| x.to_string().trim().to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        let mut jobs = Vec::new();
+        for (index, row) in rows.enumerate() {
+            if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
+                continue;
+            }
+            let values = headers
+                .iter()
+                .zip(row.iter())
+                .map(|(h, v)| (h.clone(), v.to_string()))
+                .collect();
+            jobs.push(Self::job_from_values(&values, base, index + 2)?);
+        }
+        if jobs.is_empty() {
+            return Err("The worksheet has no migration rows.".into());
+        }
+        Ok(jobs)
+    }
+    fn start_bulk(&mut self) {
+        if self.bulk_jobs.is_empty() {
+            self.bulk_message = "Import a file before starting the queue.".into();
+            return;
+        }
+        let jobs = self.bulk_jobs.clone();
+        for job in &mut self.bulk_jobs {
+            job.state = "Queued".into();
+        }
+        let (tx, rx) = mpsc::channel();
+        self.receiver = Some(rx);
+        self.status = format!("Batch validation: {} jobs", jobs.len());
+        self.output.clear();
+        thread::spawn(move || {
+            for (index, job) in jobs.into_iter().enumerate() {
+                let _ = tx.send(Event::Line(format!(
+                    "══ Job {}: {} ══",
+                    index + 1,
+                    job.label
+                )));
+                let exe = job.form.profile.imapsync_path.clone();
+                let output = Command::new(&exe).args(job.form.args(false)).output();
+                match output {
+                    Ok(result) => {
+                        for line in String::from_utf8_lossy(&result.stdout).lines() {
+                            let _ = tx.send(Event::Line(format!("[{}] {line}", index + 1)));
+                        }
+                        if !result.status.success() {
+                            let _ = tx.send(Event::Line(format!(
+                                "[{}] failed: {}",
+                                index + 1,
+                                String::from_utf8_lossy(&result.stderr).trim()
+                            )));
+                        }
+                    }
+                    Err(e) => {
+                        let _ =
+                            tx.send(Event::Line(format!("[{}] could not start: {e}", index + 1)));
+                    }
+                }
+            }
+            let _ = tx.send(Event::Finished(Ok(())));
+        });
+    }
     fn running(&self) -> bool {
         self.receiver.is_some()
     }
@@ -295,6 +471,34 @@ impl App {
                 );
             });
     }
+    fn bulk_dialog(&mut self, ctx: &egui::Context) {
+        if !self.bulk_open {
+            return;
+        }
+        let mut open = self.bulk_open;
+        egui::Window::new("Batch migration queue").open(&mut open).default_width(850.0).default_height(540.0).show(ctx, |ui| {
+            ui.heading("Import → review → validate");
+            ui.label(RichText::new(&self.bulk_message).color(MUTED));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Import CSV / XLSX…").clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
+                if ui.button("Clear queue").clicked() { self.bulk_jobs.clear(); self.bulk_message = "Queue cleared.".into(); }
+                let label = format!("Run {} dry validations", self.bulk_jobs.len());
+                if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(BLUE)).clicked() { self.start_bulk(); }
+            });
+            ui.add_space(10.0);
+            ui.label(RichText::new("Required columns: source_host, source_user, source_password, destination_host, destination_user, destination_password. Optional: name, extra_options.").size(11.0).color(MUTED));
+            ui.separator();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("bulk_jobs").striped(true).min_col_width(120.0).show(ui, |ui| {
+                    ui.strong("#"); ui.strong("Migration"); ui.strong("Source"); ui.strong("Destination"); ui.strong("Status"); ui.end_row();
+                    for (index, job) in self.bulk_jobs.iter().enumerate() { ui.label((index + 1).to_string()); ui.label(&job.label); ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user)); ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user)); ui.label(RichText::new(&job.state).color(TEAL)); ui.end_row(); }
+                });
+            });
+            ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(ALERT));
+        });
+        self.bulk_open = open;
+    }
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
@@ -320,6 +524,9 @@ impl eframe::App for App {
                             .italics()
                             .color(MUTED),
                     );
+                    if ui.button("Batch queue").clicked() {
+                        self.bulk_open = true;
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(RichText::new(&self.status).color(
                             if self.status.starts_with("Failed") {
@@ -347,6 +554,7 @@ impl eframe::App for App {
             });
         egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { ui.heading("Migration plan"); ui.label(RichText::new("Configure two IMAP accounts, validate safely, then run a deliberate synchronization.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Profile"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Dry run — validate credentials and folder mapping without modifying destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview redacted command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run dry validation  →" } else { "Run synchronization  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. imapsync receives them only for the active process.").size(11.0).color(MUTED)); });
         self.preview(ctx);
+        self.bulk_dialog(ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
