@@ -181,6 +181,14 @@ struct BulkJob {
     form: Form,
     state: String,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceView {
+    Overview,
+    Plan,
+    Mailboxes,
+    Activity,
+    Verification,
+}
 struct App {
     form: Form,
     output: Vec<String>,
@@ -199,6 +207,9 @@ struct App {
         Option<Receiver<Result<(core::ServerCapabilities, core::ServerCapabilities), String>>>,
     source_capabilities: Option<core::ServerCapabilities>,
     destination_capabilities: Option<core::ServerCapabilities>,
+    live_confirm_open: bool,
+    live_confirmed: bool,
+    active_view: WorkspaceView,
 }
 impl Default for App {
     fn default() -> Self {
@@ -228,6 +239,9 @@ impl Default for App {
             capability_receiver: None,
             source_capabilities: None,
             destination_capabilities: None,
+            live_confirm_open: false,
+            live_confirmed: false,
+            active_view: WorkspaceView::Overview,
         }
     }
 }
@@ -410,6 +424,234 @@ impl App {
         });
         self.cockpit_open = open;
     }
+
+    fn readiness_score(&self) -> (usize, usize) {
+        let checks = 5
+            + usize::from(self.source_capabilities.is_some())
+            + usize::from(self.destination_capabilities.is_some());
+        let passed = [
+            !self.form.profile.source_host.trim().is_empty(),
+            !self.form.profile.destination_host.trim().is_empty(),
+            !self.form.profile.source_user.trim().is_empty(),
+            !self.form.profile.destination_user.trim().is_empty(),
+            self.form.dry_run && !self.form.profile.delete2,
+        ]
+        .into_iter()
+        .filter(|ok| *ok)
+        .count()
+            + usize::from(self.source_capabilities.is_some())
+            + usize::from(self.destination_capabilities.is_some());
+        (passed, checks)
+    }
+
+    fn project_summary(&mut self, ui: &mut egui::Ui) {
+        if self.active_view != WorkspaceView::Plan {
+            match self.active_view {
+                WorkspaceView::Overview => self.overview_view(ui),
+                WorkspaceView::Mailboxes => self.mailbox_view(ui),
+                WorkspaceView::Activity => self.activity_view(ui),
+                WorkspaceView::Verification => self.verification_view(ui),
+                WorkspaceView::Plan => {}
+            }
+            // The legacy plan renderer follows this summary in the same panel.
+            // Hide it when a dedicated workspace view is selected.
+            ui.set_invisible();
+            return;
+        }
+        let (passed, total) = self.readiness_score();
+        let percent = (passed * 100 / total.max(1)) as u8;
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.heading("Migration workspace");
+                ui.label(RichText::new(if self.form.dry_run { "SIMULATION" } else { "LIVE CHANGES" })
+                    .strong()
+                    .color(if self.form.dry_run { TEAL } else { ALERT }));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("{percent}% ready")).strong().color(if percent >= 80 { TEAL } else { ALERT }));
+                });
+            });
+            ui.add_space(5.0);
+            ui.horizontal_wrapped(|ui| {
+                for (label, active) in [
+                    ("Discovery", self.source_capabilities.is_some() || self.destination_capabilities.is_some()),
+                    ("Preflight", !self.preflight.is_empty()),
+                    ("Pilot", false),
+                    ("Seed", false),
+                    ("Catch-up", false),
+                    ("Verify", false),
+                ] {
+                    ui.label(RichText::new(format!("{} {label}", if active { "●" } else { "○" }))
+                        .size(11.0)
+                        .color(if active { TEAL } else { MUTED }));
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(RichText::new("Recommended next step: run preflight, review blockers, then select a small pilot mailbox.").color(MUTED));
+        });
+    }
+
+    fn overview_view(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Migration overview");
+        ui.label(
+            RichText::new("A calm, evidence-led workspace for moving mailboxes safely.")
+                .color(MUTED),
+        );
+        ui.add_space(16.0);
+        let (passed, total) = self.readiness_score();
+        let percent = (passed * 100 / total.max(1)) as u8;
+        ui.label(
+            RichText::new(format!("Readiness: {percent}%"))
+                .strong()
+                .color(if percent >= 80 { TEAL } else { ALERT }),
+        );
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            ui.group(|ui| {
+                ui.label(RichText::new("PROJECT STATUS").size(11.0).color(MUTED));
+                ui.heading(if self.project_id.is_some() {
+                    "Project created"
+                } else {
+                    "No project yet"
+                });
+                ui.label(if self.project_id.is_some() {
+                    "State is durable and ready for review."
+                } else {
+                    "Start by configuring endpoints or importing a mailbox list."
+                });
+            });
+            ui.group(|ui| {
+                ui.label(RichText::new("MAILBOXES").size(11.0).color(MUTED));
+                ui.heading(if self.bulk_jobs.is_empty() {
+                    "1 configured".to_owned()
+                } else {
+                    format!("{} queued", self.bulk_jobs.len())
+                });
+                ui.label("Use Mailboxes to review scope before running anything.");
+            });
+            ui.group(|ui| {
+                ui.label(RichText::new("EVIDENCE").size(11.0).color(MUTED));
+                ui.heading("Not started");
+                ui.label("Verification becomes available after a completed run.");
+            });
+        });
+        ui.add_space(16.0);
+        ui.group(|ui| {
+            ui.heading("Recommended next step");
+            ui.label("Run a preflight before any live migration. It checks endpoints, TLS capabilities, safety settings, and the current project scope.");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Open migration plan  →").clicked() { self.active_view = WorkspaceView::Plan; }
+                if ui.button("Open Project Cockpit").clicked() { self.cockpit_open = true; self.assess_plan(); }
+                if ui.button("Import mailbox list").clicked() { self.bulk_open = true; }
+            });
+        });
+        ui.add_space(14.0);
+        ui.label(RichText::new("Safety contract").strong());
+        ui.horizontal_wrapped(|ui| {
+            for text in [
+                "Simulation is the default",
+                "Saved profiles exclude passwords",
+                "TLS verification is enabled",
+                "Source mail is read-only by default",
+            ] {
+                ui.label(RichText::new(format!("✓ {text}")).color(TEAL));
+            }
+        });
+    }
+
+    fn mailbox_view(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Mailboxes");
+        ui.label(RichText::new("Review the migration scope before execution. Import CSV/XLSX for bulk work or configure a single mailbox in the plan.").color(MUTED));
+        ui.add_space(12.0);
+        if self.bulk_jobs.is_empty() {
+            ui.group(|ui| {
+                ui.heading("No bulk mailbox list loaded");
+                ui.label("A single mailbox can be configured from the migration plan.");
+                if ui.button("Open migration plan").clicked() {
+                    self.active_view = WorkspaceView::Plan;
+                }
+                if ui.button("Import CSV / XLSX…").clicked() {
+                    self.bulk_open = true;
+                }
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{} mailbox jobs in scope", self.bulk_jobs.len()))
+                        .strong(),
+                );
+                if ui.button("Review batch queue").clicked() {
+                    self.bulk_open = true;
+                }
+            });
+            ui.add_space(8.0);
+            egui::Grid::new("mailbox_overview")
+                .striped(true)
+                .min_col_width(150.0)
+                .show(ui, |ui| {
+                    ui.strong("Mailbox");
+                    ui.strong("Source");
+                    ui.strong("Destination");
+                    ui.strong("Readiness");
+                    ui.end_row();
+                    for job in self.bulk_jobs.iter().take(100) {
+                        ui.label(&job.label);
+                        ui.label(format!(
+                            "{}\n{}",
+                            job.form.profile.source_host, job.form.profile.source_user
+                        ));
+                        ui.label(format!(
+                            "{}\n{}",
+                            job.form.profile.destination_host, job.form.profile.destination_user
+                        ));
+                        ui.label(RichText::new(&job.state).color(TEAL));
+                        ui.end_row();
+                    }
+                });
+        }
+    }
+
+    fn activity_view(&self, ui: &mut egui::Ui) {
+        ui.heading("Activity");
+        ui.label(RichText::new("Live output is retained here for operator review. Detailed diagnostics stay attached to the run.").color(MUTED));
+        ui.add_space(12.0);
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.heading(if self.running() {
+                    "Run in progress"
+                } else {
+                    "No active run"
+                });
+                ui.label(
+                    RichText::new(&self.status).color(if self.status.contains("Failed") {
+                        ALERT
+                    } else {
+                        BLUE
+                    }),
+                );
+            });
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .max_height(420.0)
+                .show(ui, |ui| {
+                    for line in &self.output {
+                        ui.label(RichText::new(line).monospace().size(12.0));
+                    }
+                });
+        });
+    }
+
+    fn verification_view(&self, ui: &mut egui::Ui) {
+        ui.heading("Verification");
+        ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
+        ui.add_space(12.0);
+        ui.group(|ui| {
+            ui.heading("Evidence report");
+            ui.label("Message-level and folder-level reconciliation will appear here after the migration engine records evidence.");
+            ui.add_space(8.0);
+            for (label, value) in [("Folders", "—"), ("Messages", "—"), ("Bytes", "—"), ("Unmatched", "—"), ("Confidence", "Not available") ] { ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); }); }
+        });
+    }
     fn job_from_values(
         values: &HashMap<String, String>,
         base: &Form,
@@ -575,6 +817,13 @@ impl App {
         self.receiver.is_some()
     }
     fn start(&mut self) {
+        if !self.form.dry_run && !self.live_confirmed {
+            self.live_confirm_open = true;
+            return;
+        }
+        if !self.form.dry_run {
+            self.live_confirmed = false;
+        }
         if let Err(e) = self.form.validate() {
             self.status = e;
             return;
@@ -665,6 +914,7 @@ impl App {
                 Err(e) => format!("Failed: {e}"),
             };
             self.receiver = None;
+            self.live_confirmed = false;
         }
     }
     fn account(
@@ -762,6 +1012,28 @@ impl App {
             ui.add_space(8.0); ui.label("For any other documented flag, use the Extra imapsync options field in the migration plan. Each option is passed as separate whitespace-delimited arguments.");
         });
     }
+
+    fn live_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.live_confirm_open {
+            return;
+        }
+        let mut open = self.live_confirm_open;
+        let mut close_requested = false;
+        egui::Window::new("Confirm live migration").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            ui.heading(RichText::new("Destination changes require confirmation").color(ALERT));
+            ui.label("This will invoke imapsync with the current credentials and rules.");
+            ui.add_space(8.0);
+            ui.label(RichText::new(format!("Project: {}", self.form.profile.name)).strong());
+            ui.label(format!("{}  →  {}", self.form.profile.source_host, self.form.profile.destination_host));
+            ui.label("Source mail is not deleted by default. Destination deletion is disabled unless explicitly enabled in Advanced options.");
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() { close_requested = true; }
+                if ui.add(egui::Button::new(RichText::new("I understand — start migration").color(Color32::WHITE)).fill(ALERT)).clicked() { close_requested = true; self.live_confirmed = true; self.start(); }
+            });
+        });
+        self.live_confirm_open = open && !close_requested;
+    }
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
@@ -822,11 +1094,65 @@ impl eframe::App for App {
                     });
                 });
             });
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { ui.heading("Migration plan"); ui.label(RichText::new("Configure two IMAP accounts, validate safely, then run a deliberate synchronization.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Profile"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Dry run — validate credentials and folder mapping without modifying destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview redacted command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run dry validation  →" } else { "Run synchronization  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. imapsync receives them only for the active process.").size(11.0).color(MUTED)); });
+        egui::SidePanel::left("workspace_nav")
+            .resizable(false)
+            .default_width(185.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::WHITE)
+                    .inner_margin(egui::Margin::same(16)),
+            )
+            .show(ctx, |ui| {
+                ui.label(RichText::new("WORKSPACE").size(11.0).strong().color(MUTED));
+                ui.add_space(6.0);
+                for (view, label, detail) in [
+                    (
+                        WorkspaceView::Overview,
+                        "Overview",
+                        "Readiness and next step",
+                    ),
+                    (
+                        WorkspaceView::Plan,
+                        "Migration plan",
+                        "Endpoints and sync rules",
+                    ),
+                    (WorkspaceView::Mailboxes, "Mailboxes", "Scope and queue"),
+                    (WorkspaceView::Activity, "Activity", "Runs and diagnostics"),
+                    (
+                        WorkspaceView::Verification,
+                        "Verification",
+                        "Evidence and confidence",
+                    ),
+                ] {
+                    let selected = self.active_view == view;
+                    if ui
+                        .selectable_label(selected, RichText::new(label).strong())
+                        .clicked()
+                    {
+                        self.active_view = view;
+                    }
+                    ui.label(RichText::new(detail).size(10.0).color(MUTED));
+                    ui.add_space(5.0);
+                }
+                ui.separator();
+                ui.label(RichText::new("TOOLS").size(11.0).strong().color(MUTED));
+                if ui.button("Batch queue").clicked() {
+                    self.bulk_open = true;
+                }
+                if ui.button("Advanced options").clicked() {
+                    self.advanced_open = true;
+                }
+                if ui.button("Project cockpit").clicked() {
+                    self.cockpit_open = true;
+                    self.assess_plan();
+                }
+            });
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. imapsync receives them only for the active process.").size(11.0).color(MUTED)); });
         self.preview(ctx);
         self.bulk_dialog(ctx);
         self.advanced_dialog(ctx);
         self.cockpit(ctx);
+        self.live_confirmation(ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
