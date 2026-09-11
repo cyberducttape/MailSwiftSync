@@ -77,4 +77,4 @@ The **Extra imapsync options** field accepts any additional documented imapsync 
 
 ## Packaging
 
-Run `scripts/package.sh` from the repository root to create a host-native tarball and SHA-256 checksum. Signing and platform-native installers require your own release keys and distribution policy.
+Run `scripts/package.sh` from anywhere inside the checkout to create a host-native tarball and SHA-256 checksum in the repository's `dist/` directory. Signing and platform-native installers require your own release keys and distribution policy.
