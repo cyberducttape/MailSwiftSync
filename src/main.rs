@@ -37,6 +37,7 @@ use std::{
     thread,
     time::Duration,
 };
+use zeroize::Zeroizing;
 
 const NAVY: Color32 = Color32::from_rgb(17, 26, 43);
 const BLUE: Color32 = Color32::from_rgb(45, 113, 205);
@@ -222,8 +223,8 @@ fn dovecot_ssl_mode(mode: &str) -> &str {
 #[derive(Clone)]
 struct Form {
     profile: Profile,
-    source_password: String,
-    destination_password: String,
+    source_password: Zeroizing<String>,
+    destination_password: Zeroizing<String>,
     dry_run: bool,
 }
 impl Default for Form {
@@ -240,8 +241,8 @@ impl Default for Form {
                 automap: true,
                 ..Default::default()
             },
-            source_password: String::new(),
-            destination_password: String::new(),
+            source_password: Zeroizing::new(String::new()),
+            destination_password: Zeroizing::new(String::new()),
             dry_run: true,
         }
     }
@@ -305,9 +306,9 @@ impl Form {
             .keyring_entry(source)?
             .ok_or("Enter a keyring ID before storing a password.")?;
         let password = if source {
-            &self.source_password
+            self.source_password.as_str()
         } else {
-            &self.destination_password
+            self.destination_password.as_str()
         };
         if password.is_empty() {
             return Err("Enter a password before storing it in the OS keyring.".into());
@@ -324,9 +325,9 @@ impl Form {
             format!("Could not load the credential from the OS keyring: {error}")
         })?;
         if source {
-            self.source_password = password;
+            self.source_password = Zeroizing::new(password);
         } else {
-            self.destination_password = password;
+            self.destination_password = Zeroizing::new(password);
         }
         Ok(())
     }
@@ -357,16 +358,22 @@ impl Form {
     }
     fn validate_internal(&self, require_credentials: bool) -> Result<(), String> {
         let mut required = vec![
-            ("Source IMAP host", &self.profile.source_host),
-            ("Source username", &self.profile.source_user),
-            ("Destination IMAP host", &self.profile.destination_host),
-            ("Destination username", &self.profile.destination_user),
+            ("Source IMAP host", self.profile.source_host.as_str()),
+            ("Source username", self.profile.source_user.as_str()),
+            (
+                "Destination IMAP host",
+                self.profile.destination_host.as_str(),
+            ),
+            (
+                "Destination username",
+                self.profile.destination_user.as_str(),
+            ),
         ];
         if require_credentials {
-            required.push(("Source password", &self.source_password));
+            required.push(("Source password", self.source_password.as_str()));
         }
         if require_credentials && self.engine() != core::Engine::Dovecot {
-            required.push(("Destination password", &self.destination_password));
+            required.push(("Destination password", self.destination_password.as_str()));
         }
         let source_port = self.profile.source_port.trim();
         if (!source_port.is_empty() && source_port.parse::<u16>().is_err()) || source_port == "0" {
@@ -432,12 +439,18 @@ impl Form {
             );
         }
         for (label, value) in [
-            ("Source IMAP host", &self.profile.source_host),
-            ("Destination IMAP host", &self.profile.destination_host),
-            ("Source username", &self.profile.source_user),
-            ("Destination username", &self.profile.destination_user),
-            ("Source password", &self.source_password),
-            ("Destination password", &self.destination_password),
+            ("Source IMAP host", self.profile.source_host.as_str()),
+            (
+                "Destination IMAP host",
+                self.profile.destination_host.as_str(),
+            ),
+            ("Source username", self.profile.source_user.as_str()),
+            (
+                "Destination username",
+                self.profile.destination_user.as_str(),
+            ),
+            ("Source password", self.source_password.as_str()),
+            ("Destination password", self.destination_password.as_str()),
         ] {
             if !value.is_empty() && value.chars().any(char::is_control) {
                 return Err(format!("{label} cannot contain control characters."));
@@ -452,8 +465,8 @@ impl Form {
     fn args_with_throttle_divisor(&self, redact: bool, throttle_divisor: usize) -> Vec<String> {
         engine::imapsync_args(
             &self.profile,
-            &self.source_password,
-            &self.destination_password,
+            self.source_password.as_str(),
+            self.destination_password.as_str(),
             self.dry_run,
             redact,
             throttle_divisor,
@@ -477,7 +490,7 @@ impl Form {
             let env = if self.local_doveadm() {
                 vec![(
                     "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                    self.source_password.clone(),
+                    self.source_password.to_string(),
                 )]
             } else {
                 Vec::new()
@@ -495,8 +508,8 @@ impl Form {
         let secret_dir = create_secret_directory()?;
         let source_file = secret_dir.join("source.secret");
         let destination_file = secret_dir.join("destination.secret");
-        if let Err(error) = write_secret_file(&source_file, &self.source_password)
-            .and_then(|_| write_secret_file(&destination_file, &self.destination_password))
+        if let Err(error) = write_secret_file(&source_file, self.source_password.as_str())
+            .and_then(|_| write_secret_file(&destination_file, self.destination_password.as_str()))
         {
             let _ = std::fs::remove_dir_all(&secret_dir);
             return Err(format!(
@@ -611,7 +624,7 @@ impl Form {
         } else if redact {
             "••••••••"
         } else {
-            &self.source_password
+            self.source_password.as_str()
         };
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
@@ -723,7 +736,7 @@ impl Form {
         } else if redact {
             "••••••••"
         } else {
-            &self.source_password
+            self.source_password.as_str()
         };
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
@@ -1565,8 +1578,8 @@ impl Default for App {
                     label: format!("{} → {}", job.source_mailbox, job.destination_mailbox),
                     form: Form {
                         profile,
-                        source_password: String::new(),
-                        destination_password: String::new(),
+                        source_password: Zeroizing::new(String::new()),
+                        destination_password: Zeroizing::new(String::new()),
                         dry_run: true,
                     },
                     state: display_job_state(&job.state).into(),
@@ -1952,10 +1965,14 @@ impl App {
         let destination_user = self.form.profile.destination_user.clone();
         let destination_password = self.form.destination_password.clone();
         thread::spawn(move || {
-            let result =
-                probe_tls_capabilities(&source, &source_user, &source_password).and_then(|left| {
-                    probe_tls_capabilities(&destination, &destination_user, &destination_password)
-                        .map(|right| (left, right))
+            let result = probe_tls_capabilities(&source, &source_user, source_password.as_str())
+                .and_then(|left| {
+                    probe_tls_capabilities(
+                        &destination,
+                        &destination_user,
+                        destination_password.as_str(),
+                    )
+                    .map(|right| (left, right))
                 });
             let _ = tx.send(result);
         });
@@ -2918,16 +2935,19 @@ impl App {
         }
         // Whitespace is meaningful in passwords. Trim only semantic fields;
         // otherwise a valid credential such as ` Secret ` is silently changed.
-        form.source_password = values.get("source_password").cloned().unwrap_or_default();
+        form.source_password =
+            Zeroizing::new(values.get("source_password").cloned().unwrap_or_default());
         form.profile.destination_host = get("destination_host");
         form.profile.destination_user = get("destination_user");
         if let Some(value) = values.get("destination_credential_id") {
             form.profile.destination_credential_id = value.trim().to_owned();
         }
-        form.destination_password = values
-            .get("destination_password")
-            .cloned()
-            .unwrap_or_default();
+        form.destination_password = Zeroizing::new(
+            values
+                .get("destination_password")
+                .cloned()
+                .unwrap_or_default(),
+        );
         form.validate_for_import()
             .map_err(|e| format!("Row {row}: {e}"))?;
         let label = values
@@ -3336,8 +3356,8 @@ impl App {
                                         &format!("[{}] ", index + 1),
                                         &cancel,
                                         &[
-                                            job.form.source_password.clone(),
-                                            job.form.destination_password.clone(),
+                                            job.form.source_password.to_string(),
+                                            job.form.destination_password.to_string(),
                                         ],
                                         Duration::from_secs(
                                             job.form.profile.migration_timeout_hours * 60 * 60,
@@ -3489,7 +3509,10 @@ impl App {
     }
     fn redact_output(&self, line: &str) -> String {
         let mut safe = line.to_owned();
-        for secret in [&self.form.source_password, &self.form.destination_password] {
+        for secret in [
+            self.form.source_password.as_str(),
+            self.form.destination_password.as_str(),
+        ] {
             if !secret.is_empty() {
                 safe = safe.replace(secret, "[REDACTED]");
             }
@@ -3689,18 +3712,18 @@ impl App {
             } else {
                 Vec::new()
             };
-        let verification_secret = self.form.source_password.clone();
+        let verification_secret = self.form.source_password.to_string();
         let verification_env = if self.form.local_doveadm() {
             vec![(
                 "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                self.form.source_password.clone(),
+                self.form.source_password.to_string(),
             )]
         } else {
             Vec::new()
         };
         let output_secrets = vec![
-            self.form.source_password.clone(),
-            self.form.destination_password.clone(),
+            self.form.source_password.to_string(),
+            self.form.destination_password.to_string(),
         ];
         let migration_timeout =
             Duration::from_secs(self.form.profile.migration_timeout_hours * 60 * 60);
@@ -4282,8 +4305,8 @@ impl App {
                         ui.label(&job.label);
                         ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user));
                         ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user));
-                        ui.add(egui::TextEdit::singleline(&mut job.form.source_password).password(true).desired_width(120.0));
-                        if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add(egui::TextEdit::singleline(&mut job.form.destination_password).password(true).desired_width(120.0)); }
+                        ui.add(egui::TextEdit::singleline(&mut *job.form.source_password).password(true).desired_width(120.0));
+                        if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add(egui::TextEdit::singleline(&mut *job.form.destination_password).password(true).desired_width(120.0)); }
                         ui.label(RichText::new(&job.state).color(TEAL));
                         ui.end_row();
                     }
@@ -4893,8 +4916,8 @@ mod tests {
         form.profile.source_user = "old-user".into();
         form.profile.destination_host = "localhost".into();
         form.profile.destination_user = "new-user".into();
-        form.source_password = "secret".into();
-        form.destination_password = "unused".into();
+        form.source_password = String::from("secret").into();
+        form.destination_password = String::from("unused").into();
         form
     }
 
@@ -4916,7 +4939,7 @@ mod tests {
     #[test]
     fn local_dovecot_credentials_use_child_environment() {
         let mut form = dovecot_form();
-        form.source_password = "secret".into();
+        form.source_password = String::from("secret").into();
         let prepared = form.prepared_command().unwrap();
         assert!(
             prepared
@@ -5213,7 +5236,7 @@ mod tests {
         form.profile.source_user = "user\r\nNOOP".into();
         assert!(form.validate().unwrap_err().contains("control characters"));
         form.profile.source_user = "user".into();
-        form.source_password = "secret\nLOGIN injected".into();
+        form.source_password = String::from("secret\nLOGIN injected").into();
         assert!(form.validate().unwrap_err().contains("control characters"));
     }
 
@@ -5288,8 +5311,8 @@ mod tests {
         values.insert("destination_user".into(), "new@example".into());
         values.insert("destination_password".into(), " Destination! ".into());
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
-        assert_eq!(job.form.source_password, " Secret123 ");
-        assert_eq!(job.form.destination_password, " Destination! ");
+        assert_eq!(job.form.source_password.as_str(), " Secret123 ");
+        assert_eq!(job.form.destination_password.as_str(), " Destination! ");
     }
 
     #[test]
@@ -5341,7 +5364,7 @@ mod tests {
             form: Form::default(),
             state: "Ready".into(),
         };
-        with_password.form.source_password = "already-present".into();
+        with_password.form.source_password = String::from("already-present").into();
         let mut with_reference = BulkJob {
             label: "reference".into(),
             form: Form::default(),

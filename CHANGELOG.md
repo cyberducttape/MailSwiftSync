@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Session-held password buffers now use `zeroize::Zeroizing<String>` throughout the form, imported rows, and keyring loads; saved profiles, snapshots, and the durable ledger remain password-free.
 - Added a SQLite partial unique index enforcing one `running` job-bound run per mailbox; parent batch runs with a null `job_id` remain valid, and direct-insert regression coverage proves the database rejects overlap.
 - Added an exhaustive mailbox state-transition matrix test covering every known state pair, including retry, recovery, delta, and verification paths.
 - Batch mailbox configuration persisted in SQLite is now restore-safe: raw expert-option values are removed from durable row configs while launch-time snapshots retain only their digest.
