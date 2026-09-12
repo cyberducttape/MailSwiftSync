@@ -1038,6 +1038,45 @@ fn terminate_recorded_process_group(pid: u32) {
     let _ = pid;
 }
 
+#[cfg(target_os = "linux")]
+fn linux_process_identity(pid: u32) -> Option<(u64, u32, u32)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat
+        .rsplit_once(") ")?
+        .1
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let process_group = fields.get(2)?.parse().ok()?;
+    let session_id = fields.get(3)?.parse().ok()?;
+    let start_ticks = fields.get(19)?.parse().ok()?;
+    Some((start_ticks, process_group, session_id))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_process_identity(_pid: u32) -> Option<(u64, u32, u32)> {
+    None
+}
+
+fn recorded_process_matches(process: &core::ActiveProcess) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let Some((start_ticks, process_group, session_id)) = linux_process_identity(process.pid)
+        else {
+            return false;
+        };
+        process.start_ticks == Some(start_ticks)
+            && process.process_group == Some(process_group)
+            && process.session_id == Some(session_id)
+            && process_group == process.pid
+            && session_id == process.pid
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = process;
+        false
+    }
+}
+
 fn number_after(line: &str, marker: &str) -> Option<u64> {
     line.split_once(marker)?
         .1
@@ -1128,7 +1167,7 @@ fn parse_dovecot_evidence(
 
 enum Event {
     Line(String),
-    ProcessStarted(usize, u32),
+    ProcessStarted(usize, u32, Option<u64>, Option<u32>, Option<u32>, String),
     JobState(usize, String),
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
@@ -1160,7 +1199,18 @@ fn run_streaming(
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
-    let _ = tx.send(Event::ProcessStarted(job_index, child.id()));
+    let identity = linux_process_identity(child.id());
+    let (start_ticks, process_group, session_id) = identity
+        .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
+        .unwrap_or((None, None, None));
+    let _ = tx.send(Event::ProcessStarted(
+        job_index,
+        child.id(),
+        start_ticks,
+        process_group,
+        session_id,
+        executable.to_owned(),
+    ));
     let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
     let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
     let out_tx = tx.clone();
@@ -1379,16 +1429,23 @@ impl Default for App {
                 Some(format!("Persistent SQLite state unavailable: {error}")),
             ),
         };
-        let (recovered, orphaned) = if persistence_warning.is_none() {
+        let (recovered, orphaned, unverified_processes) = if persistence_warning.is_none() {
             let processes = store.active_processes().unwrap_or_default();
-            for (_, _, pid) in &processes {
-                if *pid > 0 {
-                    terminate_recorded_process_group(*pid);
+            let mut unverified = 0;
+            for process in &processes {
+                if process.pid > 0 && recorded_process_matches(process) {
+                    terminate_recorded_process_group(process.pid);
+                } else {
+                    unverified += 1;
                 }
             }
-            (store.recover_abandoned_jobs().unwrap_or(0), processes.len())
+            (
+                store.recover_abandoned_jobs().unwrap_or(0),
+                processes.len(),
+                unverified,
+            )
         } else {
-            (0, 0)
+            (0, 0, 0)
         };
         let mut initial_output = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
@@ -1401,7 +1458,12 @@ impl Default for App {
         );
         if orphaned > 0 {
             initial_output.push(format!(
-                "Startup reconciled {orphaned} recorded migration process(es) before recovery."
+                "Startup found {orphaned} recorded migration process(es); verified identities were terminated before recovery."
+            ));
+        }
+        if unverified_processes > 0 {
+            initial_output.push(format!(
+                "{unverified_processes} recorded process identity(ies) could not be verified and were not signalled; review the affected jobs before retrying."
             ));
         }
         if recovered > 0 {
@@ -3259,14 +3321,29 @@ impl App {
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
-                    Event::ProcessStarted(index, pid) => {
+                    Event::ProcessStarted(
+                        index,
+                        pid,
+                        start_ticks,
+                        process_group,
+                        session_id,
+                        executable,
+                    ) => {
                         let job_id = self
                             .bulk_job_ids
                             .get(index)
                             .cloned()
                             .or_else(|| self.job_id.clone());
                         if let (Some(run_id), Some(job_id)) = (self.run_id.as_deref(), job_id)
-                            && let Err(error) = self.store.register_process(run_id, &job_id, pid)
+                            && let Err(error) = self.store.register_process(&core::ActiveProcess {
+                                run_id: run_id.to_owned(),
+                                job_id,
+                                pid,
+                                start_ticks,
+                                process_group,
+                                session_id,
+                                executable,
+                            })
                         {
                             durability_errors
                                 .push(format!("persist process identity failed: {error}"));
@@ -4566,6 +4643,21 @@ mod tests {
             assert!(directory.is_dir());
         }
         assert!(!directory.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recorded_process_identity_rejects_start_time_mismatch() {
+        let process = core::ActiveProcess {
+            run_id: "run".into(),
+            job_id: "job".into(),
+            pid: std::process::id(),
+            start_ticks: Some(0),
+            process_group: Some(std::process::id()),
+            session_id: Some(std::process::id()),
+            executable: "test".into(),
+        };
+        assert!(!recorded_process_matches(&process));
     }
 
     #[test]

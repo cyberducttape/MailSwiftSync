@@ -114,6 +114,16 @@ pub struct RunSummary {
     pub detail: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveProcess {
+    pub run_id: String,
+    pub job_id: String,
+    pub pid: u32,
+    pub start_ticks: Option<u64>,
+    pub process_group: Option<u32>,
+    pub session_id: Option<u32>,
+    pub executable: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxEvidence {
     pub source_messages: u64,
     pub destination_messages: u64,
@@ -277,7 +287,7 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
-          CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
+          CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, start_ticks INTEGER, process_group INTEGER, session_id INTEGER, executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = self
@@ -317,6 +327,38 @@ impl StateStore {
         if !job_columns.iter().any(|column| column == "config") {
             self.connection
                 .execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
+        }
+        let process_columns = self
+            .connection
+            .prepare("PRAGMA table_info(active_processes)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !process_columns.iter().any(|column| column == "start_ticks") {
+            self.connection.execute(
+                "ALTER TABLE active_processes ADD COLUMN start_ticks INTEGER",
+                [],
+            )?;
+        }
+        if !process_columns
+            .iter()
+            .any(|column| column == "process_group")
+        {
+            self.connection.execute(
+                "ALTER TABLE active_processes ADD COLUMN process_group INTEGER",
+                [],
+            )?;
+        }
+        if !process_columns.iter().any(|column| column == "session_id") {
+            self.connection.execute(
+                "ALTER TABLE active_processes ADD COLUMN session_id INTEGER",
+                [],
+            )?;
+        }
+        if !process_columns.iter().any(|column| column == "executable") {
+            self.connection.execute(
+                "ALTER TABLE active_processes ADD COLUMN executable TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
         }
         let history_columns = self
             .connection
@@ -597,22 +639,41 @@ impl StateStore {
     /// Record the OS process belonging to a durable run. Startup reconciliation
     /// uses this identity to terminate a recorded orphan before allowing an
     /// operator to retry the mailbox.
-    pub fn register_process(&self, run_id: &str, job_id: &str, pid: u32) -> rusqlite::Result<()> {
+    pub fn register_process(&self, process: &ActiveProcess) -> rusqlite::Result<()> {
         self.connection.execute(
-            "INSERT INTO active_processes(run_id,job_id,pid) VALUES(?1,?2,?3) ON CONFLICT(run_id,job_id) DO UPDATE SET pid=excluded.pid,started_at=CURRENT_TIMESTAMP",
-            params![run_id, job_id, i64::from(pid)],
+            "INSERT INTO active_processes(run_id,job_id,pid,start_ticks,process_group,session_id,executable) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(run_id,job_id) DO UPDATE SET pid=excluded.pid,start_ticks=excluded.start_ticks,process_group=excluded.process_group,session_id=excluded.session_id,executable=excluded.executable,started_at=CURRENT_TIMESTAMP",
+            params![
+                process.run_id,
+                process.job_id,
+                i64::from(process.pid),
+                process.start_ticks.map(|value| value as i64),
+                process.process_group.map(i64::from),
+                process.session_id.map(i64::from),
+                process.executable
+            ],
         )?;
         Ok(())
     }
 
-    pub fn active_processes(&self) -> rusqlite::Result<Vec<(String, String, u32)>> {
+    pub fn active_processes(&self) -> rusqlite::Result<Vec<ActiveProcess>> {
         self.connection
-            .prepare("SELECT run_id,job_id,pid FROM active_processes")?
+            .prepare("SELECT run_id,job_id,pid,start_ticks,process_group,session_id,executable FROM active_processes")?
             .query_map([], |row| {
                 let pid: i64 = row.get(2)?;
                 let pid = u32::try_from(pid)
                     .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, pid))?;
-                Ok((row.get(0)?, row.get(1)?, pid))
+                let start_ticks: Option<i64> = row.get(3)?;
+                let process_group: Option<i64> = row.get(4)?;
+                let session_id: Option<i64> = row.get(5)?;
+                Ok(ActiveProcess {
+                    run_id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    pid,
+                    start_ticks: start_ticks.and_then(|value| u64::try_from(value).ok()),
+                    process_group: process_group.and_then(|value| u32::try_from(value).ok()),
+                    session_id: session_id.and_then(|value| u32::try_from(value).ok()),
+                    executable: row.get(6)?,
+                })
             })?
             .collect()
     }
@@ -800,7 +861,6 @@ impl StateStore {
         if run_changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
-        tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
             "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
             params![mailbox_state, job_id, project_id],
@@ -1198,10 +1258,27 @@ mod tests {
             .unwrap();
         db.begin_run(&project.id, &job, "run-process", "test")
             .unwrap();
-        db.register_process("run-process", &job, 4242).unwrap();
+        db.register_process(&ActiveProcess {
+            run_id: "run-process".into(),
+            job_id: job.clone(),
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test".into(),
+        })
+        .unwrap();
         assert_eq!(
             db.active_processes().unwrap(),
-            vec![("run-process".into(), job.clone(), 4242)]
+            vec![ActiveProcess {
+                run_id: "run-process".into(),
+                job_id: job.clone(),
+                pid: 4242,
+                start_ticks: Some(7),
+                process_group: Some(4242),
+                session_id: Some(4242),
+                executable: "test".into(),
+            }]
         );
         db.recover_abandoned_jobs().unwrap();
         assert!(db.active_processes().unwrap().is_empty());
@@ -1216,8 +1293,16 @@ mod tests {
             .unwrap();
         db.begin_run(&project.id, &job, "run-process-finish", "test")
             .unwrap();
-        db.register_process("run-process-finish", &job, 4242)
-            .unwrap();
+        db.register_process(&ActiveProcess {
+            run_id: "run-process-finish".into(),
+            job_id: job.clone(),
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test".into(),
+        })
+        .unwrap();
         db.finish_run("run-process-finish", "failed", "test failure")
             .unwrap();
         assert!(db.active_processes().unwrap().is_empty());

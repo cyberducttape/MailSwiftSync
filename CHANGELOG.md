@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Process recovery now records Linux start-time, session, and process-group identity and refuses to signal a recorded PID when those values cannot be proven to match.
 - Batch run completion now updates the terminal run status and clears active process identities in one SQLite transaction.
 - Dovecot dry validation now checks both sides: the remote `imapc` source plus destination user and mailbox-list readiness, for single and batch validation runs.
 - Added explicit Dovecot execution-location choices for local or SSH invocation; automatic hostname inference remains available only for legacy compatibility.
