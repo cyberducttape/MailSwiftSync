@@ -3626,7 +3626,8 @@ impl App {
                                         Duration::from_secs(
                                             job.form.profile.migration_timeout_hours * 60 * 60,
                                         ),
-                                        job.form.engine() == core::Engine::Dovecot,
+                                        job.form.engine() == core::Engine::Dovecot
+                                            && !job.form.dry_run,
                                     );
                                     let result = if result.is_ok()
                                         && job.form.dry_run
@@ -4000,7 +4001,7 @@ impl App {
                 &cancel,
                 &output_secrets,
                 migration_timeout,
-                run_engine == core::Engine::Dovecot,
+                run_engine == core::Engine::Dovecot && !run_dry_run,
             );
             if result.is_ok() && !destination_preflight.is_empty() {
                 result = result.and_then(|outcome| {
@@ -5685,7 +5686,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn dovecot_exit_code_two_is_a_delta_outcome() {
+    fn live_dovecot_exit_code_two_is_a_delta_outcome() {
         let (tx, _rx) = mpsc::channel();
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
@@ -5703,6 +5704,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome, StreamOutcome::DeltaRequired);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dry_dovecot_exit_code_two_is_not_a_delta_outcome() {
+        let (tx, _rx) = mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        let args = vec!["-c".into(), "exit 2".into()];
+        let outcome = run_streaming(
+            "/bin/sh",
+            &args,
+            &[],
+            &tx,
+            0,
+            "",
+            &cancel,
+            &[],
+            Duration::from_secs(5),
+            false,
+        );
+        assert!(outcome.is_err());
     }
 
     #[test]
