@@ -52,6 +52,7 @@ const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
+const DOVECOT_SYNC_LOCK_WAIT_SECONDS: u64 = 300;
 const MAX_PENDING_EVENTS: usize = 4_096;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -677,6 +678,7 @@ impl Form {
                 self.profile.source_user.clone(),
             ]);
         } else {
+            args.extend(["-l".into(), DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()]);
             args.extend([if self.profile.delete2 {
                 "backup"
             } else {
@@ -5074,6 +5076,9 @@ mod tests {
         );
         assert!(args.contains(&"sync".into()));
         assert!(args.contains(&"-1".into()));
+        assert!(args.windows(2).any(|pair| {
+            pair[0] == "-l" && pair[1] == DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()
+        }));
         assert!(!args.iter().any(|arg| arg == "secret"));
     }
 

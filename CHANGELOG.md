@@ -16,6 +16,7 @@ All notable changes to MailSwiftSync are documented here.
 - Dovecot verification execution is shared between single and batch workflows, keeping redaction, two-sided parsing, and failure handling consistent.
 - Verification mismatches now use a distinct `verification_difference` state instead of being mislabeled as another required delta; only explicit engine delta outcomes remain `delta_required`.
 - Overview, Activity, Markdown reports, and JSON exports now count verification differences as operator-review items.
+- Native Dovecot live transfers now request up to five minutes for an existing dsync mailbox lock before failing, reducing collisions with other administrative sync work.
 - Active batch contexts now retain immutable child job IDs and launch-time fingerprints; completion persistence no longer consults the mutable queue to identify or certify a mailbox.
 - Duplicate-destination detection now canonicalizes endpoint ports, so an implicit IMAPS port and an explicit `:993` cannot bypass the concurrent-write guard.
 - Process-start events now carry the durable mailbox job ID rather than relying on a queue index when registering OS process identity, reducing routing risk if UI collection order changes.
