@@ -922,7 +922,10 @@ fn number_after(line: &str, marker: &str) -> Option<u64> {
 
 /// Extracts the stable summary fields emitted by imapsync. We intentionally
 /// require both hosts and all three dimensions before writing evidence; a
-/// partial log must never look like a successful zero-message migration.
+/// partial log must never look like a successful zero-message migration. The
+/// `unmatched_messages` value is a proof-pending sentinel here, not a literal
+/// count, because the text summary does not expose an unresolved-message
+/// count.
 fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxEvidence> {
     let last = |marker: &str| {
         lines
@@ -1333,8 +1336,14 @@ fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), Strin
     Ok((input.to_owned(), default_port))
 }
 
-fn imap_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+fn imap_quote(value: &str) -> Result<String, String> {
+    if value.chars().any(char::is_control) {
+        return Err("IMAP quoted value cannot contain control characters".into());
+    }
+    Ok(format!(
+        "\"{}\"",
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    ))
 }
 
 fn read_imap_tagged(
@@ -1427,8 +1436,8 @@ fn probe_tls_capabilities(
     if !preauth {
         let login = format!(
             "a002 LOGIN {} {}\r\n",
-            imap_quote(user),
-            imap_quote(password)
+            imap_quote(user)?,
+            imap_quote(password)?
         );
         stream
             .write_all(login.as_bytes())
@@ -1481,6 +1490,10 @@ impl App {
     fn start_capability_probe(&mut self) {
         if let Err(error) = self.form.load_configured_keyring_credentials() {
             self.status = error;
+            return;
+        }
+        if let Err(error) = self.form.validate() {
+            self.status = format!("Preflight input is invalid: {error}");
             return;
         }
         if self.form.engine() == core::Engine::Dovecot {
@@ -2494,7 +2507,6 @@ impl App {
                                             job.form.destination_password.clone(),
                                         ],
                                     );
-                                    cleanup_paths(&command.cleanup);
                                     drop(cleanup_guard);
                                     result
                                 }
@@ -2738,7 +2750,6 @@ impl App {
             let mut child = match command.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    cleanup_paths(&cleanup);
                     let _ = tx.send(Event::Finished(Err(format!("Could not start {exe}: {e}"))));
                     return;
                 }
@@ -2833,7 +2844,6 @@ impl App {
                     }
                 }
             }
-            cleanup_paths(&cleanup);
             let _ = tx.send(Event::Finished(result));
         });
     }
@@ -3796,6 +3806,15 @@ mod tests {
     fn remote_arguments_are_shell_quoted() {
         assert_eq!(shell_quote("plain-value"), "plain-value");
         assert_eq!(shell_quote("pa ss'word"), "'pa ss'\\''word'");
+    }
+
+    #[test]
+    fn imap_quoted_values_reject_command_injection_controls() {
+        assert_eq!(
+            imap_quote("user@example.test").unwrap(),
+            "\"user@example.test\""
+        );
+        assert!(imap_quote("secret\r\na002 NOOP").is_err());
     }
 
     #[test]

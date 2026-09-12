@@ -119,6 +119,10 @@ pub struct MailboxEvidence {
     pub destination_messages: u64,
     pub source_bytes: u64,
     pub destination_bytes: u64,
+    /// A literal unresolved-message count when the verifier provides one.
+    /// The current imapsync summary adapter uses `1` as an unresolved-proof
+    /// sentinel when its success line is absent; reports must therefore not
+    /// describe that value as a literal message count for that engine.
     pub unmatched_messages: u64,
     pub failed_messages: u64,
     pub source_folders: u64,
