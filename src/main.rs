@@ -519,6 +519,8 @@ impl Form {
         match self.profile.engine {
             // The desktop cannot safely infer the destination's mail stack
             // from a hostname or from a locally installed executable.
+            // Hostnames are not reliable server fingerprints. Auto is an
+            // explicit conservative default, not environment detection.
             core::Engine::Auto => core::Engine::ImapSync,
             selected => selected,
         }
@@ -1503,26 +1505,29 @@ fn probe_tls_capabilities(
     stream
         .write_all(b"a003 CAPABILITY\r\n")
         .map_err(|e| e.to_string())?;
-    read_imap_tagged(&mut stream, "a003", &mut response, &mut buffer)?;
-    if !imap_command_succeeded(&response, "a003") {
+    let mut post_auth_response = String::new();
+    read_imap_tagged(&mut stream, "a003", &mut post_auth_response, &mut buffer)?;
+    if !imap_command_succeeded(&post_auth_response, "a003") {
         return Err(format!("{host}: post-auth CAPABILITY failed"));
     }
     stream
         .write_all(b"a004 NAMESPACE\r\n")
         .map_err(|e| e.to_string())?;
-    read_imap_tagged(&mut stream, "a004", &mut response, &mut buffer)?;
-    if !imap_command_succeeded(&response, "a004") {
-        return Err(format!("{host}: NAMESPACE is not available"));
-    }
+    let mut _namespace_response = String::new();
+    read_imap_tagged(&mut stream, "a004", &mut _namespace_response, &mut buffer)?;
+    // NAMESPACE is useful for mapping, but not required by IMAP or by every
+    // usable migration endpoint. LIST remains the authoritative inventory
+    // gate; callers may surface this response as a compatibility warning.
     stream
         .write_all(b"a005 LIST \"\" \"*\"\r\n")
         .map_err(|e| e.to_string())?;
-    read_imap_tagged(&mut stream, "a005", &mut response, &mut buffer)?;
-    if !imap_command_succeeded(&response, "a005") {
+    let mut list_response = String::new();
+    read_imap_tagged(&mut stream, "a005", &mut list_response, &mut buffer)?;
+    if !imap_command_succeeded(&list_response, "a005") {
         return Err(format!("{host}: folder inventory failed"));
     }
     let _ = stream.write_all(b"a006 LOGOUT\r\n");
-    let caps = core::ServerCapabilities::parse(&response);
+    let caps = core::ServerCapabilities::parse(&post_auth_response);
     if caps.values.is_empty() {
         return Err(format!(
             "{host}: server did not return a CAPABILITY response"

@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- IMAP readiness now treats missing NAMESPACE support as compatible while parsing capabilities strictly from the post-auth response.
+- Clarified that Automatic engine selection is a conservative imapsync default, not server-environment autodetection.
 - Added an atomic evidence-backed terminal completion path so successful live verification can move `running` to `verified` without violating ordinary mailbox state transitions.
 - Added a persistent lifecycle stepper to the main workspace, password show/hide controls, and inline account-field validation for common input errors.
 - Clarified in the README and wiki that current UI images are workflow illustrations rather than pixel-accurate application screenshots.

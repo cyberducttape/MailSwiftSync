@@ -22,7 +22,7 @@ pub enum Engine {
 impl Engine {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Auto => "Automatic",
+            Self::Auto => "Conservative default",
             Self::Dovecot => "Dovecot native",
             Self::ImapSync => "imapsync fallback",
         }
@@ -31,7 +31,7 @@ impl Engine {
     pub fn description(self) -> &'static str {
         match self {
             Self::Auto => {
-                "Choose the safest available path; imapsync remains the conservative fallback."
+                "Use imapsync as the conservative default; select Dovecot native explicitly when appropriate."
             }
             Self::Dovecot => {
                 "Use destination-side doveadm/dsync when the destination is Dovecot and admin access is available."
