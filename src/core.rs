@@ -692,12 +692,16 @@ impl StateStore {
             .optional()
     }
     /// A desktop restart cannot prove that a previous child process still
-    /// exists. Running jobs are therefore made reviewable rather than left in
-    /// a permanently active state.
+    /// exists. All runs belonging to an interrupted wave are therefore made
+    /// terminal: claimed children become abandoned and unclaimed children
+    /// are also abandoned so their queued rows cannot wedge future retries.
+    /// Only mailboxes that were actually claimed are moved to `attention`.
     pub fn recover_abandoned_jobs(&self) -> rusqlite::Result<usize> {
         let projects = self
             .connection
-            .prepare("SELECT DISTINCT project_id FROM mailbox_jobs WHERE state='running'")?
+            .prepare(
+                "SELECT DISTINCT project_id FROM runs WHERE status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running' AND job_id IS NULL))",
+            )?
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let tx = self.connection.unchecked_transaction()?;
@@ -709,10 +713,14 @@ impl StateStore {
             "UPDATE runs SET status='abandoned',finished_at=CURRENT_TIMESTAMP,detail='Application restarted before completion' WHERE status='running'",
             [],
         )?;
+        tx.execute(
+            "UPDATE runs SET status='abandoned',finished_at=CURRENT_TIMESTAMP,detail='Application restarted before batch child was claimed' WHERE status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='abandoned' AND job_id IS NULL AND detail='Application restarted before completion')",
+            [],
+        )?;
         tx.execute("DELETE FROM active_processes", [])?;
         for project in projects {
             tx.execute(
-                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_recovered','Running mailbox jobs moved to Attention after application restart')",
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_recovered','Interrupted batch runs and claimed mailbox jobs were recovered; unclaimed child runs were abandoned')",
                 [project],
             )?;
         }
@@ -2574,6 +2582,126 @@ mod tests {
             Some("completed")
         );
         assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn recovery_abandons_unclaimed_batch_children_without_marking_them_running() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-before-claim-crash",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                &jobs,
+                "run-parent-before-claim",
+                "test",
+                &[],
+                "batch snapshot",
+                &[],
+            )
+            .unwrap();
+
+        assert_eq!(db.recover_abandoned_jobs().unwrap(), 0);
+        assert_eq!(
+            db.run_status("run-parent-before-claim").unwrap().as_deref(),
+            Some("abandoned")
+        );
+        for (job, child_run) in jobs.iter().zip(child_runs) {
+            assert_eq!(db.mailbox_state(job).unwrap().as_deref(), Some("queued"));
+            assert_eq!(
+                db.run_status(&child_run).unwrap().as_deref(),
+                Some("abandoned")
+            );
+        }
+
+        db.begin_batch_run(
+            &project.id,
+            &jobs,
+            "run-retry-after-before-claim",
+            "test",
+            &[],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn recovery_abandons_queued_and_claimed_batch_children_distinctly() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-partial-claim-crash",
+                "source",
+                "destination",
+                &[
+                    ("one".into(), "one".into()),
+                    ("two".into(), "two".into()),
+                    ("three".into(), "three".into()),
+                ],
+            )
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                &jobs,
+                "run-parent-partial-claim",
+                "test",
+                &[],
+                "batch snapshot",
+                &[],
+            )
+            .unwrap();
+        db.claim_batch_mailbox_for_child(
+            &project.id,
+            &jobs[0],
+            "run-parent-partial-claim",
+            &child_runs[0],
+        )
+        .unwrap();
+        db.register_process(&ActiveProcess {
+            run_id: child_runs[0].clone(),
+            job_id: jobs[0].clone(),
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test".into(),
+        })
+        .unwrap();
+
+        assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
+            Some("attention")
+        );
+        assert_eq!(
+            db.mailbox_state(&jobs[1]).unwrap().as_deref(),
+            Some("queued")
+        );
+        assert_eq!(
+            db.mailbox_state(&jobs[2]).unwrap().as_deref(),
+            Some("queued")
+        );
+        assert!(jobs.iter().all(|job| {
+            db.latest_run(job)
+                .unwrap()
+                .is_some_and(|run| run.status == "abandoned")
+        }));
+        assert!(db.active_processes().unwrap().is_empty());
+
+        db.begin_batch_run(
+            &project.id,
+            &jobs,
+            "run-retry-after-partial-claim",
+            "test",
+            &[],
+        )
+        .unwrap();
     }
 
     #[test]
