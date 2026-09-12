@@ -823,10 +823,9 @@ impl StateStore {
         )?;
         tx.commit()
     }
-    /// Start a batch as one durable boundary. Children are marked running
-    /// before the worker is spawned; after a crash, recovery can therefore
-    /// move every unresolved child into Attention instead of losing queued
-    /// work between the parent run and UI event polling.
+    /// Start a batch as one durable boundary. Child mailboxes remain queued
+    /// until an individual worker claims them, so durable state reflects work
+    /// that has actually reached the execution layer.
     pub fn begin_batch_run(
         &self,
         project_id: &str,
@@ -881,17 +880,53 @@ impl StateStore {
             "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,NULL,?3,?4,'running')",
             params![run_id, project_id, engine, plan_snapshot],
         )?;
-        for job_id in job_ids {
-            tx.execute(
-                "UPDATE mailbox_jobs SET state='running',attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
-                [job_id],
-            )?;
-        }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_started',?2)",
             params![
                 project_id,
                 format!("{engine} ({run_id}); {} child jobs", job_ids.len())
+            ],
+        )?;
+        tx.commit()
+    }
+    /// Atomically claims one child of a running parent batch. The operation
+    /// is idempotent for a child already claimed by that same batch because
+    /// retry/status events may be observed more than once by the UI.
+    pub fn claim_batch_mailbox(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+    ) -> rusqlite::Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let parent_is_running: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id IS NULL AND status='running')",
+            params![run_id, project_id],
+            |row| row.get(0),
+        )?;
+        if !parent_is_running {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let current: String = tx.query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+            |row| row.get(0),
+        )?;
+        if current == "running" {
+            return tx.commit();
+        }
+        if !valid_mailbox_transition(&current, "running") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "UPDATE mailbox_jobs SET state='running',attempt=attempt+1 WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'mailbox_claimed',?2)",
+            params![
+                project_id,
+                format!("{job_id} claimed by batch run {run_id}")
             ],
         )?;
         tx.commit()
@@ -1258,7 +1293,7 @@ fn valid_mailbox_transition(current: &str, next: &str) -> bool {
     match current {
         "queued" => matches!(
             next,
-            "preflight" | "ready" | "running" | "failed" | "cancelled"
+            "preflight" | "ready" | "running" | "failed" | "cancelled" | "attention"
         ),
         "preflight" => matches!(next, "ready" | "running" | "failed" | "cancelled"),
         "ready" => matches!(next, "running" | "failed" | "cancelled"),
@@ -1405,7 +1440,14 @@ mod tests {
         let allowed = [
             (
                 "queued",
-                &["preflight", "ready", "running", "failed", "cancelled"] as &[&str],
+                &[
+                    "preflight",
+                    "ready",
+                    "running",
+                    "failed",
+                    "cancelled",
+                    "attention",
+                ] as &[&str],
             ),
             ("preflight", &["ready", "running", "failed", "cancelled"]),
             ("ready", &["running", "failed", "cancelled"]),
@@ -1948,7 +1990,7 @@ mod tests {
     }
 
     #[test]
-    fn begin_batch_run_covers_all_children_before_worker_start() {
+    fn begin_batch_run_leaves_children_queued_until_claimed() {
         let db = StateStore::in_memory().unwrap();
         let (project, jobs) = db
             .create_project_with_mailboxes(
@@ -1962,10 +2004,41 @@ mod tests {
             .unwrap();
         assert!(
             jobs.iter()
-                .all(|job| db.mailbox_state(job).unwrap().as_deref() == Some("running"))
+                .all(|job| db.mailbox_state(job).unwrap().as_deref() == Some("queued"))
         );
         assert_eq!(
             db.run_status("run-batch-atomic").unwrap().as_deref(),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn batch_claim_moves_only_the_claimed_mailbox_to_running() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-claim",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        db.begin_batch_run(&project.id, &jobs, "run-batch-claim", "test", &[])
+            .unwrap();
+        db.claim_batch_mailbox(&project.id, &jobs[0], "run-batch-claim")
+            .unwrap();
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            db.mailbox_state(&jobs[1]).unwrap().as_deref(),
+            Some("queued")
+        );
+        db.claim_batch_mailbox(&project.id, &jobs[0], "run-batch-claim")
+            .unwrap();
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
             Some("running")
         );
     }

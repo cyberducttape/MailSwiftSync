@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Batch parents now leave child mailboxes queued until a worker atomically claims each one; claims increment attempts and are recorded as durable events, so the ledger no longer reports an entire queue as running before execution begins.
 - Session-held password buffers now use `zeroize::Zeroizing<String>` throughout the form, imported rows, and keyring loads; saved profiles, snapshots, and the durable ledger remain password-free.
 - Added a SQLite partial unique index enforcing one `running` job-bound run per mailbox; parent batch runs with a null `job_id` remain valid, and direct-insert regression coverage proves the database rejects overlap.
 - Added an exhaustive mailbox state-transition matrix test covering every known state pair, including retry, recovery, delta, and verification paths.

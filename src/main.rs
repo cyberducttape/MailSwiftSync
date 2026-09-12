@@ -3893,7 +3893,15 @@ impl App {
                                 "Queued" => "queued",
                                 _ => "attention",
                             };
-                            let result = self.store.set_mailbox_state(job_id, durable_state);
+                            let result = if durable_state == "running"
+                                && let Some(run) = active_run.as_ref()
+                                && matches!(run.kind, RunKind::Batch)
+                            {
+                                self.store
+                                    .claim_batch_mailbox(&run.project_id, job_id, &run.run_id)
+                            } else {
+                                self.store.set_mailbox_state(job_id, durable_state)
+                            };
                             if let Err(error) = result {
                                 durability_errors
                                     .push(format!("persist batch mailbox state failed: {error}"));
