@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Pinned CI and release builds to Rust 1.92.0 so linting and published artifacts use a reproducible toolchain.
 - Added the MIT license and clarified the product identity and control-plane positioning.
 - Repositioned the main UI around engine-neutral planning and verification/audit outcomes.
 
