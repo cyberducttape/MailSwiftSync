@@ -53,6 +53,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added optional OS-keyring credential references with session-only loading, deletion controls, and documentation that distinguishes keyring password storage from OAuth and unattended secret brokering.
 - Added stable failure taxonomy for operator action and retry policy; only transport/throttling failures are classified as transient, while run details retain the failure class.
 - Bound the exact preflight fingerprint to non-secret OS-keyring credential references so changing the credential source requires a fresh preflight.
+- Added cross-platform release-target compilation to pull-request CI, covering Linux, Windows, and both macOS architectures instead of waiting for a tag build to catch platform regressions.
 - Closed the IMAP probe validation bypass: capability discovery now validates form input and its quoting helper rejects control characters defensively; redundant secret-directory cleanup was removed from worker execution.
 - Clarified that the imapsync text-summary `unmatched_messages` value is a proof-pending sentinel, not a literal unresolved-message count.
 - Live mailbox starts now atomically create the durable run record and move the job to `running`; persistence failures abort before the migration process is spawned.
