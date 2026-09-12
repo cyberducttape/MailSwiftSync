@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Subprocess stdout/stderr readers are joined on every completion path, including timeout and cancellation, so reader failures or panics cannot be silently discarded or leave unmanaged reader threads.
 - Subprocess line readers now propagate pipe I/O failures and reader-thread panics instead of treating them as clean EOF; incremental lossy-UTF-8 streaming remains intact.
 - Visible journal retention now uses `VecDeque`, keeping the 10,000-line UI window bounded without repeatedly shifting the entire log.
 - Batch admission now creates a durable child run for every mailbox with its own engine and secret-free plan snapshot; the parent run remains the wave-level record while child identities are available for process and terminal-result attribution.

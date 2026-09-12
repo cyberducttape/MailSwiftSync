@@ -1113,16 +1113,27 @@ fn run_streaming(
         });
     let stdout_reader = out_thread
         .join()
-        .map_err(|_| "stdout reader thread panicked".to_owned())?;
+        .map_err(|_| "stdout reader thread panicked".to_owned());
     let stderr_reader = err_thread
         .join()
-        .map_err(|_| "stderr reader thread panicked".to_owned())?;
+        .map_err(|_| "stderr reader thread panicked".to_owned());
     let reader_error = stdout_reader
+        .as_ref()
         .err()
-        .map(|error| format!("stdout reader failed: {error}"))
+        .cloned()
+        .or_else(|| stderr_reader.as_ref().err().cloned())
+        .or_else(|| {
+            stdout_reader
+                .as_ref()
+                .ok()
+                .and_then(|result| result.as_ref().err())
+                .map(|error| format!("stdout reader failed: {error}"))
+        })
         .or_else(|| {
             stderr_reader
-                .err()
+                .as_ref()
+                .ok()
+                .and_then(|result| result.as_ref().err())
                 .map(|error| format!("stderr reader failed: {error}"))
         });
     match result {
@@ -1215,20 +1226,22 @@ fn run_capture_lines(
     let out_thread = thread::spawn(move || collect_redacted_lines(stdout, &out_secrets));
     let err_secrets = secrets.to_vec();
     let err_thread = thread::spawn(move || collect_redacted_lines(stderr, &err_secrets));
-    let status =
-        wait_with_timeout(&mut child, timeout, cancel).map_err(|error| error.to_string())?;
-    let mut lines = out_thread
+    let status = wait_with_timeout(&mut child, timeout, cancel).map_err(|error| error.to_string());
+    let stdout_lines = out_thread
         .join()
         .map_err(|_| "stdout reader thread panicked".to_owned())?
-        .map_err(|error| format!("stdout reader failed: {error}"))?;
+        .map_err(|error| format!("stdout reader failed: {error}"));
+    let stderr_lines = err_thread
+        .join()
+        .map_err(|_| "stderr reader thread panicked".to_owned())?
+        .map_err(|error| format!("stderr reader failed: {error}"));
+    let mut lines = stdout_lines?;
     lines.extend(
-        err_thread
-            .join()
-            .map_err(|_| "stderr reader thread panicked".to_owned())?
-            .map_err(|error| format!("stderr reader failed: {error}"))?
+        stderr_lines?
             .into_iter()
             .map(|line| format!("[stderr] {line}")),
     );
+    let status = status?;
     Ok((status, lines))
 }
 
