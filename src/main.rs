@@ -301,6 +301,23 @@ impl Form {
         ) {
             return Err("Dovecot execution must be automatic, local, or ssh.".into());
         }
+        if self.engine() == core::Engine::Dovecot && !self.local_doveadm() {
+            for (label, value) in [
+                ("Dovecot SSH host", self.profile.destination_host.as_str()),
+                (
+                    "Dovecot SSH username",
+                    self.profile.dovecot_ssh_user.as_str(),
+                ),
+            ] {
+                if (!value.is_empty() && value.starts_with('-'))
+                    || value.chars().any(char::is_whitespace)
+                {
+                    return Err(format!(
+                        "{label} cannot begin with '-' or contain whitespace."
+                    ));
+                }
+            }
+        }
         for (label, value) in required {
             if value.trim().is_empty() {
                 return Err(format!("{label} is required."));
@@ -4878,6 +4895,18 @@ mod tests {
         );
         form.profile.allow_remote_password_in_argv = true;
         assert!(form.prepared_command().is_ok());
+    }
+
+    #[test]
+    fn remote_dovecot_rejects_ssh_option_like_targets() {
+        let mut form = dovecot_form();
+        form.profile.dovecot_execution = "ssh".into();
+        form.profile.allow_remote_password_in_argv = true;
+        form.profile.destination_host = "-oProxyCommand=unsafe".into();
+        assert!(form.validate().unwrap_err().contains("SSH host"));
+        form.profile.destination_host = "mail.example".into();
+        form.profile.dovecot_ssh_user = "admin user".into();
+        assert!(form.validate().unwrap_err().contains("SSH username"));
     }
 
     #[test]
