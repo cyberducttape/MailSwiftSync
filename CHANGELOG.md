@@ -14,6 +14,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added durable redacted run output, lifecycle events, mailbox states, and verification evidence.
 - Added `imapsync` summary parsing for automatic evidence capture.
 - Added child-process-only `IMAPSYNC_PASSWORD1/2` environment credentials for live `imapsync` runs.
+- Added exportable Markdown verification reports and a tagged-release workflow for Linux, Windows, and macOS artifacts.
 - Added regression coverage for command generation, credential handling, evidence parsing, and verification confidence.
 - Added durable batch validation jobs, per-run evidence IDs, bounded execution, and operator cancellation.
 
@@ -23,6 +24,7 @@ All notable changes to MailSwiftSync are documented here.
 - Automatic engine selection is conservative and uses `imapsync` unless Dovecot mode is explicitly selected.
 - Updated operator, architecture, and security documentation to describe the native Dovecot workflow and its limitations.
 - Added explicit source port/TLS controls, including correct Dovecot mapping for plaintext (`imapc_ssl=no`), and stricter CSV/option validation.
+- Renamed the product and runtime namespace to MailSwiftSync, while retaining one-time loading of legacy profile files.
 
 ### Security
 
