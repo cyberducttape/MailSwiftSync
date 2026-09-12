@@ -177,3 +177,4 @@ All notable changes to MailSwiftSync are documented here.
 - Batch workers now wait for an acknowledged durable child/mailbox claim before launching an engine process, eliminating the asynchronous unclaimed-process window.
 - Project Markdown and JSON reports now include the durable run ID that produced each mailbox's latest evidence.
 - Project and health exports now include a stable SHA-256 reference to each persisted run plan for change-ticket correlation without duplicating the snapshot.
+- imapsync destination endpoints now support typed implicit-TLS or STARTTLS transport and transport-appropriate default ports, including explicit nonstandard destination ports.
