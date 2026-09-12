@@ -1274,7 +1274,8 @@ impl App {
         ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
         ui.add_space(12.0);
         ui.group(|ui| {
-            ui.heading("Evidence report");
+            ui.heading("Verification and audit report");
+            ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(MUTED));
             if let Some(job) = &self.job_id {
                 match self.store.evidence(job) {
                     Ok(Some(evidence)) => {
@@ -2026,10 +2027,13 @@ impl App {
         let mut close_requested = false;
         egui::Window::new("Choose migration engine").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
             ui.heading("How should this migration run?");
-            ui.label(RichText::new("Use Dovecot's native engine when the destination is Dovecot. Keep imapsync for arbitrary IMAP destinations.").color(MUTED));
+            ui.label(RichText::new("Select the execution engine that fits the destination. MailSwiftSync owns planning, safety gates, orchestration, and verification; the selected engine owns message transfer.").color(MUTED));
             ui.add_space(8.0);
             for engine in [core::Engine::Auto, core::Engine::Dovecot, core::Engine::ImapSync] {
                 ui.radio_value(&mut self.form.profile.engine, engine, engine.label());
+                if self.form.profile.engine == engine {
+                    ui.label(RichText::new(engine.description()).size(11.0).color(MUTED));
+                }
             }
             if self.form.profile.engine == core::Engine::Dovecot {
                 ui.add_space(6.0);
@@ -2093,7 +2097,7 @@ impl eframe::App for App {
                             .color(NAVY),
                     );
                     ui.label(
-                        RichText::new("IMAP migration console")
+                        RichText::new("mailbox migration control plane")
                             .italics()
                             .color(MUTED),
                     );

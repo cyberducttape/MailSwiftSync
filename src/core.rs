@@ -27,6 +27,20 @@ impl Engine {
             Self::ImapSync => "imapsync fallback",
         }
     }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Auto => {
+                "Choose the safest available path; imapsync remains the conservative fallback."
+            }
+            Self::Dovecot => {
+                "Use destination-side doveadm/dsync when the destination is Dovecot and admin access is available."
+            }
+            Self::ImapSync => {
+                "Use imapsync when both ends are arbitrary IMAP servers or no destination admin stack is available."
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

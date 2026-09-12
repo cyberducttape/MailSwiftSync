@@ -4,7 +4,7 @@
 
 MailSwiftSync helps administrators and MSPs plan, execute, verify, and audit mailbox migrations. It selects the migration engine based on the environment: Dovecot destinations can use native `doveadm`/dsync with a remote IMAP source through `imapc`; arbitrary IMAP-to-IMAP migrations can use a locally installed `imapsync` executable. Both paths provide a redacted plan, durable project state, phased execution, and an operator journal.
 
-The product value is the control plane around the transfer engine: endpoint checks, pilot and cutover planning, mailbox scope, controlled execution, durable run records, and evidence-led verification. MailSwiftSync is not a prettier imapsync launcher.
+The product value is the control plane around the transfer engine: endpoint checks, pilot and cutover planning, mailbox scope, controlled execution, durable run records, and evidence-led verification. The central workflow is **Plan → Preflight → Execute → Verify → Audit**.
 
 ## Project status
 

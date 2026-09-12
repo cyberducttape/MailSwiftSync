@@ -7,6 +7,7 @@ All notable changes to MailSwiftSync are documented here.
 ### Added
 
 - Added the MIT license and clarified the product identity and control-plane positioning.
+- Repositioned the main UI around engine-neutral planning and verification/audit outcomes.
 
 - Added explicit migration engine selection with Dovecot-native `doveadm`/`imapc` execution and an `imapsync` fallback.
 - Added local and SSH-based Dovecot destination execution with non-interactive SSH and shell-quoted remote arguments.
