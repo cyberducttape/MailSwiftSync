@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added bounded redacted stdout/stderr tails to process failures so failure classification and transient retry decisions receive the engine's actual diagnostic output.
+- Added five-second graceful shutdown before process-group escalation, Linux parent-death signalling, and retry-safe handling of timeout/cancellation cleanup.
+- Aggregate evidence mismatches now report zero compatibility confidence instead of the misleading 85% fallback; exact aggregate matches remain explicitly labelled as aggregate rather than message-level proof.
+- IMAP readiness now tries every resolved address before reporting connectivity failure, and bulk imports preserve password whitespace exactly.
+- Removed the superseded non-terminal evidence persistence API after atomic terminal completion became the only supported path.
 - Promoted the durable batch queue from validation-only to gated live execution after matching dry-validation fingerprints and explicit operator confirmation.
 - Added elapsed-time running feedback, Escape-key cancellation, dark/light theme switching, and contextual help for performance controls.
 - Added explainable evidence levels to complement the internal confidence percentage in the verification UI and architecture model.

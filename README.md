@@ -96,7 +96,7 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 4. Run validation and inspect the execution journal for successful access and folder mapping.
 5. Only then disable Dry run and launch a live migration.
 
-In imapsync mode, use **Project cockpit → Run authenticated IMAPS readiness probe** before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The probe is limited to dual-IMAPS plans; plain and STARTTLS plans use the selected engine's dry preflight for authentication validation. In Dovecot mode, the destination is checked through the native `doveadm` dry preflight and does not require a destination IMAP password.
+In imapsync mode, use **Project cockpit → Run authenticated IMAPS readiness probe** before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The probe is limited to dual-IMAPS plans; plain and STARTTLS plans use the selected engine's dry preflight for authentication validation. In Dovecot mode, the native dry preflight checks the remote `imapc` source; destination account/storage/quota checks require administrative access and are not claimed by this probe.
 
 ## Why MailSwiftSync exists
 
@@ -120,7 +120,7 @@ Dovecot mode configures the destination-side command in the form `doveadm ... sy
 
 ## Verification
 
-Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and confidence result. A successful process with incomplete evidence remains pending review. Aggregate evidence is not a substitute for message-level reconciliation; that distinction is explicit in the architecture and release criteria. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
+Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches can be accepted as `Aggregate match`, but they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
 
 ![Batch migration review](docs/wiki/assets/batch-queue.png)
 
