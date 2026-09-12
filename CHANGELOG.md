@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Subprocess line framing now reads in fixed-size chunks and caps any single unterminated line at 64 KiB with an explicit truncation marker, preventing pathological engine output from causing unbounded allocation.
 - Subprocess stdout/stderr readers are joined on every completion path, including timeout and cancellation, so reader failures or panics cannot be silently discarded or leave unmanaged reader threads.
 - Subprocess line readers now propagate pipe I/O failures and reader-thread panics instead of treating them as clean EOF; incremental lossy-UTF-8 streaming remains intact.
 - Visible journal retention now uses `VecDeque`, keeping the 10,000-line UI window bounded without repeatedly shifting the entire log.

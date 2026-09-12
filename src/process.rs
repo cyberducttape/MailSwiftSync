@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Read},
+    io::Read,
     process::{Child, Command, ExitStatus},
     sync::{
         Mutex,
@@ -10,6 +10,8 @@ use std::{
 };
 
 use crate::core;
+
+const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
 
 pub(crate) fn collect_redacted_lines<R: Read>(
     reader: R,
@@ -36,23 +38,47 @@ pub(crate) fn read_lossy_lines<R: Read>(reader: R) -> Vec<String> {
 
 /// Consume subprocess output incrementally while tolerating malformed UTF-8.
 pub(crate) fn for_each_lossy_line<R: Read, F: FnMut(String)>(
-    reader: R,
+    mut reader: R,
     mut callback: F,
 ) -> std::io::Result<()> {
-    let mut reader = BufReader::new(reader);
-    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    let mut line = Vec::with_capacity(8192);
+    let mut line_started = false;
+    let mut truncated = false;
     loop {
-        buffer.clear();
-        let bytes_read = reader.read_until(b'\n', &mut buffer)?;
+        let bytes_read = reader.read(&mut chunk)?;
         if bytes_read == 0 {
-            break;
+            if line_started {
+                emit_lossy_line(&line, truncated, &mut callback);
+            }
+            return Ok(());
         }
-        let line = String::from_utf8_lossy(&buffer)
-            .trim_end_matches(['\r', '\n'])
-            .to_owned();
-        callback(line);
+        for byte in &chunk[..bytes_read] {
+            if *byte == b'\n' {
+                emit_lossy_line(&line, truncated, &mut callback);
+                line.clear();
+                line_started = false;
+                truncated = false;
+            } else {
+                line_started = true;
+                if line.len() < MAX_SUBPROCESS_LINE_BYTES {
+                    line.push(*byte);
+                } else {
+                    truncated = true;
+                }
+            }
+        }
     }
-    Ok(())
+}
+
+fn emit_lossy_line<F: FnMut(String)>(line: &[u8], truncated: bool, callback: &mut F) {
+    let mut text = String::from_utf8_lossy(line)
+        .trim_end_matches('\r')
+        .to_owned();
+    if truncated {
+        text.push_str(" [line truncated by MailSwiftSync]");
+    }
+    callback(text);
 }
 
 #[cfg(test)]
@@ -89,6 +115,18 @@ mod tests {
             io::ErrorKind::Other,
             "reader errors must not be mistaken for clean EOF"
         );
+    }
+
+    #[test]
+    fn lossy_line_reader_bounds_a_single_unterminated_line() {
+        let input = vec![b'x'; MAX_SUBPROCESS_LINE_BYTES * 2];
+        let mut lines = Vec::new();
+
+        for_each_lossy_line(std::io::Cursor::new(input), |line| lines.push(line)).unwrap();
+
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].ends_with("[line truncated by MailSwiftSync]"));
+        assert!(lines[0].len() < MAX_SUBPROCESS_LINE_BYTES + 64);
     }
 }
 
