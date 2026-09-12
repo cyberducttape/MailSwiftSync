@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Subprocess output now uses byte-oriented line framing with lossy UTF-8 conversion, so malformed external-tool output cannot stop pipe draining; a regression test covers continued reading after invalid bytes.
 - Live bulk runs now reject duplicate destination host/port/mailbox targets before any process starts, preventing concurrent migration engines from mutating the same destination mailbox.
 - Project phase recovery from `Attention` to `Preflight` or `Verification` now works as intended, and phase changes plus their audit events commit atomically.
 - Updated user-facing troubleshooting and architecture language to consistently call imapsync output engine-confirmed rather than authoritative, and to distinguish a successful process exit from verified completion.

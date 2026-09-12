@@ -1220,7 +1220,7 @@ fn run_streaming(
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
     let out_tail = Arc::clone(&tail);
     let out_thread = thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+        for line in read_lossy_lines(stdout) {
             let mut safe = line;
             for secret in &out_secrets {
                 if !secret.is_empty() {
@@ -1236,7 +1236,7 @@ fn run_streaming(
     let err_secrets = secrets.to_vec();
     let err_tail = Arc::clone(&tail);
     let err_thread = thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        for line in read_lossy_lines(stderr) {
             let mut safe = line;
             for secret in &err_secrets {
                 if !secret.is_empty() {
@@ -1351,9 +1351,8 @@ fn run_dovecot_destination_preflight(
 }
 
 fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> Vec<String> {
-    BufReader::new(reader)
-        .lines()
-        .map_while(Result::ok)
+    read_lossy_lines(reader)
+        .into_iter()
         .map(|mut line| {
             for secret in secrets {
                 if !secret.is_empty() {
@@ -1363,6 +1362,27 @@ fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> Vec<String>
             line
         })
         .collect()
+}
+
+fn read_lossy_lines<R: Read>(reader: R) -> Vec<String> {
+    let mut reader = BufReader::new(reader);
+    let mut buffer = Vec::new();
+    let mut lines = Vec::new();
+    loop {
+        buffer.clear();
+        let bytes_read = match reader.read_until(b'\n', &mut buffer) {
+            Ok(bytes_read) => bytes_read,
+            Err(_) => break,
+        };
+        if bytes_read == 0 {
+            break;
+        }
+        let line = String::from_utf8_lossy(&buffer)
+            .trim_end_matches(['\r', '\n'])
+            .to_owned();
+        lines.push(line);
+    }
+    lines
 }
 #[derive(Clone)]
 struct BulkJob {
@@ -4729,6 +4749,13 @@ mod tests {
             },
         ];
         assert!(duplicate_bulk_destination(&jobs).is_some());
+    }
+
+    #[test]
+    fn subprocess_output_reader_survives_invalid_utf8() {
+        let bytes = b"first\n\xff\xfe\nlast\n";
+        let lines = read_lossy_lines(std::io::Cursor::new(bytes));
+        assert_eq!(lines, ["first", "��", "last"]);
     }
 
     #[test]
