@@ -910,8 +910,8 @@ impl StateStore {
             [job_id],
         )?;
         tx.execute(
-            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_started',?2)",
-            params![project_id, format!("{engine} ({run_id})")],
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_started',?3)",
+            params![project_id, run_id, format!("{engine} ({run_id})")],
         )?;
         tx.commit()
     }
@@ -1031,9 +1031,10 @@ impl StateStore {
             child_run_ids.push(child_run_id);
         }
         tx.execute(
-            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_started',?2)",
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_started',?3)",
             params![
                 project_id,
+                run_id,
                 format!("{engine} ({run_id}); {} child jobs", job_ids.len())
             ],
         )?;
@@ -1073,9 +1074,10 @@ impl StateStore {
             params![job_id, project_id],
         )?;
         tx.execute(
-            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'mailbox_claimed',?2)",
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'mailbox_claimed',?3)",
             params![
                 project_id,
+                run_id,
                 format!("{job_id} claimed by batch run {run_id}")
             ],
         )?;
@@ -1128,9 +1130,10 @@ impl StateStore {
             params![child_run_id, project_id, job_id, parent_run_id],
         )?;
         tx.execute(
-            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'mailbox_claimed',?2)",
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'mailbox_claimed',?3)",
             params![
                 project_id,
+                child_run_id,
                 format!("{job_id} claimed by child run {child_run_id}")
             ],
         )?;
@@ -1138,6 +1141,11 @@ impl StateStore {
     }
     pub fn finish_run(&self, run_id: &str, status: &str, detail: &str) -> rusqlite::Result<()> {
         let tx = self.connection.unchecked_transaction()?;
+        let project_id: String = tx.query_row(
+            "SELECT project_id FROM runs WHERE id=?1 AND status='running'",
+            [run_id],
+            |row| row.get(0),
+        )?;
         let changed = tx.execute(
             "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND status='running'",
             params![status, detail, run_id],
@@ -1146,6 +1154,10 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
+        tx.execute(
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_finished',?3)",
+            params![project_id, run_id, detail],
+        )?;
         tx.commit()
     }
     /// Atomically completes a single-mailbox run and records the durable
@@ -1212,9 +1224,10 @@ impl StateStore {
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
-            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_finished',?2)",
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_finished',?3)",
             params![
                 project_id,
+                run_id,
                 if run_status == "completed" {
                     "success"
                 } else {
@@ -1279,8 +1292,8 @@ impl StateStore {
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
-            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_finished',?2)",
-            params![project_id, "success with verification evidence"],
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_finished',?3)",
+            params![project_id, run_id, "success with verification evidence"],
         )?;
         tx.commit()
     }
@@ -2558,11 +2571,14 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
 
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
         assert!(rows.iter().all(|(project_id, run_id, _)| {
             project_id == &project.id && run_id == "run-events-1"
         }));
-        assert_eq!(rows[0].2, "transfer output");
+        assert!(
+            rows.iter()
+                .any(|(_, _, detail)| detail == "transfer output")
+        );
     }
 
     #[test]

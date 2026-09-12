@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Lifecycle events (`run_started`, `mailbox_claimed`, and `run_finished`) now carry the exact durable run ID, completing run-scoped forensic attribution alongside output and verification events.
 - SQLite startup now records a schema version and refuses to open a database stamped with a newer unsupported version, preventing unsafe partial migrations during downgrade or mixed-version use.
 - Execution output and verification events now persist their producing `run_id` in SQLite; the run resolves its project identity transactionally, improving forensic reconstruction without changing legacy project-scoped event compatibility.
 - Batch dry/live waves now reuse an existing durable queue only when every row's mailbox identity and secret-free persisted configuration match; edited queues receive a fresh project association instead of reusing stale mailbox IDs.
