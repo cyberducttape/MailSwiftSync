@@ -6,7 +6,7 @@ MailSwiftSync can import a migration list from CSV, XLS, or XLSX and validate ro
 
 ![Batch migration queue interface](assets/batch-queue.png)
 
-> This is an interface illustration showing what the batch-review workflow looks like; passwords are never shown in the queue.
+> **Documentation illustration:** this image shows the intended batch-review workflow and is not a pixel-accurate capture of the current egui application. Passwords are never shown in the queue.
 
 ## Create the file
 

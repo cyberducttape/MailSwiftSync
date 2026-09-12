@@ -2,9 +2,9 @@
 
 MailSwiftSync is a local mailbox migration control plane. It uses Dovecot's native `doveadm`/dsync workflow when the destination is Dovecot, and `imapsync` for arbitrary IMAP-to-IMAP work. It helps you plan a migration, test it safely, keep a durable project record, and verify the result.
 
-![Migration plan screen](assets/migration-plan.png)
+![Illustrative migration plan screen](assets/migration-plan.png)
 
-> The screenshot is an interface illustration. Field values in documentation are examples only.
+> **Documentation illustration:** this image is a polished workflow mockup, not a pixel-accurate capture of the current egui application. Field values are examples only. The shipped interface is intentionally utilitarian and its current controls are documented below.
 
 ## Start here
 

@@ -1330,6 +1330,20 @@ impl Default for App {
     }
 }
 
+fn format_phase_name(phase: core::Phase) -> &'static str {
+    match phase {
+        core::Phase::Discovery => "Discovery",
+        core::Phase::Preflight => "Preflight",
+        core::Phase::Pilot => "Pilot",
+        core::Phase::Seed => "Seed",
+        core::Phase::CatchUp => "Catch-up",
+        core::Phase::FinalDelta => "Final delta",
+        core::Phase::Verification => "Verification",
+        core::Phase::Complete => "Complete",
+        core::Phase::Attention => "Attention",
+    }
+}
+
 fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), String> {
     let input = input.trim();
     if input.is_empty() {
@@ -1716,7 +1730,69 @@ impl App {
         (passed, checks)
     }
 
+    fn lifecycle_stepper(&self, ui: &mut egui::Ui) {
+        let phases = [
+            core::Phase::Discovery,
+            core::Phase::Preflight,
+            core::Phase::Pilot,
+            core::Phase::Seed,
+            core::Phase::CatchUp,
+            core::Phase::FinalDelta,
+            core::Phase::Verification,
+            core::Phase::Complete,
+            core::Phase::Attention,
+        ];
+        let current = self
+            .project_id
+            .as_deref()
+            .and_then(|id| self.store.project(id).ok().flatten())
+            .map(|project| project.phase)
+            .unwrap_or(core::Phase::Discovery);
+        let current_index = phases
+            .iter()
+            .position(|phase| *phase == current)
+            .unwrap_or(0);
+        ui.group(|ui| {
+            ui.label(
+                RichText::new("MIGRATION LIFECYCLE")
+                    .size(11.0)
+                    .strong()
+                    .color(MUTED),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for (index, phase) in phases.iter().enumerate() {
+                    if index > 0 {
+                        ui.label(RichText::new("→").color(MUTED));
+                    }
+                    let color = if index < current_index {
+                        TEAL
+                    } else if index == current_index {
+                        BLUE
+                    } else {
+                        MUTED
+                    };
+                    ui.label(
+                        RichText::new(format!(
+                            "{} {}",
+                            if index < current_index {
+                                "✓"
+                            } else if index == current_index {
+                                "●"
+                            } else {
+                                "○"
+                            },
+                            format_phase_name(*phase)
+                        ))
+                        .strong()
+                        .color(color),
+                    );
+                }
+            });
+        });
+    }
+
     fn project_summary(&mut self, ui: &mut egui::Ui) {
+        self.lifecycle_stepper(ui);
         if self.active_view != WorkspaceView::Plan {
             match self.active_view {
                 WorkspaceView::Overview => self.overview_view(ui),
@@ -3170,6 +3246,18 @@ impl App {
         password: &mut String,
         color: Color32,
     ) {
+        let inline_error = |ui: &mut egui::Ui, label: &str, value: &str, required: bool| {
+            let message = if required && value.trim().is_empty() {
+                Some(format!("{label} is required."))
+            } else if !value.is_empty() && value.chars().any(char::is_control) {
+                Some(format!("{label} contains an invalid control character."))
+            } else {
+                None
+            };
+            if let Some(message) = message {
+                ui.label(RichText::new(message).color(ALERT).size(11.0));
+            }
+        };
         ui.group(|ui| {
             ui.heading(RichText::new(title).color(color));
             ui.label(RichText::new("IMAP connection").size(11.0).color(MUTED));
@@ -3177,14 +3265,25 @@ impl App {
                 ui.label("Server");
                 ui.text_edit_singleline(host);
             });
+            inline_error(ui, "Server", host, true);
             ui.horizontal(|ui| {
                 ui.label("User");
                 ui.text_edit_singleline(user);
             });
+            inline_error(ui, "User", user, true);
             ui.horizontal(|ui| {
                 ui.label("Password");
-                ui.add(egui::TextEdit::singleline(password).password(true));
+                let visibility_id = ui.make_persistent_id(title).with("password_visibility");
+                let visible = ui
+                    .ctx()
+                    .data_mut(|data| data.get_temp::<bool>(visibility_id).unwrap_or(false));
+                ui.add(egui::TextEdit::singleline(password).password(!visible));
+                if ui.button(if visible { "Hide" } else { "Show" }).clicked() {
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(visibility_id, !visible));
+                }
             });
+            inline_error(ui, "Password", password, title.starts_with("01"));
         });
     }
     fn preview(&mut self, ctx: &egui::Context) {

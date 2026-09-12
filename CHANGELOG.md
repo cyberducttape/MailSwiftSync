@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added a persistent lifecycle stepper to the main workspace, password show/hide controls, and inline account-field validation for common input errors.
+- Clarified in the README and wiki that current UI images are workflow illustrations rather than pixel-accurate application screenshots.
 - Batch workers now claim immutable jobs through an atomic index instead of contending on a mutex-protected iterator.
 - Added a configurable 1–720 hour per-process timeout for large mailbox migrations.
 - Added explicit imapsync message/byte-per-second throttles for provider-friendly runs.
