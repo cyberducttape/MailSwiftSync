@@ -179,3 +179,4 @@ All notable changes to MailSwiftSync are documented here.
 - Project and health exports now include a stable SHA-256 reference to each persisted run plan for change-ticket correlation without duplicating the snapshot.
 - imapsync destination endpoints now support typed implicit-TLS or STARTTLS transport and transport-appropriate default ports, including explicit nonstandard destination ports.
 - Operator verification surfaces now lead with named evidence levels instead of pseudo-precise confidence percentages; the compatibility score remains internal for legacy callers.
+- Single-mailbox verification exports now use named evidence levels consistently with project reports and the Verification workspace.
