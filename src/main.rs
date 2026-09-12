@@ -153,14 +153,22 @@ impl Form {
         Ok(())
     }
     fn validate(&self) -> Result<(), String> {
+        self.validate_internal(true)
+    }
+    fn validate_for_import(&self) -> Result<(), String> {
+        self.validate_internal(false)
+    }
+    fn validate_internal(&self, require_credentials: bool) -> Result<(), String> {
         let mut required = vec![
             ("Source IMAP host", &self.profile.source_host),
             ("Source username", &self.profile.source_user),
             ("Destination IMAP host", &self.profile.destination_host),
             ("Destination username", &self.profile.destination_user),
-            ("Source password", &self.source_password),
         ];
-        if self.engine() != core::Engine::Dovecot {
+        if require_credentials {
+            required.push(("Source password", &self.source_password));
+        }
+        if require_credentials && self.engine() != core::Engine::Dovecot {
             required.push(("Destination password", &self.destination_password));
         }
         let source_port = self.profile.source_port.trim();
@@ -184,8 +192,12 @@ impl Form {
         for (label, value) in [
             ("Source IMAP host", &self.profile.source_host),
             ("Destination IMAP host", &self.profile.destination_host),
+            ("Source username", &self.profile.source_user),
+            ("Destination username", &self.profile.destination_user),
+            ("Source password", &self.source_password),
+            ("Destination password", &self.destination_password),
         ] {
-            if value.chars().any(char::is_control) {
+            if !value.is_empty() && value.chars().any(char::is_control) {
                 return Err(format!("{label} cannot contain control characters."));
             }
         }
@@ -1906,7 +1918,8 @@ impl App {
         if let Some(value) = values.get("extra_options") {
             form.profile.extra_options = value.clone();
         }
-        form.validate().map_err(|e| format!("Row {row}: {e}"))?;
+        form.validate_for_import()
+            .map_err(|e| format!("Row {row}: {e}"))?;
         let label = values
             .get("name")
             .filter(|v| !v.trim().is_empty())
@@ -3168,6 +3181,18 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn passwordless_bulk_row_is_importable_but_not_runnable() {
+        let mut values = HashMap::new();
+        values.insert("source_host".into(), "old.example".into());
+        values.insert("source_user".into(), "old@example".into());
+        values.insert("destination_host".into(), "new.example".into());
+        values.insert("destination_user".into(), "new@example".into());
+        let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
+        assert!(job.form.source_password.is_empty());
+        assert!(job.form.validate().is_err());
     }
 
     #[test]
