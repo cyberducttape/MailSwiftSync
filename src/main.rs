@@ -1413,6 +1413,35 @@ struct BulkJob {
     state: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum BulkRetryScope {
+    #[default]
+    Unresolved,
+    FailedAttention,
+    DeltaRequired,
+    All,
+}
+
+impl BulkRetryScope {
+    fn includes(self, state: &str) -> bool {
+        match self {
+            Self::Unresolved => state != "verified",
+            Self::FailedAttention => matches!(state, "failed" | "attention"),
+            Self::DeltaRequired => state == "delta_required",
+            Self::All => true,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Unresolved => "Unresolved (skip verified)",
+            Self::FailedAttention => "Failed or Attention only",
+            Self::DeltaRequired => "Delta required only",
+            Self::All => "All rows (explicit re-run)",
+        }
+    }
+}
+
 fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Option<String> {
     let mut destinations = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
@@ -1545,8 +1574,9 @@ struct App {
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_live_run: bool,
-    /// Live retries exclude evidence-backed rows unless explicitly enabled.
-    bulk_include_verified: bool,
+    /// Live retry scope defaults to unresolved rows and is process-local UI
+    /// state; durable child/run IDs remain the execution identity.
+    bulk_retry_scope: BulkRetryScope,
     bulk_source_keyring_apply: String,
     bulk_destination_keyring_apply: String,
 }
@@ -1742,7 +1772,7 @@ impl Default for App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_live_run: false,
-            bulk_include_verified: false,
+            bulk_retry_scope: BulkRetryScope::default(),
             bulk_source_keyring_apply: String::new(),
             bulk_destination_keyring_apply: String::new(),
         }
@@ -3180,7 +3210,7 @@ impl App {
                 // replacement reuse the project/job IDs from an older file.
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
-                self.bulk_include_verified = false;
+                self.bulk_retry_scope = BulkRetryScope::default();
                 self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
                 self.bulk_jobs = jobs;
             }
@@ -3319,12 +3349,42 @@ impl App {
                 self.bulk_message = "Run a successful dry validation for this queue before starting live migrations.".into();
                 return;
             }
-            for (index, (job_id, job)) in self
-                .bulk_job_ids
-                .iter()
-                .zip(self.bulk_jobs.iter())
-                .enumerate()
-            {
+        }
+        if !self.persistence_available {
+            self.bulk_message = "Batch execution requires durable SQLite storage.".into();
+            return;
+        }
+        let mut all_jobs = self.bulk_jobs.clone();
+        for job in &mut all_jobs {
+            job.form.dry_run = !live;
+        }
+        let selected_indices = all_jobs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                !live
+                    || self.bulk_retry_scope.includes(
+                        self.store
+                            .mailbox_state(&self.bulk_job_ids[*index])
+                            .ok()
+                            .flatten()
+                            .as_deref()
+                            .unwrap_or("unknown"),
+                    )
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if selected_indices.is_empty() {
+            self.bulk_message = format!(
+                "No mailboxes match the selected live retry scope: {}.",
+                self.bulk_retry_scope.label()
+            );
+            return;
+        }
+        if live {
+            for &index in &selected_indices {
+                let job_id = &self.bulk_job_ids[index];
+                let job = &all_jobs[index];
                 let state = self.store.mailbox_state(job_id).ok().flatten();
                 let preflight = self.store.preflight_plan(job_id).ok().flatten();
                 if !matches!(
@@ -3349,34 +3409,6 @@ impl App {
                     return;
                 }
             }
-        }
-        if !self.persistence_available {
-            self.bulk_message = "Batch execution requires durable SQLite storage.".into();
-            return;
-        }
-        let mut all_jobs = self.bulk_jobs.clone();
-        for job in &mut all_jobs {
-            job.form.dry_run = !live;
-        }
-        let selected_indices = all_jobs
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| {
-                !live
-                    || self.bulk_include_verified
-                    || self
-                        .store
-                        .mailbox_state(&self.bulk_job_ids[*index])
-                        .ok()
-                        .flatten()
-                        .as_deref()
-                        != Some("verified")
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        if selected_indices.is_empty() {
-            self.bulk_message = "All mailboxes are already verified. Enable ‘Include already verified’ only if you intentionally want to re-run them.".into();
-            return;
         }
         let jobs = selected_indices
             .iter()
@@ -4909,20 +4941,21 @@ impl App {
                     self.bulk_jobs.clear();
                     self.bulk_project_id = None;
                     self.bulk_job_ids.clear();
-                    self.bulk_include_verified = false;
+                    self.bulk_retry_scope = BulkRetryScope::default();
                     self.bulk_preflight_credential_fingerprints.clear();
                     self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
                 }
-                let verified = self
+                let live_count = self
                     .bulk_jobs
                     .iter()
-                    .filter(|job| job.state == "Verified")
+                    .enumerate()
+                    .filter(|(index, _)| {
+                        self.bulk_job_ids
+                            .get(*index)
+                            .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
+                            .is_some_and(|state| self.bulk_retry_scope.includes(&state))
+                    })
                     .count();
-                let live_count = if self.bulk_include_verified {
-                    self.bulk_jobs.len()
-                } else {
-                    self.bulk_jobs.len().saturating_sub(verified)
-                };
                 let label = if self.form.dry_run {
                     format!("Run {} dry validations", self.bulk_jobs.len())
                 } else {
@@ -4942,18 +4975,26 @@ impl App {
                 ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(MUTED));
             });
             if !self.form.dry_run {
-                let verified = self
-                    .bulk_jobs
-                    .iter()
-                    .filter(|job| job.state == "Verified")
-                    .count();
-                ui.checkbox(
-                    &mut self.bulk_include_verified,
-                    "Include already verified mailboxes (explicit re-run)",
-                );
+                egui::ComboBox::from_id_salt("bulk_retry_scope")
+                    .selected_text(self.bulk_retry_scope.label())
+                    .show_ui(ui, |ui| {
+                        for scope in [
+                            BulkRetryScope::Unresolved,
+                            BulkRetryScope::FailedAttention,
+                            BulkRetryScope::DeltaRequired,
+                            BulkRetryScope::All,
+                        ] {
+                            ui.selectable_value(
+                                &mut self.bulk_retry_scope,
+                                scope,
+                                scope.label(),
+                            );
+                        }
+                    });
                 ui.label(
                     RichText::new(format!(
-                        "{verified} verified row(s) are excluded by default from live retries."
+                        "Live scope: {}. Verified rows run only with the explicit all-rows scope.",
+                        self.bulk_retry_scope.label()
                     ))
                     .size(11.0)
                     .color(MUTED),
@@ -5034,25 +5075,22 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(RichText::new("This will change destination mailboxes").color(ALERT));
-                let verified = self
+                let selected = self
                     .bulk_jobs
                     .iter()
-                    .filter(|job| job.state == "Verified")
+                    .enumerate()
+                    .filter(|(index, _)| {
+                        self.bulk_job_ids
+                            .get(*index)
+                            .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
+                            .is_some_and(|state| self.bulk_retry_scope.includes(&state))
+                    })
                     .count();
-                let selected = if self.bulk_include_verified {
-                    self.bulk_jobs.len()
-                } else {
-                    self.bulk_jobs.len().saturating_sub(verified)
-                };
                 ui.label(format!(
                     "{} selected mailbox processes may run concurrently.",
                     selected
                 ));
-                if verified > 0 && !self.bulk_include_verified {
-                    ui.label(format!(
-                        "{verified} already verified mailbox(es) will be skipped."
-                    ));
-                }
+                ui.label(format!("Scope: {}.", self.bulk_retry_scope.label()));
                 ui.label("Each mailbox must already have a matching successful dry validation. Source mail is not deleted by default.");
                 ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(MUTED));
                 ui.horizontal(|ui| {
