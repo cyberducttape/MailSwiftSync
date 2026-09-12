@@ -1172,7 +1172,13 @@ enum Event {
     JobState(usize, String),
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
-    Finished(Result<(), String>),
+    Finished(Result<StreamOutcome, String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamOutcome {
+    Completed,
+    DeltaRequired,
 }
 
 // The process runner keeps each security-sensitive input explicit at the call
@@ -1189,7 +1195,8 @@ fn run_streaming(
     cancel: &AtomicBool,
     secrets: &[String],
     timeout: Duration,
-) -> Result<(), String> {
+    dovecot_exit_two_is_delta: bool,
+) -> Result<StreamOutcome, String> {
     let mut command = Command::new(executable);
     command
         .args(args)
@@ -1251,7 +1258,9 @@ fn run_streaming(
         .map_err(|error| error.to_string())
         .and_then(|status| {
             if status.success() {
-                Ok(())
+                Ok(StreamOutcome::Completed)
+            } else if dovecot_exit_two_is_delta && status.code() == Some(2) {
+                Ok(StreamOutcome::DeltaRequired)
             } else {
                 Err(format!("process exited with {status}"))
             }
@@ -1259,7 +1268,7 @@ fn run_streaming(
     let _ = out_thread.join();
     let _ = err_thread.join();
     match result {
-        Ok(()) => Ok(()),
+        Ok(outcome) => Ok(outcome),
         Err(error) => {
             let recent = process_tail_text(&tail);
             if recent.is_empty() {
@@ -3017,6 +3026,7 @@ impl App {
                         )));
                         let _ = tx.send(Event::JobState(index, "Running".into()));
                         let mut completed = false;
+                        let mut delta_required = false;
                         for attempt in 0..=retry_count {
                             if attempt > 0 {
                                 let _ = tx.send(Event::Line(format!(
@@ -3044,20 +3054,24 @@ impl App {
                                         Duration::from_secs(
                                             job.form.profile.migration_timeout_hours * 60 * 60,
                                         ),
+                                        job.form.engine() == core::Engine::Dovecot,
                                     );
                                     let result = if result.is_ok()
                                         && job.form.dry_run
                                         && job.form.engine() == core::Engine::Dovecot
                                     {
-                                        run_dovecot_destination_preflight(
-                                            &job.form.dovecot_destination_preflight_commands(),
-                                            &tx,
-                                            &cancel,
-                                            Duration::from_secs(
-                                                job.form.profile.migration_timeout_hours * 60 * 60,
-                                            ),
-                                            &format!("[{}] ", index + 1),
-                                        )
+                                        result.and_then(|outcome| {
+                                            run_dovecot_destination_preflight(
+                                                &job.form.dovecot_destination_preflight_commands(),
+                                                &tx,
+                                                &cancel,
+                                                Duration::from_secs(
+                                                    job.form.profile.migration_timeout_hours * 60 * 60,
+                                                ),
+                                                &format!("[{}] ", index + 1),
+                                            )
+                                            .map(|_| outcome)
+                                        })
                                     } else {
                                         result
                                     };
@@ -3067,7 +3081,14 @@ impl App {
                                 Err(error) => Err(error),
                             };
                             match result {
-                                Ok(()) => {
+                                Ok(outcome) => {
+                                    if outcome == StreamOutcome::DeltaRequired {
+                                        let _ = tx.send(Event::Line(format!(
+                                            "[{}] Dovecot reports an incomplete synchronization; another delta pass is required",
+                                            index + 1
+                                        )));
+                                        delta_required = true;
+                                    }
                                     completed = true;
                                     break;
                                 }
@@ -3113,7 +3134,15 @@ impl App {
                             }
                         }
                         if completed {
-                            let _ = tx.send(Event::JobState(index, "Completed".into()));
+                            let _ = tx.send(Event::JobState(
+                                index,
+                                if delta_required {
+                                    "DeltaRequired"
+                                } else {
+                                    "Completed"
+                                }
+                                .into(),
+                            ));
                         } else if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
                         }
@@ -3128,7 +3157,7 @@ impl App {
             } else if failed.load(Ordering::Relaxed) {
                 Err("one or more batch jobs failed".into())
             } else {
-                Ok(())
+                Ok(StreamOutcome::Completed)
             }));
         });
     }
@@ -3326,15 +3355,19 @@ impl App {
                 &cancel,
                 &output_secrets,
                 migration_timeout,
+                run_engine == core::Engine::Dovecot,
             );
             if result.is_ok() && !destination_preflight.is_empty() {
-                result = run_dovecot_destination_preflight(
-                    &destination_preflight,
-                    &tx,
-                    &cancel,
-                    migration_timeout,
-                    "",
-                );
+                result = result.and_then(|outcome| {
+                    run_dovecot_destination_preflight(
+                        &destination_preflight,
+                        &tx,
+                        &cancel,
+                        migration_timeout,
+                        "",
+                    )
+                    .map(|_| outcome)
+                });
             }
             if result.is_ok() && !verification.is_empty() {
                 let mut reports = Vec::new();
@@ -3469,6 +3502,7 @@ impl App {
                                 "Running" => "running",
                                 "Completed" if !self.bulk_live_run => "ready",
                                 "Completed" => "completed",
+                                "DeltaRequired" => "delta_required",
                                 "Failed" => "failed",
                                 "Cancelled" => "cancelled",
                                 "Queued" => "queued",
@@ -3548,6 +3582,9 @@ impl App {
                 return;
             };
             let succeeded = r.is_ok();
+            let delta_required = r
+                .as_ref()
+                .is_ok_and(|outcome| *outcome == StreamOutcome::DeltaRequired);
             let was_bulk_run = matches!(run_context.kind, RunKind::Batch);
             let mut direct_final_state = None;
             let terminal_evidence = if succeeded && !run_context.dry_run {
@@ -3590,7 +3627,7 @@ impl App {
                         "failed"
                     }
                 } else if let Some(evidence) = terminal_evidence.as_ref() {
-                    if evidence.is_exact_match() {
+                    if evidence.is_exact_match() && !delta_required {
                         "verified"
                     } else {
                         "delta_required"
@@ -3681,7 +3718,7 @@ impl App {
                 "Migration result requires durability review".into()
             } else {
                 match r {
-                    Ok(()) => Self::successful_run_status(
+                    Ok(_) => Self::successful_run_status(
                         run_context.dry_run,
                         was_bulk_run,
                         direct_final_state,
@@ -4809,6 +4846,28 @@ mod tests {
         let bytes = b"first\n\xff\xfe\nlast\n";
         let lines = read_lossy_lines(std::io::Cursor::new(bytes));
         assert_eq!(lines, ["first", "��", "last"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dovecot_exit_code_two_is_a_delta_outcome() {
+        let (tx, _rx) = mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        let args = vec!["-c".into(), "exit 2".into()];
+        let outcome = run_streaming(
+            "/bin/sh",
+            &args,
+            &[],
+            &tx,
+            0,
+            "",
+            &cancel,
+            &[],
+            Duration::from_secs(5),
+            true,
+        )
+        .unwrap();
+        assert_eq!(outcome, StreamOutcome::DeltaRequired);
     }
 
     #[test]
