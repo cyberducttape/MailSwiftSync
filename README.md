@@ -2,13 +2,21 @@
 
 > A local-first mailbox migration control plane: plan, execute, verify, and audit bulk migrations with the best available engine.
 
+[![CI](https://github.com/itchyitchy123/MailSwiftSync/actions/workflows/ci.yml/badge.svg)](https://github.com/itchyitchy123/MailSwiftSync/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
+
+![Migration plan](docs/wiki/assets/migration-plan.png)
+
+MailSwiftSync is for hosting administrators, consultants, and MSPs moving multiple mailboxes between IMAP systems who need more than a command wrapper: a preflightable plan, controlled execution, restart-aware state, and evidence they can hand to a customer.
+
 MailSwiftSync helps administrators and MSPs plan, execute, verify, and audit mailbox migrations. It selects the migration engine based on the environment: Dovecot destinations can use native `doveadm`/dsync with a remote IMAP source through `imapc`; arbitrary IMAP-to-IMAP migrations can use a locally installed `imapsync` executable. Both paths provide a redacted plan, durable project state, phased execution, and an operator journal.
 
 The product value is the control plane around the transfer engine: endpoint checks, pilot and cutover planning, mailbox scope, controlled execution, durable run records, and evidence-led verification. The central workflow is **Plan → Preflight → Execute → Verify → Audit**.
 
 ## Project status
 
-MailSwiftSync is an early, usable 0.1 release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, and aggregate verification evidence are available today. Treat credential delivery, packaged installers, high-volume scheduling, message-level reconciliation, and unattended production operation as experimental or planned until the relevant release criteria are published.
+MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, and aggregate verification evidence are available today. Treat credential delivery, packaged installers, high-volume scheduling, message-level reconciliation, and unattended production operation as experimental or planned until the relevant release criteria are published.
 
 Stable today:
 
@@ -26,6 +34,17 @@ Experimental or planned:
 - Live migration concurrency, retry/resume checkpoints, maintenance windows, throttling, and scheduler/API operation.
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
 - Published large-scale migration case studies and compatibility matrix.
+
+## Why use this instead of the alternatives?
+
+| Approach | Good at | What MailSwiftSync adds or avoids |
+| --- | --- | --- |
+| Raw `imapsync` or shell scripts | Flexible one-off transfers | Durable project state, safety gates, bounded queues, and exportable evidence |
+| Native Dovecot `dsync` | Dovecot-to-Dovecot semantics and incremental sync | A guided plan, operator workflow, and verification around the native engine |
+| Hosted migration SaaS | Broad provider coverage and managed execution | Local data flow, no per-mailbox SaaS fee, and inspectable local records |
+| MailSwiftSync | Local IMAP migration operations | Uses proven engines while owning planning, preflight, recovery, and audit output |
+
+Choose native Dovecot tooling directly when you already have a well-tested server-side workflow and do not need a desktop control plane. Choose MailSwiftSync when you need to coordinate and document a heterogeneous or multi-mailbox migration locally. It is deliberately not a hosted service and does not replace the engines' own mailbox semantics.
 
 ## Install
 
@@ -50,7 +69,11 @@ Consult the [official imapsync installation documentation](https://imapsync.lami
 
 MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its authenticated IMAPS readiness probe. The probe validates the certificate, authenticates, refreshes capabilities after authentication, and inspects namespace/folder listing; it does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a one-day safety timeout plus an operator cancellation control. Plain and STARTTLS plans still use the selected engine's dry preflight for authentication validation.
 
-### 2. Build and run MailSwiftSync
+### 2. Download or build MailSwiftSync
+
+For released binaries, see [GitHub Releases](https://github.com/itchyitchy123/MailSwiftSync/releases). Release artifacts are built by GitHub Actions and include SHA-256 checksums. Native installers and signed artifacts are not yet published; until then, verify the checksum and use the portable archive appropriate to your platform.
+
+For contributors or users building from source:
 
 ```bash
 cargo run --release
@@ -91,6 +114,8 @@ Dovecot mode configures the destination-side command in the form `doveadm ... sy
 ## Verification
 
 Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and confidence result. A successful process with incomplete evidence remains pending review. Aggregate evidence is not a substitute for message-level reconciliation; that distinction is explicit in the architecture and release criteria. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
+
+![Batch migration review](docs/wiki/assets/batch-queue.png)
 
 The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the redacted durable event ledger remains the longer-lived audit record.
 
