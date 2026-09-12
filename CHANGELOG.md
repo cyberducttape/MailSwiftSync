@@ -13,7 +13,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added Dovecot post-run mailbox reconciliation using folder, message, and virtual-size status.
 - Added durable redacted run output, lifecycle events, mailbox states, and verification evidence.
 - Added `imapsync` summary parsing for automatic evidence capture.
-- Added ephemeral mode-600 credential passfiles for live `imapsync` runs.
+- Added child-process-only `IMAPSYNC_PASSWORD1/2` environment credentials for live `imapsync` runs.
 - Added regression coverage for command generation, credential handling, evidence parsing, and verification confidence.
 - Added durable batch validation jobs, per-run evidence IDs, bounded execution, and operator cancellation.
 

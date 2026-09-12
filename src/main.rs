@@ -13,7 +13,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
         Arc,
@@ -111,11 +111,16 @@ impl Form {
     fn path() -> std::path::PathBuf {
         dirs_next::config_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join("sourcecraft-imapsync/profile.toml")
+            .join("mailswiftsync/profile.toml")
     }
     fn load() -> Self {
         let mut form = Self::default();
-        if let Ok(text) = std::fs::read_to_string(Self::path())
+        let path = Self::path();
+        let legacy = dirs_next::config_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("sourcecraft-imapsync/profile.toml");
+        if let Ok(text) =
+            std::fs::read_to_string(&path).or_else(|_| std::fs::read_to_string(legacy))
             && let Ok(profile) = toml::from_str(&text)
         {
             form.profile = profile;
@@ -240,23 +245,23 @@ impl Form {
                 executable,
                 args,
                 cleanup: Vec::new(),
+                env: Vec::new(),
             });
         }
-        let source_file = secret_file("source", &self.source_password)?;
-        let destination_file = match secret_file("destination", &self.destination_password) {
-            Ok(path) => path,
-            Err(error) => {
-                let _ = std::fs::remove_file(&source_file);
-                return Err(error);
-            }
-        };
         let mut args = self.args(false);
-        replace_option(&mut args, "--password1", "--passfile1", &source_file);
-        replace_option(&mut args, "--password2", "--passfile2", &destination_file);
+        remove_option(&mut args, "--password1");
+        remove_option(&mut args, "--password2");
         Ok(PreparedCommand {
             executable: self.profile.imapsync_path.clone(),
             args,
-            cleanup: vec![source_file, destination_file],
+            cleanup: Vec::new(),
+            env: vec![
+                ("IMAPSYNC_PASSWORD1".into(), self.source_password.clone()),
+                (
+                    "IMAPSYNC_PASSWORD2".into(),
+                    self.destination_password.clone(),
+                ),
+            ],
         })
     }
     fn engine(&self) -> core::Engine {
@@ -433,12 +438,15 @@ struct PreparedCommand {
     executable: String,
     args: Vec<String>,
     cleanup: Vec<PathBuf>,
+    env: Vec<(String, String)>,
 }
 
-fn replace_option(args: &mut [String], old: &str, new: &str, value: &Path) {
-    if let Some(index) = args.iter().position(|arg| arg == old) {
-        args[index] = new.into();
-        args[index + 1] = value.to_string_lossy().into_owned();
+fn remove_option(args: &mut Vec<String>, option: &str) {
+    if let Some(index) = args.iter().position(|arg| arg == option) {
+        args.remove(index);
+        if index < args.len() && !args[index].starts_with("--") {
+            args.remove(index);
+        }
     }
 }
 
@@ -527,24 +535,6 @@ fn wait_with_timeout(
         }
         thread::sleep(Duration::from_millis(100));
     }
-}
-
-fn secret_file(label: &str, secret: &str) -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!("sourcecraft-{label}-{}", uuid::Uuid::new_v4()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options
-        .open(&path)
-        .map_err(|error| format!("could not create protected credential file: {error}"))?;
-    if let Err(error) = writeln!(file, "{secret}") {
-        let _ = std::fs::remove_file(&path);
-        return Err(format!(
-            "could not write protected credential file: {error}"
-        ));
-    }
-    Ok(path)
 }
 
 fn number_after(line: &str, marker: &str) -> Option<u64> {
@@ -641,12 +631,14 @@ enum Event {
 fn run_streaming(
     executable: &str,
     args: &[String],
+    env: &[(String, String)],
     tx: &mpsc::Sender<Event>,
     prefix: &str,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let mut child = Command::new(executable)
         .args(args)
+        .envs(env.iter().map(|(key, value)| (key, value)))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -726,7 +718,7 @@ impl Default for App {
     fn default() -> Self {
         let state_path = dirs_next::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
-            .join("sourcecraft-imap-migrator/state.db");
+            .join("mailswiftsync/state.db");
         if let Some(parent) = state_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -1468,6 +1460,7 @@ impl App {
                         let result = run_streaming(
                             &command.executable,
                             &command.args,
+                            &command.env,
                             &tx,
                             &format!("[{}] ", index + 1),
                             &cancel,
@@ -1548,6 +1541,7 @@ impl App {
         let exe = prepared.executable;
         let args = prepared.args;
         let cleanup = prepared.cleanup;
+        let prepared_env = prepared.env;
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
         if let Some(job) = &self.job_id {
@@ -1587,6 +1581,7 @@ impl App {
         thread::spawn(move || {
             let mut child = match Command::new(&exe)
                 .args(&args)
+                .envs(prepared_env.iter().map(|(key, value)| (key, value)))
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
@@ -1736,6 +1731,12 @@ impl App {
                                 self.run_id.as_deref().unwrap_or("unknown"),
                                 &evidence,
                             );
+                            let state = if evidence.confidence_percent() == 100 {
+                                "verified"
+                            } else {
+                                "delta_required"
+                            };
+                            let _ = self.store.set_mailbox_state(job, state);
                         }
                         if let Some(project) = &self.project_id {
                             let _ = self.store.record_event(
@@ -1768,6 +1769,12 @@ impl App {
                             self.run_id.as_deref().unwrap_or("unknown"),
                             &evidence,
                         );
+                        let state = if evidence.confidence_percent() == 100 {
+                            "verified"
+                        } else {
+                            "delta_required"
+                        };
+                        let _ = self.store.set_mailbox_state(job, state);
                     }
                     if let Some(project) = &self.project_id {
                         let _ = self.store.record_event(
@@ -1801,9 +1808,25 @@ impl App {
                 );
             }
             if let Some(job) = &self.job_id {
-                let _ = self
-                    .store
-                    .set_mailbox_state(job, if succeeded { "completed" } else { "failed" });
+                let final_state = if !succeeded {
+                    if r.as_ref()
+                        .err()
+                        .is_some_and(|error| error.contains("cancelled"))
+                    {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    }
+                } else if let Ok(Some(evidence)) = self.store.evidence(job) {
+                    if evidence.confidence_percent() == 100 {
+                        "verified"
+                    } else {
+                        "delta_required"
+                    }
+                } else {
+                    "completed"
+                };
+                let _ = self.store.set_mailbox_state(job, final_state);
             }
             if let Some(project) = &self.project_id {
                 let _ = self.store.record_event(
@@ -1989,7 +2012,12 @@ impl eframe::App for App {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("SOURCECRAFT").strong().size(23.0).color(NAVY));
+                    ui.label(
+                        RichText::new("MAILSWIFTSYNC")
+                            .strong()
+                            .size(23.0)
+                            .color(NAVY),
+                    );
                     ui.label(
                         RichText::new("IMAP migration console")
                             .italics()
@@ -2108,7 +2136,7 @@ impl eframe::App for App {
 
 fn main() -> eframe::Result<()> {
     eframe::run_native(
-        "Sourcecraft IMAP Sync",
+        "MailSwiftSync",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1040.0, 760.0])
@@ -2217,21 +2245,22 @@ mod tests {
     }
 
     #[test]
-    fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
+    fn imapsync_runtime_plan_uses_child_environment_credentials() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
         let prepared = form.prepared_command().unwrap();
-        assert!(prepared.args.contains(&"--passfile1".into()));
-        assert!(prepared.args.contains(&"--passfile2".into()));
+        assert!(!prepared.args.contains(&"--password1".into()));
+        assert!(!prepared.args.contains(&"--password2".into()));
+        assert_eq!(
+            prepared.env[0],
+            ("IMAPSYNC_PASSWORD1".into(), "secret".into())
+        );
+        assert_eq!(
+            prepared.env[1],
+            ("IMAPSYNC_PASSWORD2".into(), "unused".into())
+        );
         assert!(!prepared.args.iter().any(|arg| arg == "secret"));
-        for path in &prepared.cleanup {
-            assert!(path.exists());
-            let content = std::fs::read_to_string(path).unwrap();
-            assert!(content == "secret\n" || content == "unused\n");
-        }
-        for path in prepared.cleanup {
-            let _ = std::fs::remove_file(path);
-        }
+        assert!(prepared.cleanup.is_empty());
     }
 
     #[test]

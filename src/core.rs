@@ -264,8 +264,31 @@ impl StateStore {
         Ok(id)
     }
     pub fn set_mailbox_state(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
+        if !matches!(
+            state,
+            "queued"
+                | "preflight"
+                | "ready"
+                | "running"
+                | "delta_required"
+                | "completed"
+                | "verified"
+                | "failed"
+                | "cancelled"
+                | "attention"
+        ) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let current: String = self.connection.query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1",
+            [job_id],
+            |row| row.get(0),
+        )?;
+        if current != state && !valid_mailbox_transition(&current, state) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let changed = self.connection.execute(
-            "UPDATE mailbox_jobs SET state=?, attempt=CASE WHEN ?='running' THEN attempt+1 ELSE attempt END WHERE id=?",
+            "UPDATE mailbox_jobs SET state=?, attempt=CASE WHEN ?='running' AND state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?",
             params![state, state, job_id],
         )?;
         if changed != 1 {
@@ -327,6 +350,30 @@ fn phase_rank(phase: Phase) -> u8 {
         Phase::Verification => 6,
         Phase::Complete => 7,
         Phase::Attention => 255,
+    }
+}
+
+fn valid_mailbox_transition(current: &str, next: &str) -> bool {
+    match current {
+        "queued" => matches!(
+            next,
+            "preflight" | "ready" | "running" | "failed" | "cancelled"
+        ),
+        "preflight" => matches!(next, "ready" | "running" | "failed" | "cancelled"),
+        "ready" => matches!(next, "running" | "failed" | "cancelled"),
+        "running" => matches!(
+            next,
+            "completed" | "delta_required" | "failed" | "cancelled" | "attention"
+        ),
+        "delta_required" => matches!(next, "running" | "failed" | "cancelled"),
+        "completed" => matches!(
+            next,
+            "verified" | "delta_required" | "running" | "attention"
+        ),
+        "failed" | "cancelled" => matches!(next, "running" | "attention"),
+        "verified" => matches!(next, "delta_required" | "running" | "attention"),
+        "attention" => matches!(next, "running"),
+        _ => false,
     }
 }
 
@@ -400,5 +447,18 @@ mod tests {
             destination_folders: 1,
         };
         assert_eq!(evidence.confidence_percent(), 0);
+    }
+
+    #[test]
+    fn mailbox_state_machine_allows_retry_but_rejects_backwards_moves() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.set_mailbox_state(&job, "running").unwrap();
+        db.set_mailbox_state(&job, "failed").unwrap();
+        db.set_mailbox_state(&job, "running").unwrap();
+        assert!(db.set_mailbox_state(&job, "queued").is_err());
     }
 }

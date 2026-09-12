@@ -8,10 +8,10 @@ project_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
 cd "$project_root"
 
 cargo build --release
-target_name="sourcecraft-imap-migrator-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
+target_name="mailswiftsync-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 mkdir -p dist
-cp target/release/sourcecraft-imap-migrator dist/sourcecraft-imap-migrator
-chmod 0755 dist/sourcecraft-imap-migrator
-tar -C dist -czf "dist/${target_name}.tar.gz" sourcecraft-imap-migrator
+cp target/release/mailswiftsync dist/mailswiftsync
+chmod 0755 dist/mailswiftsync
+tar -C dist -czf "dist/${target_name}.tar.gz" mailswiftsync
 sha256sum "dist/${target_name}.tar.gz" > "dist/${target_name}.tar.gz.sha256"
-rm -f dist/sourcecraft-imap-migrator
+rm -f dist/mailswiftsync

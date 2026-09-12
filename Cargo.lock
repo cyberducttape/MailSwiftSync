@@ -1907,6 +1907,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "mailswiftsync"
+version = "0.1.0"
+dependencies = [
+ "calamine",
+ "csv",
+ "dirs-next",
+ "eframe",
+ "rfd",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "toml",
+ "uuid",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "malloc_buf"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3158,23 +3175,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "sourcecraft-imap-migrator"
-version = "0.1.0"
-dependencies = [
- "calamine",
- "csv",
- "dirs-next",
- "eframe",
- "rfd",
- "rusqlite",
- "rustls",
- "serde",
- "toml",
- "uuid",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]

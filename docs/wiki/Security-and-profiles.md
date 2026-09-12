@@ -10,7 +10,7 @@ MailSwiftSync does not save passwords, sync output, or mailbox contents. Passwor
 
 ## Credential delivery and process visibility
 
-For imapsync runs, MailSwiftSync writes each password to a short-lived mode-600 passfile and passes only the filename to the child process. The files are removed when the child exits, including startup failures. For Dovecot runs, the source password is currently supplied through the destination-side `imapc_password` override; remote process inspection can therefore expose it. Use SSH keys with `BatchMode=yes`, restrict access to the destination host, and do not run untrusted local software during a migration.
+For imapsync runs, MailSwiftSync passes passwords only to the child process through `IMAPSYNC_PASSWORD1/2` environment variables. For Dovecot runs, the source password is currently supplied through the destination-side `imapc_password` override; remote process inspection can therefore expose it. Use SSH keys with `BatchMode=yes`, restrict access to the destination host, and do not run untrusted local software during a migration.
 
 The command preview intentionally redacts passwords, but the preview is not a substitute for host-level process security. No credential mechanism should be described as enterprise-grade until keyring/OAuth or an equivalent secret broker is implemented for both engines.
 
