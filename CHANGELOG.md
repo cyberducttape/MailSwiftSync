@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Live bulk runs now reject duplicate destination host/port/mailbox targets before any process starts, preventing concurrent migration engines from mutating the same destination mailbox.
 - Project phase recovery from `Attention` to `Preflight` or `Verification` now works as intended, and phase changes plus their audit events commit atomically.
 - Updated user-facing troubleshooting and architecture language to consistently call imapsync output engine-confirmed rather than authoritative, and to distinguish a successful process exit from verified completion.
 - Live batch promotion now validates every child plan fingerprint inside the same SQLite transaction that marks the batch running, preventing a partially edited or stale queue from starting.

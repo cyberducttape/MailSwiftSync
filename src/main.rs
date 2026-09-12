@@ -1370,6 +1370,27 @@ struct BulkJob {
     form: Form,
     state: String,
 }
+
+fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Option<String> {
+    let mut destinations = HashSet::new();
+    for (index, job) in jobs.iter().enumerate() {
+        let profile = &job.form.profile;
+        let key = format!(
+            "{}:{}:{}",
+            profile.destination_host.to_ascii_lowercase(),
+            "993",
+            profile.destination_user.to_ascii_lowercase()
+        );
+        if !destinations.insert(key) {
+            return Some(format!(
+                "Mailbox {} targets a destination mailbox already used by another batch row; concurrent writes to one mailbox are blocked.",
+                index + 1
+            ));
+        }
+    }
+    None
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WorkspaceView {
     Overview,
@@ -2817,6 +2838,10 @@ impl App {
             return;
         }
         let mut jobs = self.bulk_jobs.clone();
+        if live && let Some(error) = duplicate_bulk_destination(&jobs) {
+            self.bulk_message = error;
+            return;
+        }
         for job in &mut jobs {
             if let Err(error) = job.form.load_configured_keyring_credentials() {
                 self.bulk_message =
@@ -4682,6 +4707,28 @@ mod tests {
             App::successful_run_status(false, true, None),
             "Batch transfer completed; review per-mailbox verification results"
         );
+    }
+
+    #[test]
+    fn bulk_rejects_duplicate_destination_mailboxes() {
+        let mut first = Form::default();
+        first.profile.destination_host = "mail.example".into();
+        first.profile.destination_user = "user@example".into();
+        let mut second = first.clone();
+        second.profile.source_user = "different@example".into();
+        let jobs = vec![
+            BulkJob {
+                label: "first".into(),
+                form: first,
+                state: "Ready".into(),
+            },
+            BulkJob {
+                label: "second".into(),
+                form: second,
+                state: "Ready".into(),
+            },
+        ];
+        assert!(duplicate_bulk_destination(&jobs).is_some());
     }
 
     #[test]
