@@ -22,6 +22,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Message-level mismatch reporting and exportable per-mailbox and batch reports.
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Integration tests using disposable IMAP/Dovecot environments in CI or a documented reproducible harness.
+- A clean `cargo audit` result for vulnerabilities; unmaintained transitive dependencies must be tracked and reviewed before each release.
 
 ## Proposed eight-week sequence
 
@@ -33,3 +34,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 6. Week 6: build exportable verification reports and message-level mismatch diagnostics.
 7. Week 7: publish installers, signed artifacts, checksums, and upgrade/rollback guidance.
 8. Week 8: run documented large-scale migrations, publish results, and decide whether the 1.0 criteria are met.
+
+## Current dependency audit
+
+CI runs `cargo audit`. The current dependency graph has no reported vulnerabilities; RustSec reports only the unmaintained transitive crates `paste` and `ttf-parser`, which come from the desktop GUI stack and remain tracked for upstream replacement.
