@@ -467,7 +467,8 @@ impl Form {
     }
     /// A deterministic, secret-free description of the live execution plan.
     /// It intentionally includes the generated arguments so changing an
-    /// option, endpoint, engine, or mapping invalidates an earlier preflight.
+    /// option, endpoint, engine, mapping, or credential reference invalidates
+    /// an earlier preflight. Password bytes are intentionally excluded.
     fn plan_fingerprint(&self) -> String {
         let mut planned = self.clone();
         planned.dry_run = false;
@@ -476,7 +477,13 @@ impl Form {
             remove_option(&mut args, "--password1");
             remove_option(&mut args, "--password2");
         }
-        format!("{}\n{}", executable, args.join("\u{1f}"))
+        format!(
+            "{}\n{}\ncredential-source1={}\ncredential-source2={}",
+            executable,
+            args.join("\u{1f}"),
+            planned.profile.source_credential_id.trim(),
+            planned.profile.destination_credential_id.trim(),
+        )
     }
     fn engine(&self) -> core::Engine {
         match self.profile.engine {
@@ -3736,6 +3743,19 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["mailbox", "list"]));
         assert!(!args.contains(&"backup".into()));
         assert!(!args.contains(&"sync".into()));
+    }
+
+    #[test]
+    fn plan_fingerprint_binds_credential_references_without_passwords() {
+        let mut first = dovecot_form();
+        first.profile.source_credential_id = "source-prod".into();
+        first.profile.destination_credential_id = "destination-prod".into();
+        let mut second = first.clone();
+        second.profile.source_credential_id = "source-other".into();
+        assert_ne!(first.plan_fingerprint(), second.plan_fingerprint());
+        assert!(!first.plan_fingerprint().contains("secret"));
+        assert!(first.plan_fingerprint().contains("source-prod"));
+        assert!(first.plan_fingerprint().contains("destination-prod"));
     }
 
     #[test]
