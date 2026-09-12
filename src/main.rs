@@ -588,8 +588,27 @@ fn cleanup_stale_secret_directories(base: &std::path::Path) {
 }
 
 fn write_secret_file(path: &std::path::Path, secret: &str) -> std::io::Result<()> {
-    std::fs::write(path, secret.as_bytes())?;
-    restrict_file_permissions(path)
+    let mut file = open_secret_file(path)?;
+    file.write_all(secret.as_bytes())?;
+    file.sync_all()
+}
+
+#[cfg(unix)]
+fn open_secret_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_secret_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 fn cleanup_paths(paths: &[PathBuf]) {
@@ -2988,6 +3007,18 @@ mod tests {
             std::fs::read_to_string(&prepared.args[destination_index + 1]).unwrap(),
             "unused"
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&prepared.args[source_index + 1])
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         assert!(prepared.env.is_empty());
         assert!(!prepared.args.iter().any(|arg| arg == "secret"));
         assert!(prepared.args.iter().any(|arg| arg == "--ssl1"));
