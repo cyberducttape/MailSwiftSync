@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Moved timeout handling, process-group setup/termination, Linux process identity, and recorded-process matching into `src/process.rs`; supervision policy now has a dedicated module boundary alongside output framing and launch pacing.
 - Batch child mailboxes remain `queued` until an active parent worker atomically claims them; claims increment attempts and are recorded as durable events, while generic state mutation can no longer manufacture `verified` by reusing evidence from an older run.
 - Session-held password buffers now use `zeroize::Zeroizing<String>` throughout the form, imported rows, and keyring loads; saved profiles, snapshots, and the durable ledger remain password-free.
 - Added a SQLite partial unique index enforcing one `running` job-bound run per mailbox; parent batch runs with a null `job_id` remain valid, and direct-insert regression coverage proves the database rejects overlap.
