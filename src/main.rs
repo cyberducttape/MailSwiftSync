@@ -136,6 +136,7 @@ impl Form {
         let content = toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?;
         let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
         std::fs::write(&temporary, content).map_err(|e| e.to_string())?;
+        restrict_file_permissions(&temporary).map_err(|e| e.to_string())?;
         if let Err(error) = std::fs::rename(&temporary, &path) {
             let _ = std::fs::remove_file(&temporary);
             return Err(error.to_string());
@@ -2524,6 +2525,19 @@ fn display_job_state(state: &str) -> &'static str {
         "attention" => "Attention",
         _ => "Unknown",
     }
+}
+
+#[cfg(unix)]
+fn restrict_file_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(0o600);
+    std::fs::set_permissions(path, permissions)
+}
+
+#[cfg(not(unix))]
+fn restrict_file_permissions(_: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 impl eframe::App for App {

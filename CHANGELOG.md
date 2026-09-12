@@ -36,6 +36,7 @@ All notable changes to MailSwiftSync are documented here.
 - Batch startup now validates every row before launching any process, preventing restored queues with blank credentials from running.
 - Tightened the live project-phase gate to recognized execution and verification phases only.
 - Local Dovecot commands and verification now receive source credentials through a child environment variable and Dovecot `$ENV:` expansion; remote SSH exposure remains documented.
+- Restricted profile and SQLite state files to owner-only permissions on Unix systems.
 
 ### Changed
 

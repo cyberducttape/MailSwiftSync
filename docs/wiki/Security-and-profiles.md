@@ -2,7 +2,7 @@
 
 ## What MailSwiftSync saves
 
-Saved profiles contain only non-secret configuration: profile name, hosts, usernames, imapsync path, checkboxes, and extra options. The profile is stored in the standard operating-system configuration directory under `mailswiftsync/profile.toml`.
+Saved profiles contain only non-secret configuration: profile name, hosts, usernames, imapsync path, checkboxes, and extra options. The profile is stored in the standard operating-system configuration directory under `mailswiftsync/profile.toml`. On Unix, profile and SQLite state files are restricted to owner read/write permissions (`0600`) where the platform permits it.
 
 ## What it does not save
 

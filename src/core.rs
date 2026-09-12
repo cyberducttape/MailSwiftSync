@@ -207,9 +207,12 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+        let path = path.as_ref();
         let store = Self {
             connection: Connection::open(path)?,
         };
+        restrict_database_permissions(path)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         store.migrate()?;
         Ok(store)
     }
@@ -639,6 +642,19 @@ impl StateStore {
         )?;
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn restrict_database_permissions(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(0o600);
+    std::fs::set_permissions(path, permissions)
+}
+
+#[cfg(not(unix))]
+fn restrict_database_permissions(_: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn phase_rank(phase: Phase) -> u8 {
