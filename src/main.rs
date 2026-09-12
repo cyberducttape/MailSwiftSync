@@ -2740,6 +2740,7 @@ impl App {
         }
         let mut done = None;
         let mut pending_db_events: Vec<(String, String, String)> = Vec::new();
+        let mut durability_errors = Vec::new();
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -2771,18 +2772,25 @@ impl App {
                         }
                     }
                     Event::Evidence(evidence) => {
-                        if let Some(job) = &self.job_id {
-                            let _ = self.store.record_evidence_for_run(
-                                job,
-                                self.run_id.as_deref().unwrap_or("unknown"),
-                                &evidence,
-                            );
+                        if let (Some(project), Some(job)) =
+                            (self.active_project_id().map(str::to_owned), &self.job_id)
+                        {
                             let state = if evidence.confidence_percent() == 100 {
                                 "verified"
                             } else {
                                 "delta_required"
                             };
-                            let _ = self.store.set_mailbox_state(job, state);
+                            let result = self.store.record_evidence_and_state(
+                                &project,
+                                job,
+                                self.run_id.as_deref().unwrap_or("unknown"),
+                                &evidence,
+                                state,
+                            );
+                            if let Err(error) = result {
+                                durability_errors
+                                    .push(format!("record verification evidence failed: {error}"));
+                            }
                         }
                         if let Some(project) = self.active_project_id() {
                             pending_db_events.push((
@@ -2812,32 +2820,39 @@ impl App {
                 .iter()
                 .map(|(project, kind, detail)| (project.as_str(), kind.as_str(), detail.as_str()))
                 .collect::<Vec<_>>();
-            let _ = self.store.record_events_batch(&batch);
+            let result = self.store.record_events_batch(&batch);
+            self.report_store_error("record execution events", result);
+        }
+        for error in durability_errors {
+            self.report_store_error("event persistence", Err(error));
         }
         if let Some(r) = done {
             let succeeded = r.is_ok();
             let mut direct_final_state = None;
             if succeeded && !self.form.dry_run && self.form.engine() == core::Engine::ImapSync {
                 if let Some(evidence) = parse_imapsync_evidence(&self.output) {
-                    if let Some(job) = &self.job_id {
-                        let _ = self.store.record_evidence_for_run(
-                            job,
-                            self.run_id.as_deref().unwrap_or("unknown"),
-                            &evidence,
-                        );
+                    if let (Some(project), Some(job)) =
+                        (self.active_project_id().map(str::to_owned), &self.job_id)
+                    {
                         let state = if evidence.confidence_percent() == 100 {
                             "verified"
                         } else {
                             "delta_required"
                         };
-                        let _ = self.store.set_mailbox_state(job, state);
-                    }
-                    if let Some(project) = self.active_project_id() {
-                        let _ = self.store.record_event(
-                            project,
+                        let result = self.store.record_evidence_and_state(
+                            &project,
+                            job,
+                            self.run_id.as_deref().unwrap_or("unknown"),
+                            &evidence,
+                            state,
+                        );
+                        self.report_store_error("record verification evidence", result);
+                        let result = self.store.record_event(
+                            &project,
                             "verification_evidence",
                             &format!("{}% confidence", evidence.confidence_percent()),
                         );
+                        self.report_store_error("record verification event", result);
                     }
                 } else if let Some(project) = self.active_project_id() {
                     let _ = self.store.record_event(

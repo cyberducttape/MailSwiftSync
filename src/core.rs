@@ -813,6 +813,47 @@ impl StateStore {
         tx.commit()?;
         Ok(())
     }
+    /// Stores evidence and the state derived from it as one durable unit.
+    /// This prevents a successful evidence write from being left with a
+    /// stale `running` mailbox if the follow-up state update fails.
+    pub fn record_evidence_and_state(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        value: &MailboxEvidence,
+        state: &str,
+    ) -> rusqlite::Result<()> {
+        if !matches!(state, "verified" | "delta_required") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        if run_id != "legacy" {
+            let exists: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2)",
+                params![run_id, project_id],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let current: String = tx.query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+            |row| row.get(0),
+        )?;
+        if current != state && !valid_mailbox_transition(&current, state) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
+        tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
+        tx.execute(
+            "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
+            params![state, job_id, project_id],
+        )?;
+        tx.commit()
+    }
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
         self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)?, authoritative:r.get::<_, i64>(8)? != 0 })).optional()
     }
