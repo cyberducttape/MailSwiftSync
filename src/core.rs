@@ -106,9 +106,12 @@ pub struct MailboxJob {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
     pub id: String,
+    pub job_id: Option<String>,
+    pub engine: String,
     pub status: String,
     pub started_at: String,
     pub finished_at: Option<String>,
+    pub detail: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxEvidence {
@@ -584,18 +587,39 @@ impl StateStore {
     pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,status,started_at,finished_at FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                "SELECT id,job_id,engine,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok(RunSummary {
                         id: row.get(0)?,
-                        status: row.get(1)?,
-                        started_at: row.get(2)?,
-                        finished_at: row.get(3)?,
+                        job_id: row.get(1)?,
+                        engine: row.get(2)?,
+                        status: row.get(3)?,
+                        started_at: row.get(4)?,
+                        finished_at: row.get(5)?,
+                        detail: row.get(6)?,
                     })
                 },
             )
             .optional()
+    }
+    pub fn recent_runs(&self, project_id: &str, limit: u32) -> rusqlite::Result<Vec<RunSummary>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,job_id,engine,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+        )?;
+        statement
+            .query_map(params![project_id, limit], |row| {
+                Ok(RunSummary {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    engine: row.get(2)?,
+                    status: row.get(3)?,
+                    started_at: row.get(4)?,
+                    finished_at: row.get(5)?,
+                    detail: row.get(6)?,
+                })
+            })?
+            .collect()
     }
     pub fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
         self.record_evidence_for_run(job_id, "legacy", value)

@@ -1599,10 +1599,25 @@ impl App {
         }
     }
 
-    fn activity_view(&self, ui: &mut egui::Ui) {
+    fn activity_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Activity");
-        ui.label(RichText::new("Live output is retained here for operator review. Detailed diagnostics stay attached to the run.").color(MUTED));
+        ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(MUTED));
         ui.add_space(12.0);
+        if let Some(job) = self.job_id.as_deref() {
+            let state = self.store.mailbox_state(job).ok().flatten();
+            if state
+                .as_deref()
+                .is_some_and(|value| matches!(value, "failed" | "cancelled" | "attention"))
+                && ui.button("Prepare safe retry  →").clicked()
+            {
+                self.form.dry_run = true;
+                self.live_confirmed = false;
+                self.active_view = WorkspaceView::Plan;
+                self.status =
+                    "Retry prepared as a dry preflight. Review the exact plan before any live run."
+                        .into();
+            }
+        }
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading(if self.running() {
@@ -1627,6 +1642,58 @@ impl App {
                     }
                 });
         });
+        ui.add_space(14.0);
+        ui.heading("Durable run history");
+        let Some(project) = self.active_project_id() else {
+            ui.label(
+                RichText::new("Create or restore a project to see durable runs.").color(MUTED),
+            );
+            return;
+        };
+        match self.store.recent_runs(project, 20) {
+            Ok(runs) if runs.is_empty() => {
+                ui.label(RichText::new("No durable runs recorded yet.").color(MUTED));
+            }
+            Ok(runs) => {
+                egui::Grid::new("durable_run_history")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Run");
+                        ui.strong("Engine");
+                        ui.strong("Status");
+                        ui.strong("Started");
+                        ui.strong("Finished");
+                        ui.strong("Detail");
+                        ui.end_row();
+                        for run in runs {
+                            ui.label(RichText::new(&run.id[..8.min(run.id.len())]).monospace());
+                            ui.label(run.engine);
+                            ui.label(RichText::new(&run.status).color(
+                                if run.status == "completed" {
+                                    TEAL
+                                } else if run.status == "running" {
+                                    BLUE
+                                } else {
+                                    ALERT
+                                },
+                            ));
+                            ui.label(run.started_at);
+                            ui.label(run.finished_at.unwrap_or_else(|| "in progress".into()));
+                            ui.label(if run.detail.is_empty() {
+                                "—".into()
+                            } else {
+                                run.detail
+                            });
+                            ui.end_row();
+                        }
+                    });
+            }
+            Err(error) => {
+                ui.label(
+                    RichText::new(format!("Could not read run history: {error}")).color(ALERT),
+                );
+            }
+        }
     }
 
     fn export_verification_report(&self) -> Result<(), String> {

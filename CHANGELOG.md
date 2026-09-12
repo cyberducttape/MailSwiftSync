@@ -39,6 +39,7 @@ All notable changes to MailSwiftSync are documented here.
 - imapsync credentials now use short-lived owner-only passfiles instead of environment variables, with cleanup after process completion.
 - imapsync plans now explicitly force encrypted transport for IMAPS/STARTTLS and reject destructive expert flags; stale credential directories are cleaned up after forced termination.
 - Credential files are now created atomically with owner-only permissions before any password bytes are written, then flushed before execution.
+- Activity now exposes durable run history after restart and offers an explicit safe-retry path that returns failed or interrupted mailboxes to dry preflight.
 - Restricted profile and SQLite state files to owner-only permissions on Unix systems.
 - Added durable run metadata to exported verification reports so each report is traceable to a specific execution after restart.
 - Strengthened crash durability with flushed atomic profile writes, SQLite writer backoff, and rejection of evidence records that reference unknown runs.
