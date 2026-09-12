@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added a compact credential-free project-health JSON export for ticketing and operator wrappers, including phase, mailbox state counts, Attention items, and recent run outcomes.
+- Stabilized instance-lock release after denied contender opens by explicitly closing the failed lock descriptor before returning contention to the UI.
 - Replaced fixed atomic-index batch dispatch with an MPMC channel queue. Workers now consume owned jobs from a disconnect-terminated queue while retaining bounded concurrency, cancellation, retries, and durable failure reporting.
 - Added immutable execution-plan snapshots to durable run records. Snapshots are captured at run start, exclude session passwords, and are included in verification reports so historical artifacts do not depend on later-edited UI fields.
 - Restricted the invariant-bypassing run-insertion helper to test builds and made single-mailbox verification reports derive project, endpoint, mailbox, and engine identity from durable records rather than mutable form fields.

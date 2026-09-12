@@ -881,9 +881,13 @@ fn acquire_instance_lock(state_path: &std::path::Path) -> Result<File, String> {
         .open(&lock_path)
         .map_err(|error| format!("could not open application lock: {error}"))?;
     restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
-    file.try_lock_exclusive().map_err(|_| {
-        "Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.".to_owned()
-    })?;
+    if file.try_lock_exclusive().is_err() {
+        // Explicitly close a denied contender before returning. This keeps a
+        // failed second open from retaining an open descriptor on platforms
+        // whose advisory-lock behavior is sensitive to descriptor lifetime.
+        drop(file);
+        return Err("Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.".to_owned());
+    }
     Ok(file)
 }
 
@@ -2924,6 +2928,74 @@ impl App {
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
+    fn export_project_health(&self) -> Result<(), String> {
+        let project_id = self
+            .active_project_id()
+            .ok_or("No durable migration project is available yet.")?;
+        let project = self
+            .store
+            .project(project_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("The durable migration project no longer exists.")?;
+        let jobs = self
+            .store
+            .mailboxes(project_id)
+            .map_err(|e| e.to_string())?;
+        let runs = self
+            .store
+            .recent_runs(project_id, 20)
+            .map_err(|e| e.to_string())?;
+        let attention = jobs
+            .iter()
+            .filter(|job| matches!(job.state.as_str(), "attention" | "failed" | "cancelled"))
+            .map(|job| {
+                serde_json::json!({
+                    "id": job.id,
+                    "source_mailbox": job.source_mailbox,
+                    "destination_mailbox": job.destination_mailbox,
+                    "state": job.state,
+                })
+            })
+            .collect::<Vec<_>>();
+        let recent_runs = runs
+            .iter()
+            .map(|run| {
+                serde_json::json!({
+                    "id": run.id,
+                    "job_id": run.job_id,
+                    "engine": run.engine,
+                    "status": run.status,
+                    "started_at": run.started_at,
+                    "finished_at": run.finished_at,
+                    "detail": run.detail,
+                })
+            })
+            .collect::<Vec<_>>();
+        let value = serde_json::json!({
+            "format": "mailswiftsync-project-health",
+            "version": 1,
+            "project": {
+                "id": project.id,
+                "name": project.name,
+                "phase": format!("{:?}", project.phase),
+                "source_endpoint": project.source_endpoint,
+                "destination_endpoint": project.destination_endpoint,
+            },
+            "mailboxes": {
+                "total": jobs.len(),
+                "by_state": project_health_state_counts(&jobs),
+                "attention": attention,
+            },
+            "recent_runs": recent_runs,
+        });
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-project-health.json")
+            .save_file()
+            .ok_or("Health export cancelled.")?;
+        let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+        write_private_atomic(&path, &report).map_err(|e| e.to_string())
+    }
+
     fn verification_view(&self, ui: &mut egui::Ui) {
         ui.heading("Verification");
         ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
@@ -2937,6 +3009,9 @@ impl App {
                 }
                 if ui.button("Export project JSON…").clicked() {
                     let _ = self.export_project_json();
+                }
+                if ui.button("Export project health…").clicked() {
+                    let _ = self.export_project_health();
                 }
             }
             if let Some(job) = &self.job_id {
@@ -4593,6 +4668,14 @@ impl FailureClass {
     }
 }
 
+fn project_health_state_counts(jobs: &[core::MailboxJob]) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for job in jobs {
+        *counts.entry(job.state.clone()).or_insert(0) += 1;
+    }
+    counts
+}
+
 fn classify_failure(error: &str) -> FailureClass {
     let error = error.to_ascii_lowercase();
     if [
@@ -5292,6 +5375,36 @@ mod tests {
             },
         ];
         assert!(duplicate_bulk_destination(&jobs).is_some());
+    }
+
+    #[test]
+    fn project_health_counts_group_durable_mailbox_states() {
+        let jobs = vec![
+            core::MailboxJob {
+                id: "one".into(),
+                source_mailbox: "one".into(),
+                destination_mailbox: "one".into(),
+                state: "verified".into(),
+                config: None,
+            },
+            core::MailboxJob {
+                id: "two".into(),
+                source_mailbox: "two".into(),
+                destination_mailbox: "two".into(),
+                state: "attention".into(),
+                config: None,
+            },
+            core::MailboxJob {
+                id: "three".into(),
+                source_mailbox: "three".into(),
+                destination_mailbox: "three".into(),
+                state: "verified".into(),
+                config: None,
+            },
+        ];
+        let counts = project_health_state_counts(&jobs);
+        assert_eq!(counts.get("verified"), Some(&2));
+        assert_eq!(counts.get("attention"), Some(&1));
     }
 
     #[test]
