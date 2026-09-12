@@ -782,12 +782,15 @@ impl StateStore {
         job_ids: &[String],
         run_id: &str,
         engine: &str,
+        expected_plans: &[String],
     ) -> rusqlite::Result<()> {
-        if job_ids.is_empty() {
+        if job_ids.is_empty()
+            || (!expected_plans.is_empty() && expected_plans.len() != job_ids.len())
+        {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let tx = self.connection.unchecked_transaction()?;
-        for job_id in job_ids {
+        for (index, job_id) in job_ids.iter().enumerate() {
             let current: String = tx.query_row(
                 "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
                 params![job_id, project_id],
@@ -795,6 +798,16 @@ impl StateStore {
             )?;
             if current != "running" && !valid_mailbox_transition(&current, "running") {
                 return Err(rusqlite::Error::InvalidQuery);
+            }
+            if let Some(expected_plan) = expected_plans.get(index) {
+                let actual: Option<String> = tx.query_row(
+                    "SELECT preflight_plan FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+                    params![job_id, project_id],
+                    |row| row.get(0),
+                )?;
+                if actual.as_deref() != Some(expected_plan.as_str()) {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
             }
         }
         tx.execute(
@@ -1532,7 +1545,7 @@ mod tests {
                 &[("one".into(), "one".into()), ("two".into(), "two".into())],
             )
             .unwrap();
-        db.begin_batch_run(&project.id, &jobs, "run-batch-atomic", "test")
+        db.begin_batch_run(&project.id, &jobs, "run-batch-atomic", "test", &[])
             .unwrap();
         assert!(
             jobs.iter()
@@ -1542,6 +1555,34 @@ mod tests {
             db.run_status("run-batch-atomic").unwrap().as_deref(),
             Some("running")
         );
+    }
+
+    #[test]
+    fn begin_batch_run_checks_all_live_plans_in_one_boundary() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-plans",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        db.set_preflight_plan(&jobs[0], "plan-one").unwrap();
+        db.set_preflight_plan(&jobs[1], "plan-two").unwrap();
+        let result = db.begin_batch_run(
+            &project.id,
+            &jobs,
+            "run-batch-plans",
+            "test",
+            &["plan-one".into(), "stale-plan".into()],
+        );
+        assert!(result.is_err());
+        assert!(
+            jobs.iter()
+                .all(|job| { db.mailbox_state(job).unwrap().as_deref() == Some("queued") })
+        );
+        assert!(db.run_status("run-batch-plans").unwrap().is_none());
     }
 
     #[test]

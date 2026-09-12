@@ -2877,6 +2877,13 @@ impl App {
         self.bulk_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
         self.bulk_live_run = live;
+        let expected_plans = if live {
+            jobs.iter()
+                .map(|job| job.form.plan_fingerprint())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
         if let Err(error) = self.store.begin_batch_run(
@@ -2888,6 +2895,7 @@ impl App {
             } else {
                 "batch validation"
             },
+            &expected_plans,
         ) {
             self.bulk_message = format!("Could not start durable batch run: {error}");
             return;
@@ -3577,7 +3585,16 @@ impl App {
             } else {
                 match r {
                     Ok(()) if self.form.dry_run => "Preflight completed successfully".into(),
-                    Ok(()) => "Completed successfully".into(),
+                    Ok(()) if was_bulk_run => {
+                        "Batch transfer completed; review per-mailbox verification results".into()
+                    }
+                    Ok(()) if direct_final_state == Some("verified") => {
+                        "Migration completed and verified".into()
+                    }
+                    Ok(()) if direct_final_state == Some("delta_required") => {
+                        "Migration completed; final delta or review required".into()
+                    }
+                    Ok(()) => "Migration completed; verification requires operator review".into(),
                     Err(e) => format!("Failed: {e}"),
                 }
             };
