@@ -3584,17 +3584,12 @@ impl App {
                 "Migration result requires durability review".into()
             } else {
                 match r {
-                    Ok(()) if self.form.dry_run => "Preflight completed successfully".into(),
-                    Ok(()) if was_bulk_run => {
-                        "Batch transfer completed; review per-mailbox verification results".into()
-                    }
-                    Ok(()) if direct_final_state == Some("verified") => {
-                        "Migration completed and verified".into()
-                    }
-                    Ok(()) if direct_final_state == Some("delta_required") => {
-                        "Migration completed; final delta or review required".into()
-                    }
-                    Ok(()) => "Migration completed; verification requires operator review".into(),
+                    Ok(()) => Self::successful_run_status(
+                        self.form.dry_run,
+                        was_bulk_run,
+                        direct_final_state,
+                    )
+                    .into(),
                     Err(e) => format!("Failed: {e}"),
                 }
             };
@@ -3613,6 +3608,24 @@ impl App {
             self.live_confirmed = false;
         }
     }
+    fn successful_run_status(
+        dry_run: bool,
+        was_bulk_run: bool,
+        final_state: Option<&str>,
+    ) -> &'static str {
+        if dry_run {
+            "Preflight completed successfully"
+        } else if was_bulk_run {
+            "Batch transfer completed; review per-mailbox verification results"
+        } else {
+            match final_state {
+                Some("verified") => "Migration completed and verified",
+                Some("delta_required") => "Migration completed; final delta or review required",
+                _ => "Migration completed; verification requires operator review",
+            }
+        }
+    }
+
     fn account(
         ui: &mut egui::Ui,
         title: &str,
@@ -4649,6 +4662,26 @@ mod tests {
             FailureClass::Configuration
         );
         assert_eq!(classified_failure_detail("OVERQUOTA"), "[quota] OVERQUOTA");
+    }
+
+    #[test]
+    fn successful_live_status_never_overclaims_missing_evidence() {
+        assert_eq!(
+            App::successful_run_status(false, false, Some("verified")),
+            "Migration completed and verified"
+        );
+        assert_eq!(
+            App::successful_run_status(false, false, Some("delta_required")),
+            "Migration completed; final delta or review required"
+        );
+        assert_eq!(
+            App::successful_run_status(false, false, None),
+            "Migration completed; verification requires operator review"
+        );
+        assert_eq!(
+            App::successful_run_status(false, true, None),
+            "Batch transfer completed; review per-mailbox verification results"
+        );
     }
 
     #[test]
