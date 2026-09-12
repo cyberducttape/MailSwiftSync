@@ -873,7 +873,16 @@ struct PreparedCommand {
     env: Vec<(String, String)>,
 }
 
-fn acquire_instance_lock(state_path: &std::path::Path) -> Result<File, String> {
+#[derive(Debug)]
+struct InstanceLock(File);
+
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+fn acquire_instance_lock(state_path: &std::path::Path) -> Result<InstanceLock, String> {
     let lock_path = state_path.with_extension("lock");
     let file = OpenOptions::new()
         .create(true)
@@ -890,7 +899,7 @@ fn acquire_instance_lock(state_path: &std::path::Path) -> Result<File, String> {
         drop(file);
         return Err("Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.".to_owned());
     }
-    Ok(file)
+    Ok(InstanceLock(file))
 }
 
 fn remove_option(args: &mut Vec<String>, option: &str) {
@@ -1355,7 +1364,7 @@ struct App {
     /// Held for the lifetime of the application. An advisory OS lock is
     /// released automatically if the process crashes, so a later instance
     /// can safely perform orphan recovery without killing a live sibling.
-    _instance_lock: Option<File>,
+    _instance_lock: Option<InstanceLock>,
     persistence_available: bool,
     project_id: Option<String>,
     job_id: Option<String>,
@@ -1457,6 +1466,9 @@ impl Default for App {
             ));
         }
         let mut form = Form::load();
+        if form.profile.destination_tls.is_empty() {
+            form.profile.destination_tls = default_destination_tls();
+        }
         let restored_project = persistence_warning
             .is_none()
             .then(|| store.latest_project().ok().flatten())
@@ -1503,6 +1515,10 @@ impl Default for App {
                     .as_deref()
                     .and_then(|config| toml::from_str::<Profile>(config).ok())
                     .unwrap_or_default();
+                let mut profile = profile;
+                if profile.destination_tls.is_empty() {
+                    profile.destination_tls = default_destination_tls();
+                }
                 restored_bulk_jobs.push(BulkJob {
                     label: format!("{} → {}", job.source_mailbox, job.destination_mailbox),
                     form: Form {
