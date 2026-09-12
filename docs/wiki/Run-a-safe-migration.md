@@ -41,7 +41,7 @@ Click **Run dry validation**. The **Execution journal** streams output from the 
 
 ## 6. Run the live migration
 
-Only after validation succeeds:
+Only after validation succeeds and the durable project still matches the displayed source/destination identities:
 
 1. Confirm the destination is the intended mailbox.
 2. Uncheck **Dry run**. The header changes from **SAFE MODE** to **LIVE MODE**.

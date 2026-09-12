@@ -1971,6 +1971,17 @@ fn recommended_next_action(
     }
 }
 
+fn durable_single_identity_matches(
+    project: &core::Project,
+    mailbox: &core::MailboxJob,
+    profile: &Profile,
+) -> bool {
+    project.source_endpoint == profile.source_host
+        && project.destination_endpoint == profile.destination_host
+        && mailbox.source_mailbox == profile.source_user
+        && mailbox.destination_mailbox == profile.destination_user
+}
+
 fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), String> {
     let input = input.trim();
     if input.is_empty() {
@@ -3789,6 +3800,37 @@ impl App {
             self.status = e;
             return;
         }
+        if let (Some(project_id), Some(job_id)) = (self.project_id.clone(), self.job_id.clone()) {
+            let identity_matches = self
+                .store
+                .project(&project_id)
+                .ok()
+                .flatten()
+                .zip(self.store.mailbox_identity(&job_id).ok().flatten())
+                .is_some_and(|(project, (source, destination, state))| {
+                    let mailbox = core::MailboxJob {
+                        id: job_id.clone(),
+                        source_mailbox: source,
+                        destination_mailbox: destination,
+                        state,
+                        config: None,
+                    };
+                    durable_single_identity_matches(&project, &mailbox, &self.form.profile)
+                });
+            if !identity_matches {
+                if self.form.dry_run {
+                    // A changed identity is a new durable plan. Keep the
+                    // previous project history intact and create a fresh
+                    // project/job below rather than attaching the run to the
+                    // old mailbox record.
+                    self.project_id = None;
+                    self.job_id = None;
+                } else {
+                    self.status = "The current mailbox identity differs from the durable project. Run a new dry preflight for this plan before starting live migration.".into();
+                    return;
+                }
+            }
+        }
         if !self.form.dry_run && self.form.requires_insecure_transport_ack() {
             self.status = "Live migration blocked: acknowledge the cleartext source-transport risk before continuing.".into();
             return;
@@ -5228,6 +5270,38 @@ mod tests {
         let snapshot = form.plan_snapshot();
         assert!(!snapshot.contains("bearer-token-value"));
         assert!(snapshot.contains("extra_options_sha256"));
+    }
+
+    #[test]
+    fn durable_single_identity_rejects_edited_plan() {
+        let project = core::Project {
+            id: "project".into(),
+            name: "Pilot".into(),
+            source_endpoint: "old.example".into(),
+            destination_endpoint: "new.example".into(),
+            phase: core::Phase::Preflight,
+        };
+        let mailbox = core::MailboxJob {
+            id: "job".into(),
+            source_mailbox: "alice@example.com".into(),
+            destination_mailbox: "alice@example.com".into(),
+            state: "ready".into(),
+            config: None,
+        };
+        let mut profile = Profile {
+            source_host: "old.example".into(),
+            destination_host: "new.example".into(),
+            source_user: "alice@example.com".into(),
+            destination_user: "alice@example.com".into(),
+            ..Profile::default()
+        };
+        assert!(durable_single_identity_matches(
+            &project, &mailbox, &profile
+        ));
+        profile.destination_host = "other.example".into();
+        assert!(!durable_single_identity_matches(
+            &project, &mailbox, &profile
+        ));
     }
 
     #[test]
