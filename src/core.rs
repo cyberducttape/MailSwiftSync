@@ -1388,6 +1388,65 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_state_machine_has_an_exhaustive_transition_matrix() {
+        let states = [
+            "queued",
+            "preflight",
+            "ready",
+            "running",
+            "completed",
+            "delta_required",
+            "failed",
+            "cancelled",
+            "verified",
+            "attention",
+        ];
+        let allowed = [
+            (
+                "queued",
+                &["preflight", "ready", "running", "failed", "cancelled"] as &[&str],
+            ),
+            ("preflight", &["ready", "running", "failed", "cancelled"]),
+            ("ready", &["running", "failed", "cancelled"]),
+            (
+                "running",
+                &[
+                    "ready",
+                    "completed",
+                    "delta_required",
+                    "failed",
+                    "cancelled",
+                    "attention",
+                ],
+            ),
+            (
+                "completed",
+                &["verified", "delta_required", "running", "attention"],
+            ),
+            ("delta_required", &["running", "failed", "cancelled"]),
+            ("failed", &["running", "attention"]),
+            ("cancelled", &["running", "attention"]),
+            ("verified", &["delta_required", "running", "attention"]),
+            ("attention", &["running"]),
+        ];
+        for current in states {
+            for next in states {
+                let expected = allowed
+                    .iter()
+                    .find(|(state, _)| *state == current)
+                    .is_some_and(|(_, targets)| targets.contains(&next));
+                assert_eq!(
+                    valid_mailbox_transition(current, next),
+                    expected,
+                    "unexpected mailbox transition {current} -> {next}"
+                );
+            }
+        }
+        assert!(!valid_mailbox_transition("unknown", "running"));
+        assert!(!valid_mailbox_transition("ready", "unknown"));
+    }
+
+    #[test]
     fn mailbox_cannot_start_two_runs_or_be_verified_without_evidence() {
         let db = StateStore::in_memory().unwrap();
         let project = db.create_project("test", "source", "destination").unwrap();
