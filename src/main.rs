@@ -1132,26 +1132,37 @@ fn run_streaming(
     // Start both drainers before the reliable lifecycle send. If the
     // bounded event queue is temporarily full, this send may wait, but the
     // child pipes are already being drained and cannot deadlock the engine.
-    let _ = tx.send(Event::ProcessStarted(
-        run_id.to_owned(),
-        job_id.to_owned(),
-        child.id(),
-        start_ticks,
-        process_group,
-        session_id,
-        executable.to_owned(),
-    ));
-    let result = wait_with_timeout(&mut child, timeout, cancel)
-        .map_err(|error| error.to_string())
-        .and_then(|status| {
-            if status.success() {
-                Ok(StreamOutcome::Completed)
-            } else if dovecot_exit_two_is_delta && status.code() == Some(2) {
-                Ok(StreamOutcome::DeltaRequired)
-            } else {
-                Err(format!("process exited with {status}"))
-            }
-        });
+    let process_started = tx
+        .send(Event::ProcessStarted(
+            run_id.to_owned(),
+            job_id.to_owned(),
+            child.id(),
+            start_ticks,
+            process_group,
+            session_id,
+            executable.to_owned(),
+        ))
+        .is_ok();
+    let result = if process_started {
+        wait_with_timeout(&mut child, timeout, cancel)
+            .map_err(|error| error.to_string())
+            .and_then(|status| {
+                if status.success() {
+                    Ok(StreamOutcome::Completed)
+                } else if dovecot_exit_two_is_delta && status.code() == Some(2) {
+                    Ok(StreamOutcome::DeltaRequired)
+                } else {
+                    Err(format!("process exited with {status}"))
+                }
+            })
+    } else {
+        // ProcessStarted is the reliable hand-off to the durable controller.
+        // Continuing after a disconnected event channel would leave a live
+        // child with no possible process registration or cancellation owner.
+        cancel.store(true, Ordering::Relaxed);
+        let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
+        Err("process-start event channel disconnected; child cancelled before supervision".into())
+    };
     let stdout_reader = out_thread
         .join()
         .map_err(|_| "stdout reader thread panicked".to_owned());
@@ -6381,6 +6392,31 @@ mod tests {
             false,
         );
         assert!(outcome.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disconnected_process_event_channel_cancels_child_before_returning() {
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        drop(rx);
+        let cancel = AtomicBool::new(false);
+        let outcome = run_streaming(
+            "/bin/sh",
+            &["-c".into(), "sleep 30".into()],
+            &[],
+            &tx,
+            "test-run",
+            "test-job",
+            "",
+            &cancel,
+            &[],
+            Duration::from_secs(5),
+            false,
+        );
+
+        let error = outcome.unwrap_err();
+        assert!(error.contains("event channel disconnected"));
+        assert!(cancel.load(Ordering::Relaxed));
     }
 
     #[test]
