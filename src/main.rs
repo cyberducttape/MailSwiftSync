@@ -340,6 +340,11 @@ impl Form {
                 ));
             }
         }
+        if require_credentials && self.requires_insecure_transport_ack() {
+            return Err(
+                "Plain IMAP requires an explicit cleartext-transport acknowledgement before any authenticated operation, including dry preflight.".into(),
+            );
+        }
         for (label, value) in [
             ("Source IMAP host", &self.profile.source_host),
             ("Destination IMAP host", &self.profile.destination_host),
@@ -2331,7 +2336,7 @@ impl App {
                 ),
             );
             response.on_hover_text(
-                "Use IMAPS or STARTTLS whenever possible. This acknowledgement is required for live execution and is included in the preflight fingerprint.",
+                "Use IMAPS or STARTTLS whenever possible. This acknowledgement is required before any authenticated operation, including dry preflight, and is included in the preflight fingerprint.",
             );
         });
     }
@@ -5654,9 +5659,11 @@ mod tests {
         let mut form = dovecot_form();
         form.profile.source_tls = "plain".into();
         assert!(form.requires_insecure_transport_ack());
+        assert!(form.validate().is_err());
         let without_ack = form.plan_fingerprint();
         form.profile.allow_insecure_source_transport = true;
         assert!(!form.requires_insecure_transport_ack());
+        assert!(form.validate().is_ok());
         assert_ne!(without_ack, form.plan_fingerprint());
     }
 
