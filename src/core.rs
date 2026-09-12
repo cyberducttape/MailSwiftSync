@@ -563,14 +563,21 @@ impl StateStore {
         kind: &str,
         details: &[String],
     ) -> rusqlite::Result<()> {
-        if details.is_empty() {
+        let batch = details
+            .iter()
+            .map(|detail| (project_id, kind, detail.as_str()))
+            .collect::<Vec<_>>();
+        self.record_events_batch(&batch)
+    }
+    pub fn record_events_batch(&self, events: &[(&str, &str, &str)]) -> rusqlite::Result<()> {
+        if events.is_empty() {
             return Ok(());
         }
         let tx = self.connection.unchecked_transaction()?;
         {
             let mut statement =
-                tx.prepare("INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)")?;
-            for detail in details {
+                tx.prepare_cached("INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)")?;
+            for (project_id, kind, detail) in events {
                 statement.execute(params![project_id, kind, detail])?;
             }
         }
@@ -1080,9 +1087,12 @@ mod tests {
         let project = db
             .create_project("events", "source", "destination")
             .unwrap();
-        let details = vec!["first".into(), "second".into(), "third".into()];
-        db.record_events(&project.id, "run_output", &details)
-            .unwrap();
+        let details: Vec<String> = vec!["first".into(), "second".into(), "third".into()];
+        let batch = details
+            .iter()
+            .map(|detail| (project.id.as_str(), "run_output", detail.as_str()))
+            .collect::<Vec<_>>();
+        db.record_events_batch(&batch).unwrap();
         let count: i64 = db
             .connection
             .query_row(

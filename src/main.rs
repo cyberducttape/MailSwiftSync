@@ -2565,13 +2565,19 @@ impl App {
             self.capability_receiver = None;
         }
         let mut done = None;
-        let mut pending_output_events = Vec::new();
+        let mut pending_db_events: Vec<(String, String, String)> = Vec::new();
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
                     Event::Line(s) => {
                         let safe = self.redact_output(&s);
-                        pending_output_events.push(safe.clone());
+                        if let Some(project) = self.active_project_id() {
+                            pending_db_events.push((
+                                project.to_owned(),
+                                "run_output".into(),
+                                safe.clone(),
+                            ));
+                        }
                         push_visible_output(&mut self.output, safe);
                     }
                     Event::JobState(index, state) => {
@@ -2605,32 +2611,34 @@ impl App {
                             let _ = self.store.set_mailbox_state(job, state);
                         }
                         if let Some(project) = self.active_project_id() {
-                            let _ = self.store.record_event(
-                                project,
-                                "verification_evidence",
-                                &format!("{}% confidence", evidence.confidence_percent()),
-                            );
+                            pending_db_events.push((
+                                project.to_owned(),
+                                "verification_evidence".into(),
+                                format!("{}% confidence", evidence.confidence_percent()),
+                            ));
                         }
                     }
                     Event::VerificationFailed(detail) => {
                         let safe = self.redact_output(&detail);
                         push_visible_output(&mut self.output, format!("[verification] {safe}"));
                         if let Some(project) = self.active_project_id() {
-                            let _ = self
-                                .store
-                                .record_event(project, "verification_pending", &safe);
+                            pending_db_events.push((
+                                project.to_owned(),
+                                "verification_pending".into(),
+                                safe,
+                            ));
                         }
                     }
                     Event::Finished(r) => done = Some(r),
                 }
             }
         }
-        if !pending_output_events.is_empty()
-            && let Some(project) = self.active_project_id()
-        {
-            let _ = self
-                .store
-                .record_events(project, "run_output", &pending_output_events);
+        if !pending_db_events.is_empty() {
+            let batch = pending_db_events
+                .iter()
+                .map(|(project, kind, detail)| (project.as_str(), kind.as_str(), detail.as_str()))
+                .collect::<Vec<_>>();
+            let _ = self.store.record_events_batch(&batch);
         }
         if let Some(r) = done {
             let succeeded = r.is_ok();
