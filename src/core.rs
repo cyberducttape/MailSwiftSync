@@ -310,7 +310,8 @@ impl StateStore {
           CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
           CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
           CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);
-          CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';")?;
+          CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
+          CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = self
             .connection
@@ -819,6 +820,14 @@ impl StateStore {
         if current == "running" || !valid_mailbox_transition(&current, "running") {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let active_run_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
+            params![project_id, job_id],
+            |row| row.get(0),
+        )?;
+        if active_run_exists {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         tx.execute(
             "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,'running')",
             params![run_id, project_id, job_id, engine, plan_snapshot],
@@ -900,6 +909,14 @@ impl StateStore {
             // harmless retry. This keeps one durable execution owner per
             // mailbox even when two callers race.
             if current == "running" || !valid_mailbox_transition(&current, "running") {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            let active_run_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
+                params![project_id, job_id],
+                |row| row.get(0),
+            )?;
+            if active_run_exists {
                 return Err(rusqlite::Error::InvalidQuery);
             }
             if let Some(expected_plan) = expected_plans.get(index) {
@@ -2173,6 +2190,10 @@ mod tests {
         assert_eq!(
             db.run_status("run-batch-atomic").unwrap().as_deref(),
             Some("running")
+        );
+        assert!(
+            db.begin_batch_run(&project.id, &jobs, "run-batch-duplicate", "test", &[])
+                .is_err()
         );
     }
 
