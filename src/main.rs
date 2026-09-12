@@ -44,6 +44,10 @@ struct Profile {
     source_port: String,
     #[serde(default = "default_source_tls")]
     source_tls: String,
+    /// Explicit operator acknowledgement required before a live cleartext
+    /// source connection. This is part of the plan fingerprint.
+    #[serde(default)]
+    allow_insecure_source_transport: bool,
     source_user: String,
     #[serde(default)]
     source_credential_id: String,
@@ -565,12 +569,17 @@ impl Form {
             remove_option(&mut args, "--password2");
         }
         format!(
-            "{}\n{}\ncredential-source1={}\ncredential-source2={}",
+            "{}\n{}\ncredential-source1={}\ncredential-source2={}\ninsecure-source-transport-ack={}",
             executable,
             args.join("\u{1f}"),
             planned.profile.source_credential_id.trim(),
             planned.profile.destination_credential_id.trim(),
+            planned.profile.allow_insecure_source_transport,
         )
+    }
+
+    fn requires_insecure_transport_ack(&self) -> bool {
+        self.profile.source_tls == "plain" && !self.profile.allow_insecure_source_transport
     }
     fn engine(&self) -> core::Engine {
         match self.profile.engine {
@@ -2246,8 +2255,29 @@ impl App {
         });
     }
 
+    fn source_transport_warning(&mut self, ui: &mut egui::Ui) {
+        if self.form.profile.source_tls != "plain" {
+            return;
+        }
+        ui.group(|ui| {
+            ui.label(RichText::new("INSECURE SOURCE TRANSPORT").strong().color(ALERT));
+            ui.label("Plain IMAP can expose the source password and mailbox data in transit.");
+            let response = ui.add_enabled(
+                !self.running(),
+                egui::Checkbox::new(
+                    &mut self.form.profile.allow_insecure_source_transport,
+                    "I understand and explicitly allow cleartext source transport",
+                ),
+            );
+            response.on_hover_text(
+                "Use IMAPS or STARTTLS whenever possible. This acknowledgement is required for live execution and is included in the preflight fingerprint.",
+            );
+        });
+    }
+
     fn project_summary(&mut self, ui: &mut egui::Ui) {
         self.lifecycle_stepper(ui);
+        self.source_transport_warning(ui);
         if self.active_view != WorkspaceView::Plan {
             match self.active_view {
                 WorkspaceView::Overview => self.overview_view(ui),
@@ -2398,10 +2428,20 @@ impl App {
             for text in [
                 "Simulation is the default",
                 "Saved profiles exclude passwords",
-                "TLS verification is enabled",
                 "Source mail is read-only by default",
             ] {
                 ui.label(RichText::new(format!("✓ {text}")).color(TEAL));
+            }
+            if self.form.profile.source_tls == "plain" {
+                ui.label(
+                    RichText::new("! Source transport is cleartext by explicit configuration")
+                        .color(ALERT),
+                );
+            } else {
+                ui.label(
+                    RichText::new("✓ Encrypted source transport with certificate verification")
+                        .color(TEAL),
+                );
             }
         });
     }
@@ -3061,6 +3101,14 @@ impl App {
                 format!("Mailbox {} is not ready for validation: {error}", index + 1);
             return;
         }
+        if live
+            && jobs
+                .iter()
+                .any(|job| job.form.requires_insecure_transport_ack())
+        {
+            self.bulk_message = "Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into();
+            return;
+        }
         self.durability_error = false;
         let existing_project = self.bulk_project_id.clone();
         let mailboxes = jobs
@@ -3390,6 +3438,10 @@ impl App {
         }
         if let Err(e) = self.form.validate() {
             self.status = e;
+            return;
+        }
+        if !self.form.dry_run && self.form.requires_insecure_transport_ack() {
+            self.status = "Live migration blocked: acknowledge the cleartext source-transport risk before continuing.".into();
             return;
         }
         self.durability_error = false;
@@ -5199,6 +5251,17 @@ mod tests {
         form.profile.source_tls = "plain".into();
         let (_, args) = form.command(true);
         assert!(args.iter().any(|arg| arg == "imapc_ssl=no"));
+    }
+
+    #[test]
+    fn plain_source_requires_explicit_live_transport_ack_and_binds_plan() {
+        let mut form = dovecot_form();
+        form.profile.source_tls = "plain".into();
+        assert!(form.requires_insecure_transport_ack());
+        let without_ack = form.plan_fingerprint();
+        form.profile.allow_insecure_source_transport = true;
+        assert!(!form.requires_insecure_transport_ack());
+        assert_ne!(without_ack, form.plan_fingerprint());
     }
 
     #[test]
