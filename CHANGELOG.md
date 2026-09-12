@@ -33,6 +33,8 @@ All notable changes to MailSwiftSync are documented here.
 - Bounded the in-memory visible execution journal to 10,000 lines while retaining the durable event ledger.
 - Persisted secret-free batch row configuration and restored durable batch queues for review after restart; credentials remain session-only.
 - Upgraded the GUI/spreadsheet dependency line to remove the reported high-severity `quick-xml` vulnerabilities and added `cargo audit` to CI.
+- Batch startup now validates every row before launching any process, preventing restored queues with blank credentials from running.
+- Tightened the live project-phase gate to recognized execution and verification phases only.
 
 ### Changed
 

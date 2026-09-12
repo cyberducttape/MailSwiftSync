@@ -1721,6 +1721,15 @@ impl App {
             self.bulk_message = "One or more queued jobs were imported in live mode. Re-import them with Dry run enabled.".into();
             return;
         }
+        if let Some((index, error)) = jobs
+            .iter()
+            .enumerate()
+            .find_map(|(index, job)| job.form.validate().err().map(|error| (index, error)))
+        {
+            self.bulk_message =
+                format!("Mailbox {} is not ready for validation: {error}", index + 1);
+            return;
+        }
         if !self.persistence_available {
             self.bulk_message = "Batch validation requires durable SQLite storage.".into();
             return;
@@ -1871,8 +1880,15 @@ impl App {
                 .as_deref()
                 .and_then(|id| self.store.project(id).ok().flatten())
                 .is_some_and(|project| {
-                    project.phase != core::Phase::Discovery
-                        && project.phase != core::Phase::Attention
+                    matches!(
+                        project.phase,
+                        core::Phase::Preflight
+                            | core::Phase::Pilot
+                            | core::Phase::Seed
+                            | core::Phase::CatchUp
+                            | core::Phase::FinalDelta
+                            | core::Phase::Verification
+                    )
                 });
             let plan_matches = self.job_id.as_deref().is_some_and(|job| {
                 self.store
