@@ -1864,6 +1864,93 @@ impl App {
         std::fs::write(path, report).map_err(|e| e.to_string())
     }
 
+    fn export_project_report(&self) -> Result<(), String> {
+        let project_id = self
+            .active_project_id()
+            .ok_or("No durable migration project is available yet.")?;
+        let project = self
+            .store
+            .project(project_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("The durable migration project no longer exists.")?;
+        let jobs = self
+            .store
+            .mailboxes(project_id)
+            .map_err(|e| e.to_string())?;
+        if jobs.is_empty() {
+            return Err("The project has no mailbox jobs to report.".into());
+        }
+        let runs = self
+            .store
+            .recent_runs(project_id, 20)
+            .map_err(|e| e.to_string())?;
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-project-report.md")
+            .save_file()
+            .ok_or("Report export cancelled.")?;
+        let verified = jobs.iter().filter(|job| job.state == "verified").count();
+        let attention = jobs
+            .iter()
+            .filter(|job| matches!(job.state.as_str(), "attention" | "failed" | "cancelled"))
+            .count();
+        let mut report = format!(
+            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence | Confidence | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---:|---:|---:|---:|---:|\n",
+            markdown_escape(&project.name),
+            project.id,
+            markdown_escape(&project.source_endpoint),
+            markdown_escape(&project.destination_endpoint),
+            project.phase,
+            jobs.len(),
+            verified,
+            attention,
+        );
+        for job in jobs {
+            if let Some(evidence) = self.store.evidence(&job.id).map_err(|e| e.to_string())? {
+                report.push_str(&format!(
+                    "| {} | {} | `{}` | {} | {}% | {} | {} | {} | {} |\n",
+                    markdown_escape(&job.source_mailbox),
+                    markdown_escape(&job.destination_mailbox),
+                    job.state,
+                    if evidence.authoritative {
+                        "authoritative"
+                    } else {
+                        "aggregate"
+                    },
+                    evidence.confidence_percent(),
+                    evidence.source_messages,
+                    evidence.destination_messages,
+                    evidence.unmatched_messages,
+                    evidence.failed_messages,
+                ));
+            } else {
+                report.push_str(&format!(
+                    "| {} | {} | `{}` | missing | 0% | — | — | — | — |\n",
+                    markdown_escape(&job.source_mailbox),
+                    markdown_escape(&job.destination_mailbox),
+                    job.state,
+                ));
+            }
+        }
+        report.push_str("\n## Recent runs\n\n| Run | Engine | Status | Started | Finished | Detail |\n|---|---|---|---|---|---|\n");
+        for run in runs {
+            report.push_str(&format!(
+                "| `{}` | {} | `{}` | {} | {} | {} |\n",
+                run.id,
+                markdown_escape(&run.engine),
+                run.status,
+                run.started_at,
+                run.finished_at.unwrap_or_else(|| "in progress".into()),
+                markdown_escape(if run.detail.is_empty() {
+                    "—"
+                } else {
+                    &run.detail
+                }),
+            ));
+        }
+        report.push_str("\nEvidence marked `aggregate` is reconciliation evidence, not message-level proof. Missing evidence or any state other than `verified` requires operator review before declaring the project complete.\n");
+        std::fs::write(path, report).map_err(|e| e.to_string())
+    }
+
     fn verification_view(&self, ui: &mut egui::Ui) {
         ui.heading("Verification");
         ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
@@ -1871,6 +1958,9 @@ impl App {
         ui.group(|ui| {
             ui.heading("Verification and audit report");
             ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(MUTED));
+            if self.active_project_id().is_some() && ui.button("Export project report…").clicked() {
+                let _ = self.export_project_report();
+            }
             if let Some(job) = &self.job_id {
                 match self.store.evidence(job) {
                     Ok(Some(evidence)) => {
