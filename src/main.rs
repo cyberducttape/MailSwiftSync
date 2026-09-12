@@ -1009,8 +1009,17 @@ fn parse_dovecot_evidence(
 
 enum Event {
     Line(String),
-    ProcessStarted(String, u32, Option<u64>, Option<u32>, Option<u32>, String),
+    ProcessStarted(
+        String,
+        String,
+        u32,
+        Option<u64>,
+        Option<u32>,
+        Option<u32>,
+        String,
+    ),
     JobState(usize, String),
+    JobFinished(usize, String, String),
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
     Finished(Result<StreamOutcome, String>),
@@ -1031,6 +1040,7 @@ fn run_streaming(
     args: &[String],
     env: &[(String, String)],
     tx: &mpsc::SyncSender<Event>,
+    run_id: &str,
     job_id: &str,
     prefix: &str,
     cancel: &AtomicBool,
@@ -1054,6 +1064,7 @@ fn run_streaming(
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
         .unwrap_or((None, None, None));
     let _ = tx.send(Event::ProcessStarted(
+        run_id.to_owned(),
         job_id.to_owned(),
         child.id(),
         start_ticks,
@@ -1272,6 +1283,7 @@ struct ActiveRunContext {
     job_id: Option<String>,
     batch_job_ids: Vec<String>,
     batch_plan_fingerprints: Vec<String>,
+    batch_child_run_ids: Vec<String>,
     kind: RunKind,
     dry_run: bool,
     engine: core::Engine,
@@ -3115,7 +3127,14 @@ impl App {
             .join("\n--- batch mailbox plan ---\n");
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
-        if let Err(error) = self.store.begin_batch_run_with_snapshot(
+        let child_plans = jobs
+            .iter()
+            .map(|job| core::BatchChildPlan {
+                engine: job.form.engine().label().to_owned(),
+                plan_snapshot: job.form.plan_snapshot(),
+            })
+            .collect::<Vec<_>>();
+        let child_run_ids = match self.store.begin_batch_run_with_children(
             &project_id,
             &self.bulk_job_ids,
             &run_id,
@@ -3126,16 +3145,21 @@ impl App {
             },
             &expected_plans,
             &plan_snapshot,
+            &child_plans,
         ) {
-            self.bulk_message = format!("Could not start durable batch run: {error}");
-            return;
-        }
+            Ok(ids) => ids,
+            Err(error) => {
+                self.bulk_message = format!("Could not start durable batch run: {error}");
+                return;
+            }
+        };
         self.active_run = Some(ActiveRunContext {
             run_id: run_id.clone(),
             project_id: project_id.clone(),
             job_id: None,
             batch_job_ids: self.bulk_job_ids.clone(),
             batch_plan_fingerprints: jobs.iter().map(|job| job.form.plan_fingerprint()).collect(),
+            batch_child_run_ids: child_run_ids,
             kind: RunKind::Batch,
             dry_run: !live,
             engine: self.form.engine(),
@@ -3163,9 +3187,19 @@ impl App {
         let job_count = jobs.len();
         let (job_tx, job_rx) = crossbeam_channel::unbounded();
         let queue_job_ids = self.bulk_job_ids.clone();
+        let child_run_ids = self
+            .active_run
+            .as_ref()
+            .map(|run| run.batch_child_run_ids.clone())
+            .unwrap_or_default();
         for (index, job) in jobs.into_iter().enumerate() {
             job_tx
-                .send((index, queue_job_ids[index].clone(), job))
+                .send((
+                    index,
+                    queue_job_ids[index].clone(),
+                    child_run_ids[index].clone(),
+                    job,
+                ))
                 .expect("batch workers are created immediately after queue setup");
         }
         drop(job_tx);
@@ -3182,9 +3216,14 @@ impl App {
                 let cancel = Arc::clone(&cancel);
                 let launch_limiter = Arc::clone(&launch_limiter);
                 workers.push(thread::spawn(move || {
-                    while let Ok((index, job_id, job)) = job_rx.recv() {
+                    while let Ok((index, job_id, child_run_id, job)) = job_rx.recv() {
                         if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
+                            let _ = tx.send(Event::JobFinished(
+                                index,
+                                "cancelled".into(),
+                                "cancelled before worker claim".into(),
+                            ));
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
                             }
@@ -3220,6 +3259,7 @@ impl App {
                                         &command.args,
                                         &command.env,
                                         &tx,
+                                        &child_run_id,
                                         &job_id,
                                         &format!("[{}] ", index + 1),
                                         &cancel,
@@ -3306,6 +3346,16 @@ impl App {
                                         index,
                                         if cancelled { "Cancelled" } else { "Failed" }.into(),
                                     ));
+                                    let _ = tx.send(Event::JobFinished(
+                                        index,
+                                        if cancelled {
+                                            "cancelled"
+                                        } else {
+                                            "failed"
+                                        }
+                                        .into(),
+                                        error,
+                                    ));
                                     if let Ok(mut terminal) = terminal_jobs.lock() {
                                         terminal.insert(index);
                                     }
@@ -3314,6 +3364,13 @@ impl App {
                             }
                         }
                         if completed {
+                            let terminal_state = if job.form.dry_run {
+                                "ready"
+                            } else if delta_required {
+                                "delta_required"
+                            } else {
+                                "completed"
+                            };
                             let _ = tx.send(Event::JobState(
                                 index,
                                 if delta_required {
@@ -3323,11 +3380,25 @@ impl App {
                                 }
                                 .into(),
                             ));
+                            let _ = tx.send(Event::JobFinished(
+                                index,
+                                terminal_state.into(),
+                                if delta_required {
+                                    "Dovecot reports that another delta pass is required".into()
+                                } else {
+                                    "process completed".into()
+                                },
+                            ));
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
                             }
                         } else if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
+                            let _ = tx.send(Event::JobFinished(
+                                index,
+                                "cancelled".into(),
+                                "cancelled by operator".into(),
+                            ));
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
                             }
@@ -3357,6 +3428,11 @@ impl App {
                         index + 1
                     )));
                     let _ = tx.send(Event::JobState(index, "Attention".into()));
+                    let _ = tx.send(Event::JobFinished(
+                        index,
+                        "attention".into(),
+                        "worker stopped unexpectedly".into(),
+                    ));
                 }
                 let _ = tx.send(Event::Line(
                     "A batch worker stopped unexpectedly; unresolved jobs require review before retrying."
@@ -3547,6 +3623,7 @@ impl App {
             job_id: Some(run_job_id.clone()),
             batch_job_ids: Vec::new(),
             batch_plan_fingerprints: Vec::new(),
+            batch_child_run_ids: Vec::new(),
             kind: RunKind::Single,
             dry_run: run_dry_run,
             engine: run_engine,
@@ -3606,6 +3683,7 @@ impl App {
                 &args,
                 &prepared_env,
                 &tx,
+                &run_id,
                 &process_job_id,
                 "",
                 &cancel,
@@ -3704,6 +3782,7 @@ impl App {
             while let Ok(event) = rx.try_recv() {
                 match event {
                     Event::ProcessStarted(
+                        process_run_id,
                         job_id,
                         pid,
                         start_ticks,
@@ -3711,9 +3790,9 @@ impl App {
                         session_id,
                         executable,
                     ) => {
-                        if let Some(run) = active_run.as_ref()
+                        if active_run.is_some()
                             && let Err(error) = self.store.register_process(&core::ActiveProcess {
-                                run_id: run.run_id.clone(),
+                                run_id: process_run_id,
                                 job_id,
                                 pid,
                                 start_ticks,
@@ -3763,9 +3842,14 @@ impl App {
                             let result = if durable_state == "running"
                                 && let Some(run) = active_run.as_ref()
                                 && matches!(run.kind, RunKind::Batch)
+                                && let Some(child_run_id) = run.batch_child_run_ids.get(index)
                             {
-                                self.store
-                                    .claim_batch_mailbox(&run.project_id, job_id, &run.run_id)
+                                self.store.claim_batch_mailbox_for_child(
+                                    &run.project_id,
+                                    job_id,
+                                    &run.run_id,
+                                    child_run_id,
+                                )
                             } else {
                                 self.store.set_mailbox_state(job_id, durable_state)
                             };
@@ -3785,6 +3869,39 @@ impl App {
                                         "persist batch preflight plan failed: {error}"
                                     ));
                                 }
+                            }
+                        }
+                    }
+                    Event::JobFinished(index, state, detail) => {
+                        if let Some(run) = active_run.as_ref()
+                            && matches!(run.kind, RunKind::Batch)
+                            && let (Some(job_id), Some(child_run_id)) = (
+                                run.batch_job_ids.get(index),
+                                run.batch_child_run_ids.get(index),
+                            )
+                        {
+                            let run_status = if matches!(
+                                state.as_str(),
+                                "ready" | "completed" | "delta_required"
+                            ) {
+                                "completed"
+                            } else if state == "cancelled" {
+                                "cancelled"
+                            } else {
+                                "failed"
+                            };
+                            if let Err(error) = self.store.finish_run_for_mailbox(
+                                &run.project_id,
+                                job_id,
+                                child_run_id,
+                                run_status,
+                                &state,
+                                &detail,
+                            ) {
+                                durability_errors.push(format!(
+                                    "persist child run {} completion failed: {error}",
+                                    index + 1
+                                ));
                             }
                         }
                     }
@@ -5423,6 +5540,7 @@ mod tests {
             &args,
             &[],
             &tx,
+            "test-run",
             "test-job",
             "",
             &cancel,
@@ -5445,6 +5563,7 @@ mod tests {
             &args,
             &[],
             &tx,
+            "test-run",
             "test-job",
             "",
             &cancel,

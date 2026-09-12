@@ -117,6 +117,14 @@ pub struct RunSummary {
     pub finished_at: Option<String>,
     pub detail: String,
 }
+
+/// Immutable per-mailbox metadata supplied when a batch wave is admitted.
+/// Secrets are intentionally not part of this structure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchChildPlan {
+    pub engine: String,
+    pub plan_snapshot: String,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveProcess {
     pub run_id: String,
@@ -842,8 +850,35 @@ impl StateStore {
         expected_plans: &[String],
         plan_snapshot: &str,
     ) -> rusqlite::Result<()> {
+        self.begin_batch_run_with_children(
+            project_id,
+            job_ids,
+            run_id,
+            engine,
+            expected_plans,
+            plan_snapshot,
+            &[],
+        )
+        .map(|_| ())
+    }
+
+    /// Atomically starts a batch parent and one durable child run per
+    /// mailbox. Child runs are created as active execution records while the
+    /// mailbox rows remain queued until workers claim them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_batch_run_with_children(
+        &self,
+        project_id: &str,
+        job_ids: &[String],
+        run_id: &str,
+        engine: &str,
+        expected_plans: &[String],
+        plan_snapshot: &str,
+        child_plans: &[BatchChildPlan],
+    ) -> rusqlite::Result<Vec<String>> {
         if job_ids.is_empty()
             || (!expected_plans.is_empty() && expected_plans.len() != job_ids.len())
+            || (!child_plans.is_empty() && child_plans.len() != job_ids.len())
         {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -875,6 +910,22 @@ impl StateStore {
             "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,NULL,?3,?4,'running')",
             params![run_id, project_id, engine, plan_snapshot],
         )?;
+        let mut child_run_ids = Vec::with_capacity(job_ids.len());
+        for (index, job_id) in job_ids.iter().enumerate() {
+            let child_run_id = Uuid::new_v4().to_string();
+            let child_plan = child_plans.get(index);
+            let child_engine = child_plan
+                .map(|plan| plan.engine.as_str())
+                .unwrap_or(engine);
+            let child_snapshot = child_plan
+                .map(|plan| plan.plan_snapshot.as_str())
+                .unwrap_or("");
+            tx.execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,'running')",
+                params![child_run_id, project_id, job_id, child_engine, child_snapshot],
+            )?;
+            child_run_ids.push(child_run_id);
+        }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_started',?2)",
             params![
@@ -882,7 +933,7 @@ impl StateStore {
                 format!("{engine} ({run_id}); {} child jobs", job_ids.len())
             ],
         )?;
-        tx.commit()
+        tx.commit().map(|()| child_run_ids)
     }
     /// Atomically claims one child of a running parent batch. The operation
     /// is idempotent for a child already claimed by that same batch because
@@ -922,6 +973,54 @@ impl StateStore {
             params![
                 project_id,
                 format!("{job_id} claimed by batch run {run_id}")
+            ],
+        )?;
+        tx.commit()
+    }
+    /// Claim a mailbox for its durable child run. The parent run proves that
+    /// this belongs to the active batch, while the child relation prevents a
+    /// worker from attaching a process to another row in the same project.
+    pub fn claim_batch_mailbox_for_child(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        parent_run_id: &str,
+        child_run_id: &str,
+    ) -> rusqlite::Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let parent_is_running: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id IS NULL AND status='running')",
+            params![parent_run_id, project_id],
+            |row| row.get(0),
+        )?;
+        let child_is_running: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND status='running')",
+            params![child_run_id, project_id, job_id],
+            |row| row.get(0),
+        )?;
+        if !parent_is_running || !child_is_running {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let current: String = tx.query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+            |row| row.get(0),
+        )?;
+        if current == "running" {
+            return tx.commit();
+        }
+        if !valid_mailbox_transition(&current, "running") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "UPDATE mailbox_jobs SET state='running',attempt=attempt+1 WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'mailbox_claimed',?2)",
+            params![
+                project_id,
+                format!("{job_id} claimed by child run {child_run_id}")
             ],
         )?;
         tx.commit()
@@ -2082,6 +2181,74 @@ mod tests {
             db.mailbox_state(&jobs[0]).unwrap().as_deref(),
             Some("running")
         );
+    }
+
+    #[test]
+    fn batch_children_persist_mailbox_specific_runs_and_snapshots() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-children",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                &jobs,
+                "run-parent",
+                "batch",
+                &[],
+                "parent snapshot",
+                &[
+                    BatchChildPlan {
+                        engine: "imapsync".into(),
+                        plan_snapshot: "snapshot one".into(),
+                    },
+                    BatchChildPlan {
+                        engine: "dovecot".into(),
+                        plan_snapshot: "snapshot two".into(),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(child_runs.len(), 2);
+        let first = db.run(&child_runs[0]).unwrap().unwrap();
+        let second = db.run(&child_runs[1]).unwrap().unwrap();
+        assert_eq!(first.job_id.as_deref(), Some(jobs[0].as_str()));
+        assert_eq!(first.engine, "imapsync");
+        assert_eq!(first.plan_snapshot, "snapshot one");
+        assert_eq!(second.job_id.as_deref(), Some(jobs[1].as_str()));
+        assert_eq!(second.engine, "dovecot");
+        assert_eq!(second.plan_snapshot, "snapshot two");
+        db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-parent", &child_runs[0])
+            .unwrap();
+        db.register_process(&ActiveProcess {
+            run_id: child_runs[0].clone(),
+            job_id: jobs[0].clone(),
+            pid: 4242,
+            start_ticks: Some(1),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test-engine".into(),
+        })
+        .unwrap();
+        db.finish_run_for_mailbox(
+            &project.id,
+            &jobs[0],
+            &child_runs[0],
+            "completed",
+            "completed",
+            "child complete",
+        )
+        .unwrap();
+        assert_eq!(
+            db.run_status(&child_runs[0]).unwrap().as_deref(),
+            Some("completed")
+        );
+        assert!(db.active_processes().unwrap().is_empty());
     }
 
     #[test]
