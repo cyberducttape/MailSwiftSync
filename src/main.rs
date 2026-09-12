@@ -114,6 +114,13 @@ fn default_source_tls() -> String {
     "imaps".into()
 }
 
+fn default_imap_port(tls_mode: &str) -> u16 {
+    match tls_mode {
+        "starttls" | "plain" => 143,
+        _ => 993,
+    }
+}
+
 fn dovecot_ssl_mode(mode: &str) -> &str {
     match mode {
         "plain" => "no",
@@ -336,8 +343,10 @@ impl Form {
         } else {
             &self.destination_password
         };
-        let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
-            .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
+        let source_default_port = default_imap_port(&self.profile.source_tls);
+        let (source_host, endpoint_port) =
+            endpoint_parts(&self.profile.source_host, source_default_port)
+                .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
         let (destination_host, destination_port) =
             endpoint_parts(&self.profile.destination_host, 993)
                 .unwrap_or_else(|_| (self.profile.destination_host.clone(), 993));
@@ -425,6 +434,12 @@ impl Form {
         if self.dry_run {
             a.push("--dry".into());
         }
+        // Keep imapsync's own persistent log out of its default LOG_imapsync/
+        // directory. MailSwiftSync owns the redacted journal and its retention
+        // policy instead.
+        if self.engine() == core::Engine::ImapSync {
+            a.push("--nolog".into());
+        }
         if let Ok(extra) = parse_shell_words(&self.profile.extra_options) {
             a.extend(extra);
         }
@@ -459,14 +474,26 @@ impl Form {
             "--delete1",
             "--expunge1",
             "--expunge2",
+            "--log",
+            "--logfile",
+            "--logdir",
+            "--nolog",
+            "--showpasswords",
         ];
         for option in options {
             let name = option
                 .split_once('=')
                 .map_or(option.as_str(), |(name, _)| name);
-            if RESERVED.contains(&name)
-                || name.starts_with("--delete")
-                || name.starts_with("--expunge")
+            // imapsync accepts both `--flag` and `-flag`. Normalize the
+            // spelling before applying the safety policy so a one-dash form
+            // cannot bypass the reserved-option controls.
+            let normalized_name = name.trim_start_matches('-');
+            let reserved = RESERVED
+                .iter()
+                .any(|reserved| reserved.trim_start_matches('-') == normalized_name);
+            if reserved
+                || normalized_name.starts_with("delete")
+                || normalized_name.starts_with("expunge")
             {
                 return Err(format!(
                     "Extra options: {name} is controlled by the migration plan"
@@ -564,8 +591,10 @@ impl Form {
         } else {
             &self.source_password
         };
-        let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
-            .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
+        let source_default_port = default_imap_port(&self.profile.source_tls);
+        let (source_host, endpoint_port) =
+            endpoint_parts(&self.profile.source_host, source_default_port)
+                .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
         let source_port = self
             .profile
             .source_port
@@ -674,8 +703,10 @@ impl Form {
         } else {
             &self.source_password
         };
-        let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
-            .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
+        let source_default_port = default_imap_port(&self.profile.source_tls);
+        let (source_host, endpoint_port) =
+            endpoint_parts(&self.profile.source_host, source_default_port)
+                .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
         let source_port = self
             .profile
             .source_port
@@ -794,9 +825,14 @@ fn create_secret_directory() -> Result<PathBuf, String> {
 }
 
 fn secret_runtime_base() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("mailswiftsync-runtime"))
+    secret_runtime_base_from(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
+}
+
+fn secret_runtime_base_from(runtime_dir: Option<PathBuf>) -> PathBuf {
+    match runtime_dir.filter(|path| !path.as_os_str().is_empty()) {
+        Some(path) => path.join("mailswiftsync"),
+        None => std::env::temp_dir().join("mailswiftsync-runtime"),
+    }
 }
 
 fn cleanup_stale_secret_directories(base: &std::path::Path) {
@@ -1201,6 +1237,7 @@ fn run_streaming(
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value)))
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
@@ -1307,6 +1344,7 @@ fn run_capture_lines(
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value)))
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
@@ -2820,6 +2858,10 @@ impl App {
                     "Imported {} ready jobs. Review the queue before running.",
                     jobs.len()
                 );
+                // A new file is a new durable batch scope. Never let a queue
+                // replacement reuse the project/job IDs from an older file.
+                self.bulk_project_id = None;
+                self.bulk_job_ids.clear();
                 self.bulk_jobs = jobs;
             }
             Err(e) => self.bulk_message = e,
@@ -3925,8 +3967,13 @@ impl App {
             ui.label(RichText::new(&self.bulk_message).color(MUTED));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Import CSV / XLSX…").clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
-                if ui.button("Clear queue").clicked() { self.bulk_jobs.clear(); self.bulk_message = "Queue cleared.".into(); }
+                if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
+                if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
+                    self.bulk_jobs.clear();
+                    self.bulk_project_id = None;
+                    self.bulk_job_ids.clear();
+                    self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
+                }
                 let label = if self.form.dry_run {
                     format!("Run {} dry validations", self.bulk_jobs.len())
                 } else {
@@ -4758,6 +4805,10 @@ mod tests {
         assert!(form.validate().is_err());
         form.profile.extra_options = "--sslargs1 SSL_verify_mode=0".into();
         assert!(form.validate().is_err());
+        form.profile.extra_options = "-delete2".into();
+        assert!(form.validate().is_err());
+        form.profile.extra_options = "--logdir /tmp/elsewhere".into();
+        assert!(form.validate().is_err());
     }
 
     #[test]
@@ -5017,6 +5068,24 @@ mod tests {
         );
         assert!(endpoint_parts("mail.example:0", 993).is_err());
         assert!(endpoint_parts("[2001:db8::1]garbage", 993).is_err());
+    }
+
+    #[test]
+    fn imap_default_port_matches_transport_mode() {
+        assert_eq!(default_imap_port("imaps"), 993);
+        assert_eq!(default_imap_port("starttls"), 143);
+        assert_eq!(default_imap_port("plain"), 143);
+    }
+
+    #[test]
+    fn secret_runtime_isolated_below_xdg_runtime_directory() {
+        assert_eq!(
+            secret_runtime_base_from(Some(PathBuf::from("/run/user/1000"))),
+            PathBuf::from("/run/user/1000/mailswiftsync")
+        );
+        assert!(
+            secret_runtime_base_from(Some(PathBuf::from(""))).ends_with("mailswiftsync-runtime")
+        );
     }
 
     #[test]

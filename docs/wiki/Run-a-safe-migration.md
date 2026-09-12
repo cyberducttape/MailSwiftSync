@@ -33,7 +33,7 @@ Click **Preview redacted command**. Confirm:
 - In imapsync mode, `--host1`/`--user1` and `--host2`/`--user2` describe the endpoints.
 - Dovecot dry mode uses a non-mutating `imapc` mailbox listing against the source; imapsync dry mode adds `--dry`.
 - Passwords show as dots, never readable text. imapsync receives them through short-lived owner-only passfiles, not command-line values or environment variables.
-- For imapsync, the generated plan explicitly forces `--ssl1`/`--ssl2` for IMAPS and `--tls1` for STARTTLS; it does not permit automatic cleartext fallback. A deliberately configured plain source is shown as a warning.
+- For imapsync, the generated plan explicitly forces `--ssl1`/`--ssl2` for IMAPS and `--tls1` for STARTTLS; it does not permit automatic cleartext fallback. A deliberately configured plain source is shown as a warning and defaults to port 143 when no port is supplied. MailSwiftSync also passes `--nolog` so imapsync does not create an unmanaged persistent log outside the application journal.
 
 ## 5. Run validation
 

@@ -592,6 +592,16 @@ impl StateStore {
             [job_id],
             |row| row.get(0),
         )?;
+        if state == "verified" {
+            let evidence_exists: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM evidence WHERE job_id=?1)",
+                [job_id],
+                |row| row.get(0),
+            )?;
+            if !evidence_exists {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         if current != state && !valid_mailbox_transition(&current, state) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -763,7 +773,9 @@ impl StateStore {
             params![job_id, project_id],
             |row| row.get(0),
         )?;
-        if current != "running" && !valid_mailbox_transition(&current, "running") {
+        // A mailbox may never have two active runs. Recovery must first move
+        // the previous run to an operator-review state before retrying it.
+        if current == "running" || !valid_mailbox_transition(&current, "running") {
             return Err(rusqlite::Error::InvalidQuery);
         }
         tx.execute(
@@ -804,7 +816,10 @@ impl StateStore {
                 params![job_id, project_id],
                 |row| row.get(0),
             )?;
-            if current != "running" && !valid_mailbox_transition(&current, "running") {
+            // Reject an already-running child rather than treating it as a
+            // harmless retry. This keeps one durable execution owner per
+            // mailbox even when two callers race.
+            if current == "running" || !valid_mailbox_transition(&current, "running") {
                 return Err(rusqlite::Error::InvalidQuery);
             }
             if let Some(expected_plan) = expected_plans.get(index) {
@@ -886,6 +901,16 @@ impl StateStore {
             params![job_id, project_id],
             |row| row.get(0),
         )?;
+        if mailbox_state == "verified" {
+            let evidence_exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM evidence WHERE job_id=?1)",
+                [job_id],
+                |row| row.get(0),
+            )?;
+            if !evidence_exists {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         if current != mailbox_state && !valid_mailbox_transition(&current, mailbox_state) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -1321,6 +1346,33 @@ mod tests {
     }
 
     #[test]
+    fn mailbox_cannot_start_two_runs_or_be_verified_without_evidence() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-owner", "test")
+            .unwrap();
+        assert!(
+            db.begin_run(&project.id, &job, "run-second", "test")
+                .is_err()
+        );
+        assert!(db.set_mailbox_state(&job, "verified").is_err());
+        assert!(
+            db.finish_run_for_mailbox(
+                &project.id,
+                &job,
+                "run-owner",
+                "completed",
+                "verified",
+                "without evidence",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn project_cannot_complete_without_verified_mailboxes() {
         let db = StateStore::in_memory().unwrap();
         let project = db.create_project("test", "source", "destination").unwrap();
@@ -1331,8 +1383,29 @@ mod tests {
         db.transition(&project.id, Phase::Verification).unwrap();
         assert!(db.transition(&project.id, Phase::Complete).is_err());
         db.set_mailbox_state(&job, "running").unwrap();
-        db.set_mailbox_state(&job, "completed").unwrap();
-        db.set_mailbox_state(&job, "verified").unwrap();
+        db.start_run(&project.id, Some(&job), "run-project-complete", "test")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 10,
+            destination_bytes: 10,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+        };
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "run-project-complete",
+            "completed",
+            "verified",
+            "verified",
+            &evidence,
+        )
+        .unwrap();
         db.transition(&project.id, Phase::Complete).unwrap();
     }
 
@@ -1447,10 +1520,20 @@ mod tests {
             .unwrap();
         db.set_mailbox_state(&job, "completed").unwrap();
 
-        db.finish_run_for_mailbox(&project.id, &job, "run-atomic", "completed", "verified", "")
-            .unwrap();
+        db.finish_run_for_mailbox(
+            &project.id,
+            &job,
+            "run-atomic",
+            "completed",
+            "completed",
+            "",
+        )
+        .unwrap();
 
-        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("verified"));
+        assert_eq!(
+            db.mailbox_state(&job).unwrap().as_deref(),
+            Some("completed")
+        );
         assert_eq!(
             db.run_status("run-atomic").unwrap().as_deref(),
             Some("completed")
@@ -1461,7 +1544,7 @@ mod tests {
                 &job,
                 "run-atomic",
                 "completed",
-                "verified",
+                "completed",
                 "duplicate completion",
             )
             .is_err()

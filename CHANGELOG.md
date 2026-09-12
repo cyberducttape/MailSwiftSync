@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Secret cleanup is now confined to the application-owned `mailswiftsync` directory beneath `XDG_RUNTIME_DIR`; it no longer scans or changes permissions on the shared runtime root. Batch imports and queue clearing also discard stale durable batch associations, and queue mutation is disabled while a run is active.
+- The durable mailbox ledger now rejects a second run while a mailbox is already running and refuses to create `verified` state without stored evidence. imapsync's own persistent log is disabled by default, reserved logging flags are rejected, and one-dash forms of protected options cannot bypass the safety policy.
+- Child migration and capture processes receive null stdin so external tools cannot unexpectedly block waiting for interactive input. Default source ports now follow transport mode: 993 for IMAPS and 143 for STARTTLS/plain.
 - Dovecot process exit code 2 is now preserved as a `DeltaRequired` outcome rather than being flattened into a generic failure; batch and single-run state handling retain that meaning, with a Unix runner regression test.
 - Active executions now carry an immutable run context containing their project, mailbox, mode, engine, and launch-time plan fingerprint. Completion and process-registration handling no longer infer ownership or dry/live semantics from mutable form fields or an unrelated restored batch queue.
 - Subprocess output now uses byte-oriented line framing with lossy UTF-8 conversion, so malformed external-tool output cannot stop pipe draining; a regression test covers continued reading after invalid bytes.
