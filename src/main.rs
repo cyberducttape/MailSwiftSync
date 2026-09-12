@@ -1044,8 +1044,10 @@ fn run_streaming(
     let out_secrets = secrets.to_vec();
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
     let evidence_lines = Arc::new(Mutex::new(Vec::new()));
+    let dropped_diagnostics = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let out_tail = Arc::clone(&tail);
     let out_evidence_lines = Arc::clone(&evidence_lines);
+    let out_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
             let mut safe = line;
@@ -1056,7 +1058,12 @@ fn run_streaming(
             }
             record_process_tail(&out_tail, &safe);
             record_evidence_line(&out_evidence_lines, &safe);
-            let _ = out_tx.send(Event::Line(format!("{out_prefix}{safe}")));
+            if out_tx
+                .try_send(Event::Line(format!("{out_prefix}{safe}")))
+                .is_err()
+            {
+                out_dropped_diagnostics.fetch_add(1, Ordering::Relaxed);
+            }
         })
     });
     let err_tx = tx.clone();
@@ -1064,6 +1071,7 @@ fn run_streaming(
     let err_secrets = secrets.to_vec();
     let err_tail = Arc::clone(&tail);
     let err_evidence_lines = Arc::clone(&evidence_lines);
+    let err_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
     let err_thread = thread::spawn(move || {
         for_each_lossy_line(stderr, |line| {
             let mut safe = line;
@@ -1074,7 +1082,12 @@ fn run_streaming(
             }
             record_process_tail(&err_tail, &safe);
             record_evidence_line(&err_evidence_lines, &safe);
-            let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {safe}")));
+            if err_tx
+                .try_send(Event::Line(format!("{err_prefix}[stderr] {safe}")))
+                .is_err()
+            {
+                err_dropped_diagnostics.fetch_add(1, Ordering::Relaxed);
+            }
         })
     });
     let result = wait_with_timeout(&mut child, timeout, cancel)
@@ -1113,6 +1126,12 @@ fn run_streaming(
                 .and_then(|result| result.as_ref().err())
                 .map(|error| format!("stderr reader failed: {error}"))
         });
+    let dropped = dropped_diagnostics.load(Ordering::Relaxed);
+    if dropped > 0 {
+        let _ = tx.try_send(Event::Line(format!(
+            "{prefix}[diagnostics] {dropped} output line(s) omitted because the operator event queue was full"
+        )));
+    }
     match result {
         Ok(outcome) if reader_error.is_none() => {
             let imapsync_evidence = evidence_lines
