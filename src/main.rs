@@ -172,6 +172,17 @@ impl Form {
             if value.trim().is_empty() {
                 return Err(format!("{label} is required."));
             }
+            if value.chars().any(char::is_control) {
+                return Err(format!("{label} cannot contain control characters."));
+            }
+        }
+        for (label, value) in [
+            ("Source IMAP host", &self.profile.source_host),
+            ("Destination IMAP host", &self.profile.destination_host),
+        ] {
+            if value.chars().any(char::is_control) {
+                return Err(format!("{label} cannot contain control characters."));
+            }
         }
         self.extra_options_valid()?;
         Ok(())
@@ -3089,6 +3100,16 @@ mod tests {
         assert!(form.validate().unwrap_err().contains("controlled"));
         form.profile.extra_options = "--password2 leaked".into();
         assert!(form.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_imap_command_control_characters() {
+        let mut form = dovecot_form();
+        form.profile.source_user = "user\r\nNOOP".into();
+        assert!(form.validate().unwrap_err().contains("control characters"));
+        form.profile.source_user = "user".into();
+        form.source_password = "secret\nLOGIN injected".into();
+        assert!(form.validate().unwrap_err().contains("control characters"));
     }
 
     #[test]
