@@ -1313,7 +1313,9 @@ impl Default for App {
         let (recovered, orphaned) = if persistence_warning.is_none() {
             let processes = store.active_processes().unwrap_or_default();
             for (_, _, pid) in &processes {
-                terminate_recorded_process_group(*pid);
+                if *pid > 0 {
+                    terminate_recorded_process_group(*pid);
+                }
             }
             (store.recover_abandoned_jobs().unwrap_or(0), processes.len())
         } else {

@@ -610,7 +610,9 @@ impl StateStore {
             .prepare("SELECT run_id,job_id,pid FROM active_processes")?
             .query_map([], |row| {
                 let pid: i64 = row.get(2)?;
-                Ok((row.get(0)?, row.get(1)?, u32::try_from(pid).unwrap_or(0)))
+                let pid = u32::try_from(pid)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, pid))?;
+                Ok((row.get(0)?, row.get(1)?, pid))
             })?
             .collect()
     }
