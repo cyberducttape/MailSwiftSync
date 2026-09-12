@@ -262,6 +262,7 @@ impl Default for Form {
                 name: "New migration".into(),
                 imapsync_path: "imapsync".into(),
                 source_tls: default_source_tls(),
+                destination_tls: default_destination_tls(),
                 doveadm_path: default_doveadm_path(),
                 ssh_path: default_ssh_path(),
                 dovecot_execution: default_dovecot_execution(),
@@ -5997,6 +5998,7 @@ mod tests {
         assert_eq!(default_imap_port("imaps"), 993);
         assert_eq!(default_imap_port("starttls"), 143);
         assert_eq!(default_imap_port("plain"), 143);
+        assert_eq!(Form::default().profile.destination_tls, "imaps");
     }
 
     #[test]

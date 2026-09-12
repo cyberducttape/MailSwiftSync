@@ -180,3 +180,4 @@ All notable changes to MailSwiftSync are documented here.
 - imapsync destination endpoints now support typed implicit-TLS or STARTTLS transport and transport-appropriate default ports, including explicit nonstandard destination ports.
 - Operator verification surfaces now lead with named evidence levels instead of pseudo-precise confidence percentages; the compatibility score remains internal for legacy callers.
 - Single-mailbox verification exports now use named evidence levels consistently with project reports and the Verification workspace.
+- New interactive sessions initialize destination transport explicitly to implicit TLS, avoiding an ambiguous blank TLS selector for legacy/imported profile defaults.
