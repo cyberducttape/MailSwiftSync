@@ -748,6 +748,57 @@ impl StateStore {
         )?;
         tx.commit()
     }
+    /// Atomically records terminal verification evidence and completes the
+    /// active run. A verified result is allowed to move directly from
+    /// `running` here because the evidence and terminal transition share one
+    /// transaction; ordinary mailbox-state updates still reject that jump.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_run_for_mailbox_with_evidence(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+        value: &MailboxEvidence,
+    ) -> rusqlite::Result<()> {
+        if run_status != "completed" || !matches!(mailbox_state, "verified" | "delta_required") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let current: String = tx.query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+            |row| row.get(0),
+        )?;
+        let evidence_terminal_jump =
+            current == "running" && matches!(mailbox_state, "verified" | "delta_required");
+        if current != mailbox_state
+            && !evidence_terminal_jump
+            && !valid_mailbox_transition(&current, mailbox_state)
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let run_changed = tx.execute(
+            "UPDATE runs SET status='completed',finished_at=CURRENT_TIMESTAMP,detail=?1 WHERE id=?2 AND project_id=?3 AND job_id=?4 AND status='running'",
+            params![detail, run_id, project_id, job_id],
+        )?;
+        if run_changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
+        tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
+        tx.execute(
+            "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
+            params![mailbox_state, job_id, project_id],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_finished',?2)",
+            params![project_id, "success with verification evidence"],
+        )?;
+        tx.commit()
+    }
     pub fn run_status(&self, run_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row("SELECT status FROM runs WHERE id=?1", [run_id], |row| {
@@ -1117,6 +1168,46 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn evidence_terminal_completion_allows_running_to_verified_atomically() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-evidence", "imapsync")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 3,
+            destination_messages: 3,
+            source_bytes: 300,
+            destination_bytes: 300,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 2,
+            destination_folders: 2,
+            authoritative: true,
+        };
+
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "run-evidence",
+            "completed",
+            "verified",
+            "",
+            &evidence,
+        )
+        .unwrap();
+
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("verified"));
+        assert_eq!(
+            db.run_status("run-evidence").unwrap().as_deref(),
+            Some("completed")
+        );
+        assert_eq!(db.evidence(&job).unwrap(), Some(evidence));
     }
 
     #[test]

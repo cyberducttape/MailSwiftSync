@@ -1198,6 +1198,7 @@ struct App {
     durability_error: bool,
     keyring_open: bool,
     active_view: WorkspaceView,
+    pending_evidence: Option<core::MailboxEvidence>,
 }
 impl Default for App {
     fn default() -> Self {
@@ -1326,6 +1327,7 @@ impl Default for App {
             durability_error: false,
             keyring_open: false,
             active_view: WorkspaceView::Overview,
+            pending_evidence: None,
         }
     }
 }
@@ -2981,7 +2983,6 @@ impl App {
         }
         let mut done = None;
         let mut pending_db_events: Vec<(String, String, String)> = Vec::new();
-        let mut durability_errors = Vec::new();
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -3013,31 +3014,18 @@ impl App {
                         }
                     }
                     Event::Evidence(evidence) => {
-                        if let (Some(project), Some(job)) =
-                            (self.active_project_id().map(str::to_owned), &self.job_id)
-                        {
-                            let state = if evidence.confidence_percent() == 100 {
-                                "verified"
-                            } else {
-                                "delta_required"
-                            };
-                            let result = self.store.record_evidence_and_state(
-                                &project,
-                                job,
-                                self.run_id.as_deref().unwrap_or("unknown"),
-                                &evidence,
-                                state,
-                            );
-                            if let Err(error) = result {
-                                durability_errors
-                                    .push(format!("record verification evidence failed: {error}"));
-                            }
-                        }
+                        let confidence = evidence.confidence_percent();
+                        // Hold evidence until Finished so its history, run
+                        // status, mailbox state, and terminal event commit
+                        // together. In particular, this permits the
+                        // evidence-backed running -> verified transition
+                        // without weakening ordinary state transitions.
+                        self.pending_evidence = Some(evidence);
                         if let Some(project) = self.active_project_id() {
                             pending_db_events.push((
                                 project.to_owned(),
                                 "verification_evidence".into(),
-                                format!("{}% confidence", evidence.confidence_percent()),
+                                format!("{}% confidence", confidence),
                             ));
                         }
                     }
@@ -3064,59 +3052,27 @@ impl App {
             let result = self.store.record_events_batch(&batch);
             self.report_store_error("record execution events", result);
         }
-        for error in durability_errors {
-            self.report_store_error("event persistence", Err(error));
-        }
         if let Some(r) = done {
             let succeeded = r.is_ok();
             let mut direct_final_state = None;
-            if succeeded && !self.form.dry_run && self.form.engine() == core::Engine::ImapSync {
-                if let Some(evidence) = parse_imapsync_evidence(&self.output) {
-                    if let (Some(project), Some(job)) =
-                        (self.active_project_id().map(str::to_owned), &self.job_id)
-                    {
-                        let state = if evidence.confidence_percent() == 100 {
-                            "verified"
-                        } else {
-                            "delta_required"
-                        };
-                        let result = self.store.record_evidence_and_state(
-                            &project,
-                            job,
-                            self.run_id.as_deref().unwrap_or("unknown"),
-                            &evidence,
-                            state,
-                        );
-                        self.report_store_error("record verification evidence", result);
-                        let result = self.store.record_event(
-                            &project,
-                            "verification_evidence",
-                            &format!("{}% confidence", evidence.confidence_percent()),
-                        );
-                        self.report_store_error("record verification event", result);
-                    }
-                } else if let Some(project) = self.active_project_id() {
-                    let _ = self.store.record_event(
-                        project,
-                        "verification_pending",
-                        "imapsync summary was incomplete",
-                    );
-                }
-            } else if succeeded
+            let terminal_evidence = if succeeded && !self.form.dry_run {
+                self.pending_evidence.take().or_else(|| {
+                    (self.form.engine() == core::Engine::ImapSync)
+                        .then(|| parse_imapsync_evidence(&self.output))
+                        .flatten()
+                })
+            } else {
+                self.pending_evidence.take()
+            };
+            if succeeded
                 && !self.form.dry_run
-                && self.form.engine() == core::Engine::Dovecot
-                && self
-                    .store
-                    .evidence(self.job_id.as_deref().unwrap_or(""))
-                    .ok()
-                    .flatten()
-                    .is_none()
+                && terminal_evidence.is_none()
                 && let Some(project) = self.active_project_id()
             {
                 let _ = self.store.record_event(
                     project,
                     "verification_pending",
-                    "doveadm completed; mailbox reconciliation was incomplete",
+                    "completed transfer did not provide complete verification evidence",
                 );
             }
             if self.bulk_project_id.is_none()
@@ -3144,7 +3100,7 @@ impl App {
                     } else {
                         "failed"
                     }
-                } else if let Ok(Some(evidence)) = self.store.evidence(job) {
+                } else if let Some(evidence) = terminal_evidence.as_ref() {
                     if evidence.confidence_percent() == 100 {
                         "verified"
                     } else {
@@ -3184,9 +3140,21 @@ impl App {
                     let terminal_write = if self.bulk_project_id.is_none()
                         && let (Some(job), Some(state)) = (&self.job_id, direct_final_state)
                     {
-                        self.store.finish_run_for_mailbox(
-                            &project, job, run_id, run_status, state, &detail,
-                        )
+                        if run_status == "completed" {
+                            if let Some(evidence) = terminal_evidence.as_ref() {
+                                self.store.finish_run_for_mailbox_with_evidence(
+                                    &project, job, run_id, run_status, state, &detail, evidence,
+                                )
+                            } else {
+                                self.store.finish_run_for_mailbox(
+                                    &project, job, run_id, run_status, state, &detail,
+                                )
+                            }
+                        } else {
+                            self.store.finish_run_for_mailbox(
+                                &project, job, run_id, run_status, state, &detail,
+                            )
+                        }
                     } else {
                         self.store.finish_run(run_id, run_status, &detail)
                     };
