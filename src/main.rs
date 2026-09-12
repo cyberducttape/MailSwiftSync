@@ -189,6 +189,9 @@ impl Form {
         };
         let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
             .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
+        let (destination_host, destination_port) =
+            endpoint_parts(&self.profile.destination_host, 993)
+                .unwrap_or_else(|_| (self.profile.destination_host.clone(), 993));
         let source_port = self.profile.source_port.trim();
         let mut a = vec![
             "--host1".into(),
@@ -198,7 +201,7 @@ impl Form {
             "--password1".into(),
             p1.into(),
             "--host2".into(),
-            self.profile.destination_host.clone(),
+            destination_host,
             "--user2".into(),
             self.profile.destination_user.clone(),
             "--password2".into(),
@@ -214,10 +217,16 @@ impl Form {
         ]);
         if self.profile.source_tls == "plain" {
             a.push("--nossl1".into());
-        }
-        if self.profile.source_tls == "starttls" {
+        } else if self.profile.source_tls == "starttls" {
             a.push("--tls1".into());
+        } else {
+            a.push("--ssl1".into());
         }
+        a.extend([
+            "--port2".into(),
+            destination_port.to_string(),
+            "--ssl2".into(),
+        ]);
         if self.profile.automap {
             a.push("--automap".into());
         }
@@ -270,12 +279,18 @@ impl Form {
             "--tls2",
             "--dry",
             "--delete2",
+            "--delete1",
+            "--expunge1",
+            "--expunge2",
         ];
         for option in options {
             let name = option
                 .split_once('=')
                 .map_or(option.as_str(), |(name, _)| name);
-            if RESERVED.contains(&name) {
+            if RESERVED.contains(&name)
+                || name.starts_with("--delete")
+                || name.starts_with("--expunge")
+            {
                 return Err(format!(
                     "Extra options: {name} is controlled by the migration plan"
                 ));
@@ -304,17 +319,28 @@ impl Form {
         let mut args = self.args(false);
         remove_option(&mut args, "--password1");
         remove_option(&mut args, "--password2");
+        let secret_dir = create_secret_directory()?;
+        let source_file = secret_dir.join("source.secret");
+        let destination_file = secret_dir.join("destination.secret");
+        if let Err(error) = write_secret_file(&source_file, &self.source_password)
+            .and_then(|_| write_secret_file(&destination_file, &self.destination_password))
+        {
+            let _ = std::fs::remove_dir_all(&secret_dir);
+            return Err(format!(
+                "Could not prepare temporary credential files: {error}"
+            ));
+        }
+        args.extend([
+            "--passfile1".into(),
+            source_file.to_string_lossy().into_owned(),
+            "--passfile2".into(),
+            destination_file.to_string_lossy().into_owned(),
+        ]);
         Ok(PreparedCommand {
             executable: self.profile.imapsync_path.clone(),
             args,
-            cleanup: Vec::new(),
-            env: vec![
-                ("IMAPSYNC_PASSWORD1".into(), self.source_password.clone()),
-                (
-                    "IMAPSYNC_PASSWORD2".into(),
-                    self.destination_password.clone(),
-                ),
-            ],
+            cleanup: vec![secret_dir],
+            env: Vec::new(),
         })
     }
     /// A deterministic, secret-free description of the live execution plan.
@@ -517,6 +543,76 @@ struct PreparedCommand {
     args: Vec<String>,
     cleanup: Vec<PathBuf>,
     env: Vec<(String, String)>,
+}
+
+fn create_secret_directory() -> Result<PathBuf, String> {
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs_next::data_local_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("mailswiftsync/runtime")
+        });
+    std::fs::create_dir_all(&base).map_err(|error| error.to_string())?;
+    cleanup_stale_secret_directories(&base);
+    let directory = base.join(format!("run-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    if let Err(error) = restrict_directory_permissions(&directory) {
+        let _ = std::fs::remove_dir(&directory);
+        return Err(error.to_string());
+    }
+    Ok(directory)
+}
+
+fn cleanup_stale_secret_directories(base: &std::path::Path) {
+    const MAX_SECRET_DIRECTORY_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_name().to_string_lossy().starts_with("run-") || !path.is_dir() {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > MAX_SECRET_DIRECTORY_AGE);
+        if stale {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
+fn write_secret_file(path: &std::path::Path, secret: &str) -> std::io::Result<()> {
+    std::fs::write(path, secret.as_bytes())?;
+    restrict_file_permissions(path)
+}
+
+fn cleanup_paths(paths: &[PathBuf]) {
+    for path in paths.iter().rev() {
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(path);
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn restrict_directory_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(path, permissions)
+}
+
+#[cfg(not(unix))]
+fn restrict_directory_permissions(_: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn remove_option(args: &mut Vec<String>, option: &str) {
@@ -1232,6 +1328,21 @@ impl App {
                 true,
             ));
         }
+        if self.form.engine() == core::Engine::ImapSync {
+            self.preflight.push((
+                "Transport security".into(),
+                match self.form.profile.source_tls.as_str() {
+                    "imaps" => {
+                        "TLS required for source and destination; imapsync will receive --ssl1 and --ssl2".into()
+                    }
+                    "starttls" => {
+                        "STARTTLS required for source; TLS required for destination; cleartext fallback prohibited".into()
+                    }
+                    _ => "WARNING: source cleartext is explicitly configured; destination TLS remains required".into(),
+                },
+                self.form.profile.source_tls != "plain",
+            ));
+        }
     }
     fn create_project(&mut self) {
         self.assess_plan();
@@ -1849,9 +1960,7 @@ impl App {
                                 job.form.destination_password.clone(),
                             ],
                         );
-                        for path in command.cleanup {
-                            let _ = std::fs::remove_file(path);
-                        }
+                        cleanup_paths(&command.cleanup);
                         result
                     }
                     Err(error) => Err(error),
@@ -2037,9 +2146,7 @@ impl App {
             let mut child = match command.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    for path in cleanup {
-                        let _ = std::fs::remove_file(path);
-                    }
+                    cleanup_paths(&cleanup);
                     let _ = tx.send(Event::Finished(Err(format!("Could not start {exe}: {e}"))));
                     return;
                 }
@@ -2134,9 +2241,7 @@ impl App {
                     }
                 }
             }
-            for path in cleanup {
-                let _ = std::fs::remove_file(path);
-            }
+            cleanup_paths(&cleanup);
             let _ = tx.send(Event::Finished(result));
         });
     }
@@ -2859,22 +2964,36 @@ mod tests {
     }
 
     #[test]
-    fn imapsync_runtime_plan_uses_child_environment_credentials() {
+    fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
         let prepared = form.prepared_command().unwrap();
         assert!(!prepared.args.contains(&"--password1".into()));
         assert!(!prepared.args.contains(&"--password2".into()));
+        let source_index = prepared
+            .args
+            .iter()
+            .position(|arg| arg == "--passfile1")
+            .unwrap();
+        let destination_index = prepared
+            .args
+            .iter()
+            .position(|arg| arg == "--passfile2")
+            .unwrap();
         assert_eq!(
-            prepared.env[0],
-            ("IMAPSYNC_PASSWORD1".into(), "secret".into())
+            std::fs::read_to_string(&prepared.args[source_index + 1]).unwrap(),
+            "secret"
         );
         assert_eq!(
-            prepared.env[1],
-            ("IMAPSYNC_PASSWORD2".into(), "unused".into())
+            std::fs::read_to_string(&prepared.args[destination_index + 1]).unwrap(),
+            "unused"
         );
+        assert!(prepared.env.is_empty());
         assert!(!prepared.args.iter().any(|arg| arg == "secret"));
-        assert!(prepared.cleanup.is_empty());
+        assert!(prepared.args.iter().any(|arg| arg == "--ssl1"));
+        assert!(prepared.args.iter().any(|arg| arg == "--ssl2"));
+        cleanup_paths(&prepared.cleanup);
+        assert!(!std::path::Path::new(&prepared.args[source_index + 1]).exists());
     }
 
     #[test]

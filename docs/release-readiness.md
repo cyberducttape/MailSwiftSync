@@ -9,7 +9,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
 - Sequential CSV/XLS/XLSX validation queue.
 - Aggregate source/destination folder, message, and virtual-size evidence.
-- Timeout, cancellation, child-process-only imapsync environment credentials, and documented Dovecot process-visibility limits.
+- Timeout, cancellation, child-process-only imapsync passfile credentials, and documented Dovecot process-visibility limits.
 
 ## Required before calling it production-ready
 

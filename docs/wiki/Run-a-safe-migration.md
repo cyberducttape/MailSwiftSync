@@ -19,7 +19,7 @@ MailSwiftSync exposes the most common options:
 | Map standard folders automatically | Adds `--automap` to map common folders such as Sent and Trash. |
 | Folders only | Adds `--justfolders`; useful for checking folder structure without messages. |
 | Add Message-ID header when needed | Adds `--addheader`; this can help imapsync identify messages that lack a usable Message-ID. |
-| Extra imapsync options | Adds advanced command-line options exactly as typed. Use only options you understand. |
+| Extra imapsync options | Adds non-connection advanced command-line options exactly as typed. Connection, credential, TLS, dry-run, and destructive deletion flags are controlled by the migration plan and rejected here. |
 
 Click **Advanced options** for guided controls for `--syncinternaldates`, `--useuid`, `--usecache`, `--fastio1`, `--fastio2`, and `--allowsizemismatch`. The `--delete2` setting is marked destructive and should only be considered for a deliberately exact backup after a successful dry run.
 
@@ -30,7 +30,8 @@ Click **Preview redacted command**. Confirm:
 - In Dovecot mode, `imapc_host`/`imapc_user` describe the source and `-Ru` describes the destination user.
 - In imapsync mode, `--host1`/`--user1` and `--host2`/`--user2` describe the endpoints.
 - Dovecot dry mode uses a non-mutating `imapc` mailbox listing against the source; imapsync dry mode adds `--dry`.
-- Passwords show as dots, never readable text.
+- Passwords show as dots, never readable text. imapsync receives them through short-lived owner-only passfiles, not command-line values or environment variables.
+- For imapsync, the generated plan explicitly forces `--ssl1`/`--ssl2` for IMAPS and `--tls1` for STARTTLS; it does not permit automatic cleartext fallback. A deliberately configured plain source is shown as a warning.
 
 ## 5. Run validation
 

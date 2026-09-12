@@ -76,11 +76,12 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 - **Local first.** The app does not relay mail data through a MailSwiftSync service; it invokes the selected local or destination-side engine only when you start a run.
 - **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination.
-- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through `IMAPSYNC_PASSWORD1/2` child-process environment variables; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion, while remote Dovecot runs still use a destination-side `imapc_password` override and should be treated accordingly.
+- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through short-lived owner-only `--passfile1/--passfile2` files; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion, while remote Dovecot runs still use a destination-side `imapc_password` override and should be treated accordingly.
+- **Explicit transport policy.** imapsync plans force encrypted source/destination transport (`--ssl1/--ssl2` for IMAPS or `--tls1` for STARTTLS) instead of allowing automatic cleartext fallback. Plain source transport is an explicit warning and is never presented as a verified TLS plan.
 
 ### Current security boundary
 
-The desktop runner does not persist passwords. imapsync credentials are supplied only to the child process through environment variables. Local Dovecot credentials use a child environment variable and Dovecot config expansion; remote Dovecot credentials currently use `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Treat remote Dovecot and all unattended use as operator-managed until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
+The desktop runner does not persist passwords. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion; remote Dovecot credentials currently use `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Treat remote Dovecot and all unattended use as operator-managed until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
 
 ### Dovecot mode
 
@@ -115,7 +116,7 @@ See the [release-readiness criteria](docs/release-readiness.md) for the boundary
 
 Click **Advanced options** to add common imapsync flags with understandable descriptions: internal-date sync, UID matching, cache usage, fast I/O, and size-mismatch tolerance. The `--delete2` control is visually marked destructive because it can remove destination messages that do not exist on the source.
 
-The **Extra imapsync options** field accepts any additional documented imapsync options. Test every change using Dry run first. The command preview shows the final arguments with passwords redacted.
+The **Extra imapsync options** field accepts additional non-connection imapsync options. Endpoint, credential, TLS, dry-run, and destructive deletion flags are controlled by the plan and rejected from this field. Test every change using Dry run first. The command preview shows the final arguments with passwords redacted.
 
 ## Packaging
 

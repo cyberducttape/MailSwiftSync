@@ -14,7 +14,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added Dovecot post-run mailbox reconciliation using folder, message, and virtual-size status.
 - Added durable redacted run output, lifecycle events, mailbox states, and verification evidence.
 - Added `imapsync` summary parsing for automatic evidence capture.
-- Added child-process-only `IMAPSYNC_PASSWORD1/2` environment credentials for live `imapsync` runs.
+- Added child-process-only credential delivery for live `imapsync` runs (superseded by protected ephemeral passfiles below).
 - Added exportable Markdown verification reports and a tagged-release workflow for Linux, Windows, and macOS artifacts.
 - Added explicit `ready`/`Preflight` outcomes for successful dry runs; dry validation no longer masquerades as a completed migration.
 - Added conservative evidence scope, live-run preflight/persistence gates, process-group termination on Unix, and transactional project/evidence writes.
@@ -36,6 +36,8 @@ All notable changes to MailSwiftSync are documented here.
 - Batch startup now validates every row before launching any process, preventing restored queues with blank credentials from running.
 - Tightened the live project-phase gate to recognized execution and verification phases only.
 - Local Dovecot commands and verification now receive source credentials through a child environment variable and Dovecot `$ENV:` expansion; remote SSH exposure remains documented.
+- imapsync credentials now use short-lived owner-only passfiles instead of environment variables, with cleanup after process completion.
+- imapsync plans now explicitly force encrypted transport for IMAPS/STARTTLS and reject destructive expert flags; stale credential directories are cleaned up after forced termination.
 - Restricted profile and SQLite state files to owner-only permissions on Unix systems.
 - Added durable run metadata to exported verification reports so each report is traceable to a specific execution after restart.
 - Strengthened crash durability with flushed atomic profile writes, SQLite writer backoff, and rejection of evidence records that reference unknown runs.
