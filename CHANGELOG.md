@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added elapsed-time running feedback, Escape-key cancellation, dark/light theme switching, and contextual help for performance controls.
 - Added explainable evidence levels to complement the internal confidence percentage in the verification UI and architecture model.
 - IMAP readiness now treats missing NAMESPACE support as compatible while parsing capabilities strictly from the post-auth response.
 - Clarified that Automatic engine selection is a conservative imapsync default, not server-environment autodetection.

@@ -1201,6 +1201,8 @@ struct App {
     keyring_open: bool,
     active_view: WorkspaceView,
     pending_evidence: Option<core::MailboxEvidence>,
+    run_started_at: Option<std::time::Instant>,
+    dark_mode: bool,
 }
 impl Default for App {
     fn default() -> Self {
@@ -1330,6 +1332,8 @@ impl Default for App {
             keyring_open: false,
             active_view: WorkspaceView::Overview,
             pending_evidence: None,
+            run_started_at: None,
+            dark_mode: false,
         }
     }
 }
@@ -1345,6 +1349,18 @@ fn format_phase_name(phase: core::Phase) -> &'static str {
         core::Phase::Verification => "Verification",
         core::Phase::Complete => "Complete",
         core::Phase::Attention => "Attention",
+    }
+}
+
+fn format_elapsed(elapsed: std::time::Duration) -> String {
+    let seconds = elapsed.as_secs();
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
     }
 }
 
@@ -2574,6 +2590,7 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
+        self.run_started_at = Some(std::time::Instant::now());
         self.status = format!("Batch validation: {} jobs", jobs.len());
         self.output.clear();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
@@ -2828,6 +2845,7 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
+        self.run_started_at = Some(std::time::Instant::now());
         self.status = if self.form.dry_run {
             "Dry run in progress".into()
         } else {
@@ -3204,6 +3222,7 @@ impl App {
             };
             self.receiver = None;
             self.cancel_requested = None;
+            self.run_started_at = None;
             self.run_id = None;
             if self.bulk_project_id.is_some() {
                 self.bulk_project_id = None;
@@ -3342,18 +3361,23 @@ impl App {
             ui.add_space(8.0);
             ui.group(|ui| {
                 ui.heading("Performance");
-                ui.checkbox(&mut self.form.profile.fastio1, "Fast I/O for source  (--fastio1)");
-                ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)");
+                ui.checkbox(&mut self.form.profile.fastio1, "Fast I/O for source  (--fastio1)")
+                    .on_hover_text("Uses imapsync's faster source I/O path; test this with the provider before a production cutover.");
+                ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)")
+                    .on_hover_text("Uses imapsync's faster destination I/O path; provider behavior varies.");
                 ui.horizontal(|ui| {
-                    ui.label("Messages/second (0 = unlimited)");
+                    ui.label("Messages/second (0 = unlimited)")
+                        .on_hover_text("Per-mailbox process limit, not a tenant-wide limit. With concurrent jobs, aggregate traffic can be much higher.");
                     ui.add(egui::DragValue::new(&mut self.form.profile.max_messages_per_second).range(0..=100_000));
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Bytes/second (0 = unlimited)");
+                    ui.label("Bytes/second (0 = unlimited)")
+                        .on_hover_text("Per-mailbox process limit, not a tenant-wide limit. Set concurrency and this value together for provider-safe throughput.");
                     ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX));
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Process timeout (hours)");
+                    ui.label("Process timeout (hours)")
+                        .on_hover_text("Maximum wall-clock time for one engine process. It is a safety bound, not an estimate of completion time.");
                     ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
                 });
                 ui.label(RichText::new("Throttles apply to imapsync only and can reduce provider rate limits or link saturation.").size(11.0).color(MUTED));
@@ -3674,9 +3698,27 @@ impl eframe::App for App {
     #[allow(clippy::possible_missing_else, clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll();
-        let mut v = egui::Visuals::light();
-        v.panel_fill = SKY;
-        v.window_fill = Color32::WHITE;
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) && self.running() {
+            if let Some(cancel) = &self.cancel_requested {
+                cancel.store(true, Ordering::Relaxed);
+                self.status = "Cancellation requested (Escape)…".into();
+            }
+        }
+        let mut v = if self.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+        v.panel_fill = if self.dark_mode {
+            Color32::from_rgb(25, 34, 49)
+        } else {
+            SKY
+        };
+        v.window_fill = if self.dark_mode {
+            Color32::from_rgb(31, 42, 59)
+        } else {
+            Color32::WHITE
+        };
         v.widgets.active.bg_fill = BLUE;
         v.widgets.hovered.bg_fill = Color32::from_rgb(215, 230, 248);
         v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(205, 219, 235));
@@ -3707,6 +3749,16 @@ impl eframe::App for App {
                         self.keyring_open = true;
                     }
                     if ui
+                        .button(if self.dark_mode {
+                            "Light theme"
+                        } else {
+                            "Dark theme"
+                        })
+                        .clicked()
+                    {
+                        self.dark_mode = !self.dark_mode;
+                    }
+                    if ui
                         .button(format!("Engine: {}", self.form.engine().label()))
                         .clicked()
                     {
@@ -3720,6 +3772,12 @@ impl eframe::App for App {
                         self.assess_plan();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.running() {
+                            ui.add(egui::Spinner::new());
+                            if let Some(started) = self.run_started_at {
+                                ui.label(format!("elapsed {}", format_elapsed(started.elapsed())));
+                            }
+                        }
                         ui.label(RichText::new(&self.status).color(
                             if self.status.starts_with("Failed") {
                                 ALERT

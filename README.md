@@ -32,6 +32,7 @@ Stable today:
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
+- Running jobs show elapsed time and can be cancelled with Escape; Advanced options include contextual guidance for per-process throttles.
 
 Experimental or planned:
 
