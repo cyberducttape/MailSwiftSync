@@ -42,6 +42,8 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 - Confirm no child engine processes remain, then rotate or remove temporary/keyring credentials according to local policy.
 - Preserve the SQLite workspace and exported artifacts together if the migration may need an audit or post-incident review.
 
+The durable ledger retains lifecycle and evidence history. Verbose subprocess output is diagnostic context and is automatically retained as a bounded per-project tail, so export the relevant report and health summary during the migration window if detailed engine output may be needed later.
+
 ## Policy exceptions
 
 Remote Dovecot password-in-argv exposes the credential to process inspection on the destination. If it is approved, use a trusted destination, a dedicated migration principal, a time-boxed change, and no untrusted users/processes on that host. Plain IMAP similarly requires explicit approval because credentials and mailbox traffic cross the network without transport encryption.

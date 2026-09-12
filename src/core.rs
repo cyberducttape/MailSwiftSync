@@ -275,6 +275,12 @@ pub struct StateStore {
     connection: Connection,
 }
 
+/// Verbose subprocess output is diagnostic context, not the immutable audit
+/// record. Keep a bounded per-project tail so multi-wave migrations cannot
+/// grow the ledger without limit; lifecycle, run, evidence, and phase events
+/// remain retained.
+const MAX_DURABLE_RUN_OUTPUT_EVENTS: i64 = 10_000;
+
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
@@ -771,6 +777,16 @@ impl StateStore {
             for (project_id, kind, detail) in events {
                 statement.execute(params![project_id, kind, detail])?;
             }
+        }
+        let projects = events
+            .iter()
+            .map(|(project_id, _, _)| *project_id)
+            .collect::<BTreeSet<_>>();
+        for project_id in projects {
+            tx.execute(
+                "DELETE FROM events WHERE project_id=?1 AND kind='run_output' AND id NOT IN (SELECT id FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id DESC LIMIT ?2)",
+                params![project_id, MAX_DURABLE_RUN_OUTPUT_EVENTS],
+            )?;
         }
         tx.commit()
     }
@@ -2429,6 +2445,52 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn verbose_output_is_retained_as_a_bounded_project_tail() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("retention", "source", "destination")
+            .unwrap();
+        let details = (0..=MAX_DURABLE_RUN_OUTPUT_EVENTS as usize)
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>();
+        let batch = details
+            .iter()
+            .map(|detail| (project.id.as_str(), "run_output", detail.as_str()))
+            .collect::<Vec<_>>();
+
+        db.record_events_batch(&batch).unwrap();
+
+        let count: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='run_output'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let oldest: String = db
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id ASC LIMIT 1",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let audit_count: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='project_created'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(count, MAX_DURABLE_RUN_OUTPUT_EVENTS);
+        assert_eq!(oldest, "line-1");
+        assert_eq!(audit_count, 1);
     }
 
     #[test]
