@@ -2684,6 +2684,22 @@ impl App {
             .mailbox_state(job)
             .map_err(|e| e.to_string())?
             .unwrap_or_else(|| "unknown".into());
+        let project_id = self
+            .store
+            .project_id_for_mailbox(job)
+            .map_err(|e| e.to_string())?
+            .ok_or("The mailbox job no longer belongs to a project.")?;
+        let project = self
+            .store
+            .project(&project_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("The mailbox project no longer exists.")?;
+        let (source_mailbox, destination_mailbox) = self
+            .store
+            .mailbox_identity(job)
+            .map_err(|e| e.to_string())?
+            .map(|(source, destination, _)| (source, destination))
+            .ok_or("The mailbox job no longer exists.")?;
         let run = self
             .store
             .run(&evidence_run_id)
@@ -2694,11 +2710,13 @@ impl App {
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Compatibility metric: {}% (not a probability of correctness)\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
-            markdown_escape(&self.form.profile.name),
-            markdown_escape(&self.form.profile.source_host),
-            markdown_escape(&self.form.profile.destination_host),
-            self.form.engine().label(),
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Compatibility metric: {}% (not a probability of correctness)\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
+            markdown_escape(&project.name),
+            markdown_escape(&project.source_endpoint),
+            markdown_escape(&project.destination_endpoint),
+            markdown_escape(&source_mailbox),
+            markdown_escape(&destination_mailbox),
+            markdown_escape(&run.engine),
             run.id,
             run.status,
             run.started_at,

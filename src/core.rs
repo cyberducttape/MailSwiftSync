@@ -744,7 +744,8 @@ impl StateStore {
         }
         tx.commit()
     }
-    pub fn start_run(
+    #[cfg(test)]
+    fn insert_run_for_test(
         &self,
         project_id: &str,
         job_id: Option<&str>,
@@ -1136,6 +1137,15 @@ impl StateStore {
             )
             .optional()
     }
+    pub fn project_id_for_mailbox(&self, job_id: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT project_id FROM mailbox_jobs WHERE id=?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
     pub fn mailboxes(&self, project_id: &str) -> rusqlite::Result<Vec<MailboxJob>> {
         let mut statement = self.connection.prepare(
             "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
@@ -1383,7 +1393,7 @@ mod tests {
         db.transition(&project.id, Phase::Verification).unwrap();
         assert!(db.transition(&project.id, Phase::Complete).is_err());
         db.set_mailbox_state(&job, "running").unwrap();
-        db.start_run(&project.id, Some(&job), "run-project-complete", "test")
+        db.insert_run_for_test(&project.id, Some(&job), "run-project-complete", "test")
             .unwrap();
         let evidence = MailboxEvidence {
             source_messages: 1,
@@ -1432,7 +1442,7 @@ mod tests {
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
         db.set_mailbox_state(&job, "running").unwrap();
-        db.start_run(&project.id, Some(&job), "run-1", "test")
+        db.insert_run_for_test(&project.id, Some(&job), "run-1", "test")
             .unwrap();
         assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
         assert!(db.set_mailbox_state(&job, "queued").is_err());
@@ -1718,7 +1728,7 @@ mod tests {
         let job = db
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
-        db.start_run(&project.id, Some(&job), "run-audit", "test")
+        db.insert_run_for_test(&project.id, Some(&job), "run-audit", "test")
             .unwrap();
         db.finish_run("run-audit", "completed", "ok").unwrap();
         let run = db.latest_run(&job).unwrap().unwrap();
