@@ -100,6 +100,19 @@ pub fn cleanup_paths(paths: &[PathBuf]) {
 }
 
 #[cfg(unix)]
+pub fn restrict_file_permissions(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(path, permissions)
+}
+
+#[cfg(not(unix))]
+pub fn restrict_file_permissions(_: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
 pub fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = fs::metadata(path)?.permissions();

@@ -7,12 +7,13 @@ mod verification;
 
 use credentials::{
     CleanupGuard, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
-    restrict_directory_permissions, secret_runtime_base, write_secret_file,
+    restrict_directory_permissions, restrict_file_permissions, secret_runtime_base,
+    write_secret_file,
 };
 use process::{
-    ProcessLaunchLimiter, collect_redacted_lines, configure_process_group, for_each_lossy_line,
-    linux_process_identity, recorded_process_matches, terminate_recorded_process_group,
-    wait_with_timeout,
+    InstanceLock, ProcessLaunchLimiter, acquire_instance_lock, collect_redacted_lines,
+    configure_process_group, for_each_lossy_line, linux_process_identity, recorded_process_matches,
+    terminate_recorded_process_group, wait_with_timeout,
 };
 
 use calamine::{Reader, open_workbook_auto};
@@ -20,7 +21,6 @@ use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
-use fs2::FileExt;
 use keyring::Entry;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -29,7 +29,6 @@ use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    fs::{File, OpenOptions},
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
@@ -871,35 +870,6 @@ struct PreparedCommand {
     args: Vec<String>,
     cleanup: Vec<PathBuf>,
     env: Vec<(String, String)>,
-}
-
-#[derive(Debug)]
-struct InstanceLock(File);
-
-impl Drop for InstanceLock {
-    fn drop(&mut self) {
-        let _ = self.0.unlock();
-    }
-}
-
-fn acquire_instance_lock(state_path: &std::path::Path) -> Result<InstanceLock, String> {
-    let lock_path = state_path.with_extension("lock");
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|error| format!("could not open application lock: {error}"))?;
-    restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
-    if file.try_lock_exclusive().is_err() {
-        // Explicitly close a denied contender before returning. This keeps a
-        // failed second open from retaining an open descriptor on platforms
-        // whose advisory-lock behavior is sensitive to descriptor lifetime.
-        drop(file);
-        return Err("Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.".to_owned());
-    }
-    Ok(InstanceLock(file))
 }
 
 fn remove_option(args: &mut Vec<String>, option: &str) {
@@ -5044,14 +5014,6 @@ fn classified_failure_detail(error: &str) -> String {
     format!("[{}] {error}", classify_failure(error).label())
 }
 
-#[cfg(unix)]
-fn restrict_file_permissions(path: &std::path::Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = std::fs::metadata(path)?.permissions();
-    permissions.set_mode(0o600);
-    std::fs::set_permissions(path, permissions)
-}
-
 fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
@@ -5072,11 +5034,6 @@ fn sync_directory(path: Option<&std::path::Path>) -> std::io::Result<()> {
     if let Some(path) = path {
         std::fs::File::open(path)?.sync_all()?;
     }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn restrict_file_permissions(_: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 

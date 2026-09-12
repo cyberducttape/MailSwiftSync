@@ -1,5 +1,7 @@
 use std::{
+    fs::OpenOptions,
     io::Read,
+    path::Path,
     process::{Child, Command, ExitStatus},
     sync::{
         Mutex,
@@ -9,9 +11,42 @@ use std::{
     time::{Duration, Instant},
 };
 
+use fs2::FileExt;
+
 use crate::core;
 
 const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
+
+/// Exclusive ownership of the application state workspace. Recovery must
+/// never run while another MailSwiftSync instance may still own processes.
+#[derive(Debug)]
+pub(crate) struct InstanceLock(std::fs::File);
+
+impl Drop for InstanceLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, String> {
+    let lock_path = state_path.with_extension("lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| format!("could not open application lock: {error}"))?;
+    crate::credentials::restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
+    if file.try_lock_exclusive().is_err() {
+        // Explicitly close a denied contender before returning. This keeps a
+        // failed second open from retaining an open descriptor on platforms
+        // whose advisory-lock behavior is sensitive to descriptor lifetime.
+        drop(file);
+        return Err("Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.".to_owned());
+    }
+    Ok(InstanceLock(file))
+}
 
 pub(crate) fn collect_redacted_lines<R: Read>(
     reader: R,
