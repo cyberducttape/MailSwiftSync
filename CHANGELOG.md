@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Replaced fixed atomic-index batch dispatch with an MPMC channel queue. Workers now consume owned jobs from a disconnect-terminated queue while retaining bounded concurrency, cancellation, retries, and durable failure reporting.
 - Added immutable execution-plan snapshots to durable run records. Snapshots are captured at run start, exclude session passwords, and are included in verification reports so historical artifacts do not depend on later-edited UI fields.
 - Restricted the invariant-bypassing run-insertion helper to test builds and made single-mailbox verification reports derive project, endpoint, mailbox, and engine identity from durable records rather than mutable form fields.
 - Clarified lock-contention recovery guidance and the `--nolog` behavior in the README and security/runbook docs, so operators know to close the existing owner and use MailSwiftSync’s journal rather than searching for an unmanaged imapsync log.

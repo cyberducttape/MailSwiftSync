@@ -21,7 +21,7 @@ use std::{
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
     thread,
@@ -3329,23 +3329,26 @@ impl App {
         self.output.clear();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         let retry_count = self.form.profile.batch_retry_count.min(3);
+        let job_count = jobs.len();
+        let (job_tx, job_rx) = crossbeam_channel::unbounded();
+        for (index, job) in jobs.into_iter().enumerate() {
+            job_tx
+                .send((index, job))
+                .expect("batch workers are created immediately after queue setup");
+        }
+        drop(job_tx);
         thread::spawn(move || {
-            let jobs = Arc::new(jobs);
-            let next_job = Arc::new(AtomicUsize::new(0));
             let failed = Arc::new(AtomicBool::new(false));
             let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
             let mut workers = Vec::with_capacity(concurrency);
             for _ in 0..concurrency {
-                let jobs = Arc::clone(&jobs);
-                let next_job = Arc::clone(&next_job);
+                let job_rx = job_rx.clone();
                 let failed = Arc::clone(&failed);
                 let terminal_jobs = Arc::clone(&terminal_jobs);
                 let tx = tx.clone();
                 let cancel = Arc::clone(&cancel);
                 workers.push(thread::spawn(move || {
-                    loop {
-                        let index = next_job.fetch_add(1, Ordering::Relaxed);
-                        let Some(job) = jobs.get(index) else { break };
+                    while let Ok((index, job)) = job_rx.recv() {
                         if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
                             if let Ok(mut terminal) = terminal_jobs.lock() {
@@ -3503,11 +3506,11 @@ impl App {
                 let unresolved = terminal_jobs
                     .lock()
                     .map(|terminal| {
-                        (0..jobs.len())
+                        (0..job_count)
                             .filter(|index| !terminal.contains(index))
                             .collect::<Vec<_>>()
                     })
-                    .unwrap_or_else(|_| (0..jobs.len()).collect());
+                    .unwrap_or_else(|_| (0..job_count).collect());
                 for index in unresolved {
                     let _ = tx.send(Event::Line(format!(
                         "[{}] worker stopped unexpectedly; job moved to Attention",
