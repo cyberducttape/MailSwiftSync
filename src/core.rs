@@ -680,6 +680,70 @@ impl StateStore {
         )?;
         Ok(())
     }
+    /// Atomically completes a single-mailbox run and records the durable
+    /// mailbox state.  Completion is deliberately one transaction: a run
+    /// must never be marked finished while its mailbox remains `running` (or
+    /// vice versa) after a database failure or process interruption.
+    pub fn finish_run_for_mailbox(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+    ) -> rusqlite::Result<()> {
+        if !matches!(
+            run_status,
+            "completed" | "failed" | "cancelled" | "verification_failed"
+        ) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        if !matches!(
+            mailbox_state,
+            "ready"
+                | "completed"
+                | "verified"
+                | "delta_required"
+                | "failed"
+                | "cancelled"
+                | "attention"
+        ) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let current: String = tx.query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+            |row| row.get(0),
+        )?;
+        if current != mailbox_state && !valid_mailbox_transition(&current, mailbox_state) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let run_changed = tx.execute(
+            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND project_id=?4 AND job_id=?5 AND status='running'",
+            params![run_status, detail, run_id, project_id, job_id],
+        )?;
+        if run_changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.execute(
+            "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
+            params![mailbox_state, job_id, project_id],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_finished',?2)",
+            params![
+                project_id,
+                if run_status == "completed" {
+                    "success"
+                } else {
+                    "failure"
+                }
+            ],
+        )?;
+        tx.commit()
+    }
     pub fn run_status(&self, run_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row("SELECT status FROM runs WHERE id=?1", [run_id], |row| {
@@ -975,6 +1039,38 @@ mod tests {
         assert_eq!(
             db.run_status("run-1").unwrap().as_deref(),
             Some("abandoned")
+        );
+    }
+
+    #[test]
+    fn terminal_run_and_mailbox_state_are_committed_together() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-atomic", "imapsync")
+            .unwrap();
+        db.set_mailbox_state(&job, "completed").unwrap();
+
+        db.finish_run_for_mailbox(&project.id, &job, "run-atomic", "completed", "verified", "")
+            .unwrap();
+
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("verified"));
+        assert_eq!(
+            db.run_status("run-atomic").unwrap().as_deref(),
+            Some("completed")
+        );
+        assert!(
+            db.finish_run_for_mailbox(
+                &project.id,
+                &job,
+                "run-atomic",
+                "completed",
+                "verified",
+                "duplicate completion",
+            )
+            .is_err()
         );
     }
 

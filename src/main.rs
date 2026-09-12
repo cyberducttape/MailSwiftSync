@@ -2806,6 +2806,7 @@ impl App {
         }
         if let Some(r) = done {
             let succeeded = r.is_ok();
+            let mut direct_final_state = None;
             if succeeded && !self.form.dry_run && self.form.engine() == core::Engine::ImapSync {
                 if let Some(evidence) = parse_imapsync_evidence(&self.output) {
                     if let Some(job) = &self.job_id {
@@ -2888,9 +2889,9 @@ impl App {
                 } else {
                     "completed"
                 };
-                let _ = self.store.set_mailbox_state(job, final_state);
+                direct_final_state = Some(final_state);
             }
-            if let Some(project) = self.active_project_id() {
+            if let Some(project) = self.active_project_id().map(str::to_owned) {
                 if let Some(run_id) = &self.run_id {
                     let run_status = if succeeded {
                         "completed"
@@ -2909,24 +2910,36 @@ impl App {
                     } else {
                         "failed"
                     };
-                    let _ = self.store.finish_run(
-                        run_id,
-                        run_status,
-                        if succeeded {
-                            ""
-                        } else {
-                            r.as_ref().err().map(String::as_str).unwrap_or("run failed")
-                        },
+                    let detail = if succeeded {
+                        ""
+                    } else {
+                        r.as_ref().err().map(String::as_str).unwrap_or("run failed")
+                    };
+                    let terminal_write = if self.bulk_project_id.is_none()
+                        && let (Some(job), Some(state)) = (&self.job_id, direct_final_state)
+                    {
+                        self.store.finish_run_for_mailbox(
+                            &project, job, run_id, run_status, state, detail,
+                        )
+                    } else {
+                        self.store.finish_run(run_id, run_status, detail)
+                    };
+                    if let Err(error) = terminal_write {
+                        push_visible_output(
+                            &mut self.output,
+                            format!("[durability] Could not persist terminal state: {error}"),
+                        );
+                    }
+                } else if self.bulk_project_id.is_some() {
+                    let _ = self.store.record_event(
+                        &project,
+                        "run_finished",
+                        if succeeded { "success" } else { "failure" },
                     );
                 }
-                let _ = self.store.record_event(
-                    project,
-                    "run_finished",
-                    if succeeded { "success" } else { "failure" },
-                );
                 if succeeded {
                     let _ = self.store.transition(
-                        project,
+                        &project,
                         if self.form.dry_run {
                             core::Phase::Preflight
                         } else {
@@ -2934,7 +2947,7 @@ impl App {
                         },
                     );
                 } else {
-                    let _ = self.store.transition(project, core::Phase::Attention);
+                    let _ = self.store.transition(&project, core::Phase::Attention);
                 }
             }
             self.status = match r {
