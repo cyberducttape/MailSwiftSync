@@ -1456,10 +1456,12 @@ impl Default for App {
         } else {
             (0, 0, 0)
         };
-        // Only the lock owner may reconcile stale runtime secrets. At this
-        // point startup recovery has already handled any recorded child
-        // process, so an old directory cannot belong to a live application.
-        if persistence_warning.is_none() {
+        // Only the lock owner may reconcile stale runtime secrets. If any
+        // recorded child identity could not be verified, fail closed and
+        // preserve age-only secret directories: an unverified process may
+        // still depend on its passfile. The operator can review and clean it
+        // up after confirming the process is gone.
+        if persistence_warning.is_none() && unverified_processes == 0 {
             cleanup_stale_secret_directories(&secret_runtime_base());
         }
         let mut initial_output = persistence_warning.clone().map_or_else(
@@ -1480,6 +1482,10 @@ impl Default for App {
             initial_output.push(format!(
                 "{unverified_processes} recorded process identity(ies) could not be verified and were not signalled; review the affected jobs before retrying."
             ));
+            initial_output.push(
+                "Stale secret cleanup was deferred because an unverified process may still need its passfile."
+                    .into(),
+            );
         }
         if recovered > 0 {
             initial_output.push(format!(

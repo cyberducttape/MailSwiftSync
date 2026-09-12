@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Startup now defers age-based secret-directory cleanup whenever a recorded process identity cannot be verified, preserving passfiles that an unverified orphan may still need and surfacing the deferred cleanup to the operator.
 - Overview now reports mailbox totals and durable ready/running/verified counts from the project ledger, with an explicit operator-attention count instead of inferring readiness from the in-memory import queue.
 - Legacy evidence insertion is now test-only; production code must use run-owned terminal evidence APIs so verification cannot be created outside an execution transition.
 - Process registration now validates run ownership and inserts the active-process identity in one transaction, preventing a delayed worker from recreating process state after terminal cleanup.
