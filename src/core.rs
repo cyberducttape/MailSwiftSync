@@ -1371,7 +1371,12 @@ impl StateStore {
             })?
             .collect()
     }
-    pub fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
+    // Legacy evidence insertion is retained only as a fixture helper for
+    // historical-state tests. Production callers must use the run-owned
+    // terminal methods above, which atomically bind evidence to the run and
+    // mailbox state transition.
+    #[cfg(test)]
+    fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
         self.record_evidence_for_run(job_id, "legacy", value)
     }
     pub fn record_evidence_for_run(
