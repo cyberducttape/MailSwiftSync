@@ -1028,15 +1028,6 @@ fn run_streaming(
     let (start_ticks, process_group, session_id) = identity
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
         .unwrap_or((None, None, None));
-    let _ = tx.send(Event::ProcessStarted(
-        run_id.to_owned(),
-        job_id.to_owned(),
-        child.id(),
-        start_ticks,
-        process_group,
-        session_id,
-        executable.to_owned(),
-    ));
     let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
     let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
     let out_tx = tx.clone();
@@ -1090,6 +1081,18 @@ fn run_streaming(
             }
         })
     });
+    // Start both drainers before the reliable lifecycle send. If the
+    // bounded event queue is temporarily full, this send may wait, but the
+    // child pipes are already being drained and cannot deadlock the engine.
+    let _ = tx.send(Event::ProcessStarted(
+        run_id.to_owned(),
+        job_id.to_owned(),
+        child.id(),
+        start_ticks,
+        process_group,
+        session_id,
+        executable.to_owned(),
+    ));
     let result = wait_with_timeout(&mut child, timeout, cancel)
         .map_err(|error| error.to_string())
         .and_then(|status| {

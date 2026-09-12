@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Process startup now activates stdout/stderr drainers before the reliable `ProcessStarted` event is delivered, preventing a full bounded event queue from blocking pipe setup and stalling a newly spawned engine.
 - Subprocess diagnostic lines now use nonblocking delivery to the bounded UI queue; slow operators cannot stop pipe draining and stall the migration engine. Omitted-line counts are surfaced when the queue is saturated.
 - Preflight plan records now persist only a SHA-256 digest of the canonical plan; full generated arguments remain in memory for admission checks but are no longer stored in mailbox job state.
 - Evidence-aware terminal completion now rejects a `verified` mailbox state when any modeled evidence dimension differs, keeping the verification claim enforced at the storage boundary rather than only in UI orchestration.
