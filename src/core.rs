@@ -675,6 +675,9 @@ impl StateStore {
             )
             .optional()
     }
+    /// Persist the opaque digest of a preflighted plan. Callers should pass a
+    /// canonical plan hash rather than generated command arguments; the
+    /// stored value is used only for exact equality during live admission.
     pub fn set_preflight_plan(&self, job_id: &str, plan: &str) -> rusqlite::Result<()> {
         self.connection.execute(
             "UPDATE mailbox_jobs SET preflight_plan=?1 WHERE id=?2",

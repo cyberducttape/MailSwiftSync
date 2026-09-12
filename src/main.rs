@@ -208,6 +208,13 @@ fn plan_snapshot_sha256(snapshot: &str) -> String {
     format!("{:x}", Sha256::digest(snapshot.as_bytes()))
 }
 
+/// Persist only an opaque identity for a preflighted plan. The full
+/// canonical fingerprint is used in memory for the live gate, but the
+/// database only needs equality and should not retain generated arguments.
+fn plan_fingerprint_digest(fingerprint: &str) -> String {
+    plan_snapshot_sha256(fingerprint)
+}
+
 fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), String> {
     let workers = concurrency.max(1);
     if profile.max_messages_per_second > 0 && profile.max_messages_per_second < workers as u32 {
@@ -3144,7 +3151,8 @@ impl App {
                             | "completed"
                             | "verified"
                     )
-                ) || preflight.as_deref() != Some(job.form.plan_fingerprint().as_str())
+                ) || preflight.as_deref()
+                    != Some(plan_fingerprint_digest(&job.form.plan_fingerprint()).as_str())
                 {
                     self.bulk_message = format!(
                         "Mailbox {} is not ready for live execution. Re-run dry validation after reviewing its exact plan.",
@@ -3243,7 +3251,7 @@ impl App {
         self.bulk_live_run = live;
         let expected_plans = if live {
             jobs.iter()
-                .map(|job| job.form.plan_fingerprint())
+                .map(|job| plan_fingerprint_digest(&job.form.plan_fingerprint()))
                 .collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -3286,7 +3294,10 @@ impl App {
             project_id: project_id.clone(),
             job_id: None,
             batch_job_ids: self.bulk_job_ids.clone(),
-            batch_plan_fingerprints: jobs.iter().map(|job| job.form.plan_fingerprint()).collect(),
+            batch_plan_fingerprints: jobs
+                .iter()
+                .map(|job| plan_fingerprint_digest(&job.form.plan_fingerprint()))
+                .collect(),
             batch_child_run_ids: child_run_ids,
             kind: RunKind::Batch,
             dry_run: !live,
@@ -3830,7 +3841,9 @@ impl App {
                     .preflight_plan(job)
                     .ok()
                     .flatten()
-                    .is_some_and(|plan| plan == self.form.plan_fingerprint())
+                    .is_some_and(|plan| {
+                        plan == plan_fingerprint_digest(&self.form.plan_fingerprint())
+                    })
             });
             let mailbox_ready = self.job_id.as_deref().is_some_and(|job| {
                 self.store
@@ -3870,7 +3883,7 @@ impl App {
         let args = prepared.args;
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
-        let plan_fingerprint = self.form.plan_fingerprint();
+        let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
         let plan_snapshot = self.form.plan_snapshot();
         let run_engine = self.form.engine();
         let run_dry_run = self.form.dry_run;
@@ -5309,6 +5322,16 @@ mod tests {
         assert_eq!(reference, plan_snapshot_sha256(snapshot));
         assert!(!reference.contains("old.example"));
         assert_ne!(reference, plan_snapshot_sha256("dry_run = true"));
+    }
+
+    #[test]
+    fn preflight_plan_storage_uses_an_opaque_digest() {
+        let fingerprint = "imapsync\n--timeout\u{1f}30\ncredential-source1=source-id";
+        let digest = plan_fingerprint_digest(fingerprint);
+        assert_eq!(digest.len(), 64);
+        assert_ne!(digest, fingerprint);
+        assert!(!digest.contains("imapsync"));
+        assert!(!digest.contains("source-id"));
     }
 
     #[test]

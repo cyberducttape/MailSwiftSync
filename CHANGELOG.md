@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Preflight plan records now persist only a SHA-256 digest of the canonical plan; full generated arguments remain in memory for admission checks but are no longer stored in mailbox job state.
 - Evidence-aware terminal completion now rejects a `verified` mailbox state when any modeled evidence dimension differs, keeping the verification claim enforced at the storage boundary rather than only in UI orchestration.
 - Restart recovery now abandons queued child runs belonging to an interrupted batch parent while leaving never-claimed mailboxes queued; partial-claim and pre-claim crash scenarios are covered by regression tests.
 - Startup now defers age-based secret-directory cleanup whenever a recorded process identity cannot be verified, preserving passfiles that an unverified orphan may still need and surfacing the deferred cleanup to the operator.
