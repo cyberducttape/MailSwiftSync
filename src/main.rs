@@ -732,6 +732,28 @@ impl Form {
         ]);
         vec![self.wrap_dovecot(source), self.wrap_dovecot(destination)]
     }
+
+    fn dovecot_destination_preflight_commands(&self) -> Vec<(String, Vec<String>)> {
+        if self.engine() != core::Engine::Dovecot {
+            return Vec::new();
+        }
+        let mut user = Vec::new();
+        if !self.profile.dovecot_config.trim().is_empty() {
+            user.extend(["-c".into(), self.profile.dovecot_config.clone()]);
+        }
+        user.extend(["user".into(), self.profile.destination_user.clone()]);
+        let mut mailboxes = Vec::new();
+        if !self.profile.dovecot_config.trim().is_empty() {
+            mailboxes.extend(["-c".into(), self.profile.dovecot_config.clone()]);
+        }
+        mailboxes.extend([
+            "mailbox".into(),
+            "list".into(),
+            "-u".into(),
+            self.profile.destination_user.clone(),
+        ]);
+        vec![self.wrap_dovecot(user), self.wrap_dovecot(mailboxes)]
+    }
 }
 
 struct PreparedCommand {
@@ -1219,6 +1241,7 @@ fn run_capture_lines(
     env: &[(String, String)],
     cancel: &AtomicBool,
     secrets: &[String],
+    timeout: Duration,
 ) -> Result<(ExitStatus, Vec<String>), String> {
     let mut command = Command::new(executable);
     command
@@ -1236,8 +1259,8 @@ fn run_capture_lines(
     let out_thread = thread::spawn(move || collect_redacted_lines(stdout, &out_secrets));
     let err_secrets = secrets.to_vec();
     let err_thread = thread::spawn(move || collect_redacted_lines(stderr, &err_secrets));
-    let status = wait_with_timeout(&mut child, Duration::from_secs(60 * 60), cancel)
-        .map_err(|error| error.to_string())?;
+    let status =
+        wait_with_timeout(&mut child, timeout, cancel).map_err(|error| error.to_string())?;
     let mut lines = out_thread
         .join()
         .map_err(|_| "stdout reader failed".to_owned())?;
@@ -1249,6 +1272,31 @@ fn run_capture_lines(
             .map(|line| format!("[stderr] {line}")),
     );
     Ok((status, lines))
+}
+
+fn run_dovecot_destination_preflight(
+    commands: &[(String, Vec<String>)],
+    tx: &mpsc::Sender<Event>,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    prefix: &str,
+) -> Result<(), String> {
+    for (index, (executable, args)) in commands.iter().enumerate() {
+        let (status, lines) = run_capture_lines(executable, args, &[], cancel, &[], timeout)?;
+        for line in lines {
+            let _ = tx.send(Event::Line(format!(
+                "{prefix}[destination preflight/{}] {line}",
+                index + 1
+            )));
+        }
+        if !status.success() {
+            return Err(format!(
+                "Dovecot destination preflight command {} exited with {status}",
+                index + 1
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> Vec<String> {
@@ -2857,6 +2905,22 @@ impl App {
                                             job.form.profile.migration_timeout_hours * 60 * 60,
                                         ),
                                     );
+                                    let result = if result.is_ok()
+                                        && job.form.dry_run
+                                        && job.form.engine() == core::Engine::Dovecot
+                                    {
+                                        run_dovecot_destination_preflight(
+                                            &job.form.dovecot_destination_preflight_commands(),
+                                            &tx,
+                                            &cancel,
+                                            Duration::from_secs(
+                                                job.form.profile.migration_timeout_hours * 60 * 60,
+                                            ),
+                                            &format!("[{}] ", index + 1),
+                                        )
+                                    } else {
+                                        result
+                                    };
                                     drop(cleanup_guard);
                                     result
                                 }
@@ -3074,6 +3138,12 @@ impl App {
         } else {
             Vec::new()
         };
+        let destination_preflight =
+            if self.form.dry_run && self.form.engine() == core::Engine::Dovecot {
+                self.form.dovecot_destination_preflight_commands()
+            } else {
+                Vec::new()
+            };
         let verification_secret = self.form.source_password.clone();
         let verification_env = if self.form.local_doveadm() {
             vec![(
@@ -3103,6 +3173,15 @@ impl App {
                 &output_secrets,
                 migration_timeout,
             );
+            if result.is_ok() && !destination_preflight.is_empty() {
+                result = run_dovecot_destination_preflight(
+                    &destination_preflight,
+                    &tx,
+                    &cancel,
+                    migration_timeout,
+                    "",
+                );
+            }
             if result.is_ok() && !verification.is_empty() {
                 let mut reports = Vec::new();
                 for (index, (verify_exe, verify_args)) in verification.iter().enumerate() {
@@ -3112,6 +3191,7 @@ impl App {
                         if index == 0 { &verification_env } else { &[] },
                         &cancel,
                         std::slice::from_ref(&verification_secret),
+                        migration_timeout,
                     ) {
                         Ok((status, report)) => {
                             for line in &report {
@@ -4235,6 +4315,31 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["mailbox", "list"]));
         assert!(!args.contains(&"backup".into()));
         assert!(!args.contains(&"sync".into()));
+    }
+
+    #[test]
+    fn dovecot_destination_preflight_checks_user_and_mailboxes() {
+        let form = dovecot_form();
+        let commands = form.dovecot_destination_preflight_commands();
+        assert_eq!(commands.len(), 2);
+        assert!(
+            commands[0]
+                .1
+                .windows(2)
+                .any(|pair| pair == ["user", "new-user"])
+        );
+        assert!(
+            commands[1]
+                .1
+                .windows(2)
+                .any(|pair| pair == ["mailbox", "list"])
+        );
+        assert!(
+            commands[1]
+                .1
+                .windows(2)
+                .any(|pair| pair == ["-u", "new-user"])
+        );
     }
 
     #[test]

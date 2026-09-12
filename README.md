@@ -96,7 +96,7 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 4. Run validation and inspect the execution journal for successful access and folder mapping.
 5. Only then disable Dry run and launch a live migration.
 
-In imapsync mode, use **Project cockpit → Run authenticated IMAPS readiness probe** before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The probe is limited to dual-IMAPS plans; plain and STARTTLS plans use the selected engine's dry preflight for authentication validation. In Dovecot mode, the native dry preflight checks the remote `imapc` source; destination account/storage/quota checks require administrative access and are not claimed by this probe.
+In imapsync mode, use **Project cockpit → Run authenticated IMAPS readiness probe** before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The probe is limited to dual-IMAPS plans; plain and STARTTLS plans use the selected engine's dry preflight for authentication validation. In Dovecot mode, dry preflight checks the remote `imapc` source and then runs destination-side `doveadm user` and mailbox-list checks; quota capacity still requires administrative review where it is not exposed by the configured Dovecot setup.
 
 ## Why MailSwiftSync exists
 
@@ -116,7 +116,7 @@ The desktop runner does not persist passwords. You may enter a password for the 
 
 ### Dovecot mode
 
-Dovecot mode configures the destination-side command in the form `doveadm ... sync -1Ru DESTINATION imapc:`. This is an additive final-delta-safe default. The Dovecot engine dialog lets you explicitly run `doveadm` locally or on the destination over SSH; an automatic mode remains for legacy profiles. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion selects `doveadm backup`, which makes the destination mirror the source and can remove destination-only mail. The dry command performs a non-mutating `imapc` mailbox listing against the source; it is a connectivity/configuration check, not proof that the full migration will succeed.
+Dovecot mode configures the destination-side command in the form `doveadm ... sync -1Ru DESTINATION imapc:`. This is an additive final-delta-safe default. The Dovecot engine dialog lets you explicitly run `doveadm` locally or on the destination over SSH; an automatic mode remains for legacy profiles. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion selects `doveadm backup`, which makes the destination mirror the source and can remove destination-only mail. Dry preflight performs a non-mutating `imapc` mailbox listing against the source plus destination user and mailbox-list checks; it is a readiness check, not proof that the full migration will succeed.
 
 ## Verification
 
