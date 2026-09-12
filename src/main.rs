@@ -780,14 +780,9 @@ impl Drop for CleanupGuard {
 }
 
 fn create_secret_directory() -> Result<PathBuf, String> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs_next::data_local_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("mailswiftsync/runtime")
-        });
+    let base = secret_runtime_base();
     std::fs::create_dir_all(&base).map_err(|error| error.to_string())?;
+    restrict_directory_permissions(&base).map_err(|error| error.to_string())?;
     cleanup_stale_secret_directories(&base);
     let directory = base.join(format!("run-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
@@ -796,6 +791,12 @@ fn create_secret_directory() -> Result<PathBuf, String> {
         return Err(error.to_string());
     }
     Ok(directory)
+}
+
+fn secret_runtime_base() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("mailswiftsync-runtime"))
 }
 
 fn cleanup_stale_secret_directories(base: &std::path::Path) {
@@ -1416,6 +1417,7 @@ struct App {
 }
 impl Default for App {
     fn default() -> Self {
+        cleanup_stale_secret_directories(&secret_runtime_base());
         let state_path = dirs_next::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("mailswiftsync/state.db");
