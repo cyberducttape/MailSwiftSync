@@ -129,13 +129,13 @@ struct Profile {
 /// Operator-supplied extra options are retained only as a digest so a
 /// password or token embedded in an expert option cannot enter SQLite or an
 /// exported report.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct RunPlanSnapshot {
     dry_run: bool,
     profile: RunProfileSnapshot,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct RunProfileSnapshot {
     name: String,
     source_host: String,
@@ -2655,17 +2655,42 @@ impl App {
             .run(&evidence_run_id)
             .map_err(|e| e.to_string())?
             .ok_or("The evidence refers to a run that is no longer available.")?;
+        let snapshot_profile = toml::from_str::<RunPlanSnapshot>(&run.plan_snapshot)
+            .ok()
+            .map(|snapshot| snapshot.profile);
+        let source_endpoint = snapshot_profile
+            .as_ref()
+            .map(|profile| profile.source_host.as_str())
+            .unwrap_or(project.source_endpoint.as_str());
+        let destination_endpoint = snapshot_profile
+            .as_ref()
+            .map(|profile| profile.destination_host.as_str())
+            .unwrap_or(project.destination_endpoint.as_str());
+        let source_identity = snapshot_profile
+            .as_ref()
+            .map(|profile| profile.source_user.as_str())
+            .unwrap_or(source_mailbox.as_str());
+        let destination_identity = snapshot_profile
+            .as_ref()
+            .map(|profile| profile.destination_user.as_str())
+            .unwrap_or(destination_mailbox.as_str());
+        let identity_note = if snapshot_profile.is_some() {
+            "run snapshot"
+        } else {
+            "durable project/mailbox fallback (legacy run snapshot unavailable)"
+        };
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-verification.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
             markdown_escape(&project.name),
-            markdown_escape(&project.source_endpoint),
-            markdown_escape(&project.destination_endpoint),
-            markdown_escape(&source_mailbox),
-            markdown_escape(&destination_mailbox),
+            markdown_escape(source_endpoint),
+            markdown_escape(destination_endpoint),
+            markdown_escape(source_identity),
+            markdown_escape(destination_identity),
+            identity_note,
             markdown_escape(&run.engine),
             run.id,
             run.status,

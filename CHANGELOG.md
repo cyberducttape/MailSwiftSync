@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Single-mailbox verification reports now use the evidence-producing run’s immutable plan snapshot for endpoint and mailbox identity, with an explicit legacy fallback label when an older run has no parseable snapshot.
 - CI and release workflows now pin third-party GitHub Actions to reviewed commit SHAs while retaining release-version comments, reducing supply-chain drift in builds and artifact publication.
 - Batch live promotion now reloads referenced keyring credentials and compares each selected row against a process-local digest captured by its successful dry validation; changed or missing credentials require a new dry validation without persisting secret-derived material.
 - Single-mailbox live promotion now reloads referenced keyring credentials and compares a process-local credential digest captured by the successful dry preflight; changed or missing session credentials require a new dry preflight without persisting secret-derived material.
