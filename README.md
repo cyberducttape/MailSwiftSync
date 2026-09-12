@@ -108,7 +108,7 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 - **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination.
 - **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through short-lived owner-only `--passfile1/--passfile2` files; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion, while remote Dovecot runs still use a destination-side `imapc_password` override and should be treated accordingly.
-- **Explicit transport policy.** imapsync plans force encrypted source/destination transport (`--ssl1/--ssl2` for IMAPS or `--tls1` for STARTTLS) instead of allowing automatic cleartext fallback. Plain source transport is an explicit warning and is never presented as a verified TLS plan.
+- **Explicit transport policy.** imapsync plans force encrypted source/destination transport (`--ssl1/--ssl2` for IMAPS or `--tls1` for STARTTLS), request certificate verification with `SSL_verify_mode=1`, and reject expert overrides of those settings instead of allowing automatic cleartext fallback. Plain source transport is an explicit warning and is never presented as a verified TLS plan.
 
 ### Current security boundary
 

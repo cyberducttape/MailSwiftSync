@@ -353,14 +353,24 @@ impl Form {
         if self.profile.source_tls == "plain" {
             a.push("--nossl1".into());
         } else if self.profile.source_tls == "starttls" {
-            a.push("--tls1".into());
+            a.extend([
+                "--tls1".into(),
+                "--tlsargs1".into(),
+                "SSL_verify_mode=1".into(),
+            ]);
         } else {
-            a.push("--ssl1".into());
+            a.extend([
+                "--ssl1".into(),
+                "--sslargs1".into(),
+                "SSL_verify_mode=1".into(),
+            ]);
         }
         a.extend([
             "--port2".into(),
             destination_port.to_string(),
             "--ssl2".into(),
+            "--sslargs2".into(),
+            "SSL_verify_mode=1".into(),
         ]);
         if self.profile.automap {
             a.push("--automap".into());
@@ -422,10 +432,14 @@ impl Form {
             "--port2",
             "--ssl1",
             "--ssl2",
+            "--sslargs1",
+            "--sslargs2",
             "--nossl1",
             "--nossl2",
             "--tls1",
             "--tls2",
+            "--tlsargs1",
+            "--tlsargs2",
             "--dry",
             "--delete2",
             "--delete1",
@@ -4208,6 +4222,8 @@ mod tests {
         assert!(form.validate().unwrap_err().contains("controlled"));
         form.profile.extra_options = "--password2 leaked".into();
         assert!(form.validate().is_err());
+        form.profile.extra_options = "--sslargs1 SSL_verify_mode=0".into();
+        assert!(form.validate().is_err());
     }
 
     #[test]
@@ -4432,6 +4448,18 @@ mod tests {
         assert!(!prepared.args.iter().any(|arg| arg == "secret"));
         assert!(prepared.args.iter().any(|arg| arg == "--ssl1"));
         assert!(prepared.args.iter().any(|arg| arg == "--ssl2"));
+        assert!(
+            prepared
+                .args
+                .windows(2)
+                .any(|pair| { pair == ["--sslargs1", "SSL_verify_mode=1"] })
+        );
+        assert!(
+            prepared
+                .args
+                .windows(2)
+                .any(|pair| { pair == ["--sslargs2", "SSL_verify_mode=1"] })
+        );
         cleanup_paths(&prepared.cleanup);
         assert!(!std::path::Path::new(&prepared.args[source_index + 1]).exists());
     }

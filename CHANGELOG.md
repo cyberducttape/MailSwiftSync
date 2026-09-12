@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- imapsync execution now requests certificate verification for both encrypted endpoints (`SSL_verify_mode=1`); expert options cannot override the transport policy.
 - Added bounded redacted stdout/stderr tails to process failures so failure classification and transient retry decisions receive the engine's actual diagnostic output.
 - Added five-second graceful shutdown before process-group escalation, Linux parent-death signalling, and retry-safe handling of timeout/cancellation cleanup.
 - Aggregate evidence mismatches now report zero compatibility confidence instead of the misleading 85% fallback; exact aggregate matches remain explicitly labelled as aggregate rather than message-level proof.
