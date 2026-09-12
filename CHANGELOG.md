@@ -48,6 +48,7 @@ All notable changes to MailSwiftSync are documented here.
 - Verification evidence and its derived `verified`/`delta_required` mailbox state are now committed in one transaction; event-poller persistence failures are surfaced instead of silently ignored.
 - A reported durability failure can no longer be overwritten by a later “completed successfully” status; the run is explicitly marked for durability review.
 - Reworked the README for first-time operators with above-the-fold screenshots, CI/license trust signals, audience guidance, alternative-tool comparison, and honest release/install boundaries.
+- Expanded `SECURITY.md` with supported-version policy, credential/transport/persistence boundaries, engine trust assumptions, and a safe vulnerability-reporting checklist.
 - Live mailbox starts now atomically create the durable run record and move the job to `running`; persistence failures abort before the migration process is spawned.
 - The IMAPS readiness probe now authenticates, refreshes post-auth capabilities, and requests `NAMESPACE` and `LIST` so capability results are not presented as sufficient migration readiness on their own.
 - IMAPS readiness now requires tagged `OK` responses for capability, authentication, namespace, and folder-inventory commands; completed `NO`/`BAD` responses are reported as failures.
