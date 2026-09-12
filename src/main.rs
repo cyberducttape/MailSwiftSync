@@ -2316,12 +2316,28 @@ impl App {
             });
             ui.group(|ui| {
                 ui.label(RichText::new("MAILBOXES").size(11.0).color(MUTED));
-                ui.heading(if self.bulk_jobs.is_empty() {
-                    "1 configured".to_owned()
+                if durable_jobs.is_empty() {
+                    ui.heading("None configured");
+                    ui.label("Use Mailboxes to review scope before running anything.");
                 } else {
-                    format!("{} queued", self.bulk_jobs.len())
-                });
-                ui.label("Use Mailboxes to review scope before running anything.");
+                    let counts = project_health_state_counts(&durable_jobs);
+                    ui.heading(format!("{} total", durable_jobs.len()));
+                    ui.label(format!(
+                        "{} ready · {} running · {} verified",
+                        counts.get("ready").copied().unwrap_or(0),
+                        counts.get("running").copied().unwrap_or(0),
+                        counts.get("verified").copied().unwrap_or(0),
+                    ));
+                    if attention_count > 0 {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} require operator attention",
+                                attention_count
+                            ))
+                            .color(ALERT),
+                        );
+                    }
+                }
             });
             ui.group(|ui| {
                 ui.label(RichText::new("EVIDENCE").size(11.0).color(MUTED));

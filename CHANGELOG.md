@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Overview now reports mailbox totals and durable ready/running/verified counts from the project ledger, with an explicit operator-attention count instead of inferring readiness from the in-memory import queue.
 - Legacy evidence insertion is now test-only; production code must use run-owned terminal evidence APIs so verification cannot be created outside an execution transition.
 - Process registration now validates run ownership and inserts the active-process identity in one transaction, preventing a delayed worker from recreating process state after terminal cleanup.
 - Active process registration now requires a mailbox-specific child run; parent batch runs cannot claim arbitrary same-project mailboxes.
