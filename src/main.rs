@@ -732,6 +732,57 @@ fn run_streaming(
     let _ = err_thread.join();
     result
 }
+
+fn run_capture_lines(
+    executable: &str,
+    args: &[String],
+    cancel: &AtomicBool,
+    secrets: &[String],
+) -> Result<(ExitStatus, Vec<String>), String> {
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
+    let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
+    let out_secrets = secrets.to_vec();
+    let out_thread = thread::spawn(move || collect_redacted_lines(stdout, &out_secrets));
+    let err_secrets = secrets.to_vec();
+    let err_thread = thread::spawn(move || collect_redacted_lines(stderr, &err_secrets));
+    let status = wait_with_timeout(&mut child, Duration::from_secs(60 * 60), cancel)
+        .map_err(|error| error.to_string())?;
+    let mut lines = out_thread
+        .join()
+        .map_err(|_| "stdout reader failed".to_owned())?;
+    lines.extend(
+        err_thread
+            .join()
+            .map_err(|_| "stderr reader failed".to_owned())?
+            .into_iter()
+            .map(|line| format!("[stderr] {line}")),
+    );
+    Ok((status, lines))
+}
+
+fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> Vec<String> {
+    BufReader::new(reader)
+        .lines()
+        .map_while(Result::ok)
+        .map(|mut line| {
+            for secret in secrets {
+                if !secret.is_empty() {
+                    line = line.replace(secret, "[REDACTED]");
+                }
+            }
+            line
+        })
+        .collect()
+}
 #[derive(Clone)]
 struct BulkJob {
     label: String,
@@ -1720,6 +1771,7 @@ impl App {
         } else {
             Vec::new()
         };
+        let verification_secret = self.form.source_password.clone();
         thread::spawn(move || {
             let mut command = Command::new(&exe);
             command
@@ -1767,31 +1819,26 @@ impl App {
             if result.is_ok() && !verification.is_empty() {
                 let mut reports = Vec::new();
                 for (index, (verify_exe, verify_args)) in verification.iter().enumerate() {
-                    match Command::new(verify_exe).args(verify_args).output() {
-                        Ok(output) => {
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            for line in stdout.lines() {
+                    match run_capture_lines(
+                        verify_exe,
+                        verify_args,
+                        &cancel,
+                        std::slice::from_ref(&verification_secret),
+                    ) {
+                        Ok((status, report)) => {
+                            for line in &report {
                                 let _ = tx.send(Event::Line(format!(
                                     "[verification/{}] {line}",
                                     index + 1
                                 )));
                             }
-                            for line in stderr.lines() {
-                                let _ = tx.send(Event::Line(format!(
-                                    "[verification/{} stderr] {line}",
-                                    index + 1
-                                )));
-                            }
-                            let mut report = stdout.lines().map(str::to_owned).collect::<Vec<_>>();
-                            report.extend(stderr.lines().map(str::to_owned));
-                            if output.status.success() {
+                            if status.success() {
                                 reports.push(report);
                             } else {
                                 let _ = tx.send(Event::VerificationFailed(format!(
                                     "verification command {} exited with {}",
                                     index + 1,
-                                    output.status
+                                    status
                                 )));
                                 result =
                                     Err("migration completed; Dovecot verification failed".into());
@@ -1956,6 +2003,12 @@ impl App {
                 } else if !succeeded {
                     if r.as_ref()
                         .err()
+                        .is_some_and(|error| error.contains("verification"))
+                    {
+                        "attention"
+                    } else if r
+                        .as_ref()
+                        .err()
                         .is_some_and(|error| error.contains("cancelled"))
                     {
                         "cancelled"
@@ -1977,13 +2030,24 @@ impl App {
             }
             if let Some(project) = &self.project_id {
                 if let Some(run_id) = &self.run_id {
+                    let run_status = if succeeded {
+                        "completed"
+                    } else if r
+                        .as_ref()
+                        .err()
+                        .is_some_and(|error| error.contains("verification"))
+                    {
+                        "verification_failed"
+                    } else {
+                        "failed"
+                    };
                     let _ = self.store.finish_run(
                         run_id,
-                        if succeeded { "completed" } else { "failed" },
+                        run_status,
                         if succeeded {
                             ""
                         } else {
-                            "process or verification failure"
+                            r.as_ref().err().map(String::as_str).unwrap_or("run failed")
                         },
                     );
                 }
@@ -2001,6 +2065,8 @@ impl App {
                             core::Phase::Verification
                         },
                     );
+                } else {
+                    let _ = self.store.transition(project, core::Phase::Attention);
                 }
             }
             self.status = match r {

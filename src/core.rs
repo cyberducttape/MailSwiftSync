@@ -311,6 +311,7 @@ impl StateStore {
         if current != phase
             && (current == Phase::Complete
                 || current == Phase::Attention
+                    && !matches!(phase, Phase::Preflight | Phase::Verification)
                 || phase != Phase::Attention && phase_rank(phase) < phase_rank(current))
         {
             return Err(rusqlite::Error::InvalidQuery);
