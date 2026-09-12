@@ -21,6 +21,7 @@ MailSwiftSync exposes the most common options:
 | Add Message-ID header when needed | Adds `--addheader`; this can help imapsync identify messages that lack a usable Message-ID. |
 | Extra imapsync options | Adds non-connection advanced command-line options exactly as typed. Connection, credential, TLS, dry-run, and destructive deletion flags are controlled by the migration plan and rejected here. |
 | Performance throttles | In Advanced options, optional message/byte-per-second limits are passed as explicit imapsync settings; `0` means unlimited. These controls do not affect Dovecot-native runs. |
+| Process timeout | Bounds one migration process from 1 to 720 hours. Increase it for very large or slow mailboxes; cancellation remains available at any time. |
 
 Click **Advanced options** for guided controls for `--syncinternaldates`, `--useuid`, `--usecache`, `--fastio1`, `--fastio2`, and `--allowsizemismatch`. The `--delete2` setting is marked destructive and should only be considered for a deliberately exact backup after a successful dry run.
 

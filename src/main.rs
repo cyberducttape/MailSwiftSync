@@ -70,6 +70,9 @@ struct Profile {
     /// Optional imapsync throttle. Zero means unlimited.
     #[serde(default)]
     max_bytes_per_second: u64,
+    /// Maximum runtime for one migration process, in hours.
+    #[serde(default = "default_migration_timeout_hours")]
+    migration_timeout_hours: u64,
     /// Remote Dovecot currently receives this value in a destination-side
     /// command override. Keep the unsafe compatibility path opt-in until a
     /// deployment-independent secret broker is available.
@@ -97,6 +100,9 @@ fn default_ssh_path() -> String {
 fn default_batch_concurrency() -> usize {
     2
 }
+fn default_migration_timeout_hours() -> u64 {
+    24
+}
 fn default_source_tls() -> String {
     "imaps".into()
 }
@@ -123,6 +129,7 @@ impl Default for Form {
                 source_tls: default_source_tls(),
                 doveadm_path: default_doveadm_path(),
                 ssh_path: default_ssh_path(),
+                migration_timeout_hours: default_migration_timeout_hours(),
                 automap: true,
                 ..Default::default()
             },
@@ -263,6 +270,9 @@ impl Form {
             "imaps" | "starttls" | "plain"
         ) {
             return Err("Source TLS mode must be imaps, starttls, or plain.".into());
+        }
+        if !(1..=720).contains(&self.profile.migration_timeout_hours) {
+            return Err("Migration timeout must be between 1 and 720 hours.".into());
         }
         for (label, value) in required {
             if value.trim().is_empty() {
@@ -1024,6 +1034,10 @@ enum Event {
     Finished(Result<(), String>),
 }
 
+// The process runner keeps each security-sensitive input explicit at the call
+// site: executable, args, environment, event sink, redaction prefix/secrets,
+// cancellation, and operator-selected timeout.
+#[allow(clippy::too_many_arguments)]
 fn run_streaming(
     executable: &str,
     args: &[String],
@@ -1032,6 +1046,7 @@ fn run_streaming(
     prefix: &str,
     cancel: &AtomicBool,
     secrets: &[String],
+    timeout: Duration,
 ) -> Result<(), String> {
     let mut command = Command::new(executable);
     command
@@ -1073,7 +1088,7 @@ fn run_streaming(
             let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {safe}")));
         }
     });
-    let result = wait_with_timeout(&mut child, Duration::from_secs(24 * 60 * 60), cancel)
+    let result = wait_with_timeout(&mut child, timeout, cancel)
         .map_err(|error| error.to_string())
         .and_then(|status| {
             if status.success() {
@@ -2526,6 +2541,9 @@ impl App {
                                             job.form.source_password.clone(),
                                             job.form.destination_password.clone(),
                                         ],
+                                        Duration::from_secs(
+                                            job.form.profile.migration_timeout_hours * 60 * 60,
+                                        ),
                                     );
                                     drop(cleanup_guard);
                                     result
@@ -2757,6 +2775,8 @@ impl App {
             self.form.source_password.clone(),
             self.form.destination_password.clone(),
         ];
+        let migration_timeout =
+            Duration::from_secs(self.form.profile.migration_timeout_hours * 60 * 60);
         let cleanup_guard = CleanupGuard::new(cleanup.clone());
         thread::spawn(move || {
             let _cleanup_guard = cleanup_guard;
@@ -2800,16 +2820,15 @@ impl App {
                     let _ = b.send(Event::Line(format!("[stderr] {l}")));
                 }
             });
-            let mut result =
-                wait_with_timeout(&mut child, Duration::from_secs(24 * 60 * 60), &cancel)
-                    .map_err(|e| e.to_string())
-                    .and_then(|s| {
-                        if s.success() {
-                            Ok(())
-                        } else {
-                            Err(format!("{engine_name} exited with {s}"))
-                        }
-                    });
+            let mut result = wait_with_timeout(&mut child, migration_timeout, &cancel)
+                .map_err(|e| e.to_string())
+                .and_then(|s| {
+                    if s.success() {
+                        Ok(())
+                    } else {
+                        Err(format!("{engine_name} exited with {s}"))
+                    }
+                });
             let _ = t1.join();
             let _ = t2.join();
             if result.is_ok() && !verification.is_empty() {
@@ -3257,6 +3276,10 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("Bytes/second (0 = unlimited)");
                     ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Process timeout (hours)");
+                    ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
                 });
                 ui.label(RichText::new("Throttles apply to imapsync only and can reduce provider rate limits or link saturation.").size(11.0).color(MUTED));
             });

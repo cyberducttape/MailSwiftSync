@@ -24,6 +24,7 @@ Stable today:
 - `imapsync` fallback for arbitrary IMAP endpoints.
 - CSV/XLS/XLSX validation-only batch queue with bounded operator-selected concurrency (1–16 workers).
 - Explicit imapsync message and byte throttles for provider-friendly single-mailbox runs.
+- Configurable per-process timeout (1–720 hours) so large mailboxes can run longer than the default while hung jobs remain bounded.
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
 - Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
