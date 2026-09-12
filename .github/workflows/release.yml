@@ -1,0 +1,67 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: mailswiftsync
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: mailswiftsync.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary: mailswiftsync
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}
+          chmod 0755 dist/mailswiftsync-${{ matrix.target }}
+          tar -C dist -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz mailswiftsync-${{ matrix.target }}
+          sha256sum dist/mailswiftsync-${{ matrix.target }}.tar.gz > dist/mailswiftsync-${{ matrix.target }}.tar.gz.sha256
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}.exe
+          Compress-Archive -Path dist/mailswiftsync-${{ matrix.target }}.exe -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
+          (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mailswiftsync-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: mailswiftsync-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

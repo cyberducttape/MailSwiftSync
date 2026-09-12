@@ -55,7 +55,7 @@ MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its T
 cargo run --release
 ```
 
-If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox. Prebuilt installers are planned; until then, Rust/Cargo is developer installation UX.
+If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; until a tagged release is published, Rust/Cargo is developer installation UX. Release artifacts include SHA-256 checksums.
 
 ### 3. First migration
 

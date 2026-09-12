@@ -635,6 +635,7 @@ fn run_streaming(
     tx: &mpsc::Sender<Event>,
     prefix: &str,
     cancel: &AtomicBool,
+    secrets: &[String],
 ) -> Result<(), String> {
     let mut child = Command::new(executable)
         .args(args)
@@ -647,16 +648,30 @@ fn run_streaming(
     let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
     let out_tx = tx.clone();
     let out_prefix = prefix.to_owned();
+    let out_secrets = secrets.to_vec();
     let out_thread = thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            let _ = out_tx.send(Event::Line(format!("{out_prefix}{line}")));
+            let mut safe = line;
+            for secret in &out_secrets {
+                if !secret.is_empty() {
+                    safe = safe.replace(secret, "[REDACTED]");
+                }
+            }
+            let _ = out_tx.send(Event::Line(format!("{out_prefix}{safe}")));
         }
     });
     let err_tx = tx.clone();
     let err_prefix = prefix.to_owned();
+    let err_secrets = secrets.to_vec();
     let err_thread = thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {line}")));
+            let mut safe = line;
+            for secret in &err_secrets {
+                if !secret.is_empty() {
+                    safe = safe.replace(secret, "[REDACTED]");
+                }
+            }
+            let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {safe}")));
         }
     });
     let result = wait_with_timeout(&mut child, Duration::from_secs(24 * 60 * 60), cancel)
@@ -1464,6 +1479,10 @@ impl App {
                             &tx,
                             &format!("[{}] ", index + 1),
                             &cancel,
+                            &[
+                                job.form.source_password.clone(),
+                                job.form.destination_password.clone(),
+                            ],
                         );
                         for path in command.cleanup {
                             let _ = std::fs::remove_file(path);
@@ -1823,6 +1842,8 @@ impl App {
                     } else {
                         "delta_required"
                     }
+                } else if !self.form.dry_run {
+                    "attention"
                 } else {
                     "completed"
                 };
