@@ -790,7 +790,12 @@ impl Default for App {
                 Some(format!("Persistent SQLite state unavailable: {error}")),
             ),
         };
-        let initial_output = persistence_warning.clone().map_or_else(
+        let recovered = if persistence_warning.is_none() {
+            store.recover_abandoned_jobs().unwrap_or(0)
+        } else {
+            0
+        };
+        let mut initial_output = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
             |warning| {
                 vec![
@@ -799,6 +804,11 @@ impl Default for App {
                 ]
             },
         );
+        if recovered > 0 {
+            initial_output.push(format!(
+                "Recovered {recovered} interrupted job(s) into Attention for review."
+            ));
+        }
         let form = Form::load();
         let restored_project = persistence_warning
             .is_none()
@@ -1674,6 +1684,12 @@ impl App {
             let _ = self.store.set_mailbox_state(job, "running");
         }
         if let Some(project) = &self.project_id {
+            let _ = self.store.start_run(
+                project,
+                self.job_id.as_deref(),
+                &run_id,
+                self.form.engine().label(),
+            );
             let _ = self.store.record_event(
                 project,
                 "run_started",
@@ -1960,6 +1976,17 @@ impl App {
                 let _ = self.store.set_mailbox_state(job, final_state);
             }
             if let Some(project) = &self.project_id {
+                if let Some(run_id) = &self.run_id {
+                    let _ = self.store.finish_run(
+                        run_id,
+                        if succeeded { "completed" } else { "failed" },
+                        if succeeded {
+                            ""
+                        } else {
+                            "process or verification failure"
+                        },
+                    );
+                }
                 let _ = self.store.record_event(
                     project,
                     "run_finished",

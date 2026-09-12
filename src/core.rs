@@ -217,6 +217,7 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = self
@@ -381,8 +382,37 @@ impl StateStore {
         }
         Ok(())
     }
+    /// A desktop restart cannot prove that a previous child process still
+    /// exists. Running jobs are therefore made reviewable rather than left in
+    /// a permanently active state.
+    pub fn recover_abandoned_jobs(&self) -> rusqlite::Result<usize> {
+        self.connection.execute(
+            "UPDATE mailbox_jobs SET state='attention' WHERE state='running'",
+            [],
+        )
+    }
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.event(project_id, kind, detail)
+    }
+    pub fn start_run(
+        &self,
+        project_id: &str,
+        job_id: Option<&str>,
+        run_id: &str,
+        engine: &str,
+    ) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES(?1,?2,?3,?4,'running')",
+            params![run_id, project_id, job_id, engine],
+        )?;
+        Ok(())
+    }
+    pub fn finish_run(&self, run_id: &str, status: &str, detail: &str) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3",
+            params![status, detail, run_id],
+        )?;
+        Ok(())
     }
     pub fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
         self.record_evidence_for_run(job_id, "legacy", value)
@@ -567,5 +597,17 @@ mod tests {
         db.set_mailbox_state(&job, "completed").unwrap();
         db.set_mailbox_state(&job, "verified").unwrap();
         db.transition(&project.id, Phase::Complete).unwrap();
+    }
+
+    #[test]
+    fn running_jobs_are_recovered_for_operator_review() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.set_mailbox_state(&job, "running").unwrap();
+        assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
+        assert!(db.set_mailbox_state(&job, "queued").is_err());
     }
 }
