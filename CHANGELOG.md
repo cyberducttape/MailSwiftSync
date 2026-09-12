@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Active executions now carry an immutable run context containing their project, mailbox, mode, engine, and launch-time plan fingerprint. Completion and process-registration handling no longer infer ownership or dry/live semantics from mutable form fields or an unrelated restored batch queue.
 - Subprocess output now uses byte-oriented line framing with lossy UTF-8 conversion, so malformed external-tool output cannot stop pipe draining; a regression test covers continued reading after invalid bytes.
 - Live bulk runs now reject duplicate destination host/port/mailbox targets before any process starts, preventing concurrent migration engines from mutating the same destination mailbox.
 - Project phase recovery from `Attention` to `Preflight` or `Verification` now works as intended, and phase changes plus their audit events commit atomically.

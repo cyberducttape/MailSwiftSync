@@ -1419,6 +1419,21 @@ enum WorkspaceView {
     Activity,
     Verification,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Single,
+    Batch,
+}
+#[derive(Clone)]
+struct ActiveRunContext {
+    run_id: String,
+    project_id: String,
+    job_id: Option<String>,
+    kind: RunKind,
+    dry_run: bool,
+    engine: core::Engine,
+    plan_fingerprint: String,
+}
 struct App {
     form: Form,
     output: Vec<String>,
@@ -1435,6 +1450,7 @@ struct App {
     project_id: Option<String>,
     job_id: Option<String>,
     run_id: Option<String>,
+    active_run: Option<ActiveRunContext>,
     cancel_requested: Option<Arc<AtomicBool>>,
     bulk_project_id: Option<String>,
     bulk_job_ids: Vec<String>,
@@ -1596,6 +1612,7 @@ impl Default for App {
             project_id,
             job_id,
             run_id: None,
+            active_run: None,
             cancel_requested: None,
             bulk_project_id: restored_bulk_project_id,
             bulk_job_ids: restored_bulk_job_ids,
@@ -2945,6 +2962,15 @@ impl App {
             self.bulk_message = format!("Could not start durable batch run: {error}");
             return;
         }
+        self.active_run = Some(ActiveRunContext {
+            run_id: run_id.clone(),
+            project_id: project_id.clone(),
+            job_id: None,
+            kind: RunKind::Batch,
+            dry_run: !live,
+            engine: self.form.engine(),
+            plan_fingerprint: String::new(),
+        });
         for job in &mut self.bulk_jobs {
             job.state = "Queued".into();
         }
@@ -3212,22 +3238,36 @@ impl App {
         let args = prepared.args;
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
-        let run_id = uuid::Uuid::new_v4().to_string();
-        if let (Some(project), Some(job)) = (self.project_id.as_deref(), self.job_id.as_deref()) {
-            if let Err(error) =
-                self.store
-                    .begin_run(project, job, &run_id, self.form.engine().label())
-            {
+        let plan_fingerprint = self.form.plan_fingerprint();
+        let run_engine = self.form.engine();
+        let run_dry_run = self.form.dry_run;
+        let (run_project_id, run_job_id) = match (self.project_id.clone(), self.job_id.clone()) {
+            (Some(project), Some(job)) => (project, job),
+            _ => {
                 cleanup_paths(&cleanup);
-                self.status = format!("Could not record durable run; nothing was started: {error}");
+                self.status = "Could not start without a durable mailbox project.".into();
                 return;
             }
-        } else {
+        };
+        let run_id = uuid::Uuid::new_v4().to_string();
+        if let Err(error) =
+            self.store
+                .begin_run(&run_project_id, &run_job_id, &run_id, run_engine.label())
+        {
             cleanup_paths(&cleanup);
-            self.status = "Could not start without a durable mailbox project.".into();
+            self.status = format!("Could not record durable run; nothing was started: {error}");
             return;
         }
         self.run_id = Some(run_id.clone());
+        self.active_run = Some(ActiveRunContext {
+            run_id: run_id.clone(),
+            project_id: run_project_id,
+            job_id: Some(run_job_id),
+            kind: RunKind::Single,
+            dry_run: run_dry_run,
+            engine: run_engine,
+            plan_fingerprint,
+        });
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());
@@ -3370,6 +3410,7 @@ impl App {
         let mut done = None;
         let mut pending_db_events: Vec<(String, String, String)> = Vec::new();
         let mut durability_errors = Vec::new();
+        let active_run = self.active_run.clone();
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -3381,14 +3422,16 @@ impl App {
                         session_id,
                         executable,
                     ) => {
-                        let job_id = self
-                            .bulk_job_ids
-                            .get(index)
-                            .cloned()
-                            .or_else(|| self.job_id.clone());
-                        if let (Some(run_id), Some(job_id)) = (self.run_id.as_deref(), job_id)
+                        let job_id = match active_run.as_ref().map(|run| run.kind) {
+                            Some(RunKind::Batch) => self.bulk_job_ids.get(index).cloned(),
+                            Some(RunKind::Single) => {
+                                active_run.as_ref().and_then(|run| run.job_id.clone())
+                            }
+                            None => None,
+                        };
+                        if let (Some(run), Some(job_id)) = (active_run.as_ref(), job_id)
                             && let Err(error) = self.store.register_process(&core::ActiveProcess {
-                                run_id: run_id.to_owned(),
+                                run_id: run.run_id.clone(),
                                 job_id,
                                 pid,
                                 start_ticks,
@@ -3402,8 +3445,13 @@ impl App {
                         }
                     }
                     Event::Line(s) => {
-                        let safe = self.redact_output(&s);
-                        if let Some(project) = self.active_project_id() {
+                        // Runner threads redact secrets before publishing events.
+                        // Do not re-read mutable form fields here: the operator
+                        // may have edited the next plan while this run was active.
+                        let safe = s;
+                        if let Some(project) =
+                            active_run.as_ref().map(|run| run.project_id.as_str())
+                        {
                             pending_db_events.push((
                                 project.to_owned(),
                                 "run_output".into(),
@@ -3455,7 +3503,9 @@ impl App {
                         // evidence-backed running -> verified transition
                         // without weakening ordinary state transitions.
                         self.pending_evidence = Some(evidence);
-                        if let Some(project) = self.active_project_id() {
+                        if let Some(project) =
+                            active_run.as_ref().map(|run| run.project_id.as_str())
+                        {
                             pending_db_events.push((
                                 project.to_owned(),
                                 "verification_evidence".into(),
@@ -3466,7 +3516,9 @@ impl App {
                     Event::VerificationFailed(detail) => {
                         let safe = self.redact_output(&detail);
                         push_visible_output(&mut self.output, format!("[verification] {safe}"));
-                        if let Some(project) = self.active_project_id() {
+                        if let Some(project) =
+                            active_run.as_ref().map(|run| run.project_id.as_str())
+                        {
                             pending_db_events.push((
                                 project.to_owned(),
                                 "verification_pending".into(),
@@ -3490,38 +3542,37 @@ impl App {
             self.report_store_error("batch event persistence", Err(error));
         }
         if let Some(r) = done {
+            let Some(run_context) = active_run else {
+                self.status = "Execution completed without a durable run context".into();
+                self.receiver = None;
+                return;
+            };
             let succeeded = r.is_ok();
-            let was_bulk_run = self.bulk_project_id.is_some();
+            let was_bulk_run = matches!(run_context.kind, RunKind::Batch);
             let mut direct_final_state = None;
-            let terminal_evidence = if succeeded && !self.form.dry_run {
+            let terminal_evidence = if succeeded && !run_context.dry_run {
                 self.pending_evidence.take().or_else(|| {
-                    (self.form.engine() == core::Engine::ImapSync)
+                    (run_context.engine == core::Engine::ImapSync)
                         .then(|| parse_imapsync_evidence(&self.output))
                         .flatten()
                 })
             } else {
                 self.pending_evidence.take()
             };
-            if succeeded
-                && !self.form.dry_run
-                && terminal_evidence.is_none()
-                && let Some(project) = self.active_project_id()
-            {
+            if succeeded && !run_context.dry_run && terminal_evidence.is_none() {
                 let _ = self.store.record_event(
-                    project,
+                    &run_context.project_id,
                     "verification_pending",
                     "completed transfer did not provide complete verification evidence",
                 );
             }
-            if self.bulk_project_id.is_none()
-                && let Some(job) = &self.job_id
-            {
-                if succeeded && self.form.dry_run {
+            if !was_bulk_run && let Some(job) = &run_context.job_id {
+                if succeeded && run_context.dry_run {
                     let _ = self
                         .store
-                        .set_preflight_plan(job, &self.form.plan_fingerprint());
+                        .set_preflight_plan(job, &run_context.plan_fingerprint);
                 }
-                let final_state = if succeeded && self.form.dry_run {
+                let final_state = if succeeded && run_context.dry_run {
                     "ready"
                 } else if !succeeded {
                     if r.as_ref()
@@ -3544,67 +3595,68 @@ impl App {
                     } else {
                         "delta_required"
                     }
-                } else if !self.form.dry_run {
+                } else if !run_context.dry_run {
                     "attention"
                 } else {
                     "completed"
                 };
                 direct_final_state = Some(final_state);
             }
-            if let Some(project) = self.active_project_id().map(str::to_owned) {
-                if let Some(run_id) = &self.run_id {
-                    let run_status = if succeeded {
-                        "completed"
-                    } else if r
-                        .as_ref()
-                        .err()
-                        .is_some_and(|error| error.contains("verification"))
-                    {
-                        "verification_failed"
-                    } else if r
-                        .as_ref()
-                        .err()
-                        .is_some_and(|error| error.contains("cancelled"))
-                    {
-                        "cancelled"
-                    } else {
-                        "failed"
-                    };
-                    let detail = r
-                        .as_ref()
-                        .err()
-                        .map(|error| classified_failure_detail(error))
-                        .unwrap_or_default();
-                    let terminal_write = if self.bulk_project_id.is_none()
-                        && let (Some(job), Some(state)) = (&self.job_id, direct_final_state)
-                    {
-                        if run_status == "completed" {
-                            if let Some(evidence) = terminal_evidence.as_ref() {
-                                self.store.finish_run_for_mailbox_with_evidence(
-                                    &project, job, run_id, run_status, state, &detail, evidence,
-                                )
-                            } else {
-                                self.store.finish_run_for_mailbox(
-                                    &project, job, run_id, run_status, state, &detail,
-                                )
-                            }
+            {
+                let project = &run_context.project_id;
+                let run_id = &run_context.run_id;
+                let run_status = if succeeded {
+                    "completed"
+                } else if r
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| error.contains("verification"))
+                {
+                    "verification_failed"
+                } else if r
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| error.contains("cancelled"))
+                {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                let detail = r
+                    .as_ref()
+                    .err()
+                    .map(|error| classified_failure_detail(error))
+                    .unwrap_or_default();
+                let terminal_write = if !was_bulk_run
+                    && let (Some(job), Some(state)) = (&run_context.job_id, direct_final_state)
+                {
+                    if run_status == "completed" {
+                        if let Some(evidence) = terminal_evidence.as_ref() {
+                            self.store.finish_run_for_mailbox_with_evidence(
+                                project, job, run_id, run_status, state, &detail, evidence,
+                            )
                         } else {
                             self.store.finish_run_for_mailbox(
-                                &project, job, run_id, run_status, state, &detail,
+                                project, job, run_id, run_status, state, &detail,
                             )
                         }
                     } else {
-                        self.store.finish_run(run_id, run_status, &detail)
-                    };
-                    if let Err(error) = terminal_write {
-                        push_visible_output(
-                            &mut self.output,
-                            format!("[durability] Could not persist terminal state: {error}"),
-                        );
+                        self.store.finish_run_for_mailbox(
+                            project, job, run_id, run_status, state, &detail,
+                        )
                     }
-                } else if self.bulk_project_id.is_some() {
+                } else {
+                    self.store.finish_run(run_id, run_status, &detail)
+                };
+                if let Err(error) = terminal_write {
+                    push_visible_output(
+                        &mut self.output,
+                        format!("[durability] Could not persist terminal state: {error}"),
+                    );
+                }
+                if was_bulk_run {
                     let result = self.store.record_event(
-                        &project,
+                        project,
                         "run_finished",
                         if succeeded { "success" } else { "failure" },
                     );
@@ -3612,8 +3664,8 @@ impl App {
                 }
                 if succeeded {
                     let result = self.store.transition(
-                        &project,
-                        if self.form.dry_run {
+                        project,
+                        if run_context.dry_run {
                             core::Phase::Preflight
                         } else {
                             core::Phase::Verification
@@ -3621,7 +3673,7 @@ impl App {
                     );
                     self.report_store_error("advance project phase", result);
                 } else {
-                    let result = self.store.transition(&project, core::Phase::Attention);
+                    let result = self.store.transition(project, core::Phase::Attention);
                     self.report_store_error("move project to Attention", result);
                 }
             }
@@ -3630,7 +3682,7 @@ impl App {
             } else {
                 match r {
                     Ok(()) => Self::successful_run_status(
-                        self.form.dry_run,
+                        run_context.dry_run,
                         was_bulk_run,
                         direct_final_state,
                     )
@@ -3642,6 +3694,7 @@ impl App {
             self.cancel_requested = None;
             self.run_started_at = None;
             self.run_id = None;
+            self.active_run = None;
             // Keep the durable queue after completion so a validated batch
             // can be promoted to live execution, and failed/live jobs can be
             // deliberately retried or run through another delta pass.
