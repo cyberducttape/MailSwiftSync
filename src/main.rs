@@ -1443,6 +1443,8 @@ struct App {
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_live_run: bool,
+    /// Live retries exclude evidence-backed rows unless explicitly enabled.
+    bulk_include_verified: bool,
     bulk_source_keyring_apply: String,
     bulk_destination_keyring_apply: String,
 }
@@ -1635,6 +1637,7 @@ impl Default for App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_live_run: false,
+            bulk_include_verified: false,
             bulk_source_keyring_apply: String::new(),
             bulk_destination_keyring_apply: String::new(),
         }
@@ -3018,6 +3021,7 @@ impl App {
                 // replacement reuse the project/job IDs from an older file.
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
+                self.bulk_include_verified = false;
                 self.bulk_jobs = jobs;
             }
             Err(e) => self.bulk_message = e,
@@ -3190,22 +3194,18 @@ impl App {
             self.bulk_message = "Batch execution requires durable SQLite storage.".into();
             return;
         }
-        let mut jobs = self.bulk_jobs.clone();
-        if live && let Some(error) = duplicate_bulk_destination(&jobs) {
-            self.bulk_message = error;
-            return;
-        }
-        for job in &mut jobs {
+        let mut all_jobs = self.bulk_jobs.clone();
+        for job in &mut all_jobs {
             if let Err(error) = job.form.load_configured_keyring_credentials() {
                 self.bulk_message =
                     format!("Could not load credentials for {}: {error}", job.label);
                 return;
             }
         }
-        for job in &mut jobs {
+        for job in &mut all_jobs {
             job.form.dry_run = !live;
         }
-        if let Some((index, error)) = jobs
+        if let Some((index, error)) = all_jobs
             .iter()
             .enumerate()
             .find_map(|(index, job)| job.form.validate().err().map(|error| (index, error)))
@@ -3215,13 +3215,45 @@ impl App {
             return;
         }
         if live
-            && jobs
+            && all_jobs
                 .iter()
                 .any(|job| job.form.requires_insecure_transport_ack())
         {
             self.bulk_message = "Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into();
             return;
         }
+        let selected_indices = all_jobs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                !live
+                    || self.bulk_include_verified
+                    || self
+                        .store
+                        .mailbox_state(&self.bulk_job_ids[*index])
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        != Some("verified")
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if selected_indices.is_empty() {
+            self.bulk_message = "All mailboxes are already verified. Enable ‘Include already verified’ only if you intentionally want to re-run them.".into();
+            return;
+        }
+        let jobs = selected_indices
+            .iter()
+            .map(|&index| all_jobs[index].clone())
+            .collect::<Vec<_>>();
+        if live && let Some(error) = duplicate_bulk_destination(&jobs) {
+            self.bulk_message = error;
+            return;
+        }
+        let selected_job_ids = selected_indices
+            .iter()
+            .map(|&index| self.bulk_job_ids[index].clone())
+            .collect::<Vec<_>>();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         if let Err(error) = validate_batch_throttle(&self.form.profile, concurrency) {
             self.bulk_message = error;
@@ -3229,7 +3261,7 @@ impl App {
         }
         self.durability_error = false;
         self.pending_batch_evidence.clear();
-        let mailboxes = jobs
+        let mailboxes = all_jobs
             .iter()
             .map(|job| {
                 let config = durable_batch_profile_config(&job.form.profile)?;
@@ -3296,7 +3328,7 @@ impl App {
             .collect::<Vec<_>>();
         let child_run_ids = match self.store.begin_batch_run_with_children(
             &project_id,
-            &self.bulk_job_ids,
+            &selected_job_ids,
             &run_id,
             if live {
                 "batch migration"
@@ -3317,7 +3349,7 @@ impl App {
             run_id: run_id.clone(),
             project_id: project_id.clone(),
             job_id: None,
-            batch_job_ids: self.bulk_job_ids.clone(),
+            batch_job_ids: selected_job_ids.clone(),
             batch_plan_fingerprints: jobs
                 .iter()
                 .map(|job| plan_fingerprint_digest(&job.form.plan_fingerprint()))
@@ -3328,8 +3360,10 @@ impl App {
             engine: self.form.engine(),
             plan_fingerprint: String::new(),
         });
-        for job in &mut self.bulk_jobs {
-            job.state = "Queued".into();
+        for &index in &selected_indices {
+            if let Some(job) = self.bulk_jobs.get_mut(index) {
+                job.state = "Queued".into();
+            }
         }
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -3349,7 +3383,7 @@ impl App {
         let retry_count = self.form.profile.batch_retry_count.min(3);
         let job_count = jobs.len();
         let (job_tx, job_rx) = crossbeam_channel::unbounded();
-        let queue_job_ids = self.bulk_job_ids.clone();
+        let queue_job_ids = selected_job_ids;
         let child_run_ids = self
             .active_run
             .as_ref()
@@ -4154,7 +4188,12 @@ impl App {
                                 run.batch_job_ids.iter().position(|id| id == &job_id)
                             && run.batch_child_run_ids.get(index) == Some(&child_run_id)
                         {
-                            if let Some(job) = self.bulk_jobs.get_mut(index) {
+                            let bulk_index = self
+                                .bulk_job_ids
+                                .iter()
+                                .position(|id| id == &job_id)
+                                .unwrap_or(index);
+                            if let Some(job) = self.bulk_jobs.get_mut(bulk_index) {
                                 job.state = state.clone();
                             }
                             let durable_state = match state.as_str() {
@@ -4227,9 +4266,10 @@ impl App {
                                     "verification_difference".into()
                                 }
                             });
-                            if let Some(index) =
-                                run.batch_job_ids.iter().position(|id| id == &job_id)
-                                && let Some(job) = self.bulk_jobs.get_mut(index)
+                            if run.batch_job_ids.iter().any(|id| id == &job_id)
+                                && let Some(bulk_index) =
+                                    self.bulk_job_ids.iter().position(|id| id == &job_id)
+                                && let Some(job) = self.bulk_jobs.get_mut(bulk_index)
                             {
                                 job.state = display_job_state(&final_state).into();
                             }
@@ -4646,12 +4686,23 @@ impl App {
                     self.bulk_jobs.clear();
                     self.bulk_project_id = None;
                     self.bulk_job_ids.clear();
+                    self.bulk_include_verified = false;
                     self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
                 }
+                let verified = self
+                    .bulk_jobs
+                    .iter()
+                    .filter(|job| job.state == "Verified")
+                    .count();
+                let live_count = if self.bulk_include_verified {
+                    self.bulk_jobs.len()
+                } else {
+                    self.bulk_jobs.len().saturating_sub(verified)
+                };
                 let label = if self.form.dry_run {
                     format!("Run {} dry validations", self.bulk_jobs.len())
                 } else {
-                    format!("Run {} live migrations", self.bulk_jobs.len())
+                    format!("Run {} live migrations", live_count)
                 };
                 if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(BLUE)).clicked() { self.start_bulk(); }
             });
@@ -4666,6 +4717,24 @@ impl App {
                 ui.add(egui::Slider::new(&mut self.form.profile.batch_retry_count, 0..=3));
                 ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(MUTED));
             });
+            if !self.form.dry_run {
+                let verified = self
+                    .bulk_jobs
+                    .iter()
+                    .filter(|job| job.state == "Verified")
+                    .count();
+                ui.checkbox(
+                    &mut self.bulk_include_verified,
+                    "Include already verified mailboxes (explicit re-run)",
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{verified} verified row(s) are excluded by default from live retries."
+                    ))
+                    .size(11.0)
+                    .color(MUTED),
+                );
+            }
             ui.label(RichText::new("Passwordless queue credentials").strong());
             ui.label(RichText::new("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue.").size(11.0).color(MUTED));
             let queue_editable = !self.running();
@@ -4741,10 +4810,25 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(RichText::new("This will change destination mailboxes").color(ALERT));
-                ui.label(format!(
-                    "{} queued mailbox processes may run concurrently.",
+                let verified = self
+                    .bulk_jobs
+                    .iter()
+                    .filter(|job| job.state == "Verified")
+                    .count();
+                let selected = if self.bulk_include_verified {
                     self.bulk_jobs.len()
+                } else {
+                    self.bulk_jobs.len().saturating_sub(verified)
+                };
+                ui.label(format!(
+                    "{} selected mailbox processes may run concurrently.",
+                    selected
                 ));
+                if verified > 0 && !self.bulk_include_verified {
+                    ui.label(format!(
+                        "{verified} already verified mailbox(es) will be skipped."
+                    ));
+                }
                 ui.label("Each mailbox must already have a matching successful dry validation. Source mail is not deleted by default.");
                 ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(MUTED));
                 ui.horizontal(|ui| {

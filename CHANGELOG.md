@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Live batch retries now exclude evidence-backed `Verified` mailboxes by default, with an explicit operator opt-in for intentional re-runs; selected child runs and event updates retain their original queue-row identity.
 - Startup orphan escalation now revalidates the recorded Linux PID, process group, session, and start time immediately before `SIGKILL`; recycled identities are never escalated.
 - If durable process registration fails after an engine is spawned, the controller now requests immediate cancellation and refuses to let an untracked migration continue.
 - Process startup now activates stdout/stderr drainers before the reliable `ProcessStarted` event is delivered, preventing a full bounded event queue from blocking pipe setup and stalling a newly spawned engine.
