@@ -2586,7 +2586,7 @@ impl App {
             .filter(|job| needs_operator_review(&job.state))
             .count();
         let mut report = format!(
-            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence run | Evidence | Confidence | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---:|---:|---:|---:|---:|\n",
+            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence run | Evidence | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---:|---:|---:|---:|\n",
             markdown_escape(&project.name),
             project.id,
             markdown_escape(&project.source_endpoint),
@@ -2603,13 +2603,12 @@ impl App {
                 .map_err(|e| e.to_string())?
             {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | `{}` | {} | {}% | {} | {} | {} | {} |\n",
+                    "| {} | {} | `{}` | `{}` | {} | {} | {} | {} | {} |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
                     evidence_run_id,
                     evidence.evidence_level(),
-                    evidence.confidence_percent(),
                     evidence.source_messages,
                     evidence.destination_messages,
                     evidence.unmatched_messages,
@@ -2617,7 +2616,7 @@ impl App {
                 ));
             } else {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | — | missing | 0% | — | — | — | — |\n",
+                    "| {} | {} | `{}` | — | missing | — | — | — | — |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
@@ -2683,7 +2682,6 @@ impl App {
                             "scope": if evidence.authoritative { "engine-confirmed" } else { "aggregate" },
                             "evidence_level": evidence.evidence_level(),
                             "authoritative": evidence.authoritative,
-                            "confidence_percent": evidence.confidence_percent(),
                             "source_folders": evidence.source_folders,
                             "destination_folders": evidence.destination_folders,
                             "source_messages": evidence.source_messages,
@@ -2844,7 +2842,6 @@ impl App {
                             ("Unmatched", evidence.unmatched_messages.to_string()),
                             ("Failed", evidence.failed_messages.to_string()),
                             ("Evidence level", evidence.evidence_level().into()),
-                            ("Confidence", format!("{}%", evidence.confidence_percent())),
                         ] { ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); }); }
                     }
                     Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(ALERT)); }
@@ -4177,7 +4174,7 @@ impl App {
                         }
                     }
                     Event::Evidence(evidence) => {
-                        let confidence = evidence.confidence_percent();
+                        let evidence_level = evidence.evidence_level();
                         // Hold evidence until Finished so its history, run
                         // status, mailbox state, and terminal event commit
                         // together. In particular, this permits the
@@ -4190,7 +4187,7 @@ impl App {
                             pending_db_events.push((
                                 project.to_owned(),
                                 "verification_evidence".into(),
-                                format!("{}% confidence", confidence),
+                                format!("evidence level: {evidence_level}"),
                             ));
                         }
                     }
