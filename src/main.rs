@@ -1,6 +1,7 @@
 #[allow(dead_code)] // The control-plane API is consumed by the next orchestration UI layer.
 mod core;
 mod credentials;
+mod engine;
 mod process;
 
 use credentials::{
@@ -437,175 +438,17 @@ impl Form {
         self.args_with_throttle_divisor(redact, 1)
     }
     fn args_with_throttle_divisor(&self, redact: bool, throttle_divisor: usize) -> Vec<String> {
-        let p1 = if redact {
-            "••••••••"
-        } else {
-            &self.source_password
-        };
-        let p2 = if redact {
-            "••••••••"
-        } else {
-            &self.destination_password
-        };
-        let source_default_port = default_imap_port(&self.profile.source_tls);
-        let (source_host, endpoint_port) =
-            endpoint_parts(&self.profile.source_host, source_default_port)
-                .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
-        let (destination_host, destination_port) =
-            endpoint_parts(&self.profile.destination_host, 993)
-                .unwrap_or_else(|_| (self.profile.destination_host.clone(), 993));
-        let source_port = self.profile.source_port.trim();
-        let mut a = vec![
-            "--host1".into(),
-            source_host,
-            "--user1".into(),
-            self.profile.source_user.clone(),
-            "--password1".into(),
-            p1.into(),
-            "--host2".into(),
-            destination_host,
-            "--user2".into(),
-            self.profile.destination_user.clone(),
-            "--password2".into(),
-            p2.into(),
-        ];
-        a.extend([
-            "--port1".into(),
-            if source_port.is_empty() {
-                endpoint_port.to_string()
-            } else {
-                source_port.into()
-            },
-        ]);
-        if self.profile.source_tls == "plain" {
-            a.push("--nossl1".into());
-        } else if self.profile.source_tls == "starttls" {
-            a.extend([
-                "--tls1".into(),
-                "--tlsargs1".into(),
-                "SSL_verify_mode=1".into(),
-            ]);
-        } else {
-            a.extend([
-                "--ssl1".into(),
-                "--sslargs1".into(),
-                "SSL_verify_mode=1".into(),
-            ]);
-        }
-        a.extend([
-            "--port2".into(),
-            destination_port.to_string(),
-            "--ssl2".into(),
-            "--sslargs2".into(),
-            "SSL_verify_mode=1".into(),
-        ]);
-        if self.profile.automap {
-            a.push("--automap".into());
-        }
-        if self.profile.addheader {
-            a.push("--addheader".into());
-        }
-        if self.profile.justfolders {
-            a.push("--justfolders".into());
-        }
-        for (enabled, flag) in [
-            (self.profile.sync_internaldates, "--syncinternaldates"),
-            (self.profile.useuid, "--useuid"),
-            (self.profile.usecache, "--usecache"),
-            (self.profile.fastio1, "--fastio1"),
-            (self.profile.fastio2, "--fastio2"),
-            (self.profile.allowsizemismatch, "--allowsizemismatch"),
-            (self.profile.delete2, "--delete2"),
-        ] {
-            if enabled {
-                a.push(flag.into());
-            }
-        }
-        if self.engine() == core::Engine::ImapSync {
-            if self.profile.max_messages_per_second > 0 {
-                let messages_per_process =
-                    (self.profile.max_messages_per_second / throttle_divisor.max(1) as u32).max(1);
-                a.extend([
-                    "--maxmessagespersecond".into(),
-                    messages_per_process.to_string(),
-                ]);
-            }
-            if self.profile.max_bytes_per_second > 0 {
-                let bytes_per_process =
-                    (self.profile.max_bytes_per_second / throttle_divisor.max(1) as u64).max(1);
-                a.extend(["--maxbytespersecond".into(), bytes_per_process.to_string()]);
-            }
-        }
-        if self.dry_run {
-            a.push("--dry".into());
-        }
-        // Keep imapsync's own persistent log out of its default LOG_imapsync/
-        // directory. MailSwiftSync owns the redacted journal and its retention
-        // policy instead.
-        if self.engine() == core::Engine::ImapSync {
-            a.push("--nolog".into());
-        }
-        if let Ok(extra) = parse_shell_words(&self.profile.extra_options) {
-            a.extend(extra);
-        }
-        a
+        engine::imapsync_args(
+            &self.profile,
+            &self.source_password,
+            &self.destination_password,
+            self.dry_run,
+            redact,
+            throttle_divisor,
+        )
     }
     fn extra_options_valid(&self) -> Result<(), String> {
-        let options = parse_shell_words(&self.profile.extra_options)
-            .map_err(|error| format!("Extra options: {error}"))?;
-        const RESERVED: &[&str] = &[
-            "--host1",
-            "--host2",
-            "--user1",
-            "--user2",
-            "--password1",
-            "--password2",
-            "--passfile1",
-            "--passfile2",
-            "--port1",
-            "--port2",
-            "--ssl1",
-            "--ssl2",
-            "--sslargs1",
-            "--sslargs2",
-            "--nossl1",
-            "--nossl2",
-            "--tls1",
-            "--tls2",
-            "--tlsargs1",
-            "--tlsargs2",
-            "--dry",
-            "--delete2",
-            "--delete1",
-            "--expunge1",
-            "--expunge2",
-            "--log",
-            "--logfile",
-            "--logdir",
-            "--nolog",
-            "--showpasswords",
-        ];
-        for option in options {
-            let name = option
-                .split_once('=')
-                .map_or(option.as_str(), |(name, _)| name);
-            // imapsync accepts both `--flag` and `-flag`. Normalize the
-            // spelling before applying the safety policy so a one-dash form
-            // cannot bypass the reserved-option controls.
-            let normalized_name = name.trim_start_matches('-');
-            let reserved = RESERVED
-                .iter()
-                .any(|reserved| reserved.trim_start_matches('-') == normalized_name);
-            if reserved
-                || normalized_name.starts_with("delete")
-                || normalized_name.starts_with("expunge")
-            {
-                return Err(format!(
-                    "Extra options: {name} is controlled by the migration plan"
-                ));
-            }
-        }
-        Ok(())
+        engine::validate_extra_options(&self.profile.extra_options)
     }
     fn prepared_command(&self) -> Result<PreparedCommand, String> {
         self.prepared_command_with_throttle_divisor(1)

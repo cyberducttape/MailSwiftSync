@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Extracted imapsync argument construction and expert-option safety validation into `src/engine.rs`, including transport policy, per-worker throttle shaping, and product-owned logging controls.
 - Added regression coverage proving sequential process-launch admission is paced and that durable plan snapshots retain the expert-option digest while excluding its raw value.
 - Extracted secret-runtime, passfile, cleanup-guard, and permission helpers into `src/credentials.rs`; per-run secret creation no longer triggers stale-directory sweeping, keeping cleanup under the instance-owned startup path.
 - Scoped Dovecot exit-code-2 `DeltaRequired` handling to live sync/backup runs; dry source and destination readiness checks now require ordinary successful exit status.
