@@ -521,11 +521,14 @@ impl StateStore {
             .project(id)?
             .ok_or(rusqlite::Error::QueryReturnedNoRows)?
             .phase;
+        let backwards_transition = current != Phase::Attention
+            && phase != Phase::Attention
+            && phase_rank(phase) < phase_rank(current);
         if current != phase
             && (current == Phase::Complete
-                || current == Phase::Attention
-                    && !matches!(phase, Phase::Preflight | Phase::Verification)
-                || phase != Phase::Attention && phase_rank(phase) < phase_rank(current))
+                || (current == Phase::Attention
+                    && !matches!(phase, Phase::Preflight | Phase::Verification))
+                || backwards_transition)
         {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -547,11 +550,16 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
-        self.connection.execute(
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
             "UPDATE projects SET phase=?1 WHERE id=?2",
             params![phase.as_str(), id],
         )?;
-        self.event(id, "phase_changed", phase.as_str())
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed',?2)",
+            params![id, phase.as_str()],
+        )?;
+        tx.commit()
     }
     pub fn add_mailbox(
         &self,
@@ -1326,6 +1334,21 @@ mod tests {
         db.set_mailbox_state(&job, "completed").unwrap();
         db.set_mailbox_state(&job, "verified").unwrap();
         db.transition(&project.id, Phase::Complete).unwrap();
+    }
+
+    #[test]
+    fn attention_phase_can_return_to_reviewable_work() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+
+        db.transition(&project.id, Phase::Attention).unwrap();
+        db.transition(&project.id, Phase::Preflight).unwrap();
+        db.transition(&project.id, Phase::Verification).unwrap();
+
+        assert_eq!(
+            db.project(&project.id).unwrap().unwrap().phase,
+            Phase::Verification
+        );
     }
 
     #[test]
