@@ -2951,9 +2951,6 @@ impl App {
             .get("destination_password")
             .cloned()
             .unwrap_or_default();
-        if let Some(value) = values.get("extra_options") {
-            form.profile.extra_options = value.clone();
-        }
         form.validate_for_import()
             .map_err(|e| format!("Row {row}: {e}"))?;
         let label = values
@@ -3091,6 +3088,11 @@ impl App {
                     "The migration file contains an empty or duplicate column header.".into(),
                 );
             }
+        }
+        if seen.contains("extra_options") {
+            return Err(
+                "The migration file cannot contain extra_options; configure trusted engine options in the application instead of importing executable command settings.".into(),
+            );
         }
         let required = vec![
             "source_host",
@@ -4294,7 +4296,7 @@ impl App {
             if apply_destination {
                 self.apply_bulk_keyring_id(false);
             }
-            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, name, extra_options. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, name. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Grid::new("bulk_jobs").striped(true).min_col_width(120.0).show(ui, |ui| {
@@ -5249,6 +5251,21 @@ mod tests {
                 &base,
             )
             .is_err()
+        );
+        assert!(
+            App::validate_headers(
+                &[
+                    "source_host",
+                    "source_user",
+                    "destination_host",
+                    "destination_user",
+                    "extra_options",
+                ]
+                .map(String::from),
+                &base,
+            )
+            .unwrap_err()
+            .contains("cannot contain extra_options")
         );
     }
 
