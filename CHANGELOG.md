@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Batch mailbox configuration persisted in SQLite is now restore-safe: raw expert-option values are removed from durable row configs while launch-time snapshots retain only their digest.
 - Replaced the imapsync extra-option denylist with an explicit safe allowlist for trusted application configuration; connection, credential, transport, destructive, logging, and unknown options are rejected.
 - Bounded migration event delivery with a 4,096-event backpressure queue for single and batch runs; capability discovery remains on its separate one-result channel so chatty engine output cannot grow an unbounded UI backlog.
 - Moved byte-safe, lossy subprocess line framing and redacted capture helpers into `src/process.rs`; process output policy is now reusable without depending on the UI controller.

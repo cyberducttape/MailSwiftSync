@@ -195,6 +195,17 @@ fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), 
     Ok(())
 }
 
+/// Serialize the durable queue configuration without retaining free-form
+/// expert options. Restored rows must be re-reviewed against the current
+/// trusted application profile; the launch-time run snapshot retains the
+/// SHA-256 identity of the options that were actually used.
+fn durable_batch_profile_config(profile: &Profile) -> Result<String, String> {
+    let mut safe_profile = profile.clone();
+    safe_profile.extra_options.clear();
+    toml::to_string(&safe_profile)
+        .map_err(|error| format!("Could not serialize batch plan: {error}"))
+}
+
 fn default_imap_port(tls_mode: &str) -> u16 {
     match tls_mode {
         "starttls" | "plain" => 143,
@@ -3170,8 +3181,7 @@ impl App {
         let mailboxes = jobs
             .iter()
             .map(|job| {
-                let config = toml::to_string(&job.form.profile)
-                    .map_err(|error| format!("Could not serialize batch plan: {error}"))?;
+                let config = durable_batch_profile_config(&job.form.profile)?;
                 Ok((
                     job.form.profile.source_user.clone(),
                     job.form.profile.destination_user.clone(),
@@ -4997,6 +5007,17 @@ mod tests {
             Sha256::digest(form.profile.extra_options.as_bytes())
         );
         assert!(snapshot.contains(&expected));
+    }
+
+    #[test]
+    fn durable_batch_config_excludes_raw_extra_options() {
+        let profile = Profile {
+            extra_options: "--debug secret-bearing-value".into(),
+            ..Profile::default()
+        };
+        let config = durable_batch_profile_config(&profile).unwrap();
+        assert!(!config.contains("secret-bearing-value"));
+        assert!(config.contains("extra_options"));
     }
 
     #[test]
