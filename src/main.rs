@@ -2010,7 +2010,7 @@ impl App {
         }
         Ok(jobs)
     }
-    fn validate_headers(headers: &[String], base: &Form) -> Result<(), String> {
+    fn validate_headers(headers: &[String], _base: &Form) -> Result<(), String> {
         let mut seen = HashSet::new();
         for header in headers {
             if header.is_empty() || !seen.insert(header.clone()) {
@@ -2019,16 +2019,12 @@ impl App {
                 );
             }
         }
-        let mut required = vec![
+        let required = vec![
             "source_host",
             "source_user",
-            "source_password",
             "destination_host",
             "destination_user",
         ];
-        if base.engine() != core::Engine::Dovecot {
-            required.push("destination_password");
-        }
         let missing = required
             .into_iter()
             .filter(|header| !seen.contains(*header))
@@ -2721,12 +2717,21 @@ impl App {
                 if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(BLUE)).clicked() { self.start_bulk(); }
             });
             ui.add_space(10.0);
-            ui.label(RichText::new("Required columns: source_host, source_user, source_password, destination_host, destination_user, destination_password. Optional: name, extra_options.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, name, extra_options. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Grid::new("bulk_jobs").striped(true).min_col_width(120.0).show(ui, |ui| {
-                    ui.strong("#"); ui.strong("Migration"); ui.strong("Source"); ui.strong("Destination"); ui.strong("Status"); ui.end_row();
-                    for (index, job) in self.bulk_jobs.iter().enumerate() { ui.label((index + 1).to_string()); ui.label(&job.label); ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user)); ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user)); ui.label(RichText::new(&job.state).color(TEAL)); ui.end_row(); }
+                    ui.strong("#"); ui.strong("Migration"); ui.strong("Source"); ui.strong("Destination"); ui.strong("Source password"); ui.strong("Destination password"); ui.strong("Status"); ui.end_row();
+                    for (index, job) in self.bulk_jobs.iter_mut().enumerate() {
+                        ui.label((index + 1).to_string());
+                        ui.label(&job.label);
+                        ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user));
+                        ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user));
+                        ui.add(egui::TextEdit::singleline(&mut job.form.source_password).password(true).desired_width(120.0));
+                        if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add(egui::TextEdit::singleline(&mut job.form.destination_password).password(true).desired_width(120.0)); }
+                        ui.label(RichText::new(&job.state).color(TEAL));
+                        ui.end_row();
+                    }
                 });
             });
             ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(ALERT));
@@ -3138,6 +3143,31 @@ mod tests {
         form.profile.source_user = "user".into();
         form.source_password = "secret\nLOGIN injected".into();
         assert!(form.validate().unwrap_err().contains("control characters"));
+    }
+
+    #[test]
+    fn bulk_headers_allow_credentials_to_be_entered_after_import() {
+        let base = Form::default();
+        assert!(
+            App::validate_headers(
+                &[
+                    "source_host",
+                    "source_user",
+                    "destination_host",
+                    "destination_user"
+                ]
+                .map(String::from),
+                &base,
+            )
+            .is_ok()
+        );
+        assert!(
+            App::validate_headers(
+                &["source_host", "source_user", "destination_host"].map(String::from),
+                &base,
+            )
+            .is_err()
+        );
     }
 
     #[test]

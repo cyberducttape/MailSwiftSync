@@ -19,18 +19,16 @@ Required columns are:
 
 - `source_host`
 - `source_user`
-- `source_password`
 - `destination_host`
 - `destination_user`
-- `destination_password`
 
-Optional columns are `name` and `extra_options`. Start from the [CSV template](../bulk-migrations-template.csv), replace the example values, and keep the file in a protected location.
+Optional columns are `source_password`, `destination_password`, `name`, and `extra_options`. If password columns are omitted, enter credentials in the masked per-row fields after import. This avoids putting passwords in the spreadsheet. Start from the [CSV template](../bulk-migrations-template.csv) when a protected credential-bearing import is genuinely required.
 
 ## Import and review
 
 1. Click **Batch queue** in the MailSwiftSync header.
 2. Click **Import CSV / XLSX…** and select the file.
-3. Review each source and destination in the queue table. The passwords are never shown in the table.
+3. Review each source and destination in the queue table and enter any missing credentials in the masked fields.
 4. Correct the spreadsheet and import it again if any account is wrong.
 5. Click **Run N dry validations**.
 

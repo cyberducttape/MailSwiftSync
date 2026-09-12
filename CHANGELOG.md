@@ -50,6 +50,7 @@ All notable changes to MailSwiftSync are documented here.
 - Batch startup now atomically records the parent run and marks every child job as running before worker execution, so restart recovery cannot lose queued children between UI events.
 - Dovecot mode no longer offers the dual-IMAPS readiness probe when the destination has no IMAP credential; native `doveadm` dry preflight is now the explicit destination check.
 - Remote Dovecot execution is now disabled by default until secret-broker delivery exists; operators must explicitly acknowledge the current destination process-argument exposure to opt in.
+- Bulk imports no longer require password columns; missing credentials can be entered in masked per-row fields, reducing the need to keep plaintext passwords in migration spreadsheets.
 
 ### Changed
 
