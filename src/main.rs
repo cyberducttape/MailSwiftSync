@@ -1000,6 +1000,7 @@ enum Event {
         child_run_id: String,
         state: String,
         detail: String,
+        credential_fingerprint: Option<String>,
     },
     BatchEvidence {
         job_id: String,
@@ -1454,6 +1455,9 @@ struct App {
     cancel_requested: Option<Arc<AtomicBool>>,
     bulk_project_id: Option<String>,
     bulk_job_ids: Vec<String>,
+    /// Process-local credential material from the last successful dry
+    /// validation for each durable queue row. Restored queues start empty.
+    bulk_preflight_credential_fingerprints: Vec<Option<String>>,
     cockpit_open: bool,
     preflight: Vec<(String, String, bool)>,
     capability_receiver:
@@ -1623,6 +1627,7 @@ impl Default for App {
             }
             Some(project.id.clone())
         });
+        let restored_bulk_preflight_credential_fingerprints = vec![None; restored_bulk_jobs.len()];
         Self {
             form,
             output: initial_output,
@@ -1650,6 +1655,7 @@ impl Default for App {
             cancel_requested: None,
             bulk_project_id: restored_bulk_project_id,
             bulk_job_ids: restored_bulk_job_ids,
+            bulk_preflight_credential_fingerprints: restored_bulk_preflight_credential_fingerprints,
             cockpit_open: false,
             preflight: Vec::new(),
             capability_receiver: None,
@@ -3057,6 +3063,7 @@ impl App {
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
                 self.bulk_include_verified = false;
+                self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
                 self.bulk_jobs = jobs;
             }
             Err(e) => self.bulk_message = e,
@@ -3267,6 +3274,21 @@ impl App {
                 );
                 return;
             }
+            if live {
+                let queue_index = selected_indices[selected_index];
+                let current = job.form.credential_fingerprint();
+                let expected = self
+                    .bulk_preflight_credential_fingerprints
+                    .get(queue_index)
+                    .and_then(Option::as_deref);
+                if expected != Some(current.as_str()) {
+                    self.bulk_message = format!(
+                        "Mailbox {} credentials changed or were not retained from dry validation. Run a new dry validation before live execution.",
+                        queue_index + 1
+                    );
+                    return;
+                }
+            }
         }
         if let Some((selected_index, error)) = jobs
             .iter()
@@ -3471,6 +3493,7 @@ impl App {
                                 child_run_id: child_run_id.clone(),
                                 state: "cancelled".into(),
                                 detail: "cancelled before worker claim".into(),
+                                credential_fingerprint: None,
                             });
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
@@ -3534,6 +3557,7 @@ impl App {
                                     child_run_id: child_run_id.clone(),
                                     state: if cancelled { "cancelled" } else { "failed" }.into(),
                                     detail: error,
+                                    credential_fingerprint: None,
                                 });
                                 if let Ok(mut terminal) = terminal_jobs.lock() {
                                     terminal.insert(index);
@@ -3726,6 +3750,7 @@ impl App {
                                         }
                                         .into(),
                                         detail: error,
+                                        credential_fingerprint: None,
                                     });
                                     if let Ok(mut terminal) = terminal_jobs.lock() {
                                         terminal.insert(index);
@@ -3761,6 +3786,11 @@ impl App {
                                 } else {
                                     "process completed".into()
                                 },
+                                credential_fingerprint: if job.form.dry_run {
+                                    Some(job.form.credential_fingerprint())
+                                } else {
+                                    None
+                                },
                             });
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
@@ -3776,6 +3806,7 @@ impl App {
                                 child_run_id: child_run_id.clone(),
                                 state: "cancelled".into(),
                                 detail: "cancelled by operator".into(),
+                                credential_fingerprint: None,
                             });
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
@@ -3821,6 +3852,7 @@ impl App {
                         child_run_id,
                         state: "attention".into(),
                         detail: "worker stopped unexpectedly".into(),
+                        credential_fingerprint: None,
                     });
                 }
                 let _ = tx.send(Event::Line(
@@ -4290,6 +4322,7 @@ impl App {
                         child_run_id,
                         state,
                         detail,
+                        credential_fingerprint,
                     } => {
                         if let Some(run) = active_run.as_ref()
                             && matches!(run.kind, RunKind::Batch)
@@ -4344,11 +4377,24 @@ impl App {
                                     &detail,
                                 )
                             };
+                            let completion_persisted = result.is_ok();
                             if let Err(error) = result {
                                 durability_errors.push(format!(
                                     "persist child run {} completion failed: {error}",
                                     index + 1
                                 ));
+                            }
+                            if completion_persisted
+                                && !self.bulk_live_run
+                                && state == "ready"
+                                && let Some(fingerprint) = credential_fingerprint
+                                && let Some(bulk_index) =
+                                    self.bulk_job_ids.iter().position(|id| id == &job_id)
+                                && let Some(saved) = self
+                                    .bulk_preflight_credential_fingerprints
+                                    .get_mut(bulk_index)
+                            {
+                                *saved = Some(fingerprint);
                             }
                         } else {
                             durability_errors.push(format!(
@@ -4746,6 +4792,7 @@ impl App {
                     self.bulk_project_id = None;
                     self.bulk_job_ids.clear();
                     self.bulk_include_verified = false;
+                    self.bulk_preflight_credential_fingerprints.clear();
                     self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
                 }
                 let verified = self
