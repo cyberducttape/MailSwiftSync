@@ -3196,31 +3196,7 @@ impl App {
         }
         let mut all_jobs = self.bulk_jobs.clone();
         for job in &mut all_jobs {
-            if let Err(error) = job.form.load_configured_keyring_credentials() {
-                self.bulk_message =
-                    format!("Could not load credentials for {}: {error}", job.label);
-                return;
-            }
-        }
-        for job in &mut all_jobs {
             job.form.dry_run = !live;
-        }
-        if let Some((index, error)) = all_jobs
-            .iter()
-            .enumerate()
-            .find_map(|(index, job)| job.form.validate().err().map(|error| (index, error)))
-        {
-            self.bulk_message =
-                format!("Mailbox {} is not ready for validation: {error}", index + 1);
-            return;
-        }
-        if live
-            && all_jobs
-                .iter()
-                .any(|job| job.form.requires_insecure_transport_ack())
-        {
-            self.bulk_message = "Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into();
-            return;
         }
         let selected_indices = all_jobs
             .iter()
@@ -3246,6 +3222,36 @@ impl App {
             .iter()
             .map(|&index| all_jobs[index].clone())
             .collect::<Vec<_>>();
+        let mut jobs = jobs;
+        for (selected_index, job) in jobs.iter_mut().enumerate() {
+            if let Err(error) = job.form.load_configured_keyring_credentials() {
+                self.bulk_message = format!(
+                    "Could not load credentials for mailbox {} (queue row {}): {error}",
+                    selected_index + 1,
+                    selected_indices[selected_index] + 1
+                );
+                return;
+            }
+        }
+        if let Some((selected_index, error)) = jobs
+            .iter()
+            .enumerate()
+            .find_map(|(index, job)| job.form.validate().err().map(|error| (index, error)))
+        {
+            self.bulk_message = format!(
+                "Mailbox {} is not ready for validation: {error}",
+                selected_indices[selected_index] + 1
+            );
+            return;
+        }
+        if live
+            && jobs
+                .iter()
+                .any(|job| job.form.requires_insecure_transport_ack())
+        {
+            self.bulk_message = "Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into();
+            return;
+        }
         if live && let Some(error) = duplicate_bulk_destination(&jobs) {
             self.bulk_message = error;
             return;
