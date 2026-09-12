@@ -137,10 +137,14 @@ impl Form {
         let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
         std::fs::write(&temporary, content).map_err(|e| e.to_string())?;
         restrict_file_permissions(&temporary).map_err(|e| e.to_string())?;
+        std::fs::File::open(&temporary)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
         if let Err(error) = std::fs::rename(&temporary, &path) {
             let _ = std::fs::remove_file(&temporary);
             return Err(error.to_string());
         }
+        sync_directory(path.parent()).map_err(|e| e.to_string())?;
         Ok(())
     }
     fn validate(&self) -> Result<(), String> {
@@ -2544,8 +2548,21 @@ fn restrict_file_permissions(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::set_permissions(path, permissions)
 }
 
+#[cfg(unix)]
+fn sync_directory(path: Option<&std::path::Path>) -> std::io::Result<()> {
+    if let Some(path) = path {
+        std::fs::File::open(path)?.sync_all()?;
+    }
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn restrict_file_permissions(_: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_: Option<&std::path::Path>) -> std::io::Result<()> {
     Ok(())
 }
 

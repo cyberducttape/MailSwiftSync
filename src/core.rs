@@ -231,7 +231,7 @@ impl StateStore {
         Ok(store)
     }
     fn migrate(&self) -> rusqlite::Result<()> {
-        self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+        self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -606,6 +606,16 @@ impl StateStore {
         run_id: &str,
         value: &MailboxEvidence,
     ) -> rusqlite::Result<()> {
+        if run_id != "legacy" {
+            let exists: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1)",
+                [run_id],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+        }
         let tx = self.connection.unchecked_transaction()?;
         tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
@@ -900,5 +910,29 @@ mod tests {
         assert_eq!(run.id, "run-audit");
         assert_eq!(run.status, "completed");
         assert!(run.finished_at.is_some());
+    }
+
+    #[test]
+    fn evidence_rejects_orphaned_run_ids() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("audit", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 1,
+            destination_bytes: 1,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+        };
+        assert!(
+            db.record_evidence_for_run(&job, "missing", &evidence)
+                .is_err()
+        );
     }
 }
