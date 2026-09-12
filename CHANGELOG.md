@@ -44,6 +44,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added durable run metadata to exported verification reports so each report is traceable to a specific execution after restart.
 - Strengthened crash durability with flushed atomic profile writes, SQLite writer backoff, and rejection of evidence records that reference unknown runs.
 - Made direct run completion atomic across run status, mailbox state, and the terminal audit event; persistence failures are now surfaced in the operator journal instead of being silently ignored.
+- Project-phase and batch-completion persistence errors are now surfaced to the operator rather than being discarded by the event poller.
 - Live mailbox starts now atomically create the durable run record and move the job to `running`; persistence failures abort before the migration process is spawned.
 - The IMAPS readiness probe now authenticates, refreshes post-auth capabilities, and requests `NAMESPACE` and `LIST` so capability results are not presented as sufficient migration readiness on their own.
 - IMAPS readiness now requires tagged `OK` responses for capability, authentication, namespace, and folder-inventory commands; completed `NO`/`BAD` responses are reported as failures.

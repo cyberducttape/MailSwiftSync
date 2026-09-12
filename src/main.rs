@@ -9,6 +9,7 @@ use eframe::{
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 use std::{
     collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Read, Write},
@@ -2469,6 +2470,15 @@ impl App {
         }
         safe
     }
+    fn report_store_error<E: Display>(&mut self, operation: &str, result: Result<(), E>) {
+        if let Err(error) = result {
+            push_visible_output(
+                &mut self.output,
+                format!("[durability] {operation} failed: {error}"),
+            );
+            self.status = format!("Durability error: {operation}");
+        }
+    }
     fn start(&mut self) {
         if !self.form.dry_run && !self.live_confirmed {
             self.live_confirm_open = true;
@@ -2931,14 +2941,15 @@ impl App {
                         );
                     }
                 } else if self.bulk_project_id.is_some() {
-                    let _ = self.store.record_event(
+                    let result = self.store.record_event(
                         &project,
                         "run_finished",
                         if succeeded { "success" } else { "failure" },
                     );
+                    self.report_store_error("record batch run completion", result);
                 }
                 if succeeded {
-                    let _ = self.store.transition(
+                    let result = self.store.transition(
                         &project,
                         if self.form.dry_run {
                             core::Phase::Preflight
@@ -2946,8 +2957,10 @@ impl App {
                             core::Phase::Verification
                         },
                     );
+                    self.report_store_error("advance project phase", result);
                 } else {
-                    let _ = self.store.transition(&project, core::Phase::Attention);
+                    let result = self.store.transition(&project, core::Phase::Attention);
+                    self.report_store_error("move project to Attention", result);
                 }
             }
             self.status = match r {
