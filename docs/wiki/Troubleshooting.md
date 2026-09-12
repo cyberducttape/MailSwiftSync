@@ -18,4 +18,4 @@ Stop using live mode and preserve the journal. Do not add deletion options as a 
 
 ## The journal stops changing
 
-Large mailboxes can take time. Check network connectivity and leave the application open. If imapsync exits, MailSwiftSync reports either **Completed successfully** or a failure status with the exit condition.
+Large mailboxes can take time. Check network connectivity and leave the application open. When imapsync exits, MailSwiftSync reports whether the transfer was engine-confirmed, needs a final delta, or requires verification review; a zero exit status alone is not treated as proof of completion.

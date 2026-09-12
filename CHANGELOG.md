@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Updated user-facing troubleshooting and architecture language to consistently call imapsync output engine-confirmed rather than authoritative, and to distinguish a successful process exit from verified completion.
 - Live batch promotion now validates every child plan fingerprint inside the same SQLite transaction that marks the batch running, preventing a partially edited or stale queue from starting.
 - Verification exports now use explicit evidence levels and identify engine-confirmed versus aggregate evidence; compatibility percentages are labelled as internal comparison metrics rather than probabilities. Durable project queries also have indexes for mailbox state, run history, events, evidence history, and active process lookup.
 - Secret runtime fallback now uses the system temporary directory rather than persistent application data, enforces owner-only Unix permissions, and performs stale-run cleanup at application startup as well as before a new run.
