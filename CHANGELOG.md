@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Verification exports now use explicit evidence levels and identify engine-confirmed versus aggregate evidence; compatibility percentages are labelled as internal comparison metrics rather than probabilities. Durable project queries also have indexes for mailbox state, run history, events, evidence history, and active process lookup.
 - Secret runtime fallback now uses the system temporary directory rather than persistent application data, enforces owner-only Unix permissions, and performs stale-run cleanup at application startup as well as before a new run.
 - Persistent state now creates and enforces an owner-only database directory on Unix, containing SQLite sidecars as well as the primary database file.
 - Process recovery now records Linux start-time, session, and process-group identity and refuses to signal a recorded PID when those values cannot be proven to match.

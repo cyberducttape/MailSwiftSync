@@ -2363,7 +2363,7 @@ impl App {
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence scope: {}\n- Authoritative: `{}`\n- Confidence: {}%\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report contains aggregate evidence. Message-level reconciliation and provider-specific warnings require additional verification.",
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Compatibility metric: {}% (not a probability of correctness)\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
             markdown_escape(&self.form.profile.name),
             markdown_escape(&self.form.profile.source_host),
             markdown_escape(&self.form.profile.destination_host),
@@ -2373,12 +2373,12 @@ impl App {
             run.started_at,
             run.finished_at.as_deref().unwrap_or("in progress"),
             state,
+            evidence.evidence_level(),
             if evidence.authoritative {
-                "message-level summary"
+                "engine-confirmed summary"
             } else {
                 "aggregate mailbox totals"
             },
-            evidence.authoritative,
             evidence.confidence_percent(),
             evidence.source_folders,
             evidence.destination_folders,
@@ -2439,11 +2439,7 @@ impl App {
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
-                    if evidence.authoritative {
-                        "authoritative"
-                    } else {
-                        "aggregate"
-                    },
+                    evidence.evidence_level(),
                     evidence.confidence_percent(),
                     evidence.source_messages,
                     evidence.destination_messages,
@@ -2475,7 +2471,7 @@ impl App {
                 }),
             ));
         }
-        report.push_str("\nEvidence marked `aggregate` is reconciliation evidence, not message-level proof. Missing evidence or any state other than `verified` requires operator review before declaring the project complete.\n");
+        report.push_str("\nEvidence levels describe what was actually established. Engine-confirmed output is not independent message-level reconciliation, and aggregate totals are not proof of message identity. The compatibility metric is an internal comparison aid, not a probability. Missing evidence or any state other than `verified` requires operator review before declaring the project complete.\n");
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
@@ -2510,7 +2506,8 @@ impl App {
                         "destination_mailbox": job.destination_mailbox,
                         "state": job.state,
                         "evidence": {
-                            "scope": if evidence.authoritative { "authoritative" } else { "aggregate" },
+                            "scope": if evidence.authoritative { "engine-confirmed" } else { "aggregate" },
+                            "evidence_level": evidence.evidence_level(),
                             "authoritative": evidence.authoritative,
                             "confidence_percent": evidence.confidence_percent(),
                             "source_folders": evidence.source_folders,
