@@ -210,6 +210,26 @@ fn plan_snapshot_sha256(snapshot: &str) -> String {
     format!("{:x}", Sha256::digest(snapshot.as_bytes()))
 }
 
+/// Produce a stable identity for one evidence result and the exact run plan
+/// that produced it. This is an integrity reference for exported artifacts,
+/// not a signature or a claim of independent message-level verification.
+fn evidence_digest(run_id: &str, plan_snapshot: &str, evidence: &core::MailboxEvidence) -> String {
+    let canonical = format!(
+        "run_id={run_id}\nplan_snapshot_sha256={}\nsource_folders={}\ndestination_folders={}\nsource_messages={}\ndestination_messages={}\nsource_bytes={}\ndestination_bytes={}\nunmatched_messages={}\nfailed_messages={}\nauthoritative={}\n",
+        plan_snapshot_sha256(plan_snapshot),
+        evidence.source_folders,
+        evidence.destination_folders,
+        evidence.source_messages,
+        evidence.destination_messages,
+        evidence.source_bytes,
+        evidence.destination_bytes,
+        evidence.unmatched_messages,
+        evidence.failed_messages,
+        evidence.authoritative,
+    );
+    plan_snapshot_sha256(&canonical)
+}
+
 /// Persist only an opaque identity for a preflighted plan. The full
 /// canonical fingerprint is used in memory for the live gate, but the
 /// database only needs equality and should not retain generated arguments.
@@ -2679,12 +2699,13 @@ impl App {
         } else {
             "durable project/mailbox fallback (legacy run snapshot unavailable)"
         };
+        let evidence_reference = evidence_digest(&run.id, &run.plan_snapshot, &evidence);
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-verification.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
             markdown_escape(&project.name),
             markdown_escape(source_endpoint),
             markdown_escape(destination_endpoint),
@@ -2703,6 +2724,7 @@ impl App {
             } else {
                 "aggregate mailbox totals"
             },
+            evidence_reference,
             run.plan_snapshot,
             evidence.source_folders,
             evidence.destination_folders,
@@ -2746,7 +2768,7 @@ impl App {
             .filter(|job| needs_operator_review(&job.state))
             .count();
         let mut report = format!(
-            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence run | Evidence | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---:|---:|---:|---:|\n",
+            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence run | Evidence | Evidence digest | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---|---:|---:|---:|---:|\n",
             markdown_escape(&project.name),
             project.id,
             markdown_escape(&project.source_endpoint),
@@ -2763,12 +2785,22 @@ impl App {
                 .map_err(|e| e.to_string())?
             {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | `{}` | {} | {} | {} | {} | {} |\n",
+                    "| {} | {} | `{}` | `{}` | {} | `{}` | {} | {} | {} | {} |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
                     evidence_run_id,
                     evidence.evidence_level(),
+                    evidence_digest(
+                        &evidence_run_id,
+                        &self
+                            .store
+                            .run(&evidence_run_id)
+                            .map_err(|e| e.to_string())?
+                            .ok_or("The evidence run no longer exists.")?
+                            .plan_snapshot,
+                        &evidence,
+                    ),
                     evidence.source_messages,
                     evidence.destination_messages,
                     evidence.unmatched_messages,
@@ -2776,7 +2808,7 @@ impl App {
                 ));
             } else {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | — | missing | — | — | — | — |\n",
+                    "| {} | {} | `{}` | — | missing | — | — | — | — | — |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
@@ -2831,35 +2863,48 @@ impl App {
                     .store
                     .latest_evidence_for_run(&job.id)
                     .map_err(|e| e.to_string())?;
-                Ok(match evidence {
-                    Some((evidence_run_id, evidence)) => serde_json::json!({
-                        "id": job.id,
-                        "source_mailbox": job.source_mailbox,
-                        "destination_mailbox": job.destination_mailbox,
-                        "state": job.state,
-                        "evidence": {
-                            "run_id": evidence_run_id,
-                            "scope": if evidence.authoritative { "engine-confirmed" } else { "aggregate" },
-                            "evidence_level": evidence.evidence_level(),
-                            "authoritative": evidence.authoritative,
-                            "source_folders": evidence.source_folders,
-                            "destination_folders": evidence.destination_folders,
-                            "source_messages": evidence.source_messages,
-                            "destination_messages": evidence.destination_messages,
-                            "source_bytes": evidence.source_bytes,
-                            "destination_bytes": evidence.destination_bytes,
-                            "unmatched_messages": evidence.unmatched_messages,
-                            "failed_messages": evidence.failed_messages,
-                        }
-                    }),
-                    None => serde_json::json!({
+                match evidence {
+                    Some((evidence_run_id, evidence)) => {
+                        let evidence_run = self
+                            .store
+                            .run(&evidence_run_id)
+                            .map_err(|e| e.to_string())?
+                            .ok_or("The evidence run no longer exists.")?;
+                        let digest = evidence_digest(
+                            &evidence_run_id,
+                            &evidence_run.plan_snapshot,
+                            &evidence,
+                        );
+                        Ok(serde_json::json!({
+                            "id": job.id,
+                            "source_mailbox": job.source_mailbox,
+                            "destination_mailbox": job.destination_mailbox,
+                            "state": job.state,
+                            "evidence": {
+                                "run_id": evidence_run_id,
+                                "scope": if evidence.authoritative { "engine-confirmed" } else { "aggregate" },
+                                "evidence_level": evidence.evidence_level(),
+                                "authoritative": evidence.authoritative,
+                                "evidence_digest": digest,
+                                "source_folders": evidence.source_folders,
+                                "destination_folders": evidence.destination_folders,
+                                "source_messages": evidence.source_messages,
+                                "destination_messages": evidence.destination_messages,
+                                "source_bytes": evidence.source_bytes,
+                                "destination_bytes": evidence.destination_bytes,
+                                "unmatched_messages": evidence.unmatched_messages,
+                                "failed_messages": evidence.failed_messages,
+                            }
+                        }))
+                    }
+                    None => Ok(serde_json::json!({
                         "id": job.id,
                         "source_mailbox": job.source_mailbox,
                         "destination_mailbox": job.destination_mailbox,
                         "state": job.state,
                         "evidence": null
-                    }),
-                })
+                    })),
+                }
             })
             .collect::<Result<Vec<_>, String>>()?;
         let run_values = runs
@@ -5570,6 +5615,28 @@ mod tests {
         assert_eq!(reference, plan_snapshot_sha256(snapshot));
         assert!(!reference.contains("old.example"));
         assert_ne!(reference, plan_snapshot_sha256("dry_run = true"));
+    }
+
+    #[test]
+    fn evidence_digest_binds_run_plan_and_evidence_values() {
+        let evidence = core::MailboxEvidence {
+            source_messages: 10,
+            destination_messages: 10,
+            source_bytes: 100,
+            destination_bytes: 100,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 2,
+            destination_folders: 2,
+            authoritative: true,
+        };
+        let first = evidence_digest("run-one", "snapshot-one", &evidence);
+        assert_eq!(first, evidence_digest("run-one", "snapshot-one", &evidence));
+        assert_ne!(first, evidence_digest("run-two", "snapshot-one", &evidence));
+        assert_ne!(first, evidence_digest("run-one", "snapshot-two", &evidence));
+        let mut changed = evidence.clone();
+        changed.destination_messages = 9;
+        assert_ne!(first, evidence_digest("run-one", "snapshot-one", &changed));
     }
 
     #[test]
