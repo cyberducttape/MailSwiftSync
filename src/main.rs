@@ -1178,6 +1178,46 @@ fn run_dovecot_destination_preflight(
     Ok(())
 }
 
+fn run_dovecot_verification(
+    commands: &[(String, Vec<String>)],
+    verification_env: &[(String, String)],
+    secrets: &[String],
+    tx: &mpsc::SyncSender<Event>,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    prefix: &str,
+) -> Result<core::MailboxEvidence, String> {
+    let mut reports = Vec::with_capacity(commands.len());
+    for (index, (verify_exe, verify_args)) in commands.iter().enumerate() {
+        let (status, report) = run_capture_lines(
+            verify_exe,
+            verify_args,
+            if index == 0 { verification_env } else { &[] },
+            cancel,
+            secrets,
+            timeout,
+        )?;
+        for line in &report {
+            let _ = tx.send(Event::Line(format!(
+                "{prefix}[verification/{}] {line}",
+                index + 1
+            )));
+        }
+        if !status.success() {
+            return Err(format!(
+                "Dovecot verification command {} exited with {status}",
+                index + 1
+            ));
+        }
+        reports.push(report);
+    }
+    if reports.len() < 2 {
+        return Err("Dovecot verification returned incomplete reports".into());
+    }
+    verification::parse_dovecot_evidence(&reports[0], &reports[1])
+        .ok_or_else(|| "Dovecot status output was incomplete".into())
+}
+
 #[derive(Clone)]
 struct BulkJob {
     label: String,
@@ -3288,7 +3328,47 @@ impl App {
                                         result
                                     };
                                     drop(cleanup_guard);
-                                    result
+                                    if result.is_ok()
+                                        && !job.form.dry_run
+                                        && job.form.engine() == core::Engine::Dovecot
+                                    {
+                                        let verification = job.form.dovecot_verification_commands(false);
+                                        let verification_secret =
+                                            job.form.source_password.to_string();
+                                        let verification_env = if job.form.local_doveadm() {
+                                            vec![(
+                                                "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
+                                                verification_secret.clone(),
+                                            )]
+                                        } else {
+                                            Vec::new()
+                                        };
+                                        result.and_then(|outcome| {
+                                            run_dovecot_verification(
+                                                &verification,
+                                                &verification_env,
+                                                std::slice::from_ref(&verification_secret),
+                                                &tx,
+                                                &cancel,
+                                                Duration::from_secs(
+                                                    job.form.profile.migration_timeout_hours
+                                                        * 60
+                                                        * 60,
+                                                ),
+                                                &format!("[{}] ", index + 1),
+                                            )
+                                            .map(|evidence| {
+                                                let _ = tx.send(Event::BatchEvidence {
+                                                    job_id: job_id.clone(),
+                                                    child_run_id: child_run_id.clone(),
+                                                    evidence,
+                                                });
+                                                outcome
+                                            })
+                                        })
+                                    } else {
+                                        result
+                                    }
                                 }
                                 Err(error) => Err(error),
                             };
@@ -3728,59 +3808,25 @@ impl App {
                 });
             }
             if result.is_ok() && !verification.is_empty() {
-                let mut reports = Vec::new();
-                for (index, (verify_exe, verify_args)) in verification.iter().enumerate() {
-                    match run_capture_lines(
-                        verify_exe,
-                        verify_args,
-                        if index == 0 { &verification_env } else { &[] },
-                        &cancel,
+                result = result.and_then(|stream| {
+                    run_dovecot_verification(
+                        &verification,
+                        &verification_env,
                         std::slice::from_ref(&verification_secret),
+                        &tx,
+                        &cancel,
                         migration_timeout,
-                    ) {
-                        Ok((status, report)) => {
-                            for line in &report {
-                                let _ = tx.send(Event::Line(format!(
-                                    "[verification/{}] {line}",
-                                    index + 1
-                                )));
-                            }
-                            if status.success() {
-                                reports.push(report);
-                            } else {
-                                let _ = tx.send(Event::VerificationFailed(format!(
-                                    "verification command {} exited with {}",
-                                    index + 1,
-                                    status
-                                )));
-                                result =
-                                    Err("migration completed; Dovecot verification failed".into());
-                                break;
-                            }
-                        }
-                        Err(error) => {
-                            let _ = tx.send(Event::VerificationFailed(format!(
-                                "could not start verification command {}: {error}",
-                                index + 1
-                            )));
-                            result =
-                                Err("migration completed; Dovecot verification could not start"
-                                    .into());
-                            break;
-                        }
-                    }
-                }
-                if result.is_ok() {
-                    if let Some(evidence) =
-                        verification::parse_dovecot_evidence(&reports[0], &reports[1])
-                    {
+                        "",
+                    )
+                    .map(|evidence| {
                         let _ = tx.send(Event::Evidence(evidence));
-                    } else {
-                        let _ = tx.send(Event::VerificationFailed(
-                            "Dovecot status output was incomplete".into(),
-                        ));
-                    }
-                }
+                        stream
+                    })
+                    .map_err(|error| {
+                        let _ = tx.send(Event::VerificationFailed(error.clone()));
+                        format!("migration completed; Dovecot verification failed: {error}")
+                    })
+                });
             }
             if let Ok(stream) = &result
                 && let Some(evidence) = stream.imapsync_evidence.clone()

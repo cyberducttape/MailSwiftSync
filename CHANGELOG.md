@@ -12,6 +12,7 @@ All notable changes to MailSwiftSync are documented here.
 - Live imapsync batch children retain bounded summary markers and commit per-mailbox engine evidence with the child terminal result when available.
 - Batch evidence events are validated against the active immutable child mapping before they can affect durable state.
 - Evidence parsing now lives in a dedicated verification module, separating engine-output interpretation from UI and process orchestration.
+- Live Dovecot batch children now run the existing two-sided verification commands and bind aggregate evidence to each child run before terminal completion.
 - Active batch contexts now retain immutable child job IDs and launch-time fingerprints; completion persistence no longer consults the mutable queue to identify or certify a mailbox.
 - Duplicate-destination detection now canonicalizes endpoint ports, so an implicit IMAPS port and an explicit `:993` cannot bypass the concurrent-write guard.
 - Process-start events now carry the durable mailbox job ID rather than relying on a queue index when registering OS process identity, reducing routing risk if UI collection order changes.
