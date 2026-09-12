@@ -1018,8 +1018,17 @@ enum Event {
         Option<u32>,
         String,
     ),
-    JobState(usize, String),
-    JobFinished(usize, String, String),
+    JobState {
+        job_id: String,
+        child_run_id: String,
+        state: String,
+    },
+    JobFinished {
+        job_id: String,
+        child_run_id: String,
+        state: String,
+        detail: String,
+    },
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
     Finished(Result<StreamOutcome, String>),
@@ -3220,12 +3229,17 @@ impl App {
                 workers.push(thread::spawn(move || {
                     while let Ok((index, job_id, child_run_id, job)) = job_rx.recv() {
                         if cancel.load(Ordering::Relaxed) {
-                            let _ = tx.send(Event::JobState(index, "Cancelled".into()));
-                            let _ = tx.send(Event::JobFinished(
-                                index,
-                                "cancelled".into(),
-                                "cancelled before worker claim".into(),
-                            ));
+                            let _ = tx.send(Event::JobState {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                state: "Cancelled".into(),
+                            });
+                            let _ = tx.send(Event::JobFinished {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                state: "cancelled".into(),
+                                detail: "cancelled before worker claim".into(),
+                            });
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
                             }
@@ -3236,7 +3250,11 @@ impl App {
                             index + 1,
                             job.label
                         )));
-                        let _ = tx.send(Event::JobState(index, "Running".into()));
+                        let _ = tx.send(Event::JobState {
+                            job_id: job_id.clone(),
+                            child_run_id: child_run_id.clone(),
+                            state: "Running".into(),
+                        });
                         let mut completed = false;
                         let mut delta_required = false;
                         for attempt in 0..=retry_count {
@@ -3248,7 +3266,11 @@ impl App {
                                     "[{}] retry attempt {attempt}/{retry_count}",
                                     index + 1
                                 )));
-                                let _ = tx.send(Event::JobState(index, "Running".into()));
+                                let _ = tx.send(Event::JobState {
+                                    job_id: job_id.clone(),
+                                    child_run_id: child_run_id.clone(),
+                                    state: "Running".into(),
+                                });
                             }
                             let prepared = job
                                 .form
@@ -3321,7 +3343,11 @@ impl App {
                                         index + 1,
                                         classify_failure(&error).label()
                                     )));
-                                    let _ = tx.send(Event::JobState(index, "Failed".into()));
+                                    let _ = tx.send(Event::JobState {
+                                        job_id: job_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        state: "Failed".into(),
+                                    });
                                     let delay = Duration::from_secs(1_u64 << attempt.min(5));
                                     let started = std::time::Instant::now();
                                     while started.elapsed() < delay {
@@ -3344,20 +3370,27 @@ impl App {
                                         index + 1,
                                         classify_failure(&error).label()
                                     )));
-                                    let _ = tx.send(Event::JobState(
-                                        index,
-                                        if cancelled { "Cancelled" } else { "Failed" }.into(),
-                                    ));
-                                    let _ = tx.send(Event::JobFinished(
-                                        index,
-                                        if cancelled {
+                                    let _ = tx.send(Event::JobState {
+                                        job_id: job_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        state: if cancelled {
+                                            "Cancelled"
+                                        } else {
+                                            "Failed"
+                                        }
+                                        .into(),
+                                    });
+                                    let _ = tx.send(Event::JobFinished {
+                                        job_id: job_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        state: if cancelled {
                                             "cancelled"
                                         } else {
                                             "failed"
                                         }
                                         .into(),
-                                        error,
-                                    ));
+                                        detail: error,
+                                    });
                                     if let Ok(mut terminal) = terminal_jobs.lock() {
                                         terminal.insert(index);
                                     }
@@ -3373,34 +3406,41 @@ impl App {
                             } else {
                                 "completed"
                             };
-                            let _ = tx.send(Event::JobState(
-                                index,
-                                if delta_required {
+                            let _ = tx.send(Event::JobState {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                state: if delta_required {
                                     "DeltaRequired"
                                 } else {
                                     "Completed"
                                 }
                                 .into(),
-                            ));
-                            let _ = tx.send(Event::JobFinished(
-                                index,
-                                terminal_state.into(),
-                                if delta_required {
+                            });
+                            let _ = tx.send(Event::JobFinished {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                state: terminal_state.into(),
+                                detail: if delta_required {
                                     "Dovecot reports that another delta pass is required".into()
                                 } else {
                                     "process completed".into()
                                 },
-                            ));
+                            });
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
                             }
                         } else if cancel.load(Ordering::Relaxed) {
-                            let _ = tx.send(Event::JobState(index, "Cancelled".into()));
-                            let _ = tx.send(Event::JobFinished(
-                                index,
-                                "cancelled".into(),
-                                "cancelled by operator".into(),
-                            ));
+                            let _ = tx.send(Event::JobState {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                state: "Cancelled".into(),
+                            });
+                            let _ = tx.send(Event::JobFinished {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                state: "cancelled".into(),
+                                detail: "cancelled by operator".into(),
+                            });
                             if let Ok(mut terminal) = terminal_jobs.lock() {
                                 terminal.insert(index);
                             }
@@ -3425,16 +3465,27 @@ impl App {
                     })
                     .unwrap_or_else(|_| (0..job_count).collect());
                 for index in unresolved {
+                    let Some(job_id) = queue_job_ids.get(index).cloned() else {
+                        continue;
+                    };
+                    let Some(child_run_id) = child_run_ids.get(index).cloned() else {
+                        continue;
+                    };
                     let _ = tx.send(Event::Line(format!(
                         "[{}] worker stopped unexpectedly; job moved to Attention",
                         index + 1
                     )));
-                    let _ = tx.send(Event::JobState(index, "Attention".into()));
-                    let _ = tx.send(Event::JobFinished(
-                        index,
-                        "attention".into(),
-                        "worker stopped unexpectedly".into(),
-                    ));
+                    let _ = tx.send(Event::JobState {
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        state: "Attention".into(),
+                    });
+                    let _ = tx.send(Event::JobFinished {
+                        job_id,
+                        child_run_id,
+                        state: "attention".into(),
+                        detail: "worker stopped unexpectedly".into(),
+                    });
                 }
                 let _ = tx.send(Event::Line(
                     "A batch worker stopped unexpectedly; unresolved jobs require review before retrying."
@@ -3823,14 +3874,20 @@ impl App {
                         }
                         push_visible_output(&mut self.output, safe);
                     }
-                    Event::JobState(index, state) => {
-                        if let Some(job) = self.bulk_jobs.get_mut(index) {
-                            job.state = state.clone();
-                        }
-                        if let Some(job_id) = active_run
-                            .as_ref()
-                            .and_then(|run| run.batch_job_ids.get(index))
+                    Event::JobState {
+                        job_id,
+                        child_run_id,
+                        state,
+                    } => {
+                        if let Some(run) = active_run.as_ref()
+                            && matches!(run.kind, RunKind::Batch)
+                            && let Some(index) =
+                                run.batch_job_ids.iter().position(|id| id == &job_id)
+                            && run.batch_child_run_ids.get(index) == Some(&child_run_id)
                         {
+                            if let Some(job) = self.bulk_jobs.get_mut(index) {
+                                job.state = state.clone();
+                            }
                             let durable_state = match state.as_str() {
                                 "Running" => "running",
                                 "Completed" if !self.bulk_live_run => "ready",
@@ -3841,19 +3898,15 @@ impl App {
                                 "Queued" => "queued",
                                 _ => "attention",
                             };
-                            let result = if durable_state == "running"
-                                && let Some(run) = active_run.as_ref()
-                                && matches!(run.kind, RunKind::Batch)
-                                && let Some(child_run_id) = run.batch_child_run_ids.get(index)
-                            {
+                            let result = if durable_state == "running" {
                                 self.store.claim_batch_mailbox_for_child(
                                     &run.project_id,
-                                    job_id,
+                                    &job_id,
                                     &run.run_id,
-                                    child_run_id,
+                                    &child_run_id,
                                 )
                             } else {
-                                self.store.set_mailbox_state(job_id, durable_state)
+                                self.store.set_mailbox_state(&job_id, durable_state)
                             };
                             if let Err(error) = result {
                                 durability_errors
@@ -3861,26 +3914,30 @@ impl App {
                             }
                             if state == "Completed"
                                 && !self.bulk_live_run
-                                && let Some(fingerprint) = active_run
-                                    .as_ref()
-                                    .and_then(|run| run.batch_plan_fingerprints.get(index))
+                                && let Some(fingerprint) = run.batch_plan_fingerprints.get(index)
+                                && let Err(error) =
+                                    self.store.set_preflight_plan(&job_id, fingerprint)
                             {
-                                let result = self.store.set_preflight_plan(job_id, fingerprint);
-                                if let Err(error) = result {
-                                    durability_errors.push(format!(
-                                        "persist batch preflight plan failed: {error}"
-                                    ));
-                                }
+                                durability_errors
+                                    .push(format!("persist batch preflight plan failed: {error}"));
                             }
+                        } else {
+                            durability_errors.push(format!(
+                                "ignored batch state event for unknown child run {child_run_id}"
+                            ));
                         }
                     }
-                    Event::JobFinished(index, state, detail) => {
+                    Event::JobFinished {
+                        job_id,
+                        child_run_id,
+                        state,
+                        detail,
+                    } => {
                         if let Some(run) = active_run.as_ref()
                             && matches!(run.kind, RunKind::Batch)
-                            && let (Some(job_id), Some(child_run_id)) = (
-                                run.batch_job_ids.get(index),
-                                run.batch_child_run_ids.get(index),
-                            )
+                            && let Some(index) =
+                                run.batch_job_ids.iter().position(|id| id == &job_id)
+                            && run.batch_child_run_ids.get(index) == Some(&child_run_id)
                         {
                             let run_status = if matches!(
                                 state.as_str(),
@@ -3894,8 +3951,8 @@ impl App {
                             };
                             if let Err(error) = self.store.finish_run_for_mailbox(
                                 &run.project_id,
-                                job_id,
-                                child_run_id,
+                                &job_id,
+                                &child_run_id,
                                 run_status,
                                 &state,
                                 &detail,
@@ -3905,6 +3962,10 @@ impl App {
                                     index + 1
                                 ));
                             }
+                        } else {
+                            durability_errors.push(format!(
+                                "ignored batch completion event for unknown child run {child_run_id}"
+                            ));
                         }
                     }
                     Event::Evidence(evidence) => {

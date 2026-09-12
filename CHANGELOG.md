@@ -8,6 +8,7 @@ All notable changes to MailSwiftSync are documented here.
 
 - Batch admission now creates a durable child run for every mailbox with its own engine and secret-free plan snapshot; the parent run remains the wave-level record while child identities are available for process and terminal-result attribution.
 - Batch child runs now retain their parent wave relationship in SQLite, and claims/process registration verify that relationship before a worker can own a mailbox.
+- Batch worker state and completion events now carry durable mailbox and child-run IDs instead of routing persistence by queue index.
 - Active batch contexts now retain immutable child job IDs and launch-time fingerprints; completion persistence no longer consults the mutable queue to identify or certify a mailbox.
 - Duplicate-destination detection now canonicalizes endpoint ports, so an implicit IMAPS port and an explicit `:993` cannot bypass the concurrent-write guard.
 - Process-start events now carry the durable mailbox job ID rather than relying on a queue index when registering OS process identity, reducing routing risk if UI collection order changes.
