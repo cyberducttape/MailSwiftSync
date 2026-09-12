@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Promoted the durable batch queue from validation-only to gated live execution after matching dry-validation fingerprints and explicit operator confirmation.
 - Added elapsed-time running feedback, Escape-key cancellation, dark/light theme switching, and contextual help for performance controls.
 - Added explainable evidence levels to complement the internal confidence percentage in the verification UI and architecture model.
 - IMAP readiness now treats missing NAMESPACE support as compatible while parsing capabilities strictly from the post-auth response.

@@ -1203,6 +1203,9 @@ struct App {
     pending_evidence: Option<core::MailboxEvidence>,
     run_started_at: Option<std::time::Instant>,
     dark_mode: bool,
+    bulk_live_confirm_open: bool,
+    bulk_live_confirmed: bool,
+    bulk_live_run: bool,
 }
 impl Default for App {
     fn default() -> Self {
@@ -1270,8 +1273,10 @@ impl Default for App {
         let mut restored_bulk_jobs = Vec::new();
         let mut restored_bulk_job_ids = Vec::new();
         let restored_bulk_project_id = restored_project.as_ref().and_then(|project| {
-            if project.name != "Batch validation"
-                || project.source_endpoint != "batch"
+            if !matches!(
+                project.name.as_str(),
+                "Batch validation" | "Batch migration"
+            ) || project.source_endpoint != "batch"
                 || project.destination_endpoint != "batch"
             {
                 return None;
@@ -1334,6 +1339,9 @@ impl Default for App {
             pending_evidence: None,
             run_started_at: None,
             dark_mode: false,
+            bulk_live_confirm_open: false,
+            bulk_live_confirmed: false,
+            bulk_live_run: false,
         }
     }
 }
@@ -2511,8 +2519,48 @@ impl App {
             self.bulk_message = "Import a file before starting the queue.".into();
             return;
         }
-        if !self.form.dry_run {
-            self.bulk_message = "Batch validation is always non-mutating. Re-enable Dry run before starting the queue.".into();
+        let live = !self.form.dry_run;
+        if live && !self.bulk_live_confirmed {
+            self.bulk_live_confirm_open = true;
+            return;
+        }
+        if live {
+            self.bulk_live_confirmed = false;
+            if self.bulk_project_id.is_none() || self.bulk_job_ids.len() != self.bulk_jobs.len() {
+                self.bulk_message = "Run a successful dry validation for this queue before starting live migrations.".into();
+                return;
+            }
+            for (index, (job_id, job)) in self
+                .bulk_job_ids
+                .iter()
+                .zip(self.bulk_jobs.iter())
+                .enumerate()
+            {
+                let state = self.store.mailbox_state(job_id).ok().flatten();
+                let preflight = self.store.preflight_plan(job_id).ok().flatten();
+                if !matches!(
+                    state.as_deref(),
+                    Some(
+                        "ready"
+                            | "delta_required"
+                            | "failed"
+                            | "attention"
+                            | "cancelled"
+                            | "completed"
+                            | "verified"
+                    )
+                ) || preflight.as_deref() != Some(job.form.plan_fingerprint().as_str())
+                {
+                    self.bulk_message = format!(
+                        "Mailbox {} is not ready for live execution. Re-run dry validation after reviewing its exact plan.",
+                        index + 1
+                    );
+                    return;
+                }
+            }
+        }
+        if !self.persistence_available {
+            self.bulk_message = "Batch execution requires durable SQLite storage.".into();
             return;
         }
         let mut jobs = self.bulk_jobs.clone();
@@ -2523,9 +2571,8 @@ impl App {
                 return;
             }
         }
-        if jobs.iter().any(|job| !job.form.dry_run) {
-            self.bulk_message = "One or more queued jobs were imported in live mode. Re-import them with Dry run enabled.".into();
-            return;
+        for job in &mut jobs {
+            job.form.dry_run = !live;
         }
         if let Some((index, error)) = jobs
             .iter()
@@ -2537,10 +2584,7 @@ impl App {
             return;
         }
         self.durability_error = false;
-        if !self.persistence_available {
-            self.bulk_message = "Batch validation requires durable SQLite storage.".into();
-            return;
-        }
+        let existing_project = self.bulk_project_id.clone();
         let mailboxes = jobs
             .iter()
             .map(|job| {
@@ -2560,26 +2604,38 @@ impl App {
                 return;
             }
         };
-        let (project, job_ids) = match self.store.create_project_with_mailbox_configs(
-            "Batch validation",
-            "batch",
-            "batch",
-            &mailboxes,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                self.bulk_message = format!("Could not create durable batch: {error}");
-                return;
-            }
+        let (project_id, job_ids) = if let Some(project_id) = existing_project {
+            (project_id, self.bulk_job_ids.clone())
+        } else {
+            let (project, job_ids) = match self.store.create_project_with_mailbox_configs(
+                "Batch migration",
+                "batch",
+                "batch",
+                &mailboxes,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.bulk_message = format!("Could not create durable batch: {error}");
+                    return;
+                }
+            };
+            (project.id, job_ids)
         };
-        self.bulk_project_id = Some(project.id.clone());
+        self.bulk_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
+        self.bulk_live_run = live;
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
-        if let Err(error) =
-            self.store
-                .begin_batch_run(&project.id, &self.bulk_job_ids, &run_id, "batch validation")
-        {
+        if let Err(error) = self.store.begin_batch_run(
+            &project_id,
+            &self.bulk_job_ids,
+            &run_id,
+            if live {
+                "batch migration"
+            } else {
+                "batch validation"
+            },
+        ) {
             self.bulk_message = format!("Could not start durable batch run: {error}");
             return;
         }
@@ -2591,7 +2647,15 @@ impl App {
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
         self.run_started_at = Some(std::time::Instant::now());
-        self.status = format!("Batch validation: {} jobs", jobs.len());
+        self.status = format!(
+            "{}: {} jobs",
+            if live {
+                "Batch migration"
+            } else {
+                "Batch validation"
+            },
+            jobs.len()
+        );
         self.output.clear();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         let retry_count = self.form.profile.batch_retry_count.min(3);
@@ -3007,6 +3071,7 @@ impl App {
         }
         let mut done = None;
         let mut pending_db_events: Vec<(String, String, String)> = Vec::new();
+        let mut durability_errors = Vec::new();
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
@@ -3028,13 +3093,32 @@ impl App {
                         if let Some(job_id) = self.bulk_job_ids.get(index) {
                             let durable_state = match state.as_str() {
                                 "Running" => "running",
+                                "Completed" if !self.bulk_live_run => "ready",
                                 "Completed" => "completed",
                                 "Failed" => "failed",
                                 "Cancelled" => "cancelled",
                                 "Queued" => "queued",
                                 _ => "attention",
                             };
-                            let _ = self.store.set_mailbox_state(job_id, durable_state);
+                            let result = self.store.set_mailbox_state(job_id, durable_state);
+                            if let Err(error) = result {
+                                durability_errors
+                                    .push(format!("persist batch mailbox state failed: {error}"));
+                            }
+                            if state == "Completed"
+                                && !self.bulk_live_run
+                                && let Some(fingerprint) = self
+                                    .bulk_jobs
+                                    .get(index)
+                                    .map(|job| job.form.plan_fingerprint())
+                            {
+                                let result = self.store.set_preflight_plan(job_id, &fingerprint);
+                                if let Err(error) = result {
+                                    durability_errors.push(format!(
+                                        "persist batch preflight plan failed: {error}"
+                                    ));
+                                }
+                            }
                         }
                     }
                     Event::Evidence(evidence) => {
@@ -3076,8 +3160,12 @@ impl App {
             let result = self.store.record_events_batch(&batch);
             self.report_store_error("record execution events", result);
         }
+        for error in durability_errors {
+            self.report_store_error("batch event persistence", Err(error));
+        }
         if let Some(r) = done {
             let succeeded = r.is_ok();
+            let was_bulk_run = self.bulk_project_id.is_some();
             let mut direct_final_state = None;
             let terminal_evidence = if succeeded && !self.form.dry_run {
                 self.pending_evidence.take().or_else(|| {
@@ -3224,10 +3312,14 @@ impl App {
             self.cancel_requested = None;
             self.run_started_at = None;
             self.run_id = None;
-            if self.bulk_project_id.is_some() {
+            // Keep the durable queue after completion so a validated batch
+            // can be promoted to live execution, and failed/live jobs can be
+            // deliberately retried or run through another delta pass.
+            if !was_bulk_run {
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
             }
+            self.bulk_live_run = false;
             self.live_confirmed = false;
         }
     }
@@ -3315,7 +3407,11 @@ impl App {
             ui.horizontal(|ui| {
                 if ui.button("Import CSV / XLSX…").clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
                 if ui.button("Clear queue").clicked() { self.bulk_jobs.clear(); self.bulk_message = "Queue cleared.".into(); }
-                let label = format!("Run {} dry validations", self.bulk_jobs.len());
+                let label = if self.form.dry_run {
+                    format!("Run {} dry validations", self.bulk_jobs.len())
+                } else {
+                    format!("Run {} live migrations", self.bulk_jobs.len())
+                };
                 if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(BLUE)).clicked() { self.start_bulk(); }
             });
             ui.add_space(10.0);
@@ -3349,6 +3445,40 @@ impl App {
             ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(ALERT));
         });
         self.bulk_open = open;
+    }
+    fn bulk_live_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.bulk_live_confirm_open {
+            return;
+        }
+        let mut open = self.bulk_live_confirm_open;
+        let mut close = false;
+        egui::Window::new("Confirm live batch migration")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(RichText::new("This will change destination mailboxes").color(ALERT));
+                ui.label(format!(
+                    "{} queued mailbox processes may run concurrently.",
+                    self.bulk_jobs.len()
+                ));
+                ui.label("Each mailbox must already have a matching successful dry validation. Source mail is not deleted by default.");
+                ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(MUTED));
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                    if ui
+                        .add(egui::Button::new(RichText::new("I understand — start batch").color(Color32::WHITE)).fill(ALERT))
+                        .clicked()
+                    {
+                        close = true;
+                        self.bulk_live_confirmed = true;
+                        self.start_bulk();
+                    }
+                });
+            });
+        self.bulk_live_confirm_open = open && !close;
     }
     fn advanced_dialog(&mut self, ctx: &egui::Context) {
         if !self.advanced_open {
@@ -3864,6 +3994,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.horizontal(|ui| { ui.label("Source port"); ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(90.0)); ui.label("TLS"); egui::ComboBox::from_id_salt("source_tls").selected_text(&self.form.profile.source_tls).show_ui(ui, |ui| { for mode in ["imaps", "starttls", "plain"] { ui.selectable_value(&mut self.form.profile.source_tls, mode.into(), mode); } }); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } if self.running() { if ui.button("Cancel running process").clicked() { if let Some(cancel) = &self.cancel_requested { cancel.store(true, Ordering::Relaxed); self.status = "Cancellation requested…".into(); } } } else { let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); } } if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
         self.preview(ctx);
         self.bulk_dialog(ctx);
+        self.bulk_live_confirmation(ctx);
         self.keyring_dialog(ctx);
         self.advanced_dialog(ctx);
         self.engine_dialog(ctx);

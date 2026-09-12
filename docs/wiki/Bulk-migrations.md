@@ -2,7 +2,7 @@
 
 Use the **Transient retries** control for short-lived transport failures. MailSwiftSync labels failures as `authentication`, `quota`, `transport`, `configuration`, `message`, or `unknown`; only transport/throttling failures are eligible for retry. Authentication and configuration errors stop clearly, and backoff is cancellation-aware.
 
-MailSwiftSync can import a migration list from CSV, XLS, or XLSX and validate rows with a bounded worker pool. Choose 1–16 concurrent validations to balance migration-window speed against provider throttling. Bulk validation uses the currently selected engine; live migrations remain individually confirmed until scheduler and durable live-concurrency work are complete.
+MailSwiftSync can import a migration list from CSV, XLS, or XLSX and process rows with a bounded worker pool. Choose 1–16 concurrent workers to balance migration-window speed against provider throttling. Every mailbox must first complete a matching dry validation; after that, the same durable queue can be explicitly promoted to a live batch run.
 
 ![Batch migration queue interface](assets/batch-queue.png)
 
@@ -33,9 +33,10 @@ Optional columns are `source_password`, `destination_password`, `name`, and `ext
 3. Review each source and destination in the queue table and enter any missing credentials in the masked fields.
 4. Correct the spreadsheet and import it again if any account is wrong.
 5. Choose a conservative concurrency value and click **Run N dry validations**.
+6. Review the resulting `Ready` states and exact plan fingerprints. Switch off **Simulation mode**, then click **Run N live migrations** and confirm the destructive-action dialog.
 
 ## Run safely
 
-Batch runs are deliberately validation-only and require Dry run to be enabled. The batch project and all imported mailbox jobs are committed atomically, and the batch has a durable run record. Secret-free row configuration is retained so a queue can be restored for review after restart; credentials are intentionally not persisted for replay and must be entered again. Batch startup validates every row before launching the first process, so a restored queue cannot accidentally run with blank credentials. The queue streams indexed output from concurrent workers so individual failures remain visible without unbounded process creation. Review the execution journal for every job before considering a live migration. Use the main single-mailbox workflow for a confirmed live migration.
+Dry validation and live execution are separate deliberate phases. The batch project and all imported mailbox jobs are committed atomically, and each batch has a durable run record. A live batch is allowed only when every mailbox has a matching successful dry-validation fingerprint and an operator confirms the queue. Secret-free row configuration is retained so a queue can be restored for review after restart; credentials are intentionally not persisted for replay and must be entered again. Batch startup validates every row before launching the first process, so a restored queue cannot accidentally run with blank credentials. The queue streams indexed output from concurrent workers, supports cancellation and bounded transient retries, and leaves completed/failed/attention child states visible for another delta or retry pass. Live batch verification remains aggregate/engine-dependent; review the exported evidence before declaring the project complete.
 
 Do not commit a spreadsheet containing real passwords to Git, and treat the file as sensitive after import. Imported data exists only in MailSwiftSync memory for the current queue and is not written to the saved profile. For operator-managed work, use keyring IDs in the base profile where practical; provider OAuth and unattended batch secret brokering are not yet implemented.
