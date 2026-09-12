@@ -1671,6 +1671,42 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     }
 }
 
+fn recommended_next_action(
+    phase: core::Phase,
+    has_preflight: bool,
+    attention_count: usize,
+    running: bool,
+) -> &'static str {
+    if running {
+        return "A migration is running — monitor Activity; press Escape to request cancellation.";
+    }
+    if attention_count > 0 {
+        return "Review Attention items before starting another migration.";
+    }
+    match phase {
+        core::Phase::Discovery => {
+            "Create the project, then run a dry preflight against a test mailbox."
+        }
+        core::Phase::Preflight if !has_preflight => {
+            "Run the dry preflight and review every blocker before going live."
+        }
+        core::Phase::Preflight => "Review the preflight, then choose a small pilot mailbox.",
+        core::Phase::Pilot => "Review the pilot result and prepare the seed operation.",
+        core::Phase::Seed => "Run the seed operation, then schedule a catch-up pass.",
+        core::Phase::CatchUp => "Run catch-up during the migration window and review its result.",
+        core::Phase::FinalDelta => {
+            "Run the final delta, then open Verification for reconciliation."
+        }
+        core::Phase::Verification => {
+            "Review evidence for each mailbox and export the verification report."
+        }
+        core::Phase::Complete => {
+            "The project is complete; export the report and retain the audit record."
+        }
+        core::Phase::Attention => "Review Attention items before starting another migration.",
+    }
+}
+
 fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), String> {
     let input = input.trim();
     if input.is_empty() {
@@ -2089,7 +2125,6 @@ impl App {
             core::Phase::FinalDelta,
             core::Phase::Verification,
             core::Phase::Complete,
-            core::Phase::Attention,
         ];
         let current = self
             .project_id
@@ -2100,20 +2135,20 @@ impl App {
         let current_index = phases
             .iter()
             .position(|phase| *phase == current)
-            .unwrap_or(0);
+            .unwrap_or(usize::MAX);
         ui.group(|ui| {
-            ui.label(
-                RichText::new("MIGRATION LIFECYCLE")
-                    .size(11.0)
-                    .strong()
-                    .color(MUTED),
-            );
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("MIGRATION LIFECYCLE").size(11.0).strong().color(MUTED));
+                if current == core::Phase::Attention {
+                    ui.label(RichText::new("ATTENTION REQUIRED").strong().color(ALERT));
+                }
+            });
             ui.horizontal_wrapped(|ui| {
                 for (index, phase) in phases.iter().enumerate() {
                     if index > 0 {
                         ui.label(RichText::new("→").color(MUTED));
                     }
-                    let color = if index < current_index {
+                    let color = if current_index != usize::MAX && index < current_index {
                         TEAL
                     } else if index == current_index {
                         BLUE
@@ -2123,7 +2158,7 @@ impl App {
                     ui.label(
                         RichText::new(format!(
                             "{} {}",
-                            if index < current_index {
+                            if current_index != usize::MAX && index < current_index {
                                 "✓"
                             } else if index == current_index {
                                 "●"
@@ -2137,6 +2172,9 @@ impl App {
                     );
                 }
             });
+            if current == core::Phase::Attention {
+                ui.label(RichText::new("A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.").size(11.0).color(ALERT));
+            }
         });
     }
 
@@ -2194,13 +2232,46 @@ impl App {
                 .color(MUTED),
         );
         ui.add_space(16.0);
-        let (passed, total) = self.readiness_score();
-        let percent = (passed * 100 / total.max(1)) as u8;
-        ui.label(
-            RichText::new(format!("Readiness: {percent}%"))
-                .strong()
-                .color(if percent >= 80 { TEAL } else { ALERT }),
+        let project = self
+            .project_id
+            .as_deref()
+            .and_then(|id| self.store.project(id).ok().flatten());
+        let phase = project
+            .as_ref()
+            .map(|value| value.phase)
+            .unwrap_or(core::Phase::Discovery);
+        let durable_jobs = project
+            .as_ref()
+            .and_then(|value| self.store.mailboxes(&value.id).ok())
+            .unwrap_or_default();
+        let attention_count = durable_jobs
+            .iter()
+            .filter(|job| matches!(job.state.as_str(), "attention" | "failed" | "cancelled"))
+            .count();
+        let next_action = recommended_next_action(
+            phase,
+            !self.preflight.is_empty(),
+            attention_count,
+            self.running(),
         );
+        ui.group(|ui| {
+            ui.label(
+                RichText::new("CURRENT PHASE")
+                    .size(11.0)
+                    .strong()
+                    .color(MUTED),
+            );
+            ui.heading(format_phase_name(phase));
+            if attention_count > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "{} mailbox item(s) need attention",
+                        attention_count
+                    ))
+                    .color(ALERT),
+                );
+            }
+        });
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.group(|ui| {
@@ -2227,19 +2298,30 @@ impl App {
             });
             ui.group(|ui| {
                 ui.label(RichText::new("EVIDENCE").size(11.0).color(MUTED));
-                ui.heading("Not started");
-                ui.label("Verification becomes available after a completed run.");
+                ui.heading(if phase == core::Phase::Complete {
+                    "Available"
+                } else {
+                    "Pending"
+                });
+                ui.label("Open Verification to review evidence and export the customer report.");
             });
         });
         ui.add_space(16.0);
         ui.group(|ui| {
             ui.heading("Recommended next step");
-            ui.label("Run a preflight before any live migration. It checks endpoints, TLS capabilities, safety settings, and the current project scope.");
+            ui.label(next_action);
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Open migration plan  →").clicked() { self.active_view = WorkspaceView::Plan; }
-                if ui.button("Open Project Cockpit").clicked() { self.cockpit_open = true; self.assess_plan(); }
-                if ui.button("Import mailbox list").clicked() { self.bulk_open = true; }
+                if ui.button("Open migration plan  →").clicked() {
+                    self.active_view = WorkspaceView::Plan;
+                }
+                if ui.button("Open Project Cockpit").clicked() {
+                    self.cockpit_open = true;
+                    self.assess_plan();
+                }
+                if ui.button("Import mailbox list").clicked() {
+                    self.bulk_open = true;
+                }
             });
         });
         ui.add_space(14.0);
@@ -4935,6 +5017,30 @@ mod tests {
         );
         assert!(endpoint_parts("mail.example:0", 993).is_err());
         assert!(endpoint_parts("[2001:db8::1]garbage", 993).is_err());
+    }
+
+    #[test]
+    fn recommended_action_prioritizes_interrupted_work() {
+        assert_eq!(
+            recommended_next_action(core::Phase::Preflight, true, 2, false),
+            "Review Attention items before starting another migration."
+        );
+        assert_eq!(
+            recommended_next_action(core::Phase::Preflight, true, 0, true),
+            "A migration is running — monitor Activity; press Escape to request cancellation."
+        );
+    }
+
+    #[test]
+    fn recommended_action_describes_phase_without_synthetic_readiness() {
+        assert_eq!(
+            recommended_next_action(core::Phase::Discovery, false, 0, false),
+            "Create the project, then run a dry preflight against a test mailbox."
+        );
+        assert_eq!(
+            recommended_next_action(core::Phase::Verification, true, 0, false),
+            "Review evidence for each mailbox and export the verification report."
+        );
     }
 
     #[test]
