@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Activity queries now use a lightweight run-list projection that omits full immutable plan snapshots; detailed snapshots remain available through explicit run lookup for reports and forensic review.
 - Verification now exposes a typed `EvidenceScope` (`engine-confirmed` or `aggregate-reconciled`) at the core boundary, and exported JSON uses those explicit labels instead of inventing scope from report-local conditionals.
 - Process-layer tests now pin the typed cancellation and timeout outcomes, including child-group cleanup, independently of higher-level UI error handling.
 - Process supervision now returns a typed outcome distinguishing exit codes, operator cancellation, and execution timeout; engine-specific interpretation remains above the process layer instead of relying on error-string matching.

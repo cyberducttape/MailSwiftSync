@@ -119,6 +119,21 @@ pub struct RunSummary {
     pub detail: String,
 }
 
+/// Lightweight run row for activity views and health summaries. The full
+/// immutable plan snapshot is intentionally excluded; callers that need the
+/// historical execution plan can request the individual run by ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunListItem {
+    pub id: String,
+    pub job_id: Option<String>,
+    pub parent_run_id: Option<String>,
+    pub engine: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub detail: String,
+}
+
 /// Immutable per-mailbox metadata supplied when a batch wave is admitted.
 /// Secrets are intentionally not part of this structure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1416,6 +1431,30 @@ impl StateStore {
             })?
             .collect()
     }
+
+    pub fn recent_run_list(
+        &self,
+        project_id: &str,
+        limit: u32,
+    ) -> rusqlite::Result<Vec<RunListItem>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,job_id,parent_run_id,engine,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+        )?;
+        statement
+            .query_map(params![project_id, limit], |row| {
+                Ok(RunListItem {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    parent_run_id: row.get(2)?,
+                    engine: row.get(3)?,
+                    status: row.get(4)?,
+                    started_at: row.get(5)?,
+                    finished_at: row.get(6)?,
+                    detail: row.get(7)?,
+                })
+            })?
+            .collect()
+    }
     // Legacy evidence insertion is retained only as a fixture helper for
     // historical-state tests. Production callers must use the run-owned
     // terminal methods above, which atomically bind evidence to the run and
@@ -2477,6 +2516,29 @@ mod tests {
         assert_eq!(run.id, "run-audit");
         assert_eq!(run.status, "completed");
         assert!(run.finished_at.is_some());
+    }
+
+    #[test]
+    fn recent_run_list_omits_large_plan_snapshots() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("list", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run_with_snapshot(
+            &project.id,
+            &job,
+            "run-list",
+            "test",
+            &"large snapshot".repeat(1024),
+        )
+        .unwrap();
+
+        let list = db.recent_run_list(&project.id, 10).unwrap();
+
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "run-list");
+        assert_eq!(list[0].status, "running");
     }
 
     #[test]

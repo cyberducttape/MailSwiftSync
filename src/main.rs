@@ -2642,7 +2642,7 @@ impl App {
             );
             return;
         };
-        match self.store.recent_runs(project, 20) {
+        match self.store.recent_run_list(project, 20) {
             Ok(runs) if runs.is_empty() => {
                 ui.label(RichText::new("No durable runs recorded yet.").color(MUTED));
             }
