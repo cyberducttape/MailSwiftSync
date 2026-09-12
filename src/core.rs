@@ -725,7 +725,7 @@ impl StateStore {
     /// operator to retry the mailbox.
     pub fn register_process(&self, process: &ActiveProcess) -> rusqlite::Result<()> {
         let consistent: bool = self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=?2 AND r.project_id=j.project_id WHERE r.id=?1 AND r.status='running' AND (r.job_id IS NULL OR r.job_id=j.id))",
+            "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=?2 AND r.project_id=j.project_id WHERE r.id=?1 AND r.status='running' AND r.job_id=j.id)",
             params![process.run_id, process.job_id],
             |row| row.get(0),
         )?;
@@ -2002,6 +2002,53 @@ mod tests {
         });
         assert!(result.is_err());
         assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn active_process_requires_a_mailbox_specific_child_run() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("batch-process", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source-user", "destination-user")
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                std::slice::from_ref(&job),
+                "run-parent-process",
+                "test",
+                &[],
+                "batch snapshot",
+                &[],
+            )
+            .unwrap();
+
+        assert!(
+            db.register_process(&ActiveProcess {
+                run_id: "run-parent-process".into(),
+                job_id: job.clone(),
+                pid: 4242,
+                start_ticks: Some(7),
+                process_group: Some(4242),
+                session_id: Some(4242),
+                executable: "test".into(),
+            })
+            .is_err()
+        );
+        db.claim_batch_mailbox_for_child(&project.id, &job, "run-parent-process", &child_runs[0])
+            .unwrap();
+        db.register_process(&ActiveProcess {
+            run_id: child_runs[0].clone(),
+            job_id: job.clone(),
+            pid: 4243,
+            start_ticks: Some(8),
+            process_group: Some(4243),
+            session_id: Some(4243),
+            executable: "test".into(),
+        })
+        .unwrap();
     }
 
     #[test]
