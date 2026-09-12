@@ -1,6 +1,6 @@
 # Bulk migrations from CSV or Excel
 
-Use the **Transient retries** control for short-lived transport failures. MailSwiftSync labels failures as `authentication`, `quota`, `transport`, `configuration`, `message`, or `unknown`; only transport/throttling failures are eligible for retry. Authentication and configuration errors stop clearly, and backoff is cancellation-aware.
+Use the **Transient retries** control for short-lived transport failures. MailSwiftSync labels failures as `authentication`, `quota`, `transport`, `configuration`, `message`, or `unknown`; only transport/throttling failures are eligible for retry. Authentication and configuration errors stop clearly, and backoff is cancellation-aware. For imapsync, message/byte throttle targets are divided across concurrent workers and process starts are globally paced; a finite target must be at least the worker count. These are application-level safeguards, not a substitute for provider-specific tenant limits.
 
 MailSwiftSync can import a migration list from CSV, XLS, or XLSX and process rows with a bounded worker pool. Choose 1–16 concurrent workers to balance migration-window speed against provider throttling. Every mailbox must first complete a matching dry validation; after that, the same durable queue can be explicitly promoted to a live batch run.
 

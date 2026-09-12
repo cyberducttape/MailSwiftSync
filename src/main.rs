@@ -25,7 +25,7 @@ use std::{
         mpsc::{self, Receiver},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const NAVY: Color32 = Color32::from_rgb(17, 26, 43);
@@ -35,6 +35,7 @@ const SKY: Color32 = Color32::from_rgb(235, 243, 252);
 const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
+const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Profile {
@@ -118,6 +119,21 @@ fn default_migration_timeout_hours() -> u64 {
 }
 fn default_source_tls() -> String {
     "imaps".into()
+}
+
+fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), String> {
+    let workers = concurrency.max(1);
+    if profile.max_messages_per_second > 0 && profile.max_messages_per_second < workers as u32 {
+        return Err(format!(
+            "Messages/second target must be at least the batch concurrency ({workers}), or reduce concurrency."
+        ));
+    }
+    if profile.max_bytes_per_second > 0 && profile.max_bytes_per_second < workers as u64 {
+        return Err(format!(
+            "Bytes/second target must be at least the batch concurrency ({workers}), or reduce concurrency."
+        ));
+    }
+    Ok(())
 }
 
 fn default_imap_port(tls_mode: &str) -> u16 {
@@ -361,6 +377,9 @@ impl Form {
         Ok(())
     }
     fn args(&self, redact: bool) -> Vec<String> {
+        self.args_with_throttle_divisor(redact, 1)
+    }
+    fn args_with_throttle_divisor(&self, redact: bool, throttle_divisor: usize) -> Vec<String> {
         let p1 = if redact {
             "••••••••"
         } else {
@@ -447,16 +466,17 @@ impl Form {
         }
         if self.engine() == core::Engine::ImapSync {
             if self.profile.max_messages_per_second > 0 {
+                let messages_per_process =
+                    (self.profile.max_messages_per_second / throttle_divisor.max(1) as u32).max(1);
                 a.extend([
                     "--maxmessagespersecond".into(),
-                    self.profile.max_messages_per_second.to_string(),
+                    messages_per_process.to_string(),
                 ]);
             }
             if self.profile.max_bytes_per_second > 0 {
-                a.extend([
-                    "--maxbytespersecond".into(),
-                    self.profile.max_bytes_per_second.to_string(),
-                ]);
+                let bytes_per_process =
+                    (self.profile.max_bytes_per_second / throttle_divisor.max(1) as u64).max(1);
+                a.extend(["--maxbytespersecond".into(), bytes_per_process.to_string()]);
             }
         }
         if self.dry_run {
@@ -531,6 +551,12 @@ impl Form {
         Ok(())
     }
     fn prepared_command(&self) -> Result<PreparedCommand, String> {
+        self.prepared_command_with_throttle_divisor(1)
+    }
+    fn prepared_command_with_throttle_divisor(
+        &self,
+        throttle_divisor: usize,
+    ) -> Result<PreparedCommand, String> {
         if self.engine() == core::Engine::Dovecot {
             if !self.local_doveadm() && !self.profile.allow_remote_password_in_argv {
                 return Err("Remote Dovecot execution is disabled by default because the source password may be visible in the destination command line. Enable the explicit remote-password compatibility acknowledgement only on a trusted destination, or use a secret broker.".into());
@@ -551,7 +577,7 @@ impl Form {
                 env,
             });
         }
-        let mut args = self.args(false);
+        let mut args = self.args_with_throttle_divisor(false, throttle_divisor);
         remove_option(&mut args, "--password1");
         remove_option(&mut args, "--password2");
         let secret_dir = create_secret_directory()?;
@@ -1276,6 +1302,63 @@ enum Event {
 enum StreamOutcome {
     Completed,
     DeltaRequired,
+}
+
+#[derive(Debug)]
+struct TokenBucketState {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+/// A shared admission limiter for batch engine processes.
+///
+/// The external engine owns the IMAP connection, so the controller cannot
+/// meter individual messages directly. Batch command construction therefore
+/// divides the configured imapsync message/byte ceilings across workers, and
+/// this bucket smooths process starts so a batch does not authenticate every
+/// mailbox at once. The limiter is intentionally shared by all workers.
+struct ProcessLaunchLimiter {
+    rate_per_second: f64,
+    state: Mutex<TokenBucketState>,
+}
+
+impl ProcessLaunchLimiter {
+    fn new(starts_per_second: usize) -> Self {
+        let rate_per_second = starts_per_second.max(1) as f64;
+        Self {
+            rate_per_second,
+            state: Mutex::new(TokenBucketState {
+                // A single initial token allows one worker to start
+                // immediately; subsequent starts are paced globally.
+                tokens: 1.0,
+                last_refill: Instant::now(),
+            }),
+        }
+    }
+
+    fn acquire(&self, cancel: &AtomicBool) -> bool {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            let wait = {
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => return false,
+                };
+                let now = Instant::now();
+                let elapsed = now.duration_since(state.last_refill).as_secs_f64();
+                state.tokens = (state.tokens + elapsed * self.rate_per_second).min(1.0);
+                state.last_refill = now;
+                if state.tokens >= 1.0 {
+                    state.tokens -= 1.0;
+                    return true;
+                }
+                Duration::from_secs_f64((1.0 - state.tokens) / self.rate_per_second)
+            };
+            thread::sleep(wait.min(Duration::from_millis(100)));
+        }
+    }
 }
 
 // The process runner keeps each security-sensitive input explicit at the call
@@ -3317,6 +3400,11 @@ impl App {
             self.bulk_message = "Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into();
             return;
         }
+        let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
+        if let Err(error) = validate_batch_throttle(&self.form.profile, concurrency) {
+            self.bulk_message = error;
+            return;
+        }
         self.durability_error = false;
         let existing_project = self.bulk_project_id.clone();
         let mailboxes = jobs
@@ -3414,7 +3502,6 @@ impl App {
             jobs.len()
         );
         self.output.clear();
-        let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         let retry_count = self.form.profile.batch_retry_count.min(3);
         let job_count = jobs.len();
         let (job_tx, job_rx) = crossbeam_channel::unbounded();
@@ -3424,6 +3511,7 @@ impl App {
                 .expect("batch workers are created immediately after queue setup");
         }
         drop(job_tx);
+        let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
         thread::spawn(move || {
             let failed = Arc::new(AtomicBool::new(false));
             let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
@@ -3434,6 +3522,7 @@ impl App {
                 let terminal_jobs = Arc::clone(&terminal_jobs);
                 let tx = tx.clone();
                 let cancel = Arc::clone(&cancel);
+                let launch_limiter = Arc::clone(&launch_limiter);
                 workers.push(thread::spawn(move || {
                     while let Ok((index, job)) = job_rx.recv() {
                         if cancel.load(Ordering::Relaxed) {
@@ -3452,6 +3541,9 @@ impl App {
                         let mut completed = false;
                         let mut delta_required = false;
                         for attempt in 0..=retry_count {
+                            if !launch_limiter.acquire(&cancel) {
+                                break;
+                            }
                             if attempt > 0 {
                                 let _ = tx.send(Event::Line(format!(
                                     "[{}] retry attempt {attempt}/{retry_count}",
@@ -3459,7 +3551,9 @@ impl App {
                                 )));
                                 let _ = tx.send(Event::JobState(index, "Running".into()));
                             }
-                            let prepared = job.form.prepared_command();
+                            let prepared = job
+                                .form
+                                .prepared_command_with_throttle_divisor(concurrency);
                             let result = match prepared {
                                 Ok(command) => {
                                     let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
@@ -4447,13 +4541,13 @@ impl App {
                 ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)")
                     .on_hover_text("Uses imapsync's faster destination I/O path; provider behavior varies.");
                 ui.horizontal(|ui| {
-                    ui.label("Messages/second (0 = unlimited)")
-                        .on_hover_text("Per-mailbox process limit, not a tenant-wide limit. With concurrent jobs, aggregate traffic can be much higher.");
+                    ui.label("Messages/second target (0 = unlimited)")
+                        .on_hover_text("For a batch this is an aggregate target: MailSwiftSync divides it across concurrent imapsync workers. A single run uses the value unchanged.");
                     ui.add(egui::DragValue::new(&mut self.form.profile.max_messages_per_second).range(0..=100_000));
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Bytes/second (0 = unlimited)")
-                        .on_hover_text("Per-mailbox process limit, not a tenant-wide limit. Set concurrency and this value together for provider-safe throughput.");
+                    ui.label("Bytes/second target (0 = unlimited)")
+                        .on_hover_text("For a batch this is an aggregate target: MailSwiftSync divides it across concurrent imapsync workers. A single run uses the value unchanged.");
                     ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX));
                 });
                 ui.horizontal(|ui| {
@@ -4461,7 +4555,7 @@ impl App {
                         .on_hover_text("Maximum wall-clock time for one engine process. It is a safety bound, not an estimate of completion time.");
                     ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
                 });
-                ui.label(RichText::new("Throttles apply to imapsync only and can reduce provider rate limits or link saturation.").size(11.0).color(MUTED));
+                ui.label(RichText::new("Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count.").size(11.0).color(MUTED));
             });
             ui.add_space(8.0);
             ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
@@ -5050,6 +5144,43 @@ mod tests {
             args.windows(2)
                 .any(|pair| pair == ["--maxbytespersecond", "1048576"])
         );
+    }
+
+    #[test]
+    fn batch_throttles_are_divided_across_workers() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.max_messages_per_second = 25;
+        form.profile.max_bytes_per_second = 1_048_576;
+        let args = form.args_with_throttle_divisor(true, 4);
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--maxmessagespersecond", "6"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--maxbytespersecond", "262144"])
+        );
+    }
+
+    #[test]
+    fn process_launch_limiter_honors_cancellation() {
+        let limiter = ProcessLaunchLimiter::new(1);
+        let cancel = AtomicBool::new(true);
+        assert!(!limiter.acquire(&cancel));
+    }
+
+    #[test]
+    fn batch_throttle_rejects_target_below_worker_count() {
+        let mut profile = Profile {
+            max_messages_per_second: 1,
+            ..Profile::default()
+        };
+        assert!(validate_batch_throttle(&profile, 2).is_err());
+        profile.max_messages_per_second = 2;
+        assert!(validate_batch_throttle(&profile, 2).is_ok());
+        profile.max_bytes_per_second = 1;
+        assert!(validate_batch_throttle(&profile, 2).is_err());
     }
 
     #[test]
