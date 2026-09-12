@@ -187,6 +187,10 @@ fn default_source_tls() -> String {
     "imaps".into()
 }
 
+fn plan_snapshot_sha256(snapshot: &str) -> String {
+    format!("{:x}", Sha256::digest(snapshot.as_bytes()))
+}
+
 fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), String> {
     let workers = concurrency.max(1);
     if profile.max_messages_per_second > 0 && profile.max_messages_per_second < workers as u32 {
@@ -2588,13 +2592,14 @@ impl App {
                 ));
             }
         }
-        report.push_str("\n## Recent runs\n\n| Run | Engine | Status | Started | Finished | Detail |\n|---|---|---|---|---|---|\n");
+        report.push_str("\n## Recent runs\n\n| Run | Engine | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|\n");
         for run in runs {
             report.push_str(&format!(
-                "| `{}` | {} | `{}` | {} | {} | {} |\n",
+                "| `{}` | {} | `{}` | `{}` | {} | {} | {} |\n",
                 run.id,
                 markdown_escape(&run.engine),
                 run.status,
+                plan_snapshot_sha256(&run.plan_snapshot),
                 run.started_at,
                 run.finished_at.unwrap_or_else(|| "in progress".into()),
                 markdown_escape(if run.detail.is_empty() {
@@ -2675,6 +2680,7 @@ impl App {
                     "job_id": run.job_id,
                     "parent_run_id": run.parent_run_id,
                     "engine": run.engine,
+                    "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                     "status": run.status,
                     "started_at": run.started_at,
                     "finished_at": run.finished_at,
@@ -2741,6 +2747,7 @@ impl App {
                     "job_id": run.job_id,
                     "parent_run_id": run.parent_run_id,
                     "engine": run.engine,
+                    "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                     "status": run.status,
                     "started_at": run.started_at,
                     "finished_at": run.finished_at,
@@ -5199,6 +5206,16 @@ mod tests {
             pair[0] == "-l" && pair[1] == DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()
         }));
         assert!(!args.iter().any(|arg| arg == "secret"));
+    }
+
+    #[test]
+    fn plan_snapshot_reference_is_stable_without_exposing_snapshot() {
+        let snapshot = "dry_run = false\nsource_host = \"old.example\"";
+        let reference = plan_snapshot_sha256(snapshot);
+        assert_eq!(reference.len(), 64);
+        assert_eq!(reference, plan_snapshot_sha256(snapshot));
+        assert!(!reference.contains("old.example"));
+        assert_ne!(reference, plan_snapshot_sha256("dry_run = true"));
     }
 
     #[test]
