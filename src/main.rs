@@ -6,6 +6,7 @@ use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
+use fs2::FileExt;
 use keyring::Entry;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fs::{File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
@@ -835,6 +837,22 @@ fn secret_runtime_base_from(runtime_dir: Option<PathBuf>) -> PathBuf {
     }
 }
 
+fn acquire_instance_lock(state_path: &std::path::Path) -> Result<File, String> {
+    let lock_path = state_path.with_extension("lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| format!("could not open application lock: {error}"))?;
+    restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
+    file.try_lock_exclusive().map_err(|_| {
+        "another MailSwiftSync instance already owns the migration state; close it before opening this workspace".to_owned()
+    })?;
+    Ok(file)
+}
+
 fn cleanup_stale_secret_directories(base: &std::path::Path) {
     const MAX_SECRET_DIRECTORY_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
     let Ok(entries) = std::fs::read_dir(base) else {
@@ -1493,6 +1511,10 @@ struct App {
     advanced_open: bool,
     engine_open: bool,
     store: core::StateStore,
+    /// Held for the lifetime of the application. An advisory OS lock is
+    /// released automatically if the process crashes, so a later instance
+    /// can safely perform orphan recovery without killing a live sibling.
+    _instance_lock: Option<File>,
     persistence_available: bool,
     project_id: Option<String>,
     job_id: Option<String>,
@@ -1528,8 +1550,15 @@ impl Default for App {
         if let Some(parent) = state_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let (store, persistence_warning) = match core::StateStore::open(&state_path) {
-            Ok(store) => (store, None),
+        let instance_lock = acquire_instance_lock(&state_path);
+        let (store, persistence_warning) = match &instance_lock {
+            Ok(_) => match core::StateStore::open(&state_path) {
+                Ok(store) => (store, None),
+                Err(error) => (
+                    core::StateStore::in_memory().expect("SQLite memory store must be available"),
+                    Some(format!("Persistent SQLite state unavailable: {error}")),
+                ),
+            },
             Err(error) => (
                 core::StateStore::in_memory().expect("SQLite memory store must be available"),
                 Some(format!("Persistent SQLite state unavailable: {error}")),
@@ -1655,6 +1684,7 @@ impl Default for App {
             advanced_open: false,
             engine_open: true,
             store,
+            _instance_lock: instance_lock.ok(),
             persistence_available: persistence_warning.is_none(),
             project_id,
             job_id,
@@ -5086,6 +5116,18 @@ mod tests {
         assert!(
             secret_runtime_base_from(Some(PathBuf::from(""))).ends_with("mailswiftsync-runtime")
         );
+    }
+
+    #[test]
+    fn state_lock_prevents_two_instances_and_releases_on_drop() {
+        let state_path =
+            std::env::temp_dir().join(format!("mailswiftsync-lock-{}.db", uuid::Uuid::new_v4()));
+        let first = acquire_instance_lock(&state_path).unwrap();
+        assert!(acquire_instance_lock(&state_path).is_err());
+        drop(first);
+        let second = acquire_instance_lock(&state_path).unwrap();
+        drop(second);
+        let _ = std::fs::remove_file(state_path.with_extension("lock"));
     }
 
     #[test]
