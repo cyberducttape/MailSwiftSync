@@ -2343,9 +2343,9 @@ impl App {
             .job_id
             .as_deref()
             .ok_or("No mailbox evidence is available yet.")?;
-        let evidence = self
+        let (evidence_run_id, evidence) = self
             .store
-            .evidence(job)
+            .latest_evidence_for_run(job)
             .map_err(|e| e.to_string())?
             .ok_or("No mailbox evidence is available yet.")?;
         let state = self
@@ -2355,9 +2355,9 @@ impl App {
             .unwrap_or_else(|| "unknown".into());
         let run = self
             .store
-            .latest_run(job)
+            .run(&evidence_run_id)
             .map_err(|e| e.to_string())?
-            .ok_or("No durable run record is available for this evidence.")?;
+            .ok_or("The evidence refers to a run that is no longer available.")?;
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-verification.md")
             .save_file()
