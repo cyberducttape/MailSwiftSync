@@ -2157,7 +2157,7 @@ impl App {
             .unwrap_or_default();
         let attention_count = durable_jobs
             .iter()
-            .filter(|job| matches!(job.state.as_str(), "attention" | "failed" | "cancelled"))
+            .filter(|job| needs_operator_review(&job.state))
             .count();
         let next_action = recommended_next_action(
             phase,
@@ -2349,9 +2349,7 @@ impl App {
         ui.add_space(12.0);
         if let Some(job) = self.job_id.as_deref() {
             let state = self.store.mailbox_state(job).ok().flatten();
-            if state
-                .as_deref()
-                .is_some_and(|value| matches!(value, "failed" | "cancelled" | "attention"))
+            if state.as_deref().is_some_and(needs_operator_review)
                 && ui.button("Prepare safe retry  →").clicked()
             {
                 self.form.dry_run = true;
@@ -2540,7 +2538,7 @@ impl App {
         let verified = jobs.iter().filter(|job| job.state == "verified").count();
         let attention = jobs
             .iter()
-            .filter(|job| matches!(job.state.as_str(), "attention" | "failed" | "cancelled"))
+            .filter(|job| needs_operator_review(&job.state))
             .count();
         let mut report = format!(
             "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence | Confidence | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---:|---:|---:|---:|---:|\n",
@@ -2707,7 +2705,7 @@ impl App {
             .map_err(|e| e.to_string())?;
         let attention = jobs
             .iter()
-            .filter(|job| matches!(job.state.as_str(), "attention" | "failed" | "cancelled"))
+            .filter(|job| needs_operator_review(&job.state))
             .map(|job| {
                 serde_json::json!({
                     "id": job.id,
@@ -4712,6 +4710,13 @@ fn display_job_state(state: &str) -> &'static str {
     }
 }
 
+fn needs_operator_review(state: &str) -> bool {
+    matches!(
+        state,
+        "attention" | "failed" | "cancelled" | "verification_difference"
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureClass {
     Authentication,
@@ -5665,6 +5670,8 @@ mod tests {
         let counts = project_health_state_counts(&jobs);
         assert_eq!(counts.get("verified"), Some(&2));
         assert_eq!(counts.get("attention"), Some(&1));
+        assert!(!needs_operator_review("verified"));
+        assert!(needs_operator_review("verification_difference"));
     }
 
     #[test]
