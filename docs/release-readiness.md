@@ -20,7 +20,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Preflight checks for DNS, TCP/TLS, authentication, quotas, source size, folder inventory, special-use folders, and destination readiness.
 - Explicit retry/resume/delta semantics with UIDVALIDITY-aware checkpoints and idempotent recovery after interruption.
 - Bounded concurrency, throttling, maintenance windows, and a scheduler/API that can survive the desktop closing.
-- Message-level mismatch reporting and exportable per-mailbox and batch reports.
+- Message-level mismatch reporting and exportable per-mailbox and batch reports in Markdown and JSON.
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Integration tests using disposable IMAP/Dovecot environments in CI or a documented reproducible harness.
 - A clean `cargo audit` result for vulnerabilities; unmaintained transitive dependencies must be tracked and reviewed before each release.

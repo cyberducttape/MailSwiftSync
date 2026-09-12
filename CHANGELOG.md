@@ -58,9 +58,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added Drop-based cleanup guards for prepared secret directories, retaining stale-directory cleanup for forced termination.
 - Batch validation retries only classified transient transport failures up to three times with exponential backoff; authentication and configuration failures remain terminal.
 
 - Verification exports are now written atomically, flushed before rename, and restricted to owner-only permissions on Unix.
+- Added secret-free, versioned JSON project reports alongside Markdown exports for automation and ticketing workflows.
 
 - Dovecot migrations default to additive `sync -1`; destination mirroring requires explicit destructive configuration.
 - Automatic engine selection is conservative and uses `imapsync` unless Dovecot mode is explicitly selected.

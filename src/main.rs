@@ -583,6 +583,22 @@ struct PreparedCommand {
     env: Vec<(String, String)>,
 }
 
+struct CleanupGuard {
+    paths: Vec<PathBuf>,
+}
+
+impl CleanupGuard {
+    fn new(paths: Vec<PathBuf>) -> Self {
+        Self { paths }
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        cleanup_paths(&self.paths);
+    }
+}
+
 fn create_secret_directory() -> Result<PathBuf, String> {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -1958,6 +1974,96 @@ impl App {
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
+    fn export_project_json(&self) -> Result<(), String> {
+        let project_id = self
+            .active_project_id()
+            .ok_or("No durable migration project is available yet.")?;
+        let project = self
+            .store
+            .project(project_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("The durable migration project no longer exists.")?;
+        let jobs = self
+            .store
+            .mailboxes(project_id)
+            .map_err(|e| e.to_string())?;
+        if jobs.is_empty() {
+            return Err("The project has no mailbox jobs to report.".into());
+        }
+        let runs = self
+            .store
+            .recent_runs(project_id, 20)
+            .map_err(|e| e.to_string())?;
+        let mailboxes = jobs
+            .into_iter()
+            .map(|job| {
+                let evidence = self.store.evidence(&job.id).map_err(|e| e.to_string())?;
+                Ok(match evidence {
+                    Some(evidence) => serde_json::json!({
+                        "id": job.id,
+                        "source_mailbox": job.source_mailbox,
+                        "destination_mailbox": job.destination_mailbox,
+                        "state": job.state,
+                        "evidence": {
+                            "scope": if evidence.authoritative { "authoritative" } else { "aggregate" },
+                            "authoritative": evidence.authoritative,
+                            "confidence_percent": evidence.confidence_percent(),
+                            "source_folders": evidence.source_folders,
+                            "destination_folders": evidence.destination_folders,
+                            "source_messages": evidence.source_messages,
+                            "destination_messages": evidence.destination_messages,
+                            "source_bytes": evidence.source_bytes,
+                            "destination_bytes": evidence.destination_bytes,
+                            "unmatched_messages": evidence.unmatched_messages,
+                            "failed_messages": evidence.failed_messages,
+                        }
+                    }),
+                    None => serde_json::json!({
+                        "id": job.id,
+                        "source_mailbox": job.source_mailbox,
+                        "destination_mailbox": job.destination_mailbox,
+                        "state": job.state,
+                        "evidence": null
+                    }),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let run_values = runs
+            .into_iter()
+            .map(|run| {
+                serde_json::json!({
+                    "id": run.id,
+                    "job_id": run.job_id,
+                    "engine": run.engine,
+                    "status": run.status,
+                    "started_at": run.started_at,
+                    "finished_at": run.finished_at,
+                    "detail": run.detail,
+                })
+            })
+            .collect::<Vec<_>>();
+        let value = serde_json::json!({
+            "format": "mailswiftsync-project-report",
+            "format_version": 1,
+            "project": {
+                "id": project.id,
+                "name": project.name,
+                "source_endpoint": project.source_endpoint,
+                "destination_endpoint": project.destination_endpoint,
+                "phase": format!("{:?}", project.phase),
+            },
+            "mailboxes": mailboxes,
+            "runs": run_values,
+            "note": "Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
+        });
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-project-report.json")
+            .save_file()
+            .ok_or("Report export cancelled.")?;
+        let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+        write_private_atomic(&path, &report).map_err(|e| e.to_string())
+    }
+
     fn verification_view(&self, ui: &mut egui::Ui) {
         ui.heading("Verification");
         ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
@@ -1965,8 +2071,13 @@ impl App {
         ui.group(|ui| {
             ui.heading("Verification and audit report");
             ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(MUTED));
-            if self.active_project_id().is_some() && ui.button("Export project report…").clicked() {
-                let _ = self.export_project_report();
+            if self.active_project_id().is_some() {
+                if ui.button("Export project report…").clicked() {
+                    let _ = self.export_project_report();
+                }
+                if ui.button("Export project JSON…").clicked() {
+                    let _ = self.export_project_json();
+                }
             }
             if let Some(job) = &self.job_id {
                 match self.store.evidence(job) {
@@ -2263,6 +2374,7 @@ impl App {
                             let prepared = job.form.prepared_command();
                             let result = match prepared {
                                 Ok(command) => {
+                                    let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
                                     let result = run_streaming(
                                         &command.executable,
                                         &command.args,
@@ -2276,6 +2388,7 @@ impl App {
                                         ],
                                     );
                                     cleanup_paths(&command.cleanup);
+                                    drop(cleanup_guard);
                                     result
                                 }
                                 Err(error) => Err(error),
@@ -2488,7 +2601,9 @@ impl App {
             self.form.source_password.clone(),
             self.form.destination_password.clone(),
         ];
+        let cleanup_guard = CleanupGuard::new(cleanup.clone());
         thread::spawn(move || {
+            let _cleanup_guard = cleanup_guard;
             let mut command = Command::new(&exe);
             command
                 .args(&args)
@@ -3435,6 +3550,16 @@ mod tests {
         assert!(!is_transient_batch_error(
             "invalid destination configuration"
         ));
+    }
+
+    #[test]
+    fn cleanup_guard_removes_secret_directory_on_scope_exit() {
+        let directory = create_secret_directory().unwrap();
+        {
+            let _guard = CleanupGuard::new(vec![directory.clone()]);
+            assert!(directory.is_dir());
+        }
+        assert!(!directory.exists());
     }
 
     #[test]
