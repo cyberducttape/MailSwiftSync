@@ -1502,6 +1502,27 @@ fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Option<String> {
     None
 }
 
+fn apply_keyring_id_to_jobs(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {
+    let mut applied = 0;
+    for job in jobs {
+        let password_empty = if source {
+            job.form.source_password.is_empty()
+        } else {
+            job.form.destination_password.is_empty()
+        };
+        let credential_id = if source {
+            &mut job.form.profile.source_credential_id
+        } else {
+            &mut job.form.profile.destination_credential_id
+        };
+        if password_empty && credential_id.trim().is_empty() {
+            *credential_id = id.to_owned();
+            applied += 1;
+        }
+    }
+    applied
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WorkspaceView {
     Overview,
@@ -1566,6 +1587,8 @@ struct App {
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_live_run: bool,
+    bulk_source_keyring_apply: String,
+    bulk_destination_keyring_apply: String,
 }
 impl Default for App {
     fn default() -> Self {
@@ -1735,6 +1758,8 @@ impl Default for App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_live_run: false,
+            bulk_source_keyring_apply: String::new(),
+            bulk_destination_keyring_apply: String::new(),
         }
     }
 }
@@ -2387,6 +2412,38 @@ impl App {
                 );
             }
         });
+        if !self.preflight.is_empty() {
+            ui.add_space(10.0);
+            ui.group(|ui| {
+                ui.heading("Preflight assessment");
+                egui::Grid::new("overview_preflight")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.strong("Check");
+                        ui.strong("Result");
+                        ui.end_row();
+                        for (name, detail, passed) in &self.preflight {
+                            ui.label(
+                                RichText::new(if *passed { "✓" } else { "!" }).color(if *passed {
+                                    TEAL
+                                } else {
+                                    ALERT
+                                }),
+                            );
+                            ui.label(RichText::new(name).strong());
+                            ui.label(detail);
+                            ui.end_row();
+                        }
+                    });
+                ui.label(
+                    RichText::new(
+                        "Review every failed check before promoting a project to live execution.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+            });
+        }
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.group(|ui| {
@@ -2953,6 +3010,26 @@ impl App {
             }
             Err(e) => self.bulk_message = e,
         }
+    }
+
+    fn apply_bulk_keyring_id(&mut self, source: bool) {
+        let value = if source {
+            self.bulk_source_keyring_apply.trim().to_owned()
+        } else {
+            self.bulk_destination_keyring_apply.trim().to_owned()
+        };
+        if value.is_empty() {
+            self.bulk_message = format!(
+                "Enter a {} keyring ID before applying it.",
+                if source { "source" } else { "destination" }
+            );
+            return;
+        }
+        let applied = apply_keyring_id_to_jobs(&mut self.bulk_jobs, &value, source);
+        self.bulk_message = format!(
+            "Applied the {} keyring ID to {applied} row(s) without a credential reference.",
+            if source { "source" } else { "destination" }
+        );
     }
     fn read_csv(path: &std::path::Path, base: &Form) -> Result<Vec<BulkJob>, String> {
         let mut reader = csv::Reader::from_path(path).map_err(|e| e.to_string())?;
@@ -4130,6 +4207,48 @@ impl App {
                 ui.add(egui::Slider::new(&mut self.form.profile.batch_retry_count, 0..=3));
                 ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(MUTED));
             });
+            ui.label(RichText::new("Passwordless queue credentials").strong());
+            ui.label(RichText::new("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue.").size(11.0).color(MUTED));
+            let queue_editable = !self.running();
+            let mut apply_source = false;
+            let mut apply_destination = false;
+            ui.horizontal(|ui| {
+                ui.label("Source keyring ID");
+                ui.add_enabled(
+                    queue_editable,
+                    egui::TextEdit::singleline(&mut self.bulk_source_keyring_apply)
+                        .desired_width(180.0),
+                );
+                if ui
+                    .add_enabled(queue_editable, egui::Button::new("Apply to empty source rows"))
+                    .clicked()
+                {
+                    apply_source = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Destination keyring ID");
+                ui.add_enabled(
+                    queue_editable,
+                    egui::TextEdit::singleline(&mut self.bulk_destination_keyring_apply)
+                        .desired_width(180.0),
+                );
+                if ui
+                    .add_enabled(
+                        queue_editable,
+                        egui::Button::new("Apply to empty destination rows"),
+                    )
+                    .clicked()
+                {
+                    apply_destination = true;
+                }
+            });
+            if apply_source {
+                self.apply_bulk_keyring_id(true);
+            }
+            if apply_destination {
+                self.apply_bulk_keyring_id(false);
+            }
             ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, name, extra_options. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -4705,24 +4824,6 @@ impl eframe::App for App {
                     ui.label(RichText::new(detail).size(10.0).color(MUTED));
                     ui.add_space(5.0);
                 }
-                ui.separator();
-                ui.label(RichText::new("TOOLS").size(11.0).strong().color(MUTED));
-                if ui.button("Batch queue").clicked() {
-                    self.bulk_open = true;
-                }
-                if ui
-                    .button(format!("Engine: {}", self.form.engine().label()))
-                    .clicked()
-                {
-                    self.engine_open = true;
-                }
-                if ui.button("Advanced options").clicked() {
-                    self.advanced_open = true;
-                }
-                if ui.button("Project cockpit").clicked() {
-                    self.cockpit_open = true;
-                    self.assess_plan();
-                }
             });
         egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.horizontal(|ui| { ui.label("Source port"); ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(90.0)); ui.label("TLS"); egui::ComboBox::from_id_salt("source_tls").selected_text(&self.form.profile.source_tls).show_ui(ui, |ui| { for mode in ["imaps", "starttls", "plain"] { ui.selectable_value(&mut self.form.profile.source_tls, mode.into(), mode); } }); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } if self.running() { if ui.button("Cancel running process").clicked() { if let Some(cancel) = &self.cancel_requested { cancel.store(true, Ordering::Relaxed); self.status = "Cancellation requested…".into(); } } } else { let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); } } if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
         self.preview(ctx);
@@ -5029,6 +5130,35 @@ mod tests {
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
         assert_eq!(job.form.source_password, " Secret123 ");
         assert_eq!(job.form.destination_password, " Destination! ");
+    }
+
+    #[test]
+    fn bulk_keyring_apply_fills_only_missing_source_references() {
+        let mut with_password = BulkJob {
+            label: "password".into(),
+            form: Form::default(),
+            state: "Ready".into(),
+        };
+        with_password.form.source_password = "already-present".into();
+        let mut with_reference = BulkJob {
+            label: "reference".into(),
+            form: Form::default(),
+            state: "Ready".into(),
+        };
+        with_reference.form.profile.source_credential_id = "existing".into();
+        let empty = BulkJob {
+            label: "empty".into(),
+            form: Form::default(),
+            state: "Ready".into(),
+        };
+        let mut jobs = vec![with_password, with_reference, empty];
+        assert_eq!(
+            apply_keyring_id_to_jobs(&mut jobs, "shared-source", true),
+            1
+        );
+        assert!(jobs[0].form.profile.source_credential_id.is_empty());
+        assert_eq!(jobs[1].form.profile.source_credential_id, "existing");
+        assert_eq!(jobs[2].form.profile.source_credential_id, "shared-source");
     }
 
     #[test]
