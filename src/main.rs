@@ -10,6 +10,8 @@ use credentials::{
     restrict_directory_permissions, restrict_file_permissions, secret_runtime_base,
     write_secret_file,
 };
+#[cfg(test)]
+use process::terminate_process_group_by_pid;
 use process::{
     InstanceLock, ProcessLaunchLimiter, acquire_instance_lock, collect_redacted_lines,
     configure_process_group, for_each_lossy_line, linux_process_identity, recorded_process_matches,
@@ -1472,7 +1474,7 @@ impl Default for App {
             let mut unverified = 0;
             for process in &processes {
                 if process.pid > 0 && recorded_process_matches(process) {
-                    terminate_recorded_process_group(process.pid);
+                    terminate_recorded_process_group(process);
                 } else {
                     unverified += 1;
                 }
@@ -6219,7 +6221,7 @@ mod tests {
         let pid = child.id();
         assert!(child.try_wait().unwrap().is_none());
 
-        terminate_recorded_process_group(pid);
+        terminate_process_group_by_pid(pid);
 
         let status = child.wait().unwrap();
         assert!(!status.success());
@@ -6255,7 +6257,7 @@ mod tests {
         db.register_process(&process).unwrap();
 
         assert!(recorded_process_matches(&process));
-        terminate_recorded_process_group(process.pid);
+        terminate_recorded_process_group(&process);
         assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
         assert_eq!(
             db.mailbox_state(&job).unwrap().as_deref(),

@@ -308,7 +308,44 @@ fn force_kill_process_group(child: &mut Child) {
     let _ = child.kill();
 }
 
-pub(crate) fn terminate_recorded_process_group(pid: u32) {
+/// Terminate a process group when its durable Linux identity still matches.
+/// Identity is checked both before SIGTERM and immediately before escalation
+/// to SIGKILL; a recycled PID or process group is never signalled.
+pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
+    #[cfg(unix)]
+    {
+        #[cfg(target_os = "linux")]
+        if !recorded_process_matches(process) {
+            return;
+        }
+        let process_group = -(process.pid as libc::pid_t);
+        unsafe {
+            let _ = libc::kill(process_group, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            #[cfg(target_os = "linux")]
+            if !recorded_process_matches(process) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        #[cfg(target_os = "linux")]
+        if recorded_process_matches(process) {
+            unsafe {
+                let _ = libc::kill(process_group, libc::SIGKILL);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = process;
+}
+
+/// Terminate a child group created by this process. This helper is used only
+/// for an already-owned live child; startup recovery must use the identity-
+/// checked function above.
+#[cfg(test)]
+pub(crate) fn terminate_process_group_by_pid(pid: u32) {
     #[cfg(unix)]
     {
         let process_group = -(pid as libc::pid_t);
