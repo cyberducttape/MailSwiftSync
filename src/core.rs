@@ -300,7 +300,8 @@ impl StateStore {
           CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
           CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
           CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
-          CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);")?;
+          CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);
+          CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = self
             .connection
@@ -1471,6 +1472,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn database_rejects_two_running_runs_for_one_mailbox() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-one", "test").unwrap();
+        let result = db.connection.execute(
+            "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,'test','','running')",
+            rusqlite::params!["run-two", project.id, job],
+        );
+        assert!(result.is_err());
     }
 
     #[test]
