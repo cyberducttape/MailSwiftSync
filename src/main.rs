@@ -1309,6 +1309,20 @@ fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Option<String> {
     None
 }
 
+fn durable_batch_matches_queue(
+    stored: &[core::MailboxJob],
+    desired: &[(String, String, String)],
+) -> bool {
+    stored.len() == desired.len()
+        && stored.iter().zip(desired.iter()).all(
+            |(stored, (source_mailbox, destination_mailbox, config))| {
+                stored.source_mailbox == *source_mailbox
+                    && stored.destination_mailbox == *destination_mailbox
+                    && stored.config.as_deref() == Some(config.as_str())
+            },
+        )
+}
+
 fn apply_keyring_id_to_jobs(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {
     let mut applied = 0;
     for job in jobs {
@@ -3161,7 +3175,6 @@ impl App {
         }
         self.durability_error = false;
         self.pending_batch_evidence.clear();
-        let existing_project = self.bulk_project_id.clone();
         let mailboxes = jobs
             .iter()
             .map(|job| {
@@ -3180,7 +3193,13 @@ impl App {
                 return;
             }
         };
-        let (project_id, job_ids) = if let Some(project_id) = existing_project {
+        let reusable_project = self.bulk_project_id.clone().filter(|project_id| {
+            self.store
+                .mailboxes(project_id)
+                .ok()
+                .is_some_and(|stored| durable_batch_matches_queue(&stored, &mailboxes))
+        });
+        let (project_id, job_ids) = if let Some(project_id) = reusable_project {
             (project_id, self.bulk_job_ids.clone())
         } else {
             let (project, job_ids) = match self.store.create_project_with_mailbox_configs(
@@ -5824,6 +5843,30 @@ mod tests {
             },
         ];
         assert!(duplicate_bulk_destination(&jobs).is_some());
+    }
+
+    #[test]
+    fn edited_batch_identity_cannot_reuse_old_durable_queue() {
+        let stored = vec![core::MailboxJob {
+            id: "job-1".into(),
+            source_mailbox: "alice@example.com".into(),
+            destination_mailbox: "alice@example.net".into(),
+            state: "ready".into(),
+            config: Some("engine = 'imapsync'".into()),
+        }];
+        let same = vec![(
+            "alice@example.com".into(),
+            "alice@example.net".into(),
+            "engine = 'imapsync'".into(),
+        )];
+        let edited = vec![(
+            "bob@example.com".into(),
+            "bob@example.net".into(),
+            "engine = 'imapsync'".into(),
+        )];
+
+        assert!(durable_batch_matches_queue(&stored, &same));
+        assert!(!durable_batch_matches_queue(&stored, &edited));
     }
 
     #[test]
