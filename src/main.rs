@@ -2768,10 +2768,9 @@ impl App {
             run.finished_at.as_deref().unwrap_or("in progress"),
             state,
             evidence.evidence_level(),
-            if evidence.authoritative {
-                "engine-confirmed summary"
-            } else {
-                "aggregate mailbox totals"
+            match evidence.evidence_scope() {
+                core::EvidenceScope::EngineConfirmed => "engine-confirmed summary",
+                core::EvidenceScope::AggregateReconciled => "aggregate mailbox totals",
             },
             evidence_reference,
             run.plan_snapshot,
@@ -2931,7 +2930,7 @@ impl App {
                             "state": job.state,
                             "evidence": {
                                 "run_id": evidence_run_id,
-                                "scope": if evidence.authoritative { "engine-confirmed" } else { "aggregate" },
+                                "scope": evidence.evidence_scope().label(),
                                 "evidence_level": evidence.evidence_level(),
                                 "authoritative": evidence.authoritative,
                                 "evidence_digest": digest,

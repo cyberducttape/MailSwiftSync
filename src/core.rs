@@ -155,7 +155,34 @@ pub struct MailboxEvidence {
     pub authoritative: bool,
 }
 
+/// The strongest claim supported by the current verifier adapter. This is a
+/// typed interpretation of the legacy durable `authoritative` bit; keeping
+/// the interpretation here prevents reports and UI code from inventing
+/// stronger meanings for aggregate totals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceScope {
+    EngineConfirmed,
+    AggregateReconciled,
+}
+
+impl EvidenceScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::EngineConfirmed => "engine-confirmed",
+            Self::AggregateReconciled => "aggregate-reconciled",
+        }
+    }
+}
+
 impl MailboxEvidence {
+    pub fn evidence_scope(&self) -> EvidenceScope {
+        if self.authoritative {
+            EvidenceScope::EngineConfirmed
+        } else {
+            EvidenceScope::AggregateReconciled
+        }
+    }
+
     /// Human-readable evidence category for operators and exported reports.
     /// The percentage remains available for compatibility, but it is not a
     /// probability of correctness.
@@ -166,7 +193,7 @@ impl MailboxEvidence {
         let exact = self.source_messages == self.destination_messages
             && self.source_bytes == self.destination_bytes
             && self.source_folders == self.destination_folders;
-        if self.authoritative && exact {
+        if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
             "Engine-confirmed exact match"
         } else if exact {
             "Aggregate match"
@@ -1623,6 +1650,10 @@ mod tests {
             db.evidence(&job).unwrap().unwrap().confidence_percent(),
             100
         );
+        assert_eq!(
+            db.evidence(&job).unwrap().unwrap().evidence_scope(),
+            EvidenceScope::EngineConfirmed
+        );
         db.transition(&project.id, Phase::Preflight).unwrap();
         db.transition(&project.id, Phase::Verification).unwrap();
         assert_eq!(
@@ -1682,6 +1713,11 @@ mod tests {
         assert_eq!(evidence.confidence_percent(), 85);
         assert!(evidence.is_exact_match());
         assert_eq!(evidence.evidence_level(), "Aggregate match");
+        assert_eq!(
+            evidence.evidence_scope(),
+            EvidenceScope::AggregateReconciled
+        );
+        assert_eq!(evidence.evidence_scope().label(), "aggregate-reconciled");
     }
 
     #[test]
