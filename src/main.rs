@@ -933,6 +933,13 @@ enum Event {
         Option<u32>,
         String,
     ),
+    ClaimBatch {
+        project_id: String,
+        job_id: String,
+        parent_run_id: String,
+        child_run_id: String,
+        reply: mpsc::SyncSender<Result<(), String>>,
+    },
     JobState {
         job_id: String,
         child_run_id: String,
@@ -3215,6 +3222,8 @@ impl App {
         }
         drop(job_tx);
         let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
+        let batch_project_id = project_id.clone();
+        let batch_run_id = run_id.clone();
         thread::spawn(move || {
             let failed = Arc::new(AtomicBool::new(false));
             let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
@@ -3226,6 +3235,8 @@ impl App {
                 let tx = tx.clone();
                 let cancel = Arc::clone(&cancel);
                 let launch_limiter = Arc::clone(&launch_limiter);
+                let batch_project_id = batch_project_id.clone();
+                let batch_run_id = batch_run_id.clone();
                 workers.push(thread::spawn(move || {
                     while let Ok((index, job_id, child_run_id, job)) = job_rx.recv() {
                         if cancel.load(Ordering::Relaxed) {
@@ -3250,17 +3261,69 @@ impl App {
                             index + 1,
                             job.label
                         )));
-                        let _ = tx.send(Event::JobState {
-                            job_id: job_id.clone(),
-                            child_run_id: child_run_id.clone(),
-                            state: "Running".into(),
-                        });
                         let mut completed = false;
                         let mut delta_required = false;
                         for attempt in 0..=retry_count {
                             if !launch_limiter.acquire(&cancel) {
                                 break;
                             }
+                            let (claim_tx, claim_rx) = mpsc::sync_channel(1);
+                            if tx
+                                .send(Event::ClaimBatch {
+                                    project_id: batch_project_id.clone(),
+                                    job_id: job_id.clone(),
+                                    parent_run_id: batch_run_id.clone(),
+                                    child_run_id: child_run_id.clone(),
+                                    reply: claim_tx,
+                                })
+                                .is_err()
+                            {
+                                failed.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            let claim_result = loop {
+                                if cancel.load(Ordering::Relaxed) {
+                                    break Err("cancelled by operator before durable claim".to_owned());
+                                }
+                                match claim_rx.recv_timeout(Duration::from_millis(100)) {
+                                    Ok(result) => break result,
+                                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                        break Err("durable claim response was lost".to_owned())
+                                    }
+                                }
+                            };
+                            if let Err(error) = claim_result {
+                                let cancelled = error.contains("cancelled");
+                                if !cancelled {
+                                    failed.store(true, Ordering::Relaxed);
+                                }
+                                let _ = tx.send(Event::Line(format!(
+                                    "[{}] {}",
+                                    index + 1,
+                                    error
+                                )));
+                                let _ = tx.send(Event::JobState {
+                                    job_id: job_id.clone(),
+                                    child_run_id: child_run_id.clone(),
+                                    state: if cancelled { "Cancelled" } else { "Failed" }.into(),
+                                });
+                                let _ = tx.send(Event::JobFinished {
+                                    job_id: job_id.clone(),
+                                    child_run_id: child_run_id.clone(),
+                                    state: if cancelled { "cancelled" } else { "failed" }.into(),
+                                    detail: error,
+                                });
+                                if let Ok(mut terminal) = terminal_jobs.lock() {
+                                    terminal.insert(index);
+                                }
+                                break;
+                            }
+                            let _ = tx.send(Event::JobState {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                state: "Running".into(),
+                            });
                             if attempt > 0 {
                                 let _ = tx.send(Event::Line(format!(
                                     "[{}] retry attempt {attempt}/{retry_count}",
@@ -3859,6 +3922,29 @@ impl App {
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
+                    Event::ClaimBatch {
+                        project_id,
+                        job_id,
+                        parent_run_id,
+                        child_run_id,
+                        reply,
+                    } => {
+                        let result = self
+                            .store
+                            .claim_batch_mailbox_for_child(
+                                &project_id,
+                                &job_id,
+                                &parent_run_id,
+                                &child_run_id,
+                            )
+                            .map_err(|error| error.to_string());
+                        if let Err(error) = &result {
+                            durability_errors.push(format!(
+                                "durable claim for child run {child_run_id} failed: {error}"
+                            ));
+                        }
+                        let _ = reply.send(result);
+                    }
                     Event::ProcessStarted(
                         process_run_id,
                         job_id,
