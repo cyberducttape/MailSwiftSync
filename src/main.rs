@@ -1341,6 +1341,10 @@ impl App {
     }
 
     fn start_capability_probe(&mut self) {
+        if self.form.engine() == core::Engine::Dovecot {
+            self.status = "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight.".into();
+            return;
+        }
         if self.form.profile.source_tls != "imaps" {
             self.status = "Capability discovery currently supports IMAPS only; use the configured engine preflight for plain or STARTTLS sources.".into();
             return;
@@ -1482,7 +1486,8 @@ impl App {
         let mut open = self.cockpit_open;
         egui::Window::new("Migration Project Cockpit").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
             ui.heading("Operator view"); ui.label(RichText::new("A durable migration project records phases and evidence independently of the desktop session.").color(MUTED)); ui.add_space(10.0);
-            if ui.add_enabled(self.capability_receiver.is_none(), egui::Button::new("Run authenticated IMAPS readiness probe")).clicked() { self.start_capability_probe(); }
+            if ui.add_enabled(self.capability_receiver.is_none() && self.form.engine() != core::Engine::Dovecot, egui::Button::new("Run authenticated IMAPS readiness probe")).clicked() { self.start_capability_probe(); }
+            if self.form.engine() == core::Engine::Dovecot { ui.label(RichText::new("Dovecot destination checks run through the native dry preflight.").size(11.0).color(MUTED)); }
             if self.project_id.is_none() && ui.button("Create project from current migration plan").clicked() { self.create_project(); }
             if let Some(id) = &self.project_id {
                 match self.store.project(id) {

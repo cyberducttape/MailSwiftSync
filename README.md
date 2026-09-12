@@ -65,7 +65,7 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 4. Run validation and inspect the execution journal for successful access and folder mapping.
 5. Only then disable Dry run and launch a live migration.
 
-Use **Project cockpit → Run authenticated IMAPS readiness probe** before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The probe is limited to IMAPS; plain and STARTTLS plans use the selected migration engine's dry preflight for authentication validation.
+In imapsync mode, use **Project cockpit → Run authenticated IMAPS readiness probe** before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The probe is limited to dual-IMAPS plans; plain and STARTTLS plans use the selected engine's dry preflight for authentication validation. In Dovecot mode, the destination is checked through the native `doveadm` dry preflight and does not require a destination IMAP password.
 
 ## Why MailSwiftSync exists
 
