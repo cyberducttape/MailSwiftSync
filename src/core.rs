@@ -1375,17 +1375,17 @@ impl StateStore {
         run_id: &str,
         value: &MailboxEvidence,
     ) -> rusqlite::Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
         if run_id != "legacy" {
-            let exists: bool = self.connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1)",
-                [run_id],
+            let owns_mailbox: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=r.job_id AND j.project_id=r.project_id WHERE r.id=?1 AND j.id=?2)",
+                params![run_id, job_id],
                 |row| row.get(0),
             )?;
-            if !exists {
-                return Err(rusqlite::Error::QueryReturnedNoRows);
+            if !owns_mailbox {
+                return Err(rusqlite::Error::InvalidQuery);
             }
         }
-        let tx = self.connection.unchecked_transaction()?;
         tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.commit()?;
@@ -2649,5 +2649,37 @@ mod tests {
             db.record_evidence_for_run(&job, "missing", &evidence)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn evidence_rejects_a_run_for_a_different_mailbox() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "evidence-ownership",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        db.begin_run(&project.id, &jobs[0], "evidence-run-one", "test")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 1,
+            destination_bytes: 1,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+        };
+
+        assert!(
+            db.record_evidence_for_run(&jobs[1], "evidence-run-one", &evidence)
+                .is_err()
+        );
+        assert!(db.evidence(&jobs[1]).unwrap().is_none());
     }
 }
