@@ -6,6 +6,7 @@ use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
+use keyring::Entry;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
@@ -42,8 +43,12 @@ struct Profile {
     #[serde(default = "default_source_tls")]
     source_tls: String,
     source_user: String,
+    #[serde(default)]
+    source_credential_id: String,
     destination_host: String,
     destination_user: String,
+    #[serde(default)]
+    destination_credential_id: String,
     imapsync_path: String,
     #[serde(default)]
     engine: core::Engine,
@@ -122,6 +127,8 @@ impl Default for Form {
     }
 }
 impl Form {
+    const KEYRING_SERVICE: &'static str = "com.mailswiftsync.mailbox";
+
     fn path() -> std::path::PathBuf {
         dirs_next::config_dir()
             .unwrap_or_else(std::env::temp_dir)
@@ -160,6 +167,68 @@ impl Form {
         sync_directory(path.parent()).map_err(|e| e.to_string())?;
         Ok(())
     }
+    fn keyring_entry(&self, source: bool) -> Result<Option<Entry>, String> {
+        let id = if source {
+            self.profile.source_credential_id.trim()
+        } else {
+            self.profile.destination_credential_id.trim()
+        };
+        if id.is_empty() {
+            return Ok(None);
+        }
+        Entry::new(Self::KEYRING_SERVICE, id)
+            .map(Some)
+            .map_err(|error| format!("Could not open OS keyring entry `{id}`: {error}"))
+    }
+    fn store_keyring_password(&self, source: bool) -> Result<(), String> {
+        let entry = self
+            .keyring_entry(source)?
+            .ok_or("Enter a keyring ID before storing a password.")?;
+        let password = if source {
+            &self.source_password
+        } else {
+            &self.destination_password
+        };
+        if password.is_empty() {
+            return Err("Enter a password before storing it in the OS keyring.".into());
+        }
+        entry
+            .set_password(password)
+            .map_err(|error| format!("Could not store the credential in the OS keyring: {error}"))
+    }
+    fn load_keyring_password(&mut self, source: bool) -> Result<(), String> {
+        let entry = self
+            .keyring_entry(source)?
+            .ok_or("Enter a keyring ID before loading a password.")?;
+        let password = entry.get_password().map_err(|error| {
+            format!("Could not load the credential from the OS keyring: {error}")
+        })?;
+        if source {
+            self.source_password = password;
+        } else {
+            self.destination_password = password;
+        }
+        Ok(())
+    }
+    fn delete_keyring_password(&self, source: bool) -> Result<(), String> {
+        let entry = self
+            .keyring_entry(source)?
+            .ok_or("Enter a keyring ID before deleting a password.")?;
+        entry
+            .delete_credential()
+            .map_err(|error| format!("Could not delete the OS keyring credential: {error}"))
+    }
+    fn load_configured_keyring_credentials(&mut self) -> Result<(), String> {
+        if self.source_password.is_empty() && !self.profile.source_credential_id.trim().is_empty() {
+            self.load_keyring_password(true)?;
+        }
+        if self.destination_password.is_empty()
+            && !self.profile.destination_credential_id.trim().is_empty()
+        {
+            self.load_keyring_password(false)?;
+        }
+        Ok(())
+    }
     fn validate(&self) -> Result<(), String> {
         self.validate_internal(true)
     }
@@ -195,6 +264,20 @@ impl Form {
             }
             if value.chars().any(char::is_control) {
                 return Err(format!("{label} cannot contain control characters."));
+            }
+        }
+        for (label, value) in [
+            ("Source keyring ID", &self.profile.source_credential_id),
+            (
+                "Destination keyring ID",
+                &self.profile.destination_credential_id,
+            ),
+        ] {
+            let trimmed = value.trim();
+            if trimmed.chars().any(char::is_control) || trimmed.len() > 256 {
+                return Err(format!(
+                    "{label} must not contain control characters and must be at most 256 bytes."
+                ));
             }
         }
         for (label, value) in [
@@ -1068,6 +1151,7 @@ struct App {
     live_confirm_open: bool,
     live_confirmed: bool,
     durability_error: bool,
+    keyring_open: bool,
     active_view: WorkspaceView,
 }
 impl Default for App {
@@ -1195,6 +1279,7 @@ impl Default for App {
             live_confirm_open: false,
             live_confirmed: false,
             durability_error: false,
+            keyring_open: false,
             active_view: WorkspaceView::Overview,
         }
     }
@@ -1387,6 +1472,10 @@ impl App {
     }
 
     fn start_capability_probe(&mut self) {
+        if let Err(error) = self.form.load_configured_keyring_credentials() {
+            self.status = error;
+            return;
+        }
         if self.form.engine() == core::Engine::Dovecot {
             self.status = "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight.".into();
             return;
@@ -2271,7 +2360,14 @@ impl App {
             self.bulk_message = "Batch validation is always non-mutating. Re-enable Dry run before starting the queue.".into();
             return;
         }
-        let jobs = self.bulk_jobs.clone();
+        let mut jobs = self.bulk_jobs.clone();
+        for job in &mut jobs {
+            if let Err(error) = job.form.load_configured_keyring_credentials() {
+                self.bulk_message =
+                    format!("Could not load credentials for {}: {error}", job.label);
+                return;
+            }
+        }
         if jobs.iter().any(|job| !job.form.dry_run) {
             self.bulk_message = "One or more queued jobs were imported in live mode. Re-import them with Dry run enabled.".into();
             return;
@@ -2490,6 +2586,10 @@ impl App {
         }
         if !self.form.dry_run {
             self.live_confirmed = false;
+        }
+        if let Err(error) = self.form.load_configured_keyring_credentials() {
+            self.status = error;
+            return;
         }
         if let Err(e) = self.form.validate() {
             self.status = e;
@@ -3113,6 +3213,82 @@ impl App {
             ui.add_space(8.0); ui.label("For any other documented flag, use the Extra imapsync options field in the migration plan. Each option is passed as separate whitespace-delimited arguments.");
         });
     }
+    fn keyring_dialog(&mut self, ctx: &egui::Context) {
+        if !self.keyring_open {
+            return;
+        }
+        let mut open = self.keyring_open;
+        egui::Window::new("OS keyring credentials")
+            .open(&mut open)
+            .default_width(620.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Keyring IDs are non-secret references saved in the profile. Passwords stay in the operating system credential store and are loaded only into the active session.",
+                    )
+                    .color(MUTED),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Source ID");
+                    ui.text_edit_singleline(&mut self.form.profile.source_credential_id);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Destination ID");
+                    ui.text_edit_singleline(&mut self.form.profile.destination_credential_id);
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Store source password").clicked() {
+                        self.status = match self.form.store_keyring_password(true) {
+                            Ok(()) => "Source password stored in OS keyring".into(),
+                            Err(error) => error,
+                        };
+                    }
+                    if ui.button("Load source").clicked() {
+                        self.status = match self.form.load_keyring_password(true) {
+                            Ok(()) => "Source credential loaded".into(),
+                            Err(error) => error,
+                        };
+                    }
+                    if ui.button("Delete source").clicked() {
+                        self.status = match self.form.delete_keyring_password(true) {
+                            Ok(()) => "Source credential deleted from OS keyring".into(),
+                            Err(error) => error,
+                        };
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Store destination password").clicked() {
+                        self.status = match self.form.store_keyring_password(false) {
+                            Ok(()) => "Destination password stored in OS keyring".into(),
+                            Err(error) => error,
+                        };
+                    }
+                    if ui.button("Load destination").clicked() {
+                        self.status = match self.form.load_keyring_password(false) {
+                            Ok(()) => "Destination credential loaded".into(),
+                            Err(error) => error,
+                        };
+                    }
+                    if ui.button("Delete destination").clicked() {
+                        self.status = match self.form.delete_keyring_password(false) {
+                            Ok(()) => "Destination credential deleted from OS keyring".into(),
+                            Err(error) => error,
+                        };
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering.",
+                    )
+                    .size(11.0)
+                    .color(ALERT),
+                );
+            });
+        self.keyring_open = open;
+    }
     fn engine_dialog(&mut self, ctx: &egui::Context) {
         if !self.engine_open {
             return;
@@ -3288,6 +3464,9 @@ impl eframe::App for App {
                     if ui.button("Batch queue").clicked() {
                         self.bulk_open = true;
                     }
+                    if ui.button("Credentials").clicked() {
+                        self.keyring_open = true;
+                    }
                     if ui
                         .button(format!("Engine: {}", self.form.engine().label()))
                         .clicked()
@@ -3388,6 +3567,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.horizontal(|ui| { ui.label("Source port"); ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(90.0)); ui.label("TLS"); egui::ComboBox::from_id_salt("source_tls").selected_text(&self.form.profile.source_tls).show_ui(ui, |ui| { for mode in ["imaps", "starttls", "plain"] { ui.selectable_value(&mut self.form.profile.source_tls, mode.into(), mode); } }); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } if self.running() { if ui.button("Cancel running process").clicked() { if let Some(cancel) = &self.cancel_requested { cancel.store(true, Ordering::Relaxed); self.status = "Cancellation requested…".into(); } } } else { let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); } } if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
         self.preview(ctx);
         self.bulk_dialog(ctx);
+        self.keyring_dialog(ctx);
         self.advanced_dialog(ctx);
         self.engine_dialog(ctx);
         self.cockpit(ctx);
@@ -3534,6 +3714,15 @@ mod tests {
         form.profile.source_user = "user".into();
         form.source_password = "secret\nLOGIN injected".into();
         assert!(form.validate().unwrap_err().contains("control characters"));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_keyring_ids() {
+        let mut form = dovecot_form();
+        form.profile.source_credential_id = "bad\nentry".into();
+        assert!(form.validate().unwrap_err().contains("keyring ID"));
+        form.profile.source_credential_id = "x".repeat(257);
+        assert!(form.validate().unwrap_err().contains("keyring ID"));
     }
 
     #[test]

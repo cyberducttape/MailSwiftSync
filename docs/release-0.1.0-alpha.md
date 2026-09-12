@@ -12,7 +12,7 @@ This is a technical preview for administrators who want to test the local-first 
 
 ## Known limitations
 
-- Native installers, code signing, and OS-keyring/OAuth credential delivery are not included.
+- Native installers, code signing, provider OAuth/Modern Auth, and unattended secret brokering are not included. Optional OS-keyring password references are included for local operator-managed sessions.
 - Remote Dovecot credential delivery is an explicit opt-in because the compatibility path may expose a password through destination-host process inspection.
 - Bulk execution is validation-only; live bulk scheduling, throttling, maintenance windows, and unattended operation are not supported.
 - Verification is aggregate evidence unless an engine supplies authoritative results; message-level reconciliation and UIDVALIDITY-aware checkpoints are not yet implemented.

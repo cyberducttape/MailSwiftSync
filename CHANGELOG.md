@@ -50,6 +50,7 @@ All notable changes to MailSwiftSync are documented here.
 - Reworked the README for first-time operators with above-the-fold screenshots, CI/license trust signals, audience guidance, alternative-tool comparison, and honest release/install boundaries.
 - Expanded `SECURITY.md` with supported-version policy, credential/transport/persistence boundaries, engine trust assumptions, and a safe vulnerability-reporting checklist.
 - Added package metadata and a deliberately marked technical-preview release note covering artifact coverage and known production limitations.
+- Added optional OS-keyring credential references with session-only loading, deletion controls, and documentation that distinguishes keyring password storage from OAuth and unattended secret brokering.
 - Live mailbox starts now atomically create the durable run record and move the job to `running`; persistence failures abort before the migration process is spawned.
 - The IMAPS readiness probe now authenticates, refreshes post-auth capabilities, and requests `NAMESPACE` and `LIST` so capability results are not presented as sufficient migration readiness on their own.
 - IMAPS readiness now requires tagged `OK` responses for capability, authentication, namespace, and folder-inventory commands; completed `NO`/`BAD` responses are reported as failures.
@@ -80,4 +81,4 @@ All notable changes to MailSwiftSync are documented here.
 ### Security
 
 - Passwords remain excluded from saved profiles and the SQLite ledger.
-- Dovecot source credentials still use a destination-side `imapc_password` override and may be visible to process inspection; OS-keyring/OAuth delivery remains future work.
+- Dovecot source credentials still use a destination-side `imapc_password` override for remote execution and may be visible to process inspection; provider OAuth and unattended secret brokering remain future work.

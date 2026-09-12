@@ -14,7 +14,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 
 ## Required before calling it production-ready
 
-- OS-keyring or equivalent secret-broker delivery; no password command-line exposure in the Dovecot path. Remote Dovecot execution is currently opt-in only because this is not yet solved.
+- Provider-specific OAuth/Modern Auth and equivalent unattended secret-broker delivery; no password command-line exposure in the Dovecot path. Local OS-keyring password references are available, but remote Dovecot execution is currently opt-in because its compatibility path can expose the password through destination-host process inspection.
 - Signed installers for Linux, Windows, and macOS, with checksums and reproducible release instructions.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
 - Preflight checks for DNS, TCP/TLS, authentication, quotas, source size, folder inventory, special-use folders, and destination readiness.
@@ -28,7 +28,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 ## Proposed eight-week sequence
 
 1. Week 1: finalize identity, licensing, release metadata, and a compatibility/test matrix.
-2. Week 2: implement keyring-backed credential providers and remove Dovecot process-argument secrets.
+2. Week 2: implement keyring-backed credential providers (available for operator-managed sessions); next, add provider OAuth and remove Dovecot process-argument secrets.
 3. Week 3: split preflight into DNS, transport, TLS, auth, quota, inventory, and readiness checks.
 4. Week 4: add resumable checkpoints, retries, delta status, and explicit mailbox state transitions.
 5. Week 5: add bounded concurrency, throttling, scheduling, and durable cancellation/recovery.

@@ -25,11 +25,12 @@ Stable today:
 - CSV/XLS/XLSX validation-only batch queue with bounded operator-selected concurrency (1–16 workers).
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
+- Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
 
 Experimental or planned:
 
-- OS-keyring/OAuth credential delivery and unattended secret brokering.
+- Provider-specific OAuth/Modern Auth and unattended secret brokering.
 - Native installers, signed releases, and cross-platform binary distribution.
 - Live migration concurrency, retry/resume checkpoints, maintenance windows, throttling, and scheduler/API operation.
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
@@ -105,7 +106,7 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 
 ### Current security boundary
 
-The desktop runner does not persist passwords. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion. Remote Dovecot execution is disabled by default because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host; an explicit acknowledgement is required to opt in. Treat remote Dovecot and all unattended use as operator-managed until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
+The desktop runner does not persist passwords. You may enter a password for the current session or load it through an OS-keyring ID. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion. Remote Dovecot execution is disabled by default because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host; an explicit acknowledgement is required to opt in. Provider-specific OAuth/Modern Auth and unattended secret brokering are not implemented yet. Never put real passwords in a committed CSV.
 
 ### Dovecot mode
 
