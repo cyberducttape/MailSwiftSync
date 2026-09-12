@@ -104,6 +104,13 @@ pub struct MailboxJob {
     pub config: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunSummary {
+    pub id: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxEvidence {
     pub source_messages: u64,
     pub destination_messages: u64,
@@ -574,6 +581,22 @@ impl StateStore {
             })
             .optional()
     }
+    pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
+        self.connection
+            .query_row(
+                "SELECT id,status,started_at,finished_at FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                [job_id],
+                |row| {
+                    Ok(RunSummary {
+                        id: row.get(0)?,
+                        status: row.get(1)?,
+                        started_at: row.get(2)?,
+                        finished_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+    }
     pub fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
         self.record_evidence_for_run(job_id, "legacy", value)
     }
@@ -861,5 +884,21 @@ mod tests {
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].id, jobs[0]);
         assert_eq!(restored[0].config.as_deref(), Some("engine = \"imap\""));
+    }
+
+    #[test]
+    fn latest_run_summary_is_queryable_for_audit_reports() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("audit", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.start_run(&project.id, Some(&job), "run-audit", "test")
+            .unwrap();
+        db.finish_run("run-audit", "completed", "ok").unwrap();
+        let run = db.latest_run(&job).unwrap().unwrap();
+        assert_eq!(run.id, "run-audit");
+        assert_eq!(run.status, "completed");
+        assert!(run.finished_at.is_some());
     }
 }

@@ -37,6 +37,7 @@ All notable changes to MailSwiftSync are documented here.
 - Tightened the live project-phase gate to recognized execution and verification phases only.
 - Local Dovecot commands and verification now receive source credentials through a child environment variable and Dovecot `$ENV:` expansion; remote SSH exposure remains documented.
 - Restricted profile and SQLite state files to owner-only permissions on Unix systems.
+- Added durable run metadata to exported verification reports so each report is traceable to a specific execution after restart.
 
 ### Changed
 

@@ -1510,16 +1510,25 @@ impl App {
             .mailbox_state(job)
             .map_err(|e| e.to_string())?
             .unwrap_or_else(|| "unknown".into());
+        let run = self
+            .store
+            .latest_run(job)
+            .map_err(|e| e.to_string())?
+            .ok_or("No durable run record is available for this evidence.")?;
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-verification.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Mailbox state: `{}`\n- Evidence scope: {}\n- Authoritative: `{}`\n- Confidence: {}%\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report contains aggregate evidence. Message-level reconciliation and provider-specific warnings require additional verification.",
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence scope: {}\n- Authoritative: `{}`\n- Confidence: {}%\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report contains aggregate evidence. Message-level reconciliation and provider-specific warnings require additional verification.",
             markdown_escape(&self.form.profile.name),
             markdown_escape(&self.form.profile.source_host),
             markdown_escape(&self.form.profile.destination_host),
             self.form.engine().label(),
+            run.id,
+            run.status,
+            run.started_at,
+            run.finished_at.as_deref().unwrap_or("in progress"),
             state,
             if evidence.authoritative {
                 "message-level summary"
