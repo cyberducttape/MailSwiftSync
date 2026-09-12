@@ -1032,11 +1032,28 @@ fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String
     let connection = ClientConnection::new(Arc::new(config), name)
         .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
     let mut stream = StreamOwned::new(connection, tcp);
+    // IMAP requires the server greeting before the client sends a command.
+    // Keep the greeting in the response so capability parsing can also use a
+    // PREAUTH greeting when a provider advertises capabilities there.
+    let mut response = String::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        if response.contains("\r\n") || response.len() > 65_536 {
+            break;
+        }
+    }
+    let greeting = response.to_ascii_uppercase();
+    if !greeting.contains("* OK") && !greeting.contains("* PREAUTH") {
+        return Err(format!("{host}: server greeting was missing or invalid"));
+    }
     stream
         .write_all(b"a001 CAPABILITY\r\n")
         .map_err(|e| e.to_string())?;
-    let mut response = String::new();
-    let mut buffer = [0; 4096];
     loop {
         let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
         if count == 0 {
@@ -1064,7 +1081,22 @@ impl App {
     }
 
     fn start_capability_probe(&mut self) {
-        let source = self.form.profile.source_host.trim().to_owned();
+        if self.form.profile.source_tls != "imaps" {
+            self.status = "Capability discovery currently supports IMAPS only; use the configured engine preflight for plain or STARTTLS sources.".into();
+            return;
+        }
+        let source = if self.form.profile.source_port.trim().is_empty() {
+            self.form.profile.source_host.trim().to_owned()
+        } else if let Ok((host, _)) = endpoint_parts(self.form.profile.source_host.trim(), 993) {
+            let port = self.form.profile.source_port.trim();
+            if host.contains(':') {
+                format!("[{host}]:{port}")
+            } else {
+                format!("{host}:{port}")
+            }
+        } else {
+            self.form.profile.source_host.trim().to_owned()
+        };
         let destination = self.form.profile.destination_host.trim().to_owned();
         if source.is_empty() || destination.is_empty() {
             self.status = "Enter both IMAP hosts before capability discovery.".into();

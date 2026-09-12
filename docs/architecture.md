@@ -19,7 +19,7 @@ Preflight Scheduler Verify
 
 The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, and verification evidence. It intentionally never persists passwords or mailbox content.
 
-The Project Cockpit also performs unauthenticated IMAPS capability discovery over certificate-verified TLS. It asks each endpoint for `CAPABILITY` and presents the result as planning context; it does not claim that these extensions replace Dovecot's server-side dsync behavior. A failed certificate check blocks discovery rather than being silently ignored.
+The Project Cockpit also performs unauthenticated IMAPS capability discovery over certificate-verified TLS. It consumes the server greeting before issuing `CAPABILITY`, honors an explicitly configured source port, and presents the result as planning context. The probe is intentionally limited to IMAPS; plain and STARTTLS sources are handled by engine preflight rather than being mislabeled as TLS-verified. It does not claim that these extensions replace Dovecot's server-side dsync behavior. A failed certificate check blocks discovery rather than being silently ignored.
 
 ## Migration phases
 
