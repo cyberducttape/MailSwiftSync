@@ -605,6 +605,7 @@ impl StateStore {
                 | "ready"
                 | "running"
                 | "delta_required"
+                | "verification_difference"
                 | "completed"
                 | "failed"
                 | "cancelled"
@@ -1100,6 +1101,7 @@ impl StateStore {
                 | "completed"
                 | "verified"
                 | "delta_required"
+                | "verification_difference"
                 | "failed"
                 | "cancelled"
                 | "attention"
@@ -1165,7 +1167,12 @@ impl StateStore {
         detail: &str,
         value: &MailboxEvidence,
     ) -> rusqlite::Result<()> {
-        if run_status != "completed" || !matches!(mailbox_state, "verified" | "delta_required") {
+        if run_status != "completed"
+            || !matches!(
+                mailbox_state,
+                "verified" | "delta_required" | "verification_difference"
+            )
+        {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let tx = self.connection.unchecked_transaction()?;
@@ -1174,8 +1181,11 @@ impl StateStore {
             params![job_id, project_id],
             |row| row.get(0),
         )?;
-        let evidence_terminal_jump =
-            current == "running" && matches!(mailbox_state, "verified" | "delta_required");
+        let evidence_terminal_jump = current == "running"
+            && matches!(
+                mailbox_state,
+                "verified" | "delta_required" | "verification_difference"
+            );
         if current != mailbox_state
             && !evidence_terminal_jump
             && !valid_mailbox_transition(&current, mailbox_state)
@@ -1434,12 +1444,20 @@ fn valid_mailbox_transition(current: &str, next: &str) -> bool {
         "ready" => matches!(next, "running" | "failed" | "cancelled"),
         "running" => matches!(
             next,
-            "ready" | "completed" | "delta_required" | "failed" | "cancelled" | "attention"
+            "ready"
+                | "completed"
+                | "delta_required"
+                | "verification_difference"
+                | "failed"
+                | "cancelled"
+                | "attention"
         ),
-        "delta_required" => matches!(next, "running" | "failed" | "cancelled"),
+        "delta_required" | "verification_difference" => {
+            matches!(next, "running" | "failed" | "cancelled" | "attention")
+        }
         "completed" => matches!(
             next,
-            "verified" | "delta_required" | "running" | "attention"
+            "verified" | "delta_required" | "verification_difference" | "running" | "attention"
         ),
         "failed" | "cancelled" => matches!(next, "running" | "attention"),
         "verified" => matches!(next, "delta_required" | "running" | "attention"),
@@ -1567,6 +1585,7 @@ mod tests {
             "running",
             "completed",
             "delta_required",
+            "verification_difference",
             "failed",
             "cancelled",
             "verified",
@@ -1592,6 +1611,7 @@ mod tests {
                     "ready",
                     "completed",
                     "delta_required",
+                    "verification_difference",
                     "failed",
                     "cancelled",
                     "attention",
@@ -1599,9 +1619,22 @@ mod tests {
             ),
             (
                 "completed",
-                &["verified", "delta_required", "running", "attention"],
+                &[
+                    "verified",
+                    "delta_required",
+                    "verification_difference",
+                    "running",
+                    "attention",
+                ],
             ),
-            ("delta_required", &["running", "failed", "cancelled"]),
+            (
+                "delta_required",
+                &["running", "failed", "cancelled", "attention"],
+            ),
+            (
+                "verification_difference",
+                &["running", "failed", "cancelled", "attention"],
+            ),
             ("failed", &["running", "attention"]),
             ("cancelled", &["running", "attention"]),
             ("verified", &["delta_required", "running", "attention"]),
@@ -1999,6 +2032,45 @@ mod tests {
         );
         assert_eq!(db.evidence(&job).unwrap(), Some(evidence));
         assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn evidence_difference_is_not_promoted_to_verified_or_complete() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("difference", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-difference", "imapsync")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 10,
+            destination_messages: 9,
+            source_bytes: 100,
+            destination_bytes: 90,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 2,
+            destination_folders: 2,
+            authoritative: false,
+        };
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "run-difference",
+            "completed",
+            "verification_difference",
+            "aggregate totals differ",
+            &evidence,
+        )
+        .unwrap();
+        assert_eq!(
+            db.mailbox_state(&job).unwrap().as_deref(),
+            Some("verification_difference")
+        );
+        assert!(db.transition(&project.id, Phase::Complete).is_err());
     }
 
     #[test]

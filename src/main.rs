@@ -3025,6 +3025,7 @@ impl App {
                     Some(
                         "ready"
                             | "delta_required"
+                            | "verification_difference"
                             | "failed"
                             | "attention"
                             | "cancelled"
@@ -3977,8 +3978,10 @@ impl App {
                             let final_state = evidence.as_ref().map_or(state.clone(), |value| {
                                 if value.is_exact_match() && state != "delta_required" {
                                     "verified".into()
-                                } else {
+                                } else if state == "delta_required" {
                                     "delta_required".into()
+                                } else {
+                                    "verification_difference".into()
                                 }
                             });
                             if let Some(index) =
@@ -4140,8 +4143,10 @@ impl App {
                 } else if let Some(evidence) = terminal_evidence.as_ref() {
                     if evidence.is_exact_match() && !delta_required {
                         "verified"
-                    } else {
+                    } else if delta_required {
                         "delta_required"
+                    } else {
+                        "verification_difference"
                     }
                 } else if !run_context.dry_run {
                     "attention"
@@ -4268,6 +4273,9 @@ impl App {
             match final_state {
                 Some("verified") => "Migration completed and verified",
                 Some("delta_required") => "Migration completed; final delta or review required",
+                Some("verification_difference") => {
+                    "Migration completed; verification found differences requiring review"
+                }
                 _ => "Migration completed; verification requires operator review",
             }
         }
@@ -4694,6 +4702,7 @@ fn display_job_state(state: &str) -> &'static str {
         "ready" => "Ready",
         "running" => "Running",
         "delta_required" => "Delta required",
+        "verification_difference" => "Verification difference",
         "completed" => "Completed",
         "verified" => "Verified",
         "failed" => "Failed",
