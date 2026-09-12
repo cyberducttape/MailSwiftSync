@@ -4110,8 +4110,17 @@ impl App {
                                 executable,
                             })
                         {
-                            durability_errors
-                                .push(format!("persist process identity failed: {error}"));
+                            durability_errors.push(format!(
+                                "persist process identity failed; cancellation requested before an untracked engine can continue: {error}"
+                            ));
+                            // A migration must not continue when its process
+                            // identity could not be durably registered. The
+                            // runner will terminate the child through its
+                            // normal cancellation path, while the terminal
+                            // event records the durability failure.
+                            if let Some(cancel) = &self.cancel_requested {
+                                cancel.store(true, Ordering::Relaxed);
+                            }
                         }
                     }
                     Event::Line(s) => {
