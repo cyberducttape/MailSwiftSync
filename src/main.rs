@@ -46,6 +46,7 @@ const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
+const MAX_PENDING_EVENTS: usize = 4_096;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Profile {
@@ -1144,7 +1145,7 @@ fn run_streaming(
     executable: &str,
     args: &[String],
     env: &[(String, String)],
-    tx: &mpsc::Sender<Event>,
+    tx: &mpsc::SyncSender<Event>,
     job_index: usize,
     prefix: &str,
     cancel: &AtomicBool,
@@ -1293,7 +1294,7 @@ fn run_capture_lines(
 
 fn run_dovecot_destination_preflight(
     commands: &[(String, Vec<String>)],
-    tx: &mpsc::Sender<Event>,
+    tx: &mpsc::SyncSender<Event>,
     cancel: &AtomicBool,
     timeout: Duration,
     prefix: &str,
@@ -3246,7 +3247,7 @@ impl App {
         for job in &mut self.bulk_jobs {
             job.state = "Queued".into();
         }
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
@@ -3648,7 +3649,7 @@ impl App {
             engine: run_engine,
             plan_fingerprint,
         });
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
@@ -5464,7 +5465,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn live_dovecot_exit_code_two_is_a_delta_outcome() {
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
         let outcome = run_streaming(
@@ -5486,7 +5487,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn dry_dovecot_exit_code_two_is_not_a_delta_outcome() {
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
         let outcome = run_streaming(
