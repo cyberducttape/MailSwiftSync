@@ -133,6 +133,25 @@ pub struct MailboxEvidence {
 }
 
 impl MailboxEvidence {
+    /// Human-readable evidence category for operators and exported reports.
+    /// The percentage remains available for compatibility, but it is not a
+    /// probability of correctness.
+    pub fn evidence_level(&self) -> &'static str {
+        if self.failed_messages > 0 || self.unmatched_messages > 0 {
+            return "Incomplete evidence";
+        }
+        let exact = self.source_messages == self.destination_messages
+            && self.source_bytes == self.destination_bytes
+            && self.source_folders == self.destination_folders;
+        if self.authoritative && exact {
+            "Engine-confirmed exact match"
+        } else if exact {
+            "Aggregate match"
+        } else {
+            "Aggregate mismatch"
+        }
+    }
+
     pub fn confidence_percent(&self) -> u8 {
         if !self.authoritative {
             return if self.unmatched_messages == 0 && self.failed_messages == 0 {
@@ -1073,6 +1092,7 @@ mod tests {
             authoritative: false,
         };
         assert_eq!(evidence.confidence_percent(), 85);
+        assert_eq!(evidence.evidence_level(), "Aggregate mismatch");
     }
 
     #[test]
@@ -1089,6 +1109,7 @@ mod tests {
             authoritative: false,
         };
         assert_eq!(evidence.confidence_percent(), 0);
+        assert_eq!(evidence.evidence_level(), "Incomplete evidence");
     }
 
     #[test]

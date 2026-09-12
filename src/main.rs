@@ -2322,6 +2322,7 @@ impl App {
                             ("Bytes", format!("{} source / {} destination", evidence.source_bytes, evidence.destination_bytes)),
                             ("Unmatched", evidence.unmatched_messages.to_string()),
                             ("Failed", evidence.failed_messages.to_string()),
+                            ("Evidence level", evidence.evidence_level().into()),
                             ("Confidence", format!("{}%", evidence.confidence_percent())),
                         ] { ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); }); }
                     }
