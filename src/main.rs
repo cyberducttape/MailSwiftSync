@@ -4009,13 +4009,12 @@ impl App {
                                 "Queued" => "queued",
                                 _ => "attention",
                             };
+                            // A Running event is informational. The worker has
+                            // already received an acknowledged ClaimBatch
+                            // response before it can launch the process; do
+                            // not perform a second asynchronous claim here.
                             let result = if durable_state == "running" {
-                                self.store.claim_batch_mailbox_for_child(
-                                    &run.project_id,
-                                    &job_id,
-                                    &run.run_id,
-                                    &child_run_id,
-                                )
+                                Ok(())
                             } else {
                                 self.store.set_mailbox_state(&job_id, durable_state)
                             };
