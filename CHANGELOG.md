@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Batch workers now claim immutable jobs through an atomic index instead of contending on a mutex-protected iterator.
 - Added a configurable 1–720 hour per-process timeout for large mailbox migrations.
 - Added explicit imapsync message/byte-per-second throttles for provider-friendly runs.
 - Pinned CI and release builds to Rust 1.92.0 so linting and published artifacts use a reproducible toolchain.

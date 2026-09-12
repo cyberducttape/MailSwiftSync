@@ -18,8 +18,8 @@ use std::{
     path::PathBuf,
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, Receiver},
     },
     thread,
@@ -2495,18 +2495,20 @@ impl App {
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         let retry_count = self.form.profile.batch_retry_count.min(3);
         thread::spawn(move || {
-            let queue = Arc::new(Mutex::new(jobs.into_iter().enumerate()));
+            let jobs = Arc::new(jobs);
+            let next_job = Arc::new(AtomicUsize::new(0));
             let failed = Arc::new(AtomicBool::new(false));
             let mut workers = Vec::with_capacity(concurrency);
             for _ in 0..concurrency {
-                let queue = Arc::clone(&queue);
+                let jobs = Arc::clone(&jobs);
+                let next_job = Arc::clone(&next_job);
                 let failed = Arc::clone(&failed);
                 let tx = tx.clone();
                 let cancel = Arc::clone(&cancel);
                 workers.push(thread::spawn(move || {
                     loop {
-                        let next = queue.lock().ok().and_then(|mut jobs| jobs.next());
-                        let Some((index, job)) = next else { break };
+                        let index = next_job.fetch_add(1, Ordering::Relaxed);
+                        let Some(job) = jobs.get(index) else { break };
                         if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
                             continue;
