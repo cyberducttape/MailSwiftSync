@@ -54,6 +54,11 @@ struct Profile {
     dovecot_ssh_user: String,
     #[serde(default)]
     dovecot_config: String,
+    /// Remote Dovecot currently receives this value in a destination-side
+    /// command override. Keep the unsafe compatibility path opt-in until a
+    /// deployment-independent secret broker is available.
+    #[serde(default)]
+    allow_remote_password_in_argv: bool,
     automap: bool,
     addheader: bool,
     justfolders: bool,
@@ -311,6 +316,9 @@ impl Form {
     }
     fn prepared_command(&self) -> Result<PreparedCommand, String> {
         if self.engine() == core::Engine::Dovecot {
+            if !self.local_doveadm() && !self.profile.allow_remote_password_in_argv {
+                return Err("Remote Dovecot execution is disabled by default because the source password may be visible in the destination command line. Enable the explicit remote-password compatibility acknowledgement only on a trusted destination, or use a secret broker.".into());
+            }
             let (executable, args) = self.command(false);
             let env = if self.local_doveadm() {
                 vec![(
@@ -2762,6 +2770,8 @@ impl App {
                 ui.horizontal(|ui| { ui.label("SSH executable"); ui.text_edit_singleline(&mut self.form.profile.ssh_path); });
                 ui.horizontal(|ui| { ui.label("SSH user (optional)"); ui.text_edit_singleline(&mut self.form.profile.dovecot_ssh_user); });
                 ui.horizontal(|ui| { ui.label("Config"); ui.text_edit_singleline(&mut self.form.profile.dovecot_config); });
+                ui.checkbox(&mut self.form.profile.allow_remote_password_in_argv, "I understand the remote Dovecot password may be visible in process arguments");
+                ui.label(RichText::new("Required only for remote execution until keyring/secret-broker delivery is available. Never enable this on an untrusted destination.").size(11.0).color(ALERT));
                 ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(MUTED));
             }
             ui.add_space(8.0);
@@ -3080,6 +3090,19 @@ mod tests {
             args.last()
                 .is_some_and(|command| command.contains("imapc_host=old.example"))
         );
+    }
+
+    #[test]
+    fn remote_dovecot_execution_requires_explicit_secret_exposure_ack() {
+        let mut form = dovecot_form();
+        form.profile.dovecot_ssh_user = "migration".into();
+        assert!(
+            form.prepared_command()
+                .err()
+                .is_some_and(|error| error.contains("disabled by default"))
+        );
+        form.profile.allow_remote_password_in_argv = true;
+        assert!(form.prepared_command().is_ok());
     }
 
     #[test]

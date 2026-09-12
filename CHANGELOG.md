@@ -49,6 +49,7 @@ All notable changes to MailSwiftSync are documented here.
 - Reject control characters in hosts, usernames, and passwords before validation, process execution, or authenticated IMAP probing.
 - Batch startup now atomically records the parent run and marks every child job as running before worker execution, so restart recovery cannot lose queued children between UI events.
 - Dovecot mode no longer offers the dual-IMAPS readiness probe when the destination has no IMAP credential; native `doveadm` dry preflight is now the explicit destination check.
+- Remote Dovecot execution is now disabled by default until secret-broker delivery exists; operators must explicitly acknowledge the current destination process-argument exposure to opt in.
 
 ### Changed
 

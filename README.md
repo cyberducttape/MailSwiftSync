@@ -81,7 +81,7 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 
 ### Current security boundary
 
-The desktop runner does not persist passwords. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion; remote Dovecot credentials currently use `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Treat remote Dovecot and all unattended use as operator-managed until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
+The desktop runner does not persist passwords. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion. Remote Dovecot execution is disabled by default because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host; an explicit acknowledgement is required to opt in. Treat remote Dovecot and all unattended use as operator-managed until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
 
 ### Dovecot mode
 

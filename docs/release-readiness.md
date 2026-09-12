@@ -13,7 +13,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 
 ## Required before calling it production-ready
 
-- OS-keyring or equivalent secret-broker delivery; no password command-line exposure in the Dovecot path.
+- OS-keyring or equivalent secret-broker delivery; no password command-line exposure in the Dovecot path. Remote Dovecot execution is currently opt-in only because this is not yet solved.
 - Signed installers for Linux, Windows, and macOS, with checksums and reproducible release instructions.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
 - Preflight checks for DNS, TCP/TLS, authentication, quotas, source size, folder inventory, special-use folders, and destination readiness.
