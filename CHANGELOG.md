@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Subprocess stdout/stderr is now decoded and emitted line-by-line through a callback, preserving live journal visibility and preventing complete migration logs from accumulating in memory; bounded collection remains limited to verification capture.
 - Added a compact credential-free project-health JSON export for ticketing and operator wrappers, including phase, mailbox state counts, Attention items, and recent run outcomes.
 - Stabilized instance-lock release after denied contender opens by explicitly closing the failed lock descriptor before returning contention to the UI.
 - Replaced fixed atomic-index batch dispatch with an MPMC channel queue. Workers now consume owned jobs from a disconnect-terminated queue while retaining bounded concurrency, cancellation, retries, and durable failure reporting.

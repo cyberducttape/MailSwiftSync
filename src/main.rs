@@ -1320,7 +1320,7 @@ fn run_streaming(
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
     let out_tail = Arc::clone(&tail);
     let out_thread = thread::spawn(move || {
-        for line in read_lossy_lines(stdout) {
+        for_each_lossy_line(stdout, |line| {
             let mut safe = line;
             for secret in &out_secrets {
                 if !secret.is_empty() {
@@ -1329,14 +1329,14 @@ fn run_streaming(
             }
             record_process_tail(&out_tail, &safe);
             let _ = out_tx.send(Event::Line(format!("{out_prefix}{safe}")));
-        }
+        });
     });
     let err_tx = tx.clone();
     let err_prefix = prefix.to_owned();
     let err_secrets = secrets.to_vec();
     let err_tail = Arc::clone(&tail);
     let err_thread = thread::spawn(move || {
-        for line in read_lossy_lines(stderr) {
+        for_each_lossy_line(stderr, |line| {
             let mut safe = line;
             for secret in &err_secrets {
                 if !secret.is_empty() {
@@ -1345,7 +1345,7 @@ fn run_streaming(
             }
             record_process_tail(&err_tail, &safe);
             let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {safe}")));
-        }
+        });
     });
     let result = wait_with_timeout(&mut child, timeout, cancel)
         .map_err(|error| error.to_string())
@@ -1454,23 +1454,31 @@ fn run_dovecot_destination_preflight(
 }
 
 fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> Vec<String> {
-    read_lossy_lines(reader)
-        .into_iter()
-        .map(|mut line| {
-            for secret in secrets {
-                if !secret.is_empty() {
-                    line = line.replace(secret, "[REDACTED]");
-                }
+    let mut lines = Vec::new();
+    for_each_lossy_line(reader, |mut line| {
+        for secret in secrets {
+            if !secret.is_empty() {
+                line = line.replace(secret, "[REDACTED]");
             }
-            line
-        })
-        .collect()
+        }
+        lines.push(line);
+    });
+    lines
 }
 
+#[cfg(test)]
 fn read_lossy_lines<R: Read>(reader: R) -> Vec<String> {
+    let mut lines = Vec::new();
+    for_each_lossy_line(reader, |line| lines.push(line));
+    lines
+}
+
+/// Consume subprocess output incrementally while tolerating malformed UTF-8.
+/// The streaming runner uses this callback form so a long migration never
+/// accumulates its complete stdout/stderr in memory before the UI sees it.
+fn for_each_lossy_line<R: Read, F: FnMut(String)>(reader: R, mut callback: F) {
     let mut reader = BufReader::new(reader);
     let mut buffer = Vec::new();
-    let mut lines = Vec::new();
     loop {
         buffer.clear();
         let bytes_read = match reader.read_until(b'\n', &mut buffer) {
@@ -1483,9 +1491,8 @@ fn read_lossy_lines<R: Read>(reader: R) -> Vec<String> {
         let line = String::from_utf8_lossy(&buffer)
             .trim_end_matches(['\r', '\n'])
             .to_owned();
-        lines.push(line);
+        callback(line);
     }
-    lines
 }
 #[derive(Clone)]
 struct BulkJob {
