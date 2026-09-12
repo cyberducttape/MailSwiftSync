@@ -1270,6 +1270,8 @@ struct ActiveRunContext {
     run_id: String,
     project_id: String,
     job_id: Option<String>,
+    batch_job_ids: Vec<String>,
+    batch_plan_fingerprints: Vec<String>,
     kind: RunKind,
     dry_run: bool,
     engine: core::Engine,
@@ -3132,6 +3134,8 @@ impl App {
             run_id: run_id.clone(),
             project_id: project_id.clone(),
             job_id: None,
+            batch_job_ids: self.bulk_job_ids.clone(),
+            batch_plan_fingerprints: jobs.iter().map(|job| job.form.plan_fingerprint()).collect(),
             kind: RunKind::Batch,
             dry_run: !live,
             engine: self.form.engine(),
@@ -3541,6 +3545,8 @@ impl App {
             run_id: run_id.clone(),
             project_id: run_project_id,
             job_id: Some(run_job_id.clone()),
+            batch_job_ids: Vec::new(),
+            batch_plan_fingerprints: Vec::new(),
             kind: RunKind::Single,
             dry_run: run_dry_run,
             engine: run_engine,
@@ -3740,7 +3746,10 @@ impl App {
                         if let Some(job) = self.bulk_jobs.get_mut(index) {
                             job.state = state.clone();
                         }
-                        if let Some(job_id) = self.bulk_job_ids.get(index) {
+                        if let Some(job_id) = active_run
+                            .as_ref()
+                            .and_then(|run| run.batch_job_ids.get(index))
+                        {
                             let durable_state = match state.as_str() {
                                 "Running" => "running",
                                 "Completed" if !self.bulk_live_run => "ready",
@@ -3766,12 +3775,11 @@ impl App {
                             }
                             if state == "Completed"
                                 && !self.bulk_live_run
-                                && let Some(fingerprint) = self
-                                    .bulk_jobs
-                                    .get(index)
-                                    .map(|job| job.form.plan_fingerprint())
+                                && let Some(fingerprint) = active_run
+                                    .as_ref()
+                                    .and_then(|run| run.batch_plan_fingerprints.get(index))
                             {
-                                let result = self.store.set_preflight_plan(job_id, &fingerprint);
+                                let result = self.store.set_preflight_plan(job_id, fingerprint);
                                 if let Err(error) = result {
                                     durability_errors.push(format!(
                                         "persist batch preflight plan failed: {error}"
