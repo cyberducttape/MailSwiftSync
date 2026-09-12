@@ -2650,6 +2650,7 @@ impl App {
                 serde_json::json!({
                     "id": run.id,
                     "job_id": run.job_id,
+                    "parent_run_id": run.parent_run_id,
                     "engine": run.engine,
                     "status": run.status,
                     "started_at": run.started_at,
@@ -2715,6 +2716,7 @@ impl App {
                 serde_json::json!({
                     "id": run.id,
                     "job_id": run.job_id,
+                    "parent_run_id": run.parent_run_id,
                     "engine": run.engine,
                     "status": run.status,
                     "started_at": run.started_at,

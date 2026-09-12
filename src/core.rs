@@ -107,6 +107,7 @@ pub struct MailboxJob {
 pub struct RunSummary {
     pub id: String,
     pub job_id: Option<String>,
+    pub parent_run_id: Option<String>,
     pub engine: String,
     /// Serialized execution plan captured when the run started. Session
     /// passwords and raw operator-supplied extra-option values are excluded;
@@ -300,7 +301,7 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
+          CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
           CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, start_ticks INTEGER, process_group INTEGER, session_id INTEGER, executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
@@ -357,6 +358,12 @@ impl StateStore {
         if !run_columns.iter().any(|column| column == "plan_snapshot") {
             self.connection.execute(
                 "ALTER TABLE runs ADD COLUMN plan_snapshot TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+        if !run_columns.iter().any(|column| column == "parent_run_id") {
+            self.connection.execute(
+                "ALTER TABLE runs ADD COLUMN parent_run_id TEXT REFERENCES runs(id)",
                 [],
             )?;
         }
@@ -921,8 +928,15 @@ impl StateStore {
                 .map(|plan| plan.plan_snapshot.as_str())
                 .unwrap_or("");
             tx.execute(
-                "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,'running')",
-                params![child_run_id, project_id, job_id, child_engine, child_snapshot],
+                "INSERT INTO runs(id,project_id,job_id,parent_run_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,'running')",
+                params![
+                    child_run_id,
+                    project_id,
+                    job_id,
+                    run_id,
+                    child_engine,
+                    child_snapshot
+                ],
             )?;
             child_run_ids.push(child_run_id);
         }
@@ -994,8 +1008,8 @@ impl StateStore {
             |row| row.get(0),
         )?;
         let child_is_running: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND status='running')",
-            params![child_run_id, project_id, job_id],
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND parent_run_id=?4 AND status='running')",
+            params![child_run_id, project_id, job_id, parent_run_id],
             |row| row.get(0),
         )?;
         if !parent_is_running || !child_is_running {
@@ -1174,18 +1188,19 @@ impl StateStore {
     pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                "SELECT id,job_id,parent_run_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok(RunSummary {
                         id: row.get(0)?,
                         job_id: row.get(1)?,
-                        engine: row.get(2)?,
-                        plan_snapshot: row.get(3)?,
-                        status: row.get(4)?,
-                        started_at: row.get(5)?,
-                        finished_at: row.get(6)?,
-                        detail: row.get(7)?,
+                        parent_run_id: row.get(2)?,
+                        engine: row.get(3)?,
+                        plan_snapshot: row.get(4)?,
+                        status: row.get(5)?,
+                        started_at: row.get(6)?,
+                        finished_at: row.get(7)?,
+                        detail: row.get(8)?,
                     })
                 },
             )
@@ -1194,18 +1209,19 @@ impl StateStore {
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1",
+                "SELECT id,job_id,parent_run_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1",
                 [run_id],
                 |row| {
                     Ok(RunSummary {
                         id: row.get(0)?,
                         job_id: row.get(1)?,
-                        engine: row.get(2)?,
-                        plan_snapshot: row.get(3)?,
-                        status: row.get(4)?,
-                        started_at: row.get(5)?,
-                        finished_at: row.get(6)?,
-                        detail: row.get(7)?,
+                        parent_run_id: row.get(2)?,
+                        engine: row.get(3)?,
+                        plan_snapshot: row.get(4)?,
+                        status: row.get(5)?,
+                        started_at: row.get(6)?,
+                        finished_at: row.get(7)?,
+                        detail: row.get(8)?,
                     })
                 },
             )
@@ -1213,19 +1229,20 @@ impl StateStore {
     }
     pub fn recent_runs(&self, project_id: &str, limit: u32) -> rusqlite::Result<Vec<RunSummary>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+            "SELECT id,job_id,parent_run_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
         )?;
         statement
             .query_map(params![project_id, limit], |row| {
                 Ok(RunSummary {
                     id: row.get(0)?,
                     job_id: row.get(1)?,
-                    engine: row.get(2)?,
-                    plan_snapshot: row.get(3)?,
-                    status: row.get(4)?,
-                    started_at: row.get(5)?,
-                    finished_at: row.get(6)?,
-                    detail: row.get(7)?,
+                    parent_run_id: row.get(2)?,
+                    engine: row.get(3)?,
+                    plan_snapshot: row.get(4)?,
+                    status: row.get(5)?,
+                    started_at: row.get(6)?,
+                    finished_at: row.get(7)?,
+                    detail: row.get(8)?,
                 })
             })?
             .collect()
