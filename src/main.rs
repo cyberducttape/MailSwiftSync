@@ -12,13 +12,13 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     io::{BufRead, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, Receiver},
     },
@@ -889,7 +889,7 @@ fn wait_with_timeout(
         }
         if cancel.load(Ordering::Relaxed) {
             terminate_process_group(child);
-            let _ = child.wait();
+            wait_for_graceful_exit(child, Duration::from_secs(5));
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "cancelled by operator",
@@ -897,14 +897,27 @@ fn wait_with_timeout(
         }
         if started.elapsed() >= timeout {
             terminate_process_group(child);
-            let _ = child.wait();
+            wait_for_graceful_exit(child, Duration::from_secs(5));
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                "migration exceeded the one-day execution limit",
+                "migration exceeded its configured execution timeout",
             ));
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn wait_for_graceful_exit(child: &mut Child, grace: Duration) {
+    let started = std::time::Instant::now();
+    while started.elapsed() < grace {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(_) => break,
+        }
+    }
+    force_kill_process_group(child);
+    let _ = child.wait();
 }
 
 fn configure_process_group(command: &mut Command) {
@@ -915,6 +928,10 @@ fn configure_process_group(command: &mut Command) {
         // shell/wrapper descendant running against the destination.
         unsafe {
             command.pre_exec(|| {
+                #[cfg(target_os = "linux")]
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
                 if libc::setsid() == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -931,7 +948,15 @@ fn terminate_process_group(child: &mut Child) {
         unsafe {
             let _ = libc::kill(process_group, libc::SIGTERM);
         }
-        thread::sleep(Duration::from_millis(100));
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
+}
+
+fn force_kill_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let process_group = -(child.id() as libc::pid_t);
         unsafe {
             let _ = libc::kill(process_group, libc::SIGKILL);
         }
@@ -1065,6 +1090,8 @@ fn run_streaming(
     let out_tx = tx.clone();
     let out_prefix = prefix.to_owned();
     let out_secrets = secrets.to_vec();
+    let tail = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
+    let out_tail = Arc::clone(&tail);
     let out_thread = thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             let mut safe = line;
@@ -1073,12 +1100,14 @@ fn run_streaming(
                     safe = safe.replace(secret, "[REDACTED]");
                 }
             }
+            record_process_tail(&out_tail, &safe);
             let _ = out_tx.send(Event::Line(format!("{out_prefix}{safe}")));
         }
     });
     let err_tx = tx.clone();
     let err_prefix = prefix.to_owned();
     let err_secrets = secrets.to_vec();
+    let err_tail = Arc::clone(&tail);
     let err_thread = thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             let mut safe = line;
@@ -1087,6 +1116,7 @@ fn run_streaming(
                     safe = safe.replace(secret, "[REDACTED]");
                 }
             }
+            record_process_tail(&err_tail, &safe);
             let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {safe}")));
         }
     });
@@ -1101,7 +1131,32 @@ fn run_streaming(
         });
     let _ = out_thread.join();
     let _ = err_thread.join();
-    result
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let recent = process_tail_text(&tail);
+            if recent.is_empty() {
+                Err(error)
+            } else {
+                Err(format!("{error}; recent output: {recent}"))
+            }
+        }
+    }
+}
+
+fn record_process_tail(tail: &Mutex<VecDeque<String>>, line: &str) {
+    if let Ok(mut tail) = tail.lock() {
+        if tail.len() == 200 {
+            tail.pop_front();
+        }
+        tail.push_back(line.to_owned());
+    }
+}
+
+fn process_tail_text(tail: &Mutex<VecDeque<String>>) -> String {
+    tail.lock()
+        .map(|lines| lines.iter().cloned().collect::<Vec<_>>().join(" | "))
+        .unwrap_or_default()
 }
 
 fn run_capture_lines(
@@ -1465,13 +1520,32 @@ fn probe_tls_capabilities(
     } else {
         format!("{server_name}:{port}")
     };
-    let socket = address
+    let sockets = address
         .to_socket_addrs()
         .map_err(|error| format!("{host}: {error}"))?
-        .next()
-        .ok_or_else(|| format!("{host}: no address found"))?;
-    let tcp = TcpStream::connect_timeout(&socket, Duration::from_secs(8))
-        .map_err(|e| format!("{host}: {e}"))?;
+        .collect::<Vec<_>>();
+    if sockets.is_empty() {
+        return Err(format!("{host}: no address found"));
+    }
+    let mut last_error = None;
+    let mut tcp = None;
+    for socket in sockets {
+        match TcpStream::connect_timeout(&socket, Duration::from_secs(8)) {
+            Ok(stream) => {
+                tcp = Some(stream);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let tcp = tcp.ok_or_else(|| {
+        format!(
+            "{host}: could not connect to any resolved address: {}",
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "unknown connection error".into())
+        )
+    })?;
     tcp.set_read_timeout(Some(Duration::from_secs(8)))
         .map_err(|e| e.to_string())?;
     let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -2374,10 +2448,15 @@ impl App {
         let mut form = base.clone();
         form.profile.source_host = get("source_host");
         form.profile.source_user = get("source_user");
-        form.source_password = get("source_password");
+        // Whitespace is meaningful in passwords. Trim only semantic fields;
+        // otherwise a valid credential such as ` Secret ` is silently changed.
+        form.source_password = values.get("source_password").cloned().unwrap_or_default();
         form.profile.destination_host = get("destination_host");
         form.profile.destination_user = get("destination_user");
-        form.destination_password = get("destination_password");
+        form.destination_password = values
+            .get("destination_password")
+            .cloned()
+            .unwrap_or_default();
         if let Some(value) = values.get("extra_options") {
             form.profile.extra_options = value.clone();
         }
@@ -2924,7 +3003,6 @@ impl App {
             },
             self.form.engine().label()
         )];
-        let engine_name = self.form.engine().label().to_owned();
         let verification = if !self.form.dry_run && self.form.engine() == core::Engine::Dovecot {
             self.form.dovecot_verification_commands(false)
         } else {
@@ -2948,57 +3026,16 @@ impl App {
         let cleanup_guard = CleanupGuard::new(cleanup.clone());
         thread::spawn(move || {
             let _cleanup_guard = cleanup_guard;
-            let mut command = Command::new(&exe);
-            command
-                .args(&args)
-                .envs(prepared_env.iter().map(|(key, value)| (key, value)))
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            configure_process_group(&mut command);
-            let mut child = match command.spawn() {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx.send(Event::Finished(Err(format!("Could not start {exe}: {e}"))));
-                    return;
-                }
-            };
-            let out = child.stdout.take().expect("piped");
-            let err = child.stderr.take().expect("piped");
-            let stdout_secrets = output_secrets.clone();
-            let a = tx.clone();
-            let t1 = thread::spawn(move || {
-                for mut l in BufReader::new(out).lines().map_while(Result::ok) {
-                    for secret in &stdout_secrets {
-                        if !secret.is_empty() {
-                            l = l.replace(secret, "[REDACTED]");
-                        }
-                    }
-                    let _ = a.send(Event::Line(l));
-                }
-            });
-            let stderr_secrets = output_secrets;
-            let b = tx.clone();
-            let t2 = thread::spawn(move || {
-                for mut l in BufReader::new(err).lines().map_while(Result::ok) {
-                    for secret in &stderr_secrets {
-                        if !secret.is_empty() {
-                            l = l.replace(secret, "[REDACTED]");
-                        }
-                    }
-                    let _ = b.send(Event::Line(format!("[stderr] {l}")));
-                }
-            });
-            let mut result = wait_with_timeout(&mut child, migration_timeout, &cancel)
-                .map_err(|e| e.to_string())
-                .and_then(|s| {
-                    if s.success() {
-                        Ok(())
-                    } else {
-                        Err(format!("{engine_name} exited with {s}"))
-                    }
-                });
-            let _ = t1.join();
-            let _ = t2.join();
+            let mut result = run_streaming(
+                &exe,
+                &args,
+                &prepared_env,
+                &tx,
+                "",
+                &cancel,
+                &output_secrets,
+                migration_timeout,
+            );
             if result.is_ok() && !verification.is_empty() {
                 let mut reports = Vec::new();
                 for (index, (verify_exe, verify_args)) in verification.iter().enumerate() {
@@ -3213,7 +3250,7 @@ impl App {
                         "failed"
                     }
                 } else if let Some(evidence) = terminal_evidence.as_ref() {
-                    if evidence.confidence_percent() == 100 {
+                    if evidence.is_exact_match() {
                         "verified"
                     } else {
                         "delta_required"
@@ -4227,6 +4264,20 @@ mod tests {
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
         assert!(job.form.source_password.is_empty());
         assert!(job.form.validate().is_err());
+    }
+
+    #[test]
+    fn bulk_import_preserves_password_whitespace() {
+        let mut values = HashMap::new();
+        values.insert("source_host".into(), "old.example".into());
+        values.insert("source_user".into(), "old@example".into());
+        values.insert("source_password".into(), " Secret123 ".into());
+        values.insert("destination_host".into(), "new.example".into());
+        values.insert("destination_user".into(), "new@example".into());
+        values.insert("destination_password".into(), " Destination! ".into());
+        let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
+        assert_eq!(job.form.source_password, " Secret123 ");
+        assert_eq!(job.form.destination_password, " Destination! ");
     }
 
     #[test]
