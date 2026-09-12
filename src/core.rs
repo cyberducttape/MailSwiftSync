@@ -951,6 +951,7 @@ impl StateStore {
             "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
             params![mailbox_state, job_id, project_id],
         )?;
+        tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_finished',?2)",
             params![project_id, "success with verification evidence"],
@@ -969,6 +970,25 @@ impl StateStore {
             .query_row(
                 "SELECT id,job_id,engine,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
                 [job_id],
+                |row| {
+                    Ok(RunSummary {
+                        id: row.get(0)?,
+                        job_id: row.get(1)?,
+                        engine: row.get(2)?,
+                        status: row.get(3)?,
+                        started_at: row.get(4)?,
+                        finished_at: row.get(5)?,
+                        detail: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+    }
+    pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
+        self.connection
+            .query_row(
+                "SELECT id,job_id,engine,status,started_at,finished_at,detail FROM runs WHERE id=?1",
+                [run_id],
                 |row| {
                     Ok(RunSummary {
                         id: row.get(0)?,
@@ -1028,6 +1048,33 @@ impl StateStore {
     }
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
         self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)?, authoritative:r.get::<_, i64>(8)? != 0 })).optional()
+    }
+    pub fn latest_evidence_for_run(
+        &self,
+        job_id: &str,
+    ) -> rusqlite::Result<Option<(String, MailboxEvidence)>> {
+        self.connection
+            .query_row(
+                "SELECT run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative FROM evidence_history WHERE job_id=?1 ORDER BY captured_at DESC, id DESC LIMIT 1",
+                [job_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        MailboxEvidence {
+                            source_messages: row.get(1)?,
+                            destination_messages: row.get(2)?,
+                            source_bytes: row.get(3)?,
+                            destination_bytes: row.get(4)?,
+                            unmatched_messages: row.get(5)?,
+                            failed_messages: row.get(6)?,
+                            source_folders: row.get(7)?,
+                            destination_folders: row.get(8)?,
+                            authoritative: row.get::<_, i64>(9)? != 0,
+                        },
+                    ))
+                },
+            )
+            .optional()
     }
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects WHERE id=?1", [id], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
@@ -1418,6 +1465,16 @@ mod tests {
             destination_folders: 2,
             authoritative: true,
         };
+        db.register_process(&ActiveProcess {
+            run_id: "run-evidence".into(),
+            job_id: job.clone(),
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test".into(),
+        })
+        .unwrap();
 
         db.finish_run_for_mailbox_with_evidence(
             &project.id,
@@ -1436,6 +1493,55 @@ mod tests {
             Some("completed")
         );
         assert_eq!(db.evidence(&job).unwrap(), Some(evidence));
+        assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn latest_evidence_resolves_to_its_own_run() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-evidence-one", "imapsync")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 10,
+            destination_bytes: 10,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+        };
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "run-evidence-one",
+            "completed",
+            "verified",
+            "",
+            &evidence,
+        )
+        .unwrap();
+        db.begin_run(&project.id, &job, "run-evidence-two", "imapsync")
+            .unwrap();
+        db.finish_run_for_mailbox(
+            &project.id,
+            &job,
+            "run-evidence-two",
+            "failed",
+            "attention",
+            "later failure",
+        )
+        .unwrap();
+
+        let (run_id, latest) = db.latest_evidence_for_run(&job).unwrap().unwrap();
+        assert_eq!(run_id, "run-evidence-one");
+        assert_eq!(latest, evidence);
+        assert_eq!(db.run(&run_id).unwrap().unwrap().status, "completed");
     }
 
     #[test]
