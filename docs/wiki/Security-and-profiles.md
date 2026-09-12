@@ -14,6 +14,8 @@ For imapsync runs, MailSwiftSync writes passwords to short-lived owner-only pass
 
 The command preview intentionally redacts passwords, but the preview is not a substitute for host-level process security. OS-keyring references improve operator-managed sessions, but provider OAuth or an equivalent secret broker is still required before describing unattended credential delivery as enterprise-grade for both engines.
 
+The application holds an exclusive lock beside the SQLite database while it is open. This prevents a second MailSwiftSync instance from treating a live first instance as an abandoned owner during startup recovery. If the lock message appears, close the existing window; do not delete the lock file casually. imapsync is also started with `--nolog` so diagnostic output remains under MailSwiftSync’s journal and report policy rather than creating an unmanaged `LOG_imapsync/` file.
+
 ## Recommended practice
 
 - Use provider-issued app passwords where available; OAuth/Modern Auth is not yet implemented by MailSwiftSync.

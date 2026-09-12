@@ -874,7 +874,7 @@ fn acquire_instance_lock(state_path: &std::path::Path) -> Result<File, String> {
         .map_err(|error| format!("could not open application lock: {error}"))?;
     restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
     file.try_lock_exclusive().map_err(|_| {
-        "another MailSwiftSync instance already owns the migration state; close it before opening this workspace".to_owned()
+        "Another MailSwiftSync instance holds the project database. Close the existing window before opening this workspace; do not delete the lock file while it may be running.".to_owned()
     })?;
     Ok(file)
 }
@@ -5373,7 +5373,11 @@ mod tests {
         let state_path =
             std::env::temp_dir().join(format!("mailswiftsync-lock-{}.db", uuid::Uuid::new_v4()));
         let first = acquire_instance_lock(&state_path).unwrap();
-        assert!(acquire_instance_lock(&state_path).is_err());
+        assert!(
+            acquire_instance_lock(&state_path)
+                .unwrap_err()
+                .contains("project database")
+        );
         drop(first);
         let second = acquire_instance_lock(&state_path).unwrap();
         drop(second);
@@ -5438,6 +5442,19 @@ mod tests {
             Some("abandoned")
         );
         assert!(!child.wait().unwrap().success());
+        // The retry is only attempted after the matching process has been
+        // reaped and recovery has changed the mailbox out of `running`.
+        db.begin_run(&project.id, &job, "run-after-reap", "test")
+            .unwrap();
+        db.finish_run_for_mailbox(
+            &project.id,
+            &job,
+            "run-after-reap",
+            "cancelled",
+            "cancelled",
+            "test retry cleanup",
+        )
+        .unwrap();
     }
 
     #[test]

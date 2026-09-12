@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Clarified lock-contention recovery guidance and the `--nolog` behavior in the README and security/runbook docs, so operators know to close the existing owner and use MailSwiftSync’s journal rather than searching for an unmanaged imapsync log.
 - Simplified workspace navigation by keeping the sidebar focused on Overview, Plan, Mailboxes, Activity, and Verification; modal tools remain in the header. Overview now surfaces durable preflight results and the current next action. Batch queues can apply OS-keyring credential references to rows missing credentials without copying password values or overwriting existing row credentials.
 - Added a Linux startup-recovery integration test covering the complete orphan path: persist a real process identity, verify ownership, terminate the matching process group, recover the mailbox to `Attention`, clear the active-process row, and mark the run abandoned.
 - Remote Dovecot validation now rejects SSH hosts and usernames beginning with `-` or containing whitespace, preventing imported endpoint values from being interpreted as SSH options.
