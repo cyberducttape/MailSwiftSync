@@ -27,6 +27,7 @@ All notable changes to MailSwiftSync are documented here.
 - Bound live execution to the exact secret-free plan captured by a successful dry preflight, and require the mailbox job to be explicitly ready.
 - Made project creation transactional in the cockpit, reject advanced options that override controlled endpoints or credentials, and redact worker-thread output before it reaches the event journal.
 - Added cancellation status to structured run records and expanded exported reports with mailbox state and evidence scope.
+- Made batch project and mailbox creation atomic, attached batch validation to a durable run record, and journaled batch activity under its project.
 
 ### Changed
 

@@ -314,6 +314,47 @@ impl StateStore {
         tx.commit()?;
         Ok((project, job_id))
     }
+    pub fn create_project_with_mailboxes(
+        &self,
+        name: &str,
+        source: &str,
+        destination: &str,
+        mailboxes: &[(String, String)],
+    ) -> rusqlite::Result<(Project, Vec<String>)> {
+        if mailboxes.is_empty() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let project = Project {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            source_endpoint: source.into(),
+            destination_endpoint: destination.into(),
+            phase: Phase::Discovery,
+        };
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES(?1,?2,?3,?4,?5)",
+            params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
+        )?;
+        let mut ids = Vec::with_capacity(mailboxes.len());
+        for (source_mailbox, destination_mailbox) in mailboxes {
+            let id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')",
+                params![id, project.id, source_mailbox, destination_mailbox],
+            )?;
+            ids.push(id);
+        }
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created',?2)",
+            params![
+                project.id,
+                format!("Batch created with {} mailbox jobs", ids.len())
+            ],
+        )?;
+        tx.commit()?;
+        Ok((project, ids))
+    }
     pub fn transition(&self, id: &str, phase: Phase) -> rusqlite::Result<()> {
         let current = self
             .project(id)?
@@ -646,5 +687,27 @@ mod tests {
         db.set_mailbox_state(&job, "running").unwrap();
         assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
         assert!(db.set_mailbox_state(&job, "queued").is_err());
+    }
+
+    #[test]
+    fn batch_project_creation_is_atomic() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(
+            db.first_mailbox(&project.id).unwrap(),
+            Some(jobs[0].clone())
+        );
+        assert_eq!(
+            db.mailbox_state(&jobs[1]).unwrap().as_deref(),
+            Some("queued")
+        );
     }
 }

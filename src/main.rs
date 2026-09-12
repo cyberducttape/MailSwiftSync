@@ -1046,6 +1046,12 @@ fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String
 }
 
 impl App {
+    fn active_project_id(&self) -> Option<&str> {
+        self.project_id
+            .as_deref()
+            .or(self.bulk_project_id.as_deref())
+    }
+
     fn start_capability_probe(&mut self) {
         let source = self.form.profile.source_host.trim().to_owned();
         let destination = self.form.profile.destination_host.trim().to_owned();
@@ -1640,32 +1646,38 @@ impl App {
             self.bulk_message = "Batch validation requires durable SQLite storage.".into();
             return;
         }
-        let project = match self
-            .store
-            .create_project("Batch validation", "batch", "batch")
-        {
-            Ok(project) => project,
+        let mailboxes = jobs
+            .iter()
+            .map(|job| {
+                (
+                    job.form.profile.source_user.clone(),
+                    job.form.profile.destination_user.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let (project, job_ids) = match self.store.create_project_with_mailboxes(
+            "Batch validation",
+            "batch",
+            "batch",
+            &mailboxes,
+        ) {
+            Ok(value) => value,
             Err(error) => {
                 self.bulk_message = format!("Could not create durable batch: {error}");
                 return;
             }
         };
-        let mut job_ids = Vec::with_capacity(jobs.len());
-        for job in &jobs {
-            match self.store.add_mailbox(
-                &project.id,
-                &job.form.profile.source_user,
-                &job.form.profile.destination_user,
-            ) {
-                Ok(id) => job_ids.push(id),
-                Err(error) => {
-                    self.bulk_message = format!("Could not create durable batch job: {error}");
-                    return;
-                }
-            }
-        }
         self.bulk_project_id = Some(project.id.clone());
         self.bulk_job_ids = job_ids;
+        let run_id = uuid::Uuid::new_v4().to_string();
+        self.run_id = Some(run_id.clone());
+        if let Err(error) = self
+            .store
+            .start_run(&project.id, None, &run_id, "batch validation")
+        {
+            self.bulk_message = format!("Could not start durable batch run: {error}");
+            return;
+        }
         for job in &mut self.bulk_jobs {
             job.state = "Queued".into();
         }
@@ -1999,7 +2011,7 @@ impl App {
                 match event {
                     Event::Line(s) => {
                         let safe = self.redact_output(&s);
-                        if let Some(project) = &self.project_id {
+                        if let Some(project) = self.active_project_id() {
                             let _ = self.store.record_event(project, "run_output", &safe);
                         }
                         self.output.push(safe);
@@ -2034,7 +2046,7 @@ impl App {
                             };
                             let _ = self.store.set_mailbox_state(job, state);
                         }
-                        if let Some(project) = &self.project_id {
+                        if let Some(project) = self.active_project_id() {
                             let _ = self.store.record_event(
                                 project,
                                 "verification_evidence",
@@ -2045,7 +2057,7 @@ impl App {
                     Event::VerificationFailed(detail) => {
                         let safe = self.redact_output(&detail);
                         self.output.push(format!("[verification] {safe}"));
-                        if let Some(project) = &self.project_id {
+                        if let Some(project) = self.active_project_id() {
                             let _ = self
                                 .store
                                 .record_event(project, "verification_pending", &safe);
@@ -2072,14 +2084,14 @@ impl App {
                         };
                         let _ = self.store.set_mailbox_state(job, state);
                     }
-                    if let Some(project) = &self.project_id {
+                    if let Some(project) = self.active_project_id() {
                         let _ = self.store.record_event(
                             project,
                             "verification_evidence",
                             &format!("{}% confidence", evidence.confidence_percent()),
                         );
                     }
-                } else if let Some(project) = &self.project_id {
+                } else if let Some(project) = self.active_project_id() {
                     let _ = self.store.record_event(
                         project,
                         "verification_pending",
@@ -2095,7 +2107,7 @@ impl App {
                     .ok()
                     .flatten()
                     .is_none()
-                && let Some(project) = &self.project_id
+                && let Some(project) = self.active_project_id()
             {
                 let _ = self.store.record_event(
                     project,
@@ -2103,7 +2115,9 @@ impl App {
                     "doveadm completed; mailbox reconciliation was incomplete",
                 );
             }
-            if let Some(job) = &self.job_id {
+            if self.bulk_project_id.is_none()
+                && let Some(job) = &self.job_id
+            {
                 if succeeded && self.form.dry_run {
                     let _ = self
                         .store
@@ -2139,7 +2153,7 @@ impl App {
                 };
                 let _ = self.store.set_mailbox_state(job, final_state);
             }
-            if let Some(project) = &self.project_id {
+            if let Some(project) = self.active_project_id() {
                 if let Some(run_id) = &self.run_id {
                     let run_status = if succeeded {
                         "completed"

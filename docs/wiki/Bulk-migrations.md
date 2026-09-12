@@ -36,6 +36,6 @@ Optional columns are `name` and `extra_options`. Start from the [CSV template](.
 
 ## Run safely
 
-Batch runs are deliberately validation-only and require Dry run to be enabled. Each imported row is recorded as a durable mailbox job, and the queue streams output sequentially so individual failures remain visible. Review the execution journal for every job before considering a live migration. Use the main single-mailbox workflow for a confirmed live migration.
+Batch runs are deliberately validation-only and require Dry run to be enabled. The batch project and all imported mailbox jobs are committed atomically, and the batch has a durable run record. The queue streams output sequentially so individual failures remain visible, but credentials are intentionally not persisted for restart/replay. Review the execution journal for every job before considering a live migration. Use the main single-mailbox workflow for a confirmed live migration.
 
 Do not commit a spreadsheet containing real passwords to Git, and treat the file as sensitive after import. Imported data exists only in MailSwiftSync memory for the current queue and is not written to the saved profile. A future keyring-backed credential source should be preferred for production batch work.
