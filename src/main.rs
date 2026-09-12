@@ -1866,7 +1866,7 @@ impl App {
             evidence.unmatched_messages,
             evidence.failed_messages
         );
-        std::fs::write(path, report).map_err(|e| e.to_string())
+        write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
     fn export_project_report(&self) -> Result<(), String> {
@@ -1953,7 +1953,7 @@ impl App {
             ));
         }
         report.push_str("\nEvidence marked `aggregate` is reconciliation evidence, not message-level proof. Missing evidence or any state other than `verified` requires operator review before declaring the project complete.\n");
-        std::fs::write(path, report).map_err(|e| e.to_string())
+        write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
     fn verification_view(&self, ui: &mut egui::Ui) {
@@ -2987,6 +2987,21 @@ fn restrict_file_permissions(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::set_permissions(path, permissions)
 }
 
+fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
+    let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        std::fs::write(&temporary, content)?;
+        restrict_file_permissions(&temporary)?;
+        std::fs::File::open(&temporary)?.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        sync_directory(path.parent())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 #[cfg(unix)]
 fn sync_directory(path: Option<&std::path::Path>) -> std::io::Result<()> {
     if let Some(path) = path {
@@ -3321,6 +3336,25 @@ mod tests {
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
         assert!(job.form.source_password.is_empty());
         assert!(job.form.validate().is_err());
+    }
+
+    #[test]
+    fn verification_report_write_is_atomic_and_private() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-report-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("report.md");
+        write_private_atomic(&path, "report body").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "report body");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

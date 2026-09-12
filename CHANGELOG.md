@@ -58,6 +58,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Verification exports are now written atomically, flushed before rename, and restricted to owner-only permissions on Unix.
+
 - Dovecot migrations default to additive `sync -1`; destination mirroring requires explicit destructive configuration.
 - Automatic engine selection is conservative and uses `imapsync` unless Dovecot mode is explicitly selected.
 - Updated operator, architecture, and security documentation to describe the native Dovecot workflow and its limitations.
