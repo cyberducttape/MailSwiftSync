@@ -99,6 +99,8 @@ cargo build --release
 
 ## Documentation
 
+MailSwiftSync is distributed under the [MIT License](LICENSE).
+
 Begin with the [MailSwiftSync Wiki](docs/wiki/Home.md) for illustrated, step-by-step setup and migration guidance.
 
 For the durable project, phase, and verification model, see the [control-plane architecture](docs/architecture.md).

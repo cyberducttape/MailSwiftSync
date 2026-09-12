@@ -38,7 +38,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}
           chmod 0755 dist/mailswiftsync-${{ matrix.target }}
           tar -C dist -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz mailswiftsync-${{ matrix.target }}
-          sha256sum dist/mailswiftsync-${{ matrix.target }}.tar.gz > dist/mailswiftsync-${{ matrix.target }}.tar.gz.sha256
+          shasum -a 256 dist/mailswiftsync-${{ matrix.target }}.tar.gz > dist/mailswiftsync-${{ matrix.target }}.tar.gz.sha256
       - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
