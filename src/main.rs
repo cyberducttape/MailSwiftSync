@@ -1213,10 +1213,12 @@ fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Option<String> {
     let mut destinations = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
         let profile = &job.form.profile;
+        let (destination_host, destination_port) = endpoint_parts(&profile.destination_host, 993)
+            .unwrap_or_else(|_| (profile.destination_host.trim().to_owned(), 993));
         let key = format!(
             "{}:{}:{}",
-            profile.destination_host.to_ascii_lowercase(),
-            "993",
+            destination_host.to_ascii_lowercase(),
+            destination_port,
             profile.destination_user.to_ascii_lowercase()
         );
         if !destinations.insert(key) {
@@ -5328,6 +5330,28 @@ mod tests {
         first.profile.destination_user = "user@example".into();
         let mut second = first.clone();
         second.profile.source_user = "different@example".into();
+        let jobs = vec![
+            BulkJob {
+                label: "first".into(),
+                form: first,
+                state: "Ready".into(),
+            },
+            BulkJob {
+                label: "second".into(),
+                form: second,
+                state: "Ready".into(),
+            },
+        ];
+        assert!(duplicate_bulk_destination(&jobs).is_some());
+    }
+
+    #[test]
+    fn duplicate_destination_detection_normalizes_explicit_default_port() {
+        let mut first = Form::default();
+        first.profile.destination_host = "mail.example".into();
+        first.profile.destination_user = "user@example".into();
+        let mut second = first.clone();
+        second.profile.destination_host = "mail.example:993".into();
         let jobs = vec![
             BulkJob {
                 label: "first".into(),

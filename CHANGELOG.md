@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Duplicate-destination detection now canonicalizes endpoint ports, so an implicit IMAPS port and an explicit `:993` cannot bypass the concurrent-write guard.
 - Process-start events now carry the durable mailbox job ID rather than relying on a queue index when registering OS process identity, reducing routing risk if UI collection order changes.
 - Moved timeout handling, process-group setup/termination, Linux process identity, and recorded-process matching into `src/process.rs`; supervision policy now has a dedicated module boundary alongside output framing and launch pacing.
 - Batch child mailboxes remain `queued` until an active parent worker atomically claims them; claims increment attempts and are recorded as durable events, while generic state mutation can no longer manufacture `verified` by reusing evidence from an older run.
