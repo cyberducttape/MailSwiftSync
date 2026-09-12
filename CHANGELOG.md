@@ -43,6 +43,7 @@ All notable changes to MailSwiftSync are documented here.
 - Restricted profile and SQLite state files to owner-only permissions on Unix systems.
 - Added durable run metadata to exported verification reports so each report is traceable to a specific execution after restart.
 - Strengthened crash durability with flushed atomic profile writes, SQLite writer backoff, and rejection of evidence records that reference unknown runs.
+- Live mailbox starts now atomically create the durable run record and move the job to `running`; persistence failures abort before the migration process is spawned.
 
 ### Changed
 

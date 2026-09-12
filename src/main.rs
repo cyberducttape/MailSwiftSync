@@ -2167,23 +2167,21 @@ impl App {
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
         let run_id = uuid::Uuid::new_v4().to_string();
+        if let (Some(project), Some(job)) = (self.project_id.as_deref(), self.job_id.as_deref()) {
+            if let Err(error) =
+                self.store
+                    .begin_run(project, job, &run_id, self.form.engine().label())
+            {
+                cleanup_paths(&cleanup);
+                self.status = format!("Could not record durable run; nothing was started: {error}");
+                return;
+            }
+        } else {
+            cleanup_paths(&cleanup);
+            self.status = "Could not start without a durable mailbox project.".into();
+            return;
+        }
         self.run_id = Some(run_id.clone());
-        if let Some(job) = &self.job_id {
-            let _ = self.store.set_mailbox_state(job, "running");
-        }
-        if let Some(project) = &self.project_id {
-            let _ = self.store.start_run(
-                project,
-                self.job_id.as_deref(),
-                &run_id,
-                self.form.engine().label(),
-            );
-            let _ = self.store.record_event(
-                project,
-                "run_started",
-                &format!("{} ({run_id})", self.form.engine().label()),
-            );
-        }
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());

@@ -570,6 +570,39 @@ impl StateStore {
         )?;
         Ok(())
     }
+    /// Atomically records a run and moves its mailbox into `running`.
+    /// Keeping these writes together prevents restart recovery from seeing a
+    /// running mailbox without the run record needed to explain it.
+    pub fn begin_run(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        engine: &str,
+    ) -> rusqlite::Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let current: String = tx.query_row(
+            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            params![job_id, project_id],
+            |row| row.get(0),
+        )?;
+        if current != "running" && !valid_mailbox_transition(&current, "running") {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES(?1,?2,?3,?4,'running')",
+            params![run_id, project_id, job_id, engine],
+        )?;
+        tx.execute(
+            "UPDATE mailbox_jobs SET state='running',attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
+            [job_id],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_started',?2)",
+            params![project_id, format!("{engine} ({run_id})")],
+        )?;
+        tx.commit()
+    }
     pub fn finish_run(&self, run_id: &str, status: &str, detail: &str) -> rusqlite::Result<()> {
         self.connection.execute(
             "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3",
@@ -934,6 +967,25 @@ mod tests {
         assert_eq!(run.id, "run-audit");
         assert_eq!(run.status, "completed");
         assert!(run.finished_at.is_some());
+    }
+
+    #[test]
+    fn begin_run_atomically_moves_mailbox_and_records_run() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("atomic", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.set_mailbox_state(&job, "ready").unwrap();
+        db.begin_run(&project.id, &job, "run-atomic", "test")
+            .unwrap();
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
+        assert_eq!(
+            db.run_status("run-atomic").unwrap().as_deref(),
+            Some("running")
+        );
     }
 
     #[test]
