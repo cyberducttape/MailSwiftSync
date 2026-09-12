@@ -387,6 +387,31 @@ impl Form {
         }
         Ok(())
     }
+    /// Reload configured references immediately before live admission. The
+    /// ordinary loader intentionally preserves a password typed into the
+    /// current form; live promotion must instead use the current keyring
+    /// value when a credential reference is authoritative.
+    fn reload_configured_keyring_credentials(&mut self) -> Result<(), String> {
+        if !self.profile.source_credential_id.trim().is_empty() {
+            self.load_keyring_password(true)?;
+        }
+        if !self.profile.destination_credential_id.trim().is_empty() {
+            self.load_keyring_password(false)?;
+        }
+        Ok(())
+    }
+
+    /// A process-local comparison value for the credential material used by
+    /// a dry preflight. It is deliberately never persisted or included in a
+    /// plan snapshot; it only detects a session/keyring change before live
+    /// promotion and forces a fresh dry preflight.
+    fn credential_fingerprint(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(self.source_password.as_bytes());
+        digest.update([0]);
+        digest.update(self.destination_password.as_bytes());
+        format!("{:x}", digest.finalize())
+    }
     fn validate(&self) -> Result<(), String> {
         self.validate_internal(true)
     }
@@ -1400,6 +1425,7 @@ struct ActiveRunContext {
     dry_run: bool,
     engine: core::Engine,
     plan_fingerprint: String,
+    credential_fingerprint: String,
 }
 struct App {
     form: Form,
@@ -1420,6 +1446,9 @@ struct App {
     persistence_available: bool,
     project_id: Option<String>,
     job_id: Option<String>,
+    /// Process-local credential material used by the last successful dry
+    /// preflight. Missing after restart intentionally requires revalidation.
+    preflight_credential_fingerprint: Option<String>,
     run_id: Option<String>,
     active_run: Option<ActiveRunContext>,
     cancel_requested: Option<Arc<AtomicBool>>,
@@ -1615,6 +1644,7 @@ impl Default for App {
             persistence_available: persistence_warning.is_none(),
             project_id,
             job_id,
+            preflight_credential_fingerprint: None,
             run_id: None,
             active_run: None,
             cancel_requested: None,
@@ -1932,7 +1962,12 @@ impl App {
     }
 
     fn start_capability_probe(&mut self) {
-        if let Err(error) = self.form.load_configured_keyring_credentials() {
+        let credential_load = if self.form.dry_run {
+            self.form.load_configured_keyring_credentials()
+        } else {
+            self.form.reload_configured_keyring_credentials()
+        };
+        if let Err(error) = credential_load {
             self.status = error;
             return;
         }
@@ -3365,6 +3400,7 @@ impl App {
             dry_run: !live,
             engine: self.form.engine(),
             plan_fingerprint: String::new(),
+            credential_fingerprint: String::new(),
         });
         for &index in &selected_indices {
             if let Some(job) = self.bulk_jobs.get_mut(index) {
@@ -3909,6 +3945,9 @@ impl App {
                         plan == plan_fingerprint_digest(&self.form.plan_fingerprint())
                     })
             });
+            let current_credential_fingerprint = self.form.credential_fingerprint();
+            let credentials_match = self.preflight_credential_fingerprint.as_deref()
+                == Some(current_credential_fingerprint.as_str());
             let mailbox_ready = self.job_id.as_deref().is_some_and(|job| {
                 self.store
                     .mailbox_state(job)
@@ -3916,8 +3955,12 @@ impl App {
                     .flatten()
                     .is_some_and(|state| state == "ready" || state == "delta_required")
             });
-            if !preflight_ready || !mailbox_ready || !plan_matches {
-                self.status = "Run a successful dry preflight for this exact mailbox plan before starting live migration.".into();
+            if !preflight_ready || !mailbox_ready || !plan_matches || !credentials_match {
+                self.status = if credentials_match {
+                    "Run a successful dry preflight for this exact mailbox plan before starting live migration.".into()
+                } else {
+                    "Credentials changed or were reloaded since preflight. Run a new dry preflight before starting live migration.".into()
+                };
                 return;
             }
         }
@@ -3948,6 +3991,7 @@ impl App {
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
         let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
+        let credential_fingerprint = self.form.credential_fingerprint();
         let plan_snapshot = self.form.plan_snapshot();
         let run_engine = self.form.engine();
         let run_dry_run = self.form.dry_run;
@@ -3983,6 +4027,7 @@ impl App {
             dry_run: run_dry_run,
             engine: run_engine,
             plan_fingerprint,
+            credential_fingerprint,
         });
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -4500,11 +4545,19 @@ impl App {
                 } else {
                     self.store.finish_run(run_id, run_status, &detail)
                 };
-                if let Err(error) = terminal_write {
-                    push_visible_output(
-                        &mut self.output,
-                        format!("[durability] Could not persist terminal state: {error}"),
-                    );
+                let terminal_write_ok = match terminal_write {
+                    Ok(()) => true,
+                    Err(error) => {
+                        push_visible_output(
+                            &mut self.output,
+                            format!("[durability] Could not persist terminal state: {error}"),
+                        );
+                        false
+                    }
+                };
+                if terminal_write_ok && !was_bulk_run && run_context.dry_run {
+                    self.preflight_credential_fingerprint =
+                        Some(run_context.credential_fingerprint.clone());
                 }
                 if was_bulk_run {
                     let result = self.store.record_event(
@@ -5641,6 +5694,22 @@ mod tests {
         assert!(!first.plan_fingerprint().contains("secret"));
         assert!(first.plan_fingerprint().contains("source-prod"));
         assert!(first.plan_fingerprint().contains("destination-prod"));
+    }
+
+    #[test]
+    fn credential_fingerprint_changes_without_exposing_secret_material() {
+        let mut first = dovecot_form();
+        first.source_password = Zeroizing::new("source-one".into());
+        first.destination_password = Zeroizing::new("destination-one".into());
+        let mut second = first.clone();
+        second.destination_password = Zeroizing::new("destination-two".into());
+
+        assert_ne!(
+            first.credential_fingerprint(),
+            second.credential_fingerprint()
+        );
+        assert!(!first.credential_fingerprint().contains("source-one"));
+        assert!(!first.credential_fingerprint().contains("destination-one"));
     }
 
     #[test]

@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Single-mailbox live promotion now reloads referenced keyring credentials and compares a process-local credential digest captured by the successful dry preflight; changed or missing session credentials require a new dry preflight without persisting secret-derived material.
 - Live batch retries now exclude evidence-backed `Verified` mailboxes by default, with an explicit operator opt-in for intentional re-runs; selected child runs and event updates retain their original queue-row identity. Excluded rows no longer need restored session credentials loaded or revalidated.
 - Startup orphan escalation now revalidates the recorded Linux PID, process group, session, and start time immediately before `SIGKILL`; recycled identities are never escalated.
 - If durable process registration fails after an engine is spawned, the controller now requests immediate cancellation and refuses to let an untracked migration continue.
