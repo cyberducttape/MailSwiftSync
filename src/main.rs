@@ -15,7 +15,7 @@ use process::terminate_process_group_by_pid;
 use process::{
     InstanceLock, ProcessLaunchLimiter, acquire_instance_lock, collect_redacted_lines,
     configure_process_group, for_each_lossy_line, linux_process_identity, recorded_process_matches,
-    terminate_recorded_process_group, wait_with_timeout,
+    terminate_process_group, terminate_recorded_process_group, wait_with_timeout,
 };
 
 use calamine::{Reader, open_workbook_auto};
@@ -1076,8 +1076,22 @@ fn run_streaming(
     let (start_ticks, process_group, session_id) = identity
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
         .unwrap_or((None, None, None));
-    let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
-    let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_process_group(&mut child);
+            let _ = child.wait();
+            return Err("stdout pipe unavailable; child cancelled before supervision".into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            terminate_process_group(&mut child);
+            let _ = child.wait();
+            return Err("stderr pipe unavailable; child cancelled before supervision".into());
+        }
+    };
     let out_tx = tx.clone();
     let out_prefix = prefix.to_owned();
     let out_secrets = secrets.to_vec();
@@ -1278,8 +1292,22 @@ fn run_capture_lines(
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
-    let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
-    let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            terminate_process_group(&mut child);
+            let _ = child.wait();
+            return Err("stdout pipe unavailable; child cancelled before supervision".into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            terminate_process_group(&mut child);
+            let _ = child.wait();
+            return Err("stderr pipe unavailable; child cancelled before supervision".into());
+        }
+    };
     let out_secrets = secrets.to_vec();
     let out_thread = thread::spawn(move || collect_redacted_lines(stdout, &out_secrets));
     let err_secrets = secrets.to_vec();

@@ -284,7 +284,7 @@ pub(crate) fn configure_process_group(command: &mut Command) {
     }
 }
 
-fn terminate_process_group(child: &mut Child) {
+pub(crate) fn terminate_process_group(child: &mut Child) {
     #[cfg(unix)]
     {
         let process_group = -(child.id() as libc::pid_t);
