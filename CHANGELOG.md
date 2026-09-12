@@ -173,3 +173,4 @@ All notable changes to MailSwiftSync are documented here.
 
 - Passwords remain excluded from saved profiles and the SQLite ledger.
 - Dovecot source credentials still use a destination-side `imapc_password` override for remote execution and may be visible to process inspection; provider OAuth and unattended secret brokering remain future work.
+- Automatically advances fully evidence-verified live projects through Verification to Complete; incomplete projects remain in Verification for operator review.

@@ -4216,15 +4216,40 @@ impl App {
                     self.report_store_error("record batch run completion", result);
                 }
                 if succeeded {
-                    let result = self.store.transition(
-                        project,
-                        if run_context.dry_run {
-                            core::Phase::Preflight
-                        } else {
-                            core::Phase::Verification
-                        },
-                    );
-                    self.report_store_error("advance project phase", result);
+                    if run_context.dry_run {
+                        let result = self.store.transition(project, core::Phase::Preflight);
+                        self.report_store_error("advance project phase", result);
+                    } else {
+                        let fully_verified = self.store.all_mailboxes_verified(project);
+                        match fully_verified {
+                            Ok(true) => {
+                                let verification =
+                                    self.store.transition(project, core::Phase::Verification);
+                                if let Err(error) = verification {
+                                    self.report_store_error(
+                                        "advance project to Verification",
+                                        Err(error),
+                                    );
+                                } else {
+                                    let complete =
+                                        self.store.transition(project, core::Phase::Complete);
+                                    self.report_store_error(
+                                        "complete fully verified project",
+                                        complete,
+                                    );
+                                }
+                            }
+                            Ok(false) => {
+                                let result =
+                                    self.store.transition(project, core::Phase::Verification);
+                                self.report_store_error("advance project phase", result);
+                            }
+                            Err(error) => self.report_store_error(
+                                "check project verification before completion",
+                                Err(error),
+                            ),
+                        }
+                    }
                 } else {
                     let result = self.store.transition(project, core::Phase::Attention);
                     self.report_store_error("move project to Attention", result);

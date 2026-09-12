@@ -1388,6 +1388,14 @@ impl StateStore {
             })?
             .collect()
     }
+    pub fn all_mailboxes_verified(&self, project_id: &str) -> rusqlite::Result<bool> {
+        let (total, verified): (i64, i64) = self.connection.query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN state='verified' THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?;
+        Ok(total > 0 && total == verified)
+    }
     fn event(&self, id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.connection.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)",
@@ -1754,6 +1762,7 @@ mod tests {
             .unwrap();
         db.transition(&project.id, Phase::Preflight).unwrap();
         db.transition(&project.id, Phase::Verification).unwrap();
+        assert!(!db.all_mailboxes_verified(&project.id).unwrap());
         assert!(db.transition(&project.id, Phase::Complete).is_err());
         db.set_mailbox_state(&job, "running").unwrap();
         db.insert_run_for_test(&project.id, Some(&job), "run-project-complete", "test")
@@ -1779,6 +1788,7 @@ mod tests {
             &evidence,
         )
         .unwrap();
+        assert!(db.all_mailboxes_verified(&project.id).unwrap());
         db.transition(&project.id, Phase::Complete).unwrap();
     }
 
