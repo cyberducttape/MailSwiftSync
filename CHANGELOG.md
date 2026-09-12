@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Began separating process orchestration from the UI controller by extracting the shared batch process-launch limiter into `src/process.rs`; the seam is behavior-preserving and covered by the existing limiter tests.
 - Added a shared cancellation-aware process-launch token bucket for batch workers and aggregate imapsync throttle shaping, preventing configured message/byte ceilings from multiplying with batch concurrency while smoothing connection bursts; unsafe targets below worker count are rejected.
 - Added a production migration runbook covering pilot-to-bulk sequencing, instance-lock and crash recovery, Attention review, evidence/health exports, and the policy exceptions for plain IMAP and remote Dovecot credentials.
 - Plain IMAP now requires explicit cleartext-transport acknowledgement before any authenticated operation, including dry preflight; the UI guidance and validation error explain that simulation still transmits credentials and protocol traffic.
