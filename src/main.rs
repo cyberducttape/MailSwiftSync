@@ -1067,6 +1067,7 @@ struct App {
     destination_capabilities: Option<core::ServerCapabilities>,
     live_confirm_open: bool,
     live_confirmed: bool,
+    durability_error: bool,
     active_view: WorkspaceView,
 }
 impl Default for App {
@@ -1193,6 +1194,7 @@ impl Default for App {
             destination_capabilities: None,
             live_confirm_open: false,
             live_confirmed: false,
+            durability_error: false,
             active_view: WorkspaceView::Overview,
         }
     }
@@ -2283,6 +2285,7 @@ impl App {
                 format!("Mailbox {} is not ready for validation: {error}", index + 1);
             return;
         }
+        self.durability_error = false;
         if !self.persistence_available {
             self.bulk_message = "Batch validation requires durable SQLite storage.".into();
             return;
@@ -2472,6 +2475,7 @@ impl App {
     }
     fn report_store_error<E: Display>(&mut self, operation: &str, result: Result<(), E>) {
         if let Err(error) = result {
+            self.durability_error = true;
             push_visible_output(
                 &mut self.output,
                 format!("[durability] {operation} failed: {error}"),
@@ -2491,6 +2495,7 @@ impl App {
             self.status = e;
             return;
         }
+        self.durability_error = false;
         if !self.form.dry_run {
             if !self.persistence_available {
                 self.status =
@@ -2978,10 +2983,14 @@ impl App {
                     self.report_store_error("move project to Attention", result);
                 }
             }
-            self.status = match r {
-                Ok(()) if self.form.dry_run => "Preflight completed successfully".into(),
-                Ok(()) => "Completed successfully".into(),
-                Err(e) => format!("Failed: {e}"),
+            self.status = if self.durability_error {
+                "Migration result requires durability review".into()
+            } else {
+                match r {
+                    Ok(()) if self.form.dry_run => "Preflight completed successfully".into(),
+                    Ok(()) => "Completed successfully".into(),
+                    Err(e) => format!("Failed: {e}"),
+                }
             };
             self.receiver = None;
             self.cancel_requested = None;
