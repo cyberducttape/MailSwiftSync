@@ -3158,11 +3158,13 @@ impl App {
             let jobs = Arc::new(jobs);
             let next_job = Arc::new(AtomicUsize::new(0));
             let failed = Arc::new(AtomicBool::new(false));
+            let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
             let mut workers = Vec::with_capacity(concurrency);
             for _ in 0..concurrency {
                 let jobs = Arc::clone(&jobs);
                 let next_job = Arc::clone(&next_job);
                 let failed = Arc::clone(&failed);
+                let terminal_jobs = Arc::clone(&terminal_jobs);
                 let tx = tx.clone();
                 let cancel = Arc::clone(&cancel);
                 workers.push(thread::spawn(move || {
@@ -3171,6 +3173,9 @@ impl App {
                         let Some(job) = jobs.get(index) else { break };
                         if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
+                            if let Ok(mut terminal) = terminal_jobs.lock() {
+                                terminal.insert(index);
+                            }
                             continue;
                         }
                         let _ = tx.send(Event::Line(format!(
@@ -3283,6 +3288,9 @@ impl App {
                                         index,
                                         if cancelled { "Cancelled" } else { "Failed" }.into(),
                                     ));
+                                    if let Ok(mut terminal) = terminal_jobs.lock() {
+                                        terminal.insert(index);
+                                    }
                                     break;
                                 }
                             }
@@ -3297,14 +3305,45 @@ impl App {
                                 }
                                 .into(),
                             ));
+                            if let Ok(mut terminal) = terminal_jobs.lock() {
+                                terminal.insert(index);
+                            }
                         } else if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
+                            if let Ok(mut terminal) = terminal_jobs.lock() {
+                                terminal.insert(index);
+                            }
                         }
                     }
                 }));
             }
+            let mut worker_panicked = false;
             for worker in workers {
-                let _ = worker.join();
+                if worker.join().is_err() {
+                    worker_panicked = true;
+                    failed.store(true, Ordering::Relaxed);
+                }
+            }
+            if worker_panicked {
+                let unresolved = terminal_jobs
+                    .lock()
+                    .map(|terminal| {
+                        (0..jobs.len())
+                            .filter(|index| !terminal.contains(index))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_else(|_| (0..jobs.len()).collect());
+                for index in unresolved {
+                    let _ = tx.send(Event::Line(format!(
+                        "[{}] worker stopped unexpectedly; job moved to Attention",
+                        index + 1
+                    )));
+                    let _ = tx.send(Event::JobState(index, "Attention".into()));
+                }
+                let _ = tx.send(Event::Line(
+                    "A batch worker stopped unexpectedly; unresolved jobs require review before retrying."
+                        .into(),
+                ));
             }
             let _ = tx.send(Event::Finished(if cancel.load(Ordering::Relaxed) {
                 Err("batch cancelled".into())

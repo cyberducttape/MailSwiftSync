@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Batch worker panics are no longer silently discarded. The controller detects failed worker joins, moves unresolved children to `Attention`, emits an operator-visible diagnostic, and fails the parent batch result so unfinished work cannot appear successful.
 - Added an exclusive cross-platform application-state lock. A second MailSwiftSync window no longer performs orphan recovery against a live first window; it enters a non-durable session and cannot start migrations until the existing owner releases the lock.
 - Secret cleanup is now confined to the application-owned `mailswiftsync` directory beneath `XDG_RUNTIME_DIR`; it no longer scans or changes permissions on the shared runtime root. Batch imports and queue clearing also discard stale durable batch associations, and queue mutation is disabled while a run is active.
 - The durable mailbox ledger now rejects a second run while a mailbox is already running and refuses to create `verified` state without stored evidence. imapsync's own persistent log is disabled by default, reserved logging flags are rejected, and one-dash forms of protected options cannot bypass the safety policy.
