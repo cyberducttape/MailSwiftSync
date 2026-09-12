@@ -182,3 +182,4 @@ All notable changes to MailSwiftSync are documented here.
 - Single-mailbox verification exports now use named evidence levels consistently with project reports and the Verification workspace.
 - New interactive sessions initialize destination transport explicitly to implicit TLS, avoiding an ambiguous blank TLS selector for legacy/imported profile defaults.
 - Instance-lock ownership now has an explicit RAII unlock path, making release deterministic on normal shutdown as well as automatic on process termination.
+- CI now pins cargo-audit to 0.22.2 so the dependency-security gate is reproducible across runs.

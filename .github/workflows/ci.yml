@@ -22,7 +22,7 @@ jobs:
       - run: cargo test --all-targets
       - run: cargo build --release
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies
         run: cargo audit
 
