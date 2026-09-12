@@ -269,12 +269,6 @@ pub struct StateStore {
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-            restrict_directory_permissions(parent)
-                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        }
         let store = Self {
             connection: Connection::open(path)?,
         };
@@ -1230,19 +1224,6 @@ fn restrict_database_permissions(path: &Path) -> std::io::Result<()> {
     std::fs::set_permissions(path, permissions)
 }
 
-#[cfg(unix)]
-fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = std::fs::metadata(path)?.permissions();
-    permissions.set_mode(0o700);
-    std::fs::set_permissions(path, permissions)
-}
-
-#[cfg(not(unix))]
-fn restrict_directory_permissions(_: &Path) -> std::io::Result<()> {
-    Ok(())
-}
-
 fn restrict_database_sidecars(path: &Path) -> std::io::Result<()> {
     for suffix in ["-wal", "-shm"] {
         let sidecar = Path::new(&format!("{}{}", path.display(), suffix)).to_owned();
@@ -1798,15 +1779,19 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn persistent_database_parent_is_owner_only() {
+    fn state_store_does_not_change_parent_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = std::env::temp_dir().join(format!("mailswiftsync-db-{}", Uuid::new_v4()));
         let path = directory.join("state.db");
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&directory, permissions).unwrap();
         let _store = StateStore::open(&path).unwrap();
         assert_eq!(
             std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
-            0o700
+            0o755
         );
         drop(_store);
         std::fs::remove_dir_all(directory).unwrap();

@@ -976,7 +976,6 @@ fn create_secret_directory() -> Result<PathBuf, String> {
     let base = secret_runtime_base();
     std::fs::create_dir_all(&base).map_err(|error| error.to_string())?;
     restrict_directory_permissions(&base).map_err(|error| error.to_string())?;
-    cleanup_stale_secret_directories(&base);
     let directory = base.join(format!("run-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
     if let Err(error) = restrict_directory_permissions(&directory) {
@@ -1737,12 +1736,12 @@ struct App {
 }
 impl Default for App {
     fn default() -> Self {
-        cleanup_stale_secret_directories(&secret_runtime_base());
         let state_path = dirs_next::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("mailswiftsync/state.db");
         if let Some(parent) = state_path.parent() {
             let _ = std::fs::create_dir_all(parent);
+            let _ = restrict_directory_permissions(parent);
         }
         let instance_lock = acquire_instance_lock(&state_path);
         let (store, persistence_warning) = match &instance_lock {
@@ -1776,6 +1775,12 @@ impl Default for App {
         } else {
             (0, 0, 0)
         };
+        // Only the lock owner may reconcile stale runtime secrets. At this
+        // point startup recovery has already handled any recorded child
+        // process, so an old directory cannot belong to a live application.
+        if persistence_warning.is_none() {
+            cleanup_stale_secret_directories(&secret_runtime_base());
+        }
         let mut initial_output = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
             |warning| {
