@@ -5221,6 +5221,22 @@ mod tests {
         let _ = std::fs::remove_file(state_path.with_extension("lock"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn recorded_process_group_termination_stops_orphaned_child() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "trap '' TERM; sleep 30"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        assert!(child.try_wait().unwrap().is_none());
+
+        terminate_recorded_process_group(pid);
+
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+    }
+
     #[test]
     fn recommended_action_prioritizes_interrupted_work() {
         assert_eq!(
