@@ -8,7 +8,7 @@ use credentials::{
     CleanupGuard, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
     restrict_directory_permissions, secret_runtime_base, write_secret_file,
 };
-use process::ProcessLaunchLimiter;
+use process::{ProcessLaunchLimiter, collect_redacted_lines, for_each_lossy_line};
 
 use calamine::{Reader, open_workbook_auto};
 use eframe::{
@@ -25,7 +25,7 @@ use std::fmt::Display;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
     process::{Child, Command, ExitStatus, Stdio},
@@ -1316,47 +1316,6 @@ fn run_dovecot_destination_preflight(
     Ok(())
 }
 
-fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> Vec<String> {
-    let mut lines = Vec::new();
-    for_each_lossy_line(reader, |mut line| {
-        for secret in secrets {
-            if !secret.is_empty() {
-                line = line.replace(secret, "[REDACTED]");
-            }
-        }
-        lines.push(line);
-    });
-    lines
-}
-
-#[cfg(test)]
-fn read_lossy_lines<R: Read>(reader: R) -> Vec<String> {
-    let mut lines = Vec::new();
-    for_each_lossy_line(reader, |line| lines.push(line));
-    lines
-}
-
-/// Consume subprocess output incrementally while tolerating malformed UTF-8.
-/// The streaming runner uses this callback form so a long migration never
-/// accumulates its complete stdout/stderr in memory before the UI sees it.
-fn for_each_lossy_line<R: Read, F: FnMut(String)>(reader: R, mut callback: F) {
-    let mut reader = BufReader::new(reader);
-    let mut buffer = Vec::new();
-    loop {
-        buffer.clear();
-        let bytes_read = match reader.read_until(b'\n', &mut buffer) {
-            Ok(bytes_read) => bytes_read,
-            Err(_) => break,
-        };
-        if bytes_read == 0 {
-            break;
-        }
-        let line = String::from_utf8_lossy(&buffer)
-            .trim_end_matches(['\r', '\n'])
-            .to_owned();
-        callback(line);
-    }
-}
 #[derive(Clone)]
 struct BulkJob {
     label: String,
@@ -5498,7 +5457,7 @@ mod tests {
     #[test]
     fn subprocess_output_reader_survives_invalid_utf8() {
         let bytes = b"first\n\xff\xfe\nlast\n";
-        let lines = read_lossy_lines(std::io::Cursor::new(bytes));
+        let lines = process::read_lossy_lines(std::io::Cursor::new(bytes));
         assert_eq!(lines, ["first", "��", "last"]);
     }
 
