@@ -724,7 +724,12 @@ impl StateStore {
     /// uses this identity to terminate a recorded orphan before allowing an
     /// operator to retry the mailbox.
     pub fn register_process(&self, process: &ActiveProcess) -> rusqlite::Result<()> {
-        let consistent: bool = self.connection.query_row(
+        // Validate ownership and insert the identity in one transaction. A
+        // worker can arrive late while the UI is finishing a run; a
+        // separate SELECT followed by INSERT would let that stale worker
+        // recreate an active-process row after terminal cleanup.
+        let tx = self.connection.unchecked_transaction()?;
+        let consistent: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=?2 AND r.project_id=j.project_id WHERE r.id=?1 AND r.status='running' AND r.job_id=j.id)",
             params![process.run_id, process.job_id],
             |row| row.get(0),
@@ -732,7 +737,7 @@ impl StateStore {
         if !consistent {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        self.connection.execute(
+        tx.execute(
             "INSERT INTO active_processes(run_id,job_id,pid,start_ticks,process_group,session_id,executable) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(run_id,job_id) DO UPDATE SET pid=excluded.pid,start_ticks=excluded.start_ticks,process_group=excluded.process_group,session_id=excluded.session_id,executable=excluded.executable,started_at=CURRENT_TIMESTAMP",
             params![
                 process.run_id,
@@ -744,7 +749,7 @@ impl StateStore {
                 process.executable
             ],
         )?;
-        Ok(())
+        tx.commit()
     }
 
     pub fn active_processes(&self) -> rusqlite::Result<Vec<ActiveProcess>> {
@@ -2049,6 +2054,37 @@ mod tests {
             executable: "test".into(),
         })
         .unwrap();
+    }
+
+    #[test]
+    fn late_process_registration_after_terminal_run_is_rejected() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("late-process", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source-user", "destination-user")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-late-process", "test")
+            .unwrap();
+        db.finish_run(
+            "run-late-process",
+            "failed",
+            "cancelled before process registration",
+        )
+        .unwrap();
+
+        let result = db.register_process(&ActiveProcess {
+            run_id: "run-late-process".into(),
+            job_id: job,
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test".into(),
+        });
+        assert!(result.is_err());
+        assert!(db.active_processes().unwrap().is_empty());
     }
 
     #[test]

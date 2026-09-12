@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Process registration now validates run ownership and inserts the active-process identity in one transaction, preventing a delayed worker from recreating process state after terminal cleanup.
 - Active process registration now requires a mailbox-specific child run; parent batch runs cannot claim arbitrary same-project mailboxes.
 - `record_evidence_for_run` now verifies that the durable run is the exact child run for the supplied mailbox, preventing same-project or cross-project evidence misattribution.
 - Lifecycle events (`run_started`, `mailbox_claimed`, and `run_finished`) now carry the exact durable run ID, completing run-scoped forensic attribution alongside output and verification events.
