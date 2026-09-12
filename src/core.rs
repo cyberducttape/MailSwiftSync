@@ -302,6 +302,13 @@ impl StateStore {
         Ok(store)
     }
     fn migrate(&self) -> rusqlite::Result<()> {
+        const CURRENT_SCHEMA_VERSION: i64 = 1;
+        let stored_schema_version: i64 =
+            self.connection
+                .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if stored_schema_version > CURRENT_SCHEMA_VERSION {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
@@ -389,6 +396,8 @@ impl StateStore {
             "CREATE INDEX IF NOT EXISTS idx_events_run_created ON events(run_id, created_at DESC)",
             [],
         )?;
+        self.connection
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         let process_columns = self
             .connection
             .prepare("PRAGMA table_info(active_processes)")?
@@ -2237,6 +2246,29 @@ mod tests {
             0o755
         );
         drop(_store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn schema_version_is_recorded_and_future_versions_are_rejected() {
+        let db = StateStore::in_memory().unwrap();
+        let version: i64 = db
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        drop(db);
+
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-schema-{}", Uuid::new_v4()));
+        let path = directory.join("state.db");
+        std::fs::create_dir_all(&directory).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "user_version", 99_i64)
+            .unwrap();
+        drop(connection);
+        assert!(StateStore::open(&path).is_err());
         std::fs::remove_dir_all(directory).unwrap();
     }
 
