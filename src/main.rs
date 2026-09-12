@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
@@ -54,6 +54,8 @@ struct Profile {
     dovecot_ssh_user: String,
     #[serde(default)]
     dovecot_config: String,
+    #[serde(default = "default_batch_concurrency")]
+    batch_concurrency: usize,
     /// Remote Dovecot currently receives this value in a destination-side
     /// command override. Keep the unsafe compatibility path opt-in until a
     /// deployment-independent secret broker is available.
@@ -77,6 +79,9 @@ fn default_doveadm_path() -> String {
 }
 fn default_ssh_path() -> String {
     "ssh".into()
+}
+fn default_batch_concurrency() -> usize {
+    2
 }
 fn default_source_tls() -> String {
     "imaps".into()
@@ -2219,57 +2224,71 @@ impl App {
         self.receiver = Some(rx);
         self.status = format!("Batch validation: {} jobs", jobs.len());
         self.output.clear();
+        let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         thread::spawn(move || {
-            let mut failed = false;
-            for (index, job) in jobs.into_iter().enumerate() {
-                if cancel.load(Ordering::Relaxed) {
-                    let _ = tx.send(Event::JobState(index, "Cancelled".into()));
-                    continue;
-                }
-                let _ = tx.send(Event::Line(format!(
-                    "══ Job {}: {} ══",
-                    index + 1,
-                    job.label
-                )));
-                let _ = tx.send(Event::JobState(index, "Running".into()));
-                let prepared = job.form.prepared_command();
-                let result = match prepared {
-                    Ok(command) => {
-                        let result = run_streaming(
-                            &command.executable,
-                            &command.args,
-                            &command.env,
-                            &tx,
-                            &format!("[{}] ", index + 1),
-                            &cancel,
-                            &[
-                                job.form.source_password.clone(),
-                                job.form.destination_password.clone(),
-                            ],
-                        );
-                        cleanup_paths(&command.cleanup);
-                        result
+            let queue = Arc::new(Mutex::new(jobs.into_iter().enumerate()));
+            let failed = Arc::new(AtomicBool::new(false));
+            let mut workers = Vec::with_capacity(concurrency);
+            for _ in 0..concurrency {
+                let queue = Arc::clone(&queue);
+                let failed = Arc::clone(&failed);
+                let tx = tx.clone();
+                let cancel = Arc::clone(&cancel);
+                workers.push(thread::spawn(move || {
+                    loop {
+                        let next = queue.lock().ok().and_then(|mut jobs| jobs.next());
+                        let Some((index, job)) = next else { break };
+                        if cancel.load(Ordering::Relaxed) {
+                            let _ = tx.send(Event::JobState(index, "Cancelled".into()));
+                            continue;
+                        }
+                        let _ = tx.send(Event::Line(format!(
+                            "══ Job {}: {} ══",
+                            index + 1,
+                            job.label
+                        )));
+                        let _ = tx.send(Event::JobState(index, "Running".into()));
+                        let prepared = job.form.prepared_command();
+                        let result = match prepared {
+                            Ok(command) => {
+                                let result = run_streaming(
+                                    &command.executable,
+                                    &command.args,
+                                    &command.env,
+                                    &tx,
+                                    &format!("[{}] ", index + 1),
+                                    &cancel,
+                                    &[
+                                        job.form.source_password.clone(),
+                                        job.form.destination_password.clone(),
+                                    ],
+                                );
+                                cleanup_paths(&command.cleanup);
+                                result
+                            }
+                            Err(error) => Err(error),
+                        };
+                        if let Err(error) = result {
+                            let cancelled = error.contains("cancelled");
+                            failed.store(true, Ordering::Relaxed);
+                            let _ =
+                                tx.send(Event::Line(format!("[{}] failed: {error}", index + 1)));
+                            let _ = tx.send(Event::JobState(
+                                index,
+                                if cancelled { "Cancelled" } else { "Failed" }.into(),
+                            ));
+                        } else {
+                            let _ = tx.send(Event::JobState(index, "Completed".into()));
+                        }
                     }
-                    Err(error) => Err(error),
-                };
-                if let Err(error) = result {
-                    let cancelled = error.contains("cancelled");
-                    failed = true;
-                    let _ = tx.send(Event::Line(format!("[{}] failed: {error}", index + 1)));
-                    let _ = tx.send(Event::JobState(
-                        index,
-                        if cancelled { "Cancelled" } else { "Failed" }.into(),
-                    ));
-                    if cancelled {
-                        continue;
-                    }
-                } else {
-                    let _ = tx.send(Event::JobState(index, "Completed".into()));
-                }
+                }));
+            }
+            for worker in workers {
+                let _ = worker.join();
             }
             let _ = tx.send(Event::Finished(if cancel.load(Ordering::Relaxed) {
                 Err("batch cancelled".into())
-            } else if failed {
+            } else if failed.load(Ordering::Relaxed) {
                 Err("one or more batch jobs failed".into())
             } else {
                 Ok(())
@@ -2820,6 +2839,11 @@ impl App {
                 if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(BLUE)).clicked() { self.start_bulk(); }
             });
             ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label("Concurrent validations");
+                ui.add(egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16));
+                ui.label(RichText::new("bounded 1–16 workers").size(11.0).color(MUTED));
+            });
             ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, name, extra_options. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {

@@ -53,6 +53,7 @@ All notable changes to MailSwiftSync are documented here.
 - Bulk imports no longer require password columns; missing credentials can be entered in masked per-row fields, reducing the need to keep plaintext passwords in migration spreadsheets.
 - Separated structural bulk-import validation from credential-required execution validation, so passwordless identity imports are accepted but cannot be launched until credentials are supplied.
 - Added project-level Markdown verification reports covering every durable mailbox job, evidence scope, confidence, unresolved states, and recent runs.
+- Replaced sequential batch validation with a bounded 1–16 worker pool and an operator-selected concurrency setting; cancellation and indexed output remain shared across workers.
 
 ### Changed
 

@@ -7,7 +7,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Explicit Dovecot-native and imapsync engine paths.
 - Dry-run default and explicit confirmation before destination changes.
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
-- Sequential CSV/XLS/XLSX validation queue.
+- CSV/XLS/XLSX validation queue with bounded 1–16 worker concurrency.
 - Aggregate source/destination folder, message, and virtual-size evidence.
 - Timeout, cancellation, child-process-only imapsync passfile credentials, and documented Dovecot process-visibility limits.
 

@@ -14,7 +14,7 @@ Stable today:
 
 - Dovecot-native `doveadm sync -1`/`backup` planning and execution, including remote `imapc` sources.
 - `imapsync` fallback for arbitrary IMAP endpoints.
-- CSV/XLS/XLSX validation-only batch queue.
+- CSV/XLS/XLSX validation-only batch queue with bounded operator-selected concurrency (1–16 workers).
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
 
@@ -22,7 +22,7 @@ Experimental or planned:
 
 - OS-keyring/OAuth credential delivery and unattended secret brokering.
 - Native installers, signed releases, and cross-platform binary distribution.
-- Concurrency controls, retry/resume checkpoints, maintenance windows, throttling, and scheduler/API operation.
+- Live migration concurrency, retry/resume checkpoints, maintenance windows, throttling, and scheduler/API operation.
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
 - Published large-scale migration case studies and compatibility matrix.
 
