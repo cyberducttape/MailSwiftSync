@@ -19,6 +19,7 @@ The application holds an exclusive lock beside the SQLite database while it is o
 ## Recommended practice
 
 - Use provider-issued app passwords where available; OAuth/Modern Auth is not yet implemented by MailSwiftSync.
+- Plain source IMAP requires an explicit acknowledgement before any authenticated operation, including dry preflight, because simulation still transmits credentials and mailbox protocol traffic without transport encryption.
 - Start against a test destination mailbox.
 - Keep the source mailbox unchanged during the first migration.
 - Save the execution journal externally if you need an audit record.

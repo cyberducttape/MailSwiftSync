@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added a production migration runbook covering pilot-to-bulk sequencing, instance-lock and crash recovery, Attention review, evidence/health exports, and the policy exceptions for plain IMAP and remote Dovecot credentials.
 - Plain IMAP now requires explicit cleartext-transport acknowledgement before any authenticated operation, including dry preflight; the UI guidance and validation error explain that simulation still transmits credentials and protocol traffic.
 - Subprocess stdout/stderr is now decoded and emitted line-by-line through a callback, preserving live journal visibility and preventing complete migration logs from accumulating in memory; bounded collection remains limited to verification capture.
 - Added a compact credential-free project-health JSON export for ticketing and operator wrappers, including phase, mailbox state counts, Attention items, and recent run outcomes.

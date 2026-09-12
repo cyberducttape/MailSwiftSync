@@ -33,6 +33,7 @@ Verification currently distinguishes engine-confirmed imapsync summaries from ag
 
 - [Install and first launch](Install-and-first-launch.md)
 - [Run a safe migration](Run-a-safe-migration.md)
+- [Production migration runbook](Production-runbook.md)
 - [Bulk migrations from CSV or Excel](Bulk-migrations.md)
 - [Profiles, passwords, and security](Security-and-profiles.md)
 - [Troubleshooting](Troubleshooting.md)
