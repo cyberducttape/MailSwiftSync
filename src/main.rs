@@ -1029,6 +1029,11 @@ enum Event {
         state: String,
         detail: String,
     },
+    BatchEvidence {
+        job_id: String,
+        child_run_id: String,
+        evidence: core::MailboxEvidence,
+    },
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
     Finished(Result<StreamOutcome, String>),
@@ -1038,6 +1043,12 @@ enum Event {
 enum StreamOutcome {
     Completed,
     DeltaRequired,
+}
+
+#[derive(Debug)]
+struct StreamResult {
+    outcome: StreamOutcome,
+    imapsync_evidence: Option<core::MailboxEvidence>,
 }
 
 // The process runner keeps each security-sensitive input explicit at the call
@@ -1056,7 +1067,7 @@ fn run_streaming(
     secrets: &[String],
     timeout: Duration,
     dovecot_exit_two_is_delta: bool,
-) -> Result<StreamOutcome, String> {
+) -> Result<StreamResult, String> {
     let mut command = Command::new(executable);
     command
         .args(args)
@@ -1087,7 +1098,9 @@ fn run_streaming(
     let out_prefix = prefix.to_owned();
     let out_secrets = secrets.to_vec();
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
+    let evidence_lines = Arc::new(Mutex::new(Vec::new()));
     let out_tail = Arc::clone(&tail);
+    let out_evidence_lines = Arc::clone(&evidence_lines);
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
             let mut safe = line;
@@ -1097,6 +1110,7 @@ fn run_streaming(
                 }
             }
             record_process_tail(&out_tail, &safe);
+            record_evidence_line(&out_evidence_lines, &safe);
             let _ = out_tx.send(Event::Line(format!("{out_prefix}{safe}")));
         });
     });
@@ -1104,6 +1118,7 @@ fn run_streaming(
     let err_prefix = prefix.to_owned();
     let err_secrets = secrets.to_vec();
     let err_tail = Arc::clone(&tail);
+    let err_evidence_lines = Arc::clone(&evidence_lines);
     let err_thread = thread::spawn(move || {
         for_each_lossy_line(stderr, |line| {
             let mut safe = line;
@@ -1113,6 +1128,7 @@ fn run_streaming(
                 }
             }
             record_process_tail(&err_tail, &safe);
+            record_evidence_line(&err_evidence_lines, &safe);
             let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {safe}")));
         });
     });
@@ -1130,7 +1146,16 @@ fn run_streaming(
     let _ = out_thread.join();
     let _ = err_thread.join();
     match result {
-        Ok(outcome) => Ok(outcome),
+        Ok(outcome) => {
+            let imapsync_evidence = evidence_lines
+                .lock()
+                .ok()
+                .and_then(|lines| parse_imapsync_evidence(&lines));
+            Ok(StreamResult {
+                outcome,
+                imapsync_evidence,
+            })
+        }
         Err(error) => {
             let recent = process_tail_text(&tail);
             if recent.is_empty() {
@@ -1139,6 +1164,24 @@ fn run_streaming(
                 Err(format!("{error}; recent output: {recent}"))
             }
         }
+    }
+}
+
+fn record_evidence_line(lines: &Mutex<Vec<String>>, line: &str) {
+    const EVIDENCE_MARKERS: [&str; 7] = [
+        "Host1 Nb folders:",
+        "Host2 Nb folders:",
+        "Host1 Nb messages:",
+        "Host2 Nb messages:",
+        "Host1 Total size:",
+        "Host2 Total size:",
+        "Detected ",
+    ];
+    if (line.contains("The sync looks good") || EVIDENCE_MARKERS.iter().any(|m| line.contains(m)))
+        && let Ok(mut lines) = lines.lock()
+        && lines.len() < 64
+    {
+        lines.push(line.to_owned());
     }
 }
 
@@ -1334,6 +1377,7 @@ struct App {
     keyring_open: bool,
     active_view: WorkspaceView,
     pending_evidence: Option<core::MailboxEvidence>,
+    pending_batch_evidence: HashMap<String, core::MailboxEvidence>,
     run_started_at: Option<std::time::Instant>,
     dark_mode: bool,
     bulk_live_confirm_open: bool,
@@ -1511,6 +1555,7 @@ impl Default for App {
             keyring_open: false,
             active_view: WorkspaceView::Overview,
             pending_evidence: None,
+            pending_batch_evidence: HashMap::new(),
             run_started_at: None,
             dark_mode: false,
             bulk_live_confirm_open: false,
@@ -3085,6 +3130,7 @@ impl App {
             return;
         }
         self.durability_error = false;
+        self.pending_batch_evidence.clear();
         let existing_project = self.bulk_project_id.clone();
         let mailboxes = jobs
             .iter()
@@ -3296,7 +3342,19 @@ impl App {
                                         ),
                                         job.form.engine() == core::Engine::Dovecot
                                             && !job.form.dry_run,
-                                    );
+                                    )
+                                    .map(|stream| {
+                                        if !job.form.dry_run
+                                            && let Some(evidence) = stream.imapsync_evidence
+                                        {
+                                            let _ = tx.send(Event::BatchEvidence {
+                                                job_id: job_id.clone(),
+                                                child_run_id: child_run_id.clone(),
+                                                evidence,
+                                            });
+                                        }
+                                        stream.outcome
+                                    });
                                     let result = if result.is_ok()
                                         && job.form.dry_run
                                         && job.form.engine() == core::Engine::Dovecot
@@ -3809,7 +3867,12 @@ impl App {
                     }
                 }
             }
-            let _ = tx.send(Event::Finished(result));
+            if let Ok(stream) = &result
+                && let Some(evidence) = stream.imapsync_evidence.clone()
+            {
+                let _ = tx.send(Event::Evidence(evidence));
+            }
+            let _ = tx.send(Event::Finished(result.map(|stream| stream.outcome)));
         });
     }
     fn poll(&mut self) {
@@ -3949,14 +4012,41 @@ impl App {
                             } else {
                                 "failed"
                             };
-                            if let Err(error) = self.store.finish_run_for_mailbox(
-                                &run.project_id,
-                                &job_id,
-                                &child_run_id,
-                                run_status,
-                                &state,
-                                &detail,
-                            ) {
+                            let evidence = self.pending_batch_evidence.remove(&child_run_id);
+                            let final_state = evidence.as_ref().map_or(state.clone(), |value| {
+                                if value.is_exact_match() && state != "delta_required" {
+                                    "verified".into()
+                                } else {
+                                    "delta_required".into()
+                                }
+                            });
+                            if let Some(index) =
+                                run.batch_job_ids.iter().position(|id| id == &job_id)
+                                && let Some(job) = self.bulk_jobs.get_mut(index)
+                            {
+                                job.state = display_job_state(&final_state).into();
+                            }
+                            let result = if let Some(value) = evidence.as_ref() {
+                                self.store.finish_run_for_mailbox_with_evidence(
+                                    &run.project_id,
+                                    &job_id,
+                                    &child_run_id,
+                                    run_status,
+                                    &final_state,
+                                    &detail,
+                                    value,
+                                )
+                            } else {
+                                self.store.finish_run_for_mailbox(
+                                    &run.project_id,
+                                    &job_id,
+                                    &child_run_id,
+                                    run_status,
+                                    &final_state,
+                                    &detail,
+                                )
+                            };
+                            if let Err(error) = result {
                                 durability_errors.push(format!(
                                     "persist child run {} completion failed: {error}",
                                     index + 1
@@ -3965,6 +4055,27 @@ impl App {
                         } else {
                             durability_errors.push(format!(
                                 "ignored batch completion event for unknown child run {child_run_id}"
+                            ));
+                        }
+                    }
+                    Event::BatchEvidence {
+                        job_id,
+                        child_run_id,
+                        evidence,
+                    } => {
+                        if let Some(run) = active_run.as_ref()
+                            && matches!(run.kind, RunKind::Batch)
+                            && run
+                                .batch_job_ids
+                                .iter()
+                                .position(|id| id == &job_id)
+                                .and_then(|index| run.batch_child_run_ids.get(index))
+                                == Some(&child_run_id)
+                        {
+                            self.pending_batch_evidence.insert(child_run_id, evidence);
+                        } else {
+                            durability_errors.push(format!(
+                                "ignored evidence event for unknown child run {child_run_id}"
                             ));
                         }
                     }
@@ -4171,6 +4282,7 @@ impl App {
             self.run_started_at = None;
             self.run_id = None;
             self.active_run = None;
+            self.pending_batch_evidence.clear();
             // Keep the durable queue after completion so a validated batch
             // can be promoted to live execution, and failed/live jobs can be
             // deliberately retried or run through another delta pass.
@@ -5612,7 +5724,37 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(outcome, StreamOutcome::DeltaRequired);
+        assert_eq!(outcome.outcome, StreamOutcome::DeltaRequired);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
+        let (tx, _rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let cancel = AtomicBool::new(false);
+        let args = vec![
+            "-c".into(),
+            "printf '%s\\n' 'Host1 Nb folders: 2' 'Host2 Nb folders: 2' 'Host1 Nb messages: 7' 'Host2 Nb messages: 7' 'Host1 Total size: 100' 'Host2 Total size: 100' 'The sync looks good'".into(),
+        ];
+        let result = run_streaming(
+            "/bin/sh",
+            &args,
+            &[],
+            &tx,
+            "test-run",
+            "test-job",
+            "",
+            &cancel,
+            &[],
+            Duration::from_secs(5),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.outcome, StreamOutcome::Completed);
+        let evidence = result.imapsync_evidence.unwrap();
+        assert_eq!(evidence.source_messages, 7);
+        assert_eq!(evidence.destination_messages, 7);
+        assert!(evidence.authoritative);
     }
 
     #[cfg(unix)]
