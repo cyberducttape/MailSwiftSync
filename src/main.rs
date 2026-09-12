@@ -3,6 +3,7 @@ mod core;
 mod credentials;
 mod engine;
 mod process;
+mod verification;
 
 use credentials::{
     CleanupGuard, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
@@ -919,94 +920,6 @@ fn parse_shell_words(input: &str) -> Result<Vec<String>, String> {
     Ok(words)
 }
 
-fn number_after(line: &str, marker: &str) -> Option<u64> {
-    line.split_once(marker)?
-        .1
-        .split_whitespace()
-        .find_map(|token| {
-            token
-                .trim_matches(|character: char| !character.is_ascii_digit())
-                .parse()
-                .ok()
-        })
-}
-
-/// Extracts the stable summary fields emitted by imapsync. We intentionally
-/// require both hosts and all three dimensions before writing evidence; a
-/// partial log must never look like a successful zero-message migration. The
-/// `unmatched_messages` value is a proof-pending sentinel here, not a literal
-/// count, because the text summary does not expose an unresolved-message
-/// count.
-fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxEvidence> {
-    let last = |marker: &str| {
-        lines
-            .iter()
-            .rev()
-            .find_map(|line| number_after(line, marker))
-    };
-    let source_folders = last("Host1 Nb folders:")?;
-    let destination_folders = last("Host2 Nb folders:")?;
-    let source_messages = last("Host1 Nb messages:")?;
-    let destination_messages = last("Host2 Nb messages:")?;
-    let source_bytes = last("Host1 Total size:")?;
-    let destination_bytes = last("Host2 Total size:")?;
-    let failed_messages = last("Detected ").unwrap_or(0);
-    let matched = lines
-        .iter()
-        .any(|line| line.contains("The sync looks good"));
-    Some(core::MailboxEvidence {
-        source_messages,
-        destination_messages,
-        source_bytes,
-        destination_bytes,
-        unmatched_messages: if matched { 0 } else { 1 },
-        failed_messages,
-        source_folders,
-        destination_folders,
-        authoritative: matched,
-    })
-}
-
-fn parse_dovecot_status(lines: &[String]) -> Option<(u64, u64, u64)> {
-    let mut folders = 0;
-    let mut messages = 0;
-    let mut bytes = 0;
-    for line in lines {
-        let message_count = line
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("messages=")?.parse::<u64>().ok());
-        let virtual_size = line
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("vsize=")?.parse::<u64>().ok());
-        if let (Some(message_count), Some(virtual_size)) = (message_count, virtual_size) {
-            folders += 1;
-            messages += message_count;
-            bytes += virtual_size;
-        }
-    }
-    (folders > 0).then_some((folders, messages, bytes))
-}
-
-fn parse_dovecot_evidence(
-    source: &[String],
-    destination: &[String],
-) -> Option<core::MailboxEvidence> {
-    let (source_folders, source_messages, source_bytes) = parse_dovecot_status(source)?;
-    let (destination_folders, destination_messages, destination_bytes) =
-        parse_dovecot_status(destination)?;
-    Some(core::MailboxEvidence {
-        source_messages,
-        destination_messages,
-        source_bytes,
-        destination_bytes,
-        unmatched_messages: 0,
-        failed_messages: 0,
-        source_folders,
-        destination_folders,
-        authoritative: false,
-    })
-}
-
 enum Event {
     Line(String),
     ProcessStarted(
@@ -1150,7 +1063,7 @@ fn run_streaming(
             let imapsync_evidence = evidence_lines
                 .lock()
                 .ok()
-                .and_then(|lines| parse_imapsync_evidence(&lines));
+                .and_then(|lines| verification::parse_imapsync_evidence(&lines));
             Ok(StreamResult {
                 outcome,
                 imapsync_evidence,
@@ -3858,7 +3771,9 @@ impl App {
                     }
                 }
                 if result.is_ok() {
-                    if let Some(evidence) = parse_dovecot_evidence(&reports[0], &reports[1]) {
+                    if let Some(evidence) =
+                        verification::parse_dovecot_evidence(&reports[0], &reports[1])
+                    {
                         let _ = tx.send(Event::Evidence(evidence));
                     } else {
                         let _ = tx.send(Event::VerificationFailed(
@@ -4140,7 +4055,7 @@ impl App {
             let terminal_evidence = if succeeded && !run_context.dry_run {
                 self.pending_evidence.take().or_else(|| {
                     (run_context.engine == core::Engine::ImapSync)
-                        .then(|| parse_imapsync_evidence(&self.output))
+                        .then(|| verification::parse_imapsync_evidence(&self.output))
                         .flatten()
                 })
             } else {
@@ -6068,14 +5983,14 @@ mod tests {
             "The sync looks good, all 42 identified messages in host1 are on host2.".into(),
             "Detected 0 errors".into(),
         ];
-        let evidence = parse_imapsync_evidence(&lines).unwrap();
+        let evidence = verification::parse_imapsync_evidence(&lines).unwrap();
         assert_eq!(evidence.confidence_percent(), 100);
         assert_eq!(evidence.source_messages, 42);
     }
 
     #[test]
     fn incomplete_imapsync_summary_is_not_evidence() {
-        assert!(parse_imapsync_evidence(&["Detected 0 errors".into()]).is_none());
+        assert!(verification::parse_imapsync_evidence(&["Detected 0 errors".into()]).is_none());
     }
 
     #[test]
@@ -6088,7 +6003,7 @@ mod tests {
             "INBOX messages=10 vsize=100".into(),
             "Archive messages=2 vsize=50".into(),
         ];
-        let evidence = parse_dovecot_evidence(&source, &destination).unwrap();
+        let evidence = verification::parse_dovecot_evidence(&source, &destination).unwrap();
         assert_eq!(evidence.source_folders, 2);
         assert_eq!(evidence.source_messages, 12);
         assert_eq!(evidence.confidence_percent(), 85);
