@@ -672,6 +672,14 @@ impl StateStore {
     /// uses this identity to terminate a recorded orphan before allowing an
     /// operator to retry the mailbox.
     pub fn register_process(&self, process: &ActiveProcess) -> rusqlite::Result<()> {
+        let consistent: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=?2 AND r.project_id=j.project_id WHERE r.id=?1 AND r.status='running')",
+            params![process.run_id, process.job_id],
+            |row| row.get(0),
+        )?;
+        if !consistent {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         self.connection.execute(
             "INSERT INTO active_processes(run_id,job_id,pid,start_ticks,process_group,session_id,executable) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(run_id,job_id) DO UPDATE SET pid=excluded.pid,start_ticks=excluded.start_ticks,process_group=excluded.process_group,session_id=excluded.session_id,executable=excluded.executable,started_at=CURRENT_TIMESTAMP",
             params![
@@ -1484,6 +1492,37 @@ mod tests {
             }]
         );
         db.recover_abandoned_jobs().unwrap();
+        assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn active_process_rejects_run_and_mailbox_from_different_projects() {
+        let db = StateStore::in_memory().unwrap();
+        let first = db
+            .create_project("first", "source-a", "destination-a")
+            .unwrap();
+        let first_job = db
+            .add_mailbox(&first.id, "source-a", "destination-a")
+            .unwrap();
+        let second = db
+            .create_project("second", "source-b", "destination-b")
+            .unwrap();
+        let second_job = db
+            .add_mailbox(&second.id, "source-b", "destination-b")
+            .unwrap();
+        db.begin_run(&first.id, &first_job, "run-first", "test")
+            .unwrap();
+
+        let result = db.register_process(&ActiveProcess {
+            run_id: "run-first".into(),
+            job_id: second_job,
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test".into(),
+        });
+        assert!(result.is_err());
         assert!(db.active_processes().unwrap().is_empty());
     }
 
