@@ -132,11 +132,14 @@ impl Form {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(
-            path,
-            toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())
+        let content = toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?;
+        let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&temporary, content).map_err(|e| e.to_string())?;
+        if let Err(error) = std::fs::rename(&temporary, &path) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error.to_string());
+        }
+        Ok(())
     }
     fn validate(&self) -> Result<(), String> {
         let mut required = vec![
@@ -149,10 +152,8 @@ impl Form {
         if self.engine() != core::Engine::Dovecot {
             required.push(("Destination password", &self.destination_password));
         }
-        if (!self.profile.source_port.trim().is_empty()
-            && self.profile.source_port.parse::<u16>().is_err())
-            || self.profile.source_port.trim() == "0"
-        {
+        let source_port = self.profile.source_port.trim();
+        if (!source_port.is_empty() && source_port.parse::<u16>().is_err()) || source_port == "0" {
             return Err("Source IMAP port must be a number between 1 and 65535.".into());
         }
         if !matches!(
@@ -182,6 +183,7 @@ impl Form {
         };
         let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
             .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
+        let source_port = self.profile.source_port.trim();
         let mut a = vec![
             "--host1".into(),
             source_host,
@@ -198,10 +200,10 @@ impl Form {
         ];
         a.extend([
             "--port1".into(),
-            if self.profile.source_port.trim().is_empty() {
+            if source_port.is_empty() {
                 endpoint_port.to_string()
             } else {
-                self.profile.source_port.trim().into()
+                source_port.into()
             },
         ]);
         if self.profile.source_tls == "plain" {
@@ -917,7 +919,14 @@ fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), Strin
     if let Some(rest) = input.strip_prefix('[') {
         let end = rest.find(']').ok_or("IPv6 endpoint is missing ]")?;
         let host = rest[..end].to_owned();
-        let port = rest[end + 1..]
+        if host.is_empty() {
+            return Err("IPv6 endpoint has an empty host".into());
+        }
+        let suffix = &rest[end + 1..];
+        if !suffix.is_empty() && !suffix.starts_with(':') {
+            return Err("invalid characters after IPv6 endpoint".into());
+        }
+        let port = suffix
             .strip_prefix(':')
             .map(|value| value.parse::<u16>())
             .transpose()
@@ -932,6 +941,9 @@ fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), Strin
         && let Some((host, port)) = input.rsplit_once(':')
         && let Ok(port) = port.parse::<u16>()
     {
+        if host.is_empty() {
+            return Err("endpoint has an empty host".into());
+        }
         if port == 0 {
             return Err("endpoint port must be between 1 and 65535".into());
         }
@@ -2495,6 +2507,7 @@ mod tests {
             ("2001:db8::1".into(), 993)
         );
         assert!(endpoint_parts("mail.example:0", 993).is_err());
+        assert!(endpoint_parts("[2001:db8::1]garbage", 993).is_err());
     }
 
     #[test]
