@@ -64,6 +64,12 @@ struct Profile {
     batch_concurrency: usize,
     #[serde(default)]
     batch_retry_count: usize,
+    /// Optional imapsync throttle. Zero means unlimited.
+    #[serde(default)]
+    max_messages_per_second: u32,
+    /// Optional imapsync throttle. Zero means unlimited.
+    #[serde(default)]
+    max_bytes_per_second: u64,
     /// Remote Dovecot currently receives this value in a destination-side
     /// command override. Keep the unsafe compatibility path opt-in until a
     /// deployment-independent secret broker is available.
@@ -366,6 +372,20 @@ impl Form {
         ] {
             if enabled {
                 a.push(flag.into());
+            }
+        }
+        if self.engine() == core::Engine::ImapSync {
+            if self.profile.max_messages_per_second > 0 {
+                a.extend([
+                    "--maxmessagespersecond".into(),
+                    self.profile.max_messages_per_second.to_string(),
+                ]);
+            }
+            if self.profile.max_bytes_per_second > 0 {
+                a.extend([
+                    "--maxbytespersecond".into(),
+                    self.profile.max_bytes_per_second.to_string(),
+                ]);
             }
         }
         if self.dry_run {
@@ -3226,7 +3246,20 @@ impl App {
             ui.add_space(8.0);
             ui.group(|ui| { ui.heading("Reliability and metadata"); ui.checkbox(&mut self.form.profile.sync_internaldates, "Sync internal dates  (--syncinternaldates)"); ui.checkbox(&mut self.form.profile.useuid, "Use message UIDs when available  (--useuid)"); ui.checkbox(&mut self.form.profile.usecache, "Use imapsync cache  (--usecache)"); ui.checkbox(&mut self.form.profile.allowsizemismatch, "Allow message-size mismatch  (--allowsizemismatch)"); });
             ui.add_space(8.0);
-            ui.group(|ui| { ui.heading("Performance"); ui.checkbox(&mut self.form.profile.fastio1, "Fast I/O for source  (--fastio1)"); ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)"); });
+            ui.group(|ui| {
+                ui.heading("Performance");
+                ui.checkbox(&mut self.form.profile.fastio1, "Fast I/O for source  (--fastio1)");
+                ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)");
+                ui.horizontal(|ui| {
+                    ui.label("Messages/second (0 = unlimited)");
+                    ui.add(egui::DragValue::new(&mut self.form.profile.max_messages_per_second).range(0..=100_000));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Bytes/second (0 = unlimited)");
+                    ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX));
+                });
+                ui.label(RichText::new("Throttles apply to imapsync only and can reduce provider rate limits or link saturation.").size(11.0).color(MUTED));
+            });
             ui.add_space(8.0);
             ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
             ui.add_space(8.0); ui.label("For any other documented flag, use the Extra imapsync options field in the migration plan. Each option is passed as separate whitespace-delimited arguments.");
@@ -3743,6 +3776,23 @@ mod tests {
         assert_eq!(
             prepared.env,
             vec![("MAILSWIFTSYNC_IMAPC_PASSWORD".into(), "secret".into())]
+        );
+    }
+
+    #[test]
+    fn imapsync_plan_includes_explicit_throttles() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.max_messages_per_second = 25;
+        form.profile.max_bytes_per_second = 1_048_576;
+        let args = form.args(true);
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--maxmessagespersecond", "25"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--maxbytespersecond", "1048576"])
         );
     }
 

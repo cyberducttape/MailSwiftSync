@@ -23,6 +23,7 @@ Stable today:
 - Dovecot-native `doveadm sync -1`/`backup` planning and execution, including remote `imapc` sources.
 - `imapsync` fallback for arbitrary IMAP endpoints.
 - CSV/XLS/XLSX validation-only batch queue with bounded operator-selected concurrency (1–16 workers).
+- Explicit imapsync message and byte throttles for provider-friendly single-mailbox runs.
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
 - Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
