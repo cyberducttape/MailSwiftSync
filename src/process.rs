@@ -2,7 +2,7 @@ use std::{
     fs::OpenOptions,
     io::Read,
     path::Path,
-    process::{Child, Command, ExitStatus},
+    process::{Child, Command},
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -183,6 +183,16 @@ pub(crate) struct ProcessLaunchLimiter {
     state: Mutex<TokenBucketState>,
 }
 
+/// Result of supervising an external process. Engine adapters can interpret
+/// the exit code without having to infer cancellation or timeout from an
+/// error string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProcessOutcome {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) cancelled: bool,
+    pub(crate) timed_out: bool,
+}
+
 impl ProcessLaunchLimiter {
     pub(crate) fn new(starts_per_second: usize) -> Self {
         let rate_per_second = starts_per_second.max(1) as f64;
@@ -224,27 +234,33 @@ pub(crate) fn wait_with_timeout(
     child: &mut Child,
     timeout: Duration,
     cancel: &AtomicBool,
-) -> std::io::Result<ExitStatus> {
+) -> std::io::Result<ProcessOutcome> {
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(status);
+            return Ok(ProcessOutcome {
+                exit_code: status.code(),
+                cancelled: false,
+                timed_out: false,
+            });
         }
         if cancel.load(Ordering::Relaxed) {
             terminate_process_group(child);
             wait_for_graceful_exit(child, Duration::from_secs(5));
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "cancelled by operator",
-            ));
+            return Ok(ProcessOutcome {
+                exit_code: None,
+                cancelled: true,
+                timed_out: false,
+            });
         }
         if started.elapsed() >= timeout {
             terminate_process_group(child);
             wait_for_graceful_exit(child, Duration::from_secs(5));
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "migration exceeded its configured execution timeout",
-            ));
+            return Ok(ProcessOutcome {
+                exit_code: None,
+                cancelled: false,
+                timed_out: true,
+            });
         }
         thread::sleep(Duration::from_millis(100));
     }

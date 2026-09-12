@@ -13,9 +13,10 @@ use credentials::{
 #[cfg(test)]
 use process::terminate_process_group_by_pid;
 use process::{
-    InstanceLock, ProcessLaunchLimiter, acquire_instance_lock, collect_redacted_lines,
-    configure_process_group, for_each_lossy_line, linux_process_identity, recorded_process_matches,
-    terminate_process_group, terminate_recorded_process_group, wait_with_timeout,
+    InstanceLock, ProcessLaunchLimiter, ProcessOutcome, acquire_instance_lock,
+    collect_redacted_lines, configure_process_group, for_each_lossy_line, linux_process_identity,
+    recorded_process_matches, terminate_process_group, terminate_recorded_process_group,
+    wait_with_timeout,
 };
 
 use calamine::{Reader, open_workbook_auto};
@@ -34,7 +35,7 @@ use std::{
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
-    process::{Command, ExitStatus, Stdio},
+    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -1158,17 +1159,24 @@ fn run_streaming(
         ))
         .is_ok();
     let result = if process_started {
-        wait_with_timeout(&mut child, timeout, cancel)
-            .map_err(|error| error.to_string())
-            .and_then(|status| {
-                if status.success() {
-                    Ok(StreamOutcome::Completed)
-                } else if dovecot_exit_two_is_delta && status.code() == Some(2) {
-                    Ok(StreamOutcome::DeltaRequired)
-                } else {
-                    Err(format!("process exited with {status}"))
-                }
-            })
+        match wait_with_timeout(&mut child, timeout, cancel) {
+            Err(error) => Err(error.to_string()),
+            Ok(ProcessOutcome {
+                cancelled: true, ..
+            }) => Err("cancelled by operator".into()),
+            Ok(ProcessOutcome {
+                timed_out: true, ..
+            }) => Err("migration exceeded its configured execution timeout".into()),
+            Ok(ProcessOutcome {
+                exit_code: Some(0), ..
+            }) => Ok(StreamOutcome::Completed),
+            Ok(ProcessOutcome {
+                exit_code: Some(2), ..
+            }) if dovecot_exit_two_is_delta => Ok(StreamOutcome::DeltaRequired),
+            Ok(ProcessOutcome { exit_code, .. }) => {
+                Err(format!("process exited with code {:?}", exit_code))
+            }
+        }
     } else {
         // ProcessStarted is the reliable hand-off to the durable controller.
         // Continuing after a disconnected event channel would leave a live
@@ -1280,7 +1288,7 @@ fn run_capture_lines(
     cancel: &AtomicBool,
     secrets: &[String],
     timeout: Duration,
-) -> Result<(ExitStatus, Vec<String>), String> {
+) -> Result<(ProcessOutcome, Vec<String>), String> {
     let mut command = Command::new(executable);
     command
         .args(args)
@@ -1346,10 +1354,11 @@ fn run_dovecot_destination_preflight(
                 index + 1
             )));
         }
-        if !status.success() {
+        if status.exit_code != Some(0) {
             return Err(format!(
-                "Dovecot destination preflight command {} exited with {status}",
-                index + 1
+                "Dovecot destination preflight command {} exited with code {:?}",
+                index + 1,
+                status.exit_code
             ));
         }
     }
@@ -1381,10 +1390,11 @@ fn run_dovecot_verification(
                 index + 1
             )));
         }
-        if !status.success() {
+        if status.exit_code != Some(0) {
             return Err(format!(
-                "Dovecot verification command {} exited with {status}",
-                index + 1
+                "Dovecot verification command {} exited with code {:?}",
+                index + 1,
+                status.exit_code
             ));
         }
         reports.push(report);

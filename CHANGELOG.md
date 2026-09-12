@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Process supervision now returns a typed outcome distinguishing exit codes, operator cancellation, and execution timeout; engine-specific interpretation remains above the process layer instead of relying on error-string matching.
 - Post-spawn stdout/stderr pipe failures now terminate and reap the child before the process runner returns, keeping every execution path supervised or explicitly failed closed.
 - The process runner now fails closed when the reliable `ProcessStarted` event cannot be delivered: it cancels and reaps the spawned child before returning, preventing an engine from continuing without durable supervision.
 - Verification Markdown and project JSON exports now include a deterministic evidence digest bound to the producing run, immutable plan snapshot, and recorded evidence dimensions; the digest is an integrity reference, not a signature or message-level verification claim.
