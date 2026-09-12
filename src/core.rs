@@ -742,12 +742,16 @@ impl StateStore {
         tx.commit()
     }
     pub fn finish_run(&self, run_id: &str, status: &str, detail: &str) -> rusqlite::Result<()> {
-        self.connection.execute(
-            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3",
+        let tx = self.connection.unchecked_transaction()?;
+        let changed = tx.execute(
+            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND status='running'",
             params![status, detail, run_id],
         )?;
-        self.clear_processes(run_id)?;
-        Ok(())
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
+        tx.commit()
     }
     /// Atomically completes a single-mailbox run and records the durable
     /// mailbox state.  Completion is deliberately one transaction: a run
@@ -1201,6 +1205,30 @@ mod tests {
         );
         db.recover_abandoned_jobs().unwrap();
         assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn terminal_batch_run_clears_process_identity_atomically() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-process-finish", "test")
+            .unwrap();
+        db.register_process("run-process-finish", &job, 4242)
+            .unwrap();
+        db.finish_run("run-process-finish", "failed", "test failure")
+            .unwrap();
+        assert!(db.active_processes().unwrap().is_empty());
+        assert_eq!(
+            db.run_status("run-process-finish").unwrap().as_deref(),
+            Some("failed")
+        );
+        assert!(
+            db.finish_run("run-process-finish", "failed", "duplicate")
+                .is_err()
+        );
     }
 
     #[test]
