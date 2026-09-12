@@ -1616,6 +1616,10 @@ impl App {
         thread::spawn(move || {
             let mut failed = false;
             for (index, job) in jobs.into_iter().enumerate() {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = tx.send(Event::JobState(index, "Cancelled".into()));
+                    continue;
+                }
                 let _ = tx.send(Event::Line(format!(
                     "══ Job {}: {} ══",
                     index + 1,
@@ -1645,14 +1649,23 @@ impl App {
                     Err(error) => Err(error),
                 };
                 if let Err(error) = result {
+                    let cancelled = error.contains("cancelled");
                     failed = true;
                     let _ = tx.send(Event::Line(format!("[{}] failed: {error}", index + 1)));
-                    let _ = tx.send(Event::JobState(index, "Failed".into()));
+                    let _ = tx.send(Event::JobState(
+                        index,
+                        if cancelled { "Cancelled" } else { "Failed" }.into(),
+                    ));
+                    if cancelled {
+                        continue;
+                    }
                 } else {
                     let _ = tx.send(Event::JobState(index, "Completed".into()));
                 }
             }
-            let _ = tx.send(Event::Finished(if failed {
+            let _ = tx.send(Event::Finished(if cancel.load(Ordering::Relaxed) {
+                Err("batch cancelled".into())
+            } else if failed {
                 Err("one or more batch jobs failed".into())
             } else {
                 Ok(())
@@ -1908,6 +1921,7 @@ impl App {
                                 "Running" => "running",
                                 "Completed" => "completed",
                                 "Failed" => "failed",
+                                "Cancelled" => "cancelled",
                                 "Queued" => "queued",
                                 _ => "attention",
                             };

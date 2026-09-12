@@ -20,6 +20,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added conservative evidence scope, live-run preflight/persistence gates, process-group termination on Unix, and transactional project/evidence writes.
 - Added abandoned-run recovery and structured run lifecycle records; verification failures now enter operator Attention instead of masquerading as transfer failures.
 - Added bounded, cancellable verification subprocesses with Unix process-group termination.
+- Batch cancellation now stops subsequent jobs and records cancelled mailbox states.
 - Added regression coverage for command generation, credential handling, evidence parsing, and verification confidence.
 - Added durable batch validation jobs, per-run evidence IDs, bounded execution, and operator cancellation.
 
