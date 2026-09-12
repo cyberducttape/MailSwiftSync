@@ -905,7 +905,7 @@ impl Default for App {
                 "Recovered {recovered} interrupted job(s) into Attention for review."
             ));
         }
-        let form = Form::load();
+        let mut form = Form::load();
         let restored_project = persistence_warning
             .is_none()
             .then(|| store.latest_project().ok().flatten())
@@ -917,10 +917,21 @@ impl Default for App {
                     && project.destination_endpoint == form.profile.destination_host
             })
             .map(|project| {
-                (
-                    Some(project.id.clone()),
-                    store.first_mailbox(&project.id).ok().flatten(),
-                )
+                let job_id = store.first_mailbox(&project.id).ok().flatten();
+                if let Some(job) = &job_id
+                    && let Ok(Some((source_user, destination_user, state))) =
+                        store.mailbox_identity(job)
+                {
+                    // Restore non-secret mailbox identity and make recovery
+                    // state visible immediately. Passwords remain blank and
+                    // must be entered again before a live run.
+                    form.profile.source_user = source_user;
+                    form.profile.destination_user = destination_user;
+                    if state == "attention" {
+                        form.dry_run = true;
+                    }
+                }
+                (Some(project.id.clone()), job_id)
             })
             .unwrap_or((None, None));
         Self {

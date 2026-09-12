@@ -464,10 +464,28 @@ impl StateStore {
     /// exists. Running jobs are therefore made reviewable rather than left in
     /// a permanently active state.
     pub fn recover_abandoned_jobs(&self) -> rusqlite::Result<usize> {
-        self.connection.execute(
+        let projects = self
+            .connection
+            .prepare("SELECT DISTINCT project_id FROM mailbox_jobs WHERE state='running'")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let tx = self.connection.unchecked_transaction()?;
+        let count = tx.execute(
             "UPDATE mailbox_jobs SET state='attention' WHERE state='running'",
             [],
-        )
+        )?;
+        tx.execute(
+            "UPDATE runs SET status='abandoned',finished_at=CURRENT_TIMESTAMP,detail='Application restarted before completion' WHERE status='running'",
+            [],
+        )?;
+        for project in projects {
+            tx.execute(
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_recovered','Running mailbox jobs moved to Attention after application restart')",
+                [project],
+            )?;
+        }
+        tx.commit()?;
+        Ok(count)
     }
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.event(project_id, kind, detail)
@@ -491,6 +509,13 @@ impl StateStore {
             params![status, detail, run_id],
         )?;
         Ok(())
+    }
+    pub fn run_status(&self, run_id: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row("SELECT status FROM runs WHERE id=?1", [run_id], |row| {
+                row.get(0)
+            })
+            .optional()
     }
     pub fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
         self.record_evidence_for_run(job_id, "legacy", value)
@@ -522,6 +547,18 @@ impl StateStore {
                 "SELECT id FROM mailbox_jobs WHERE project_id=?1 LIMIT 1",
                 [project_id],
                 |r| r.get(0),
+            )
+            .optional()
+    }
+    pub fn mailbox_identity(
+        &self,
+        job_id: &str,
+    ) -> rusqlite::Result<Option<(String, String, String)>> {
+        self.connection
+            .query_row(
+                "SELECT source_mailbox,destination_mailbox,state FROM mailbox_jobs WHERE id=?1",
+                [job_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()
     }
@@ -685,8 +722,14 @@ mod tests {
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
         db.set_mailbox_state(&job, "running").unwrap();
+        db.start_run(&project.id, Some(&job), "run-1", "test")
+            .unwrap();
         assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
         assert!(db.set_mailbox_state(&job, "queued").is_err());
+        assert_eq!(
+            db.run_status("run-1").unwrap().as_deref(),
+            Some("abandoned")
+        );
     }
 
     #[test]
@@ -708,6 +751,10 @@ mod tests {
         assert_eq!(
             db.mailbox_state(&jobs[1]).unwrap().as_deref(),
             Some("queued")
+        );
+        assert_eq!(
+            db.mailbox_identity(&jobs[0]).unwrap().unwrap(),
+            ("one".into(), "one".into(), "queued".into())
         );
     }
 }

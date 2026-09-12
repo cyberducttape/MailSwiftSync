@@ -28,6 +28,7 @@ All notable changes to MailSwiftSync are documented here.
 - Made project creation transactional in the cockpit, reject advanced options that override controlled endpoints or credentials, and redact worker-thread output before it reaches the event journal.
 - Added cancellation status to structured run records and expanded exported reports with mailbox state and evidence scope.
 - Made batch project and mailbox creation atomic, attached batch validation to a durable run record, and journaled batch activity under its project.
+- Restored the selected mailbox identity from durable state and marked interrupted run records as abandoned with recovery events on restart.
 
 ### Changed
 
