@@ -2504,8 +2504,9 @@ impl App {
                                         && is_transient_batch_error(&error) =>
                                 {
                                     let _ = tx.send(Event::Line(format!(
-                                        "[{}] transient failure; retrying: {error}",
-                                        index + 1
+                                        "[{}] [{}] transient failure; retrying: {error}",
+                                        index + 1,
+                                        classify_failure(&error).label()
                                     )));
                                     let _ = tx.send(Event::JobState(index, "Failed".into()));
                                     let delay = Duration::from_secs(1_u64 << attempt.min(5));
@@ -2526,8 +2527,9 @@ impl App {
                                         failed.store(true, Ordering::Relaxed);
                                     }
                                     let _ = tx.send(Event::Line(format!(
-                                        "[{}] failed: {error}",
-                                        index + 1
+                                        "[{}] [{}] failed: {error}",
+                                        index + 1,
+                                        classify_failure(&error).label()
                                     )));
                                     let _ = tx.send(Event::JobState(
                                         index,
@@ -3040,19 +3042,19 @@ impl App {
                     } else {
                         "failed"
                     };
-                    let detail = if succeeded {
-                        ""
-                    } else {
-                        r.as_ref().err().map(String::as_str).unwrap_or("run failed")
-                    };
+                    let detail = r
+                        .as_ref()
+                        .err()
+                        .map(|error| classified_failure_detail(error))
+                        .unwrap_or_default();
                     let terminal_write = if self.bulk_project_id.is_none()
                         && let (Some(job), Some(state)) = (&self.job_id, direct_final_state)
                     {
                         self.store.finish_run_for_mailbox(
-                            &project, job, run_id, run_status, state, detail,
+                            &project, job, run_id, run_status, state, &detail,
                         )
                     } else {
-                        self.store.finish_run(run_id, run_status, detail)
+                        self.store.finish_run(run_id, run_status, &detail)
                     };
                     if let Err(error) = terminal_write {
                         push_visible_output(
@@ -3374,9 +3376,69 @@ fn display_job_state(state: &str) -> &'static str {
     }
 }
 
-fn is_transient_batch_error(error: &str) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FailureClass {
+    Authentication,
+    Quota,
+    Transport,
+    Configuration,
+    Message,
+    Unknown,
+}
+
+impl FailureClass {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Authentication => "authentication",
+            Self::Quota => "quota",
+            Self::Transport => "transport",
+            Self::Configuration => "configuration",
+            Self::Message => "message",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+fn classify_failure(error: &str) -> FailureClass {
     let error = error.to_ascii_lowercase();
-    [
+    if [
+        "authentication",
+        "auth failed",
+        "authentification",
+        "invalid credentials",
+        "login denied",
+        "login failed",
+        "authenticationfailed",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Authentication
+    } else if [
+        "overquota",
+        "over quota",
+        "quota exceeded",
+        "quota",
+        "mailbox is full",
+        "insufficient storage",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Quota
+    } else if [
+        "message too large",
+        "too large",
+        "append failed",
+        "invalid message",
+        "message rejected",
+        "msg rejected",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Message
+    } else if [
         "timed out",
         "timeout",
         "connection reset",
@@ -3385,9 +3447,38 @@ fn is_transient_batch_error(error: &str) -> bool {
         "broken pipe",
         "temporarily unavailable",
         "try again",
+        "throttl",
+        "rate limit",
     ]
     .iter()
     .any(|marker| error.contains(marker))
+    {
+        FailureClass::Transport
+    } else if [
+        "invalid option",
+        "unknown option",
+        "could not start",
+        "not found",
+        "no such file",
+        "configuration",
+        "invalid endpoint",
+        "missing",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Configuration
+    } else {
+        FailureClass::Unknown
+    }
+}
+
+fn is_transient_batch_error(error: &str) -> bool {
+    classify_failure(error) == FailureClass::Transport
+}
+
+fn classified_failure_detail(error: &str) -> String {
+    format!("[{}] {error}", classify_failure(error).label())
 }
 
 #[cfg(unix)]
@@ -3789,6 +3880,28 @@ mod tests {
         assert!(!is_transient_batch_error(
             "invalid destination configuration"
         ));
+    }
+
+    #[test]
+    fn failure_taxonomy_keeps_operator_actions_distinct() {
+        assert_eq!(
+            classify_failure("AUTHENTICATIONFAILED"),
+            FailureClass::Authentication
+        );
+        assert_eq!(classify_failure("OVERQUOTA"), FailureClass::Quota);
+        assert_eq!(
+            classify_failure("connection reset by peer"),
+            FailureClass::Transport
+        );
+        assert_eq!(
+            classify_failure("message too large for destination"),
+            FailureClass::Message
+        );
+        assert_eq!(
+            classify_failure("unknown option --bad"),
+            FailureClass::Configuration
+        );
+        assert_eq!(classified_failure_detail("OVERQUOTA"), "[quota] OVERQUOTA");
     }
 
     #[test]

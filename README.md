@@ -24,6 +24,7 @@ Stable today:
 - `imapsync` fallback for arbitrary IMAP endpoints.
 - CSV/XLS/XLSX validation-only batch queue with bounded operator-selected concurrency (1–16 workers).
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
+- Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
