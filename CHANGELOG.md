@@ -17,6 +17,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added child-process-only `IMAPSYNC_PASSWORD1/2` environment credentials for live `imapsync` runs.
 - Added exportable Markdown verification reports and a tagged-release workflow for Linux, Windows, and macOS artifacts.
 - Added explicit `ready`/`Preflight` outcomes for successful dry runs; dry validation no longer masquerades as a completed migration.
+- Added conservative evidence scope, live-run preflight/persistence gates, process-group termination on Unix, and transactional project/evidence writes.
 - Added regression coverage for command generation, credential handling, evidence parsing, and verification confidence.
 - Added durable batch validation jobs, per-run evidence IDs, bounded execution, and operator cancellation.
 

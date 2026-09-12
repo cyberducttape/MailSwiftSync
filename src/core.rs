@@ -104,10 +104,20 @@ pub struct MailboxEvidence {
     pub failed_messages: u64,
     pub source_folders: u64,
     pub destination_folders: u64,
+    /// True only when the engine supplied message-level/authoritative proof.
+    /// Aggregate mailbox totals must never be presented as full verification.
+    pub authoritative: bool,
 }
 
 impl MailboxEvidence {
     pub fn confidence_percent(&self) -> u8 {
+        if !self.authoritative {
+            return if self.unmatched_messages == 0 && self.failed_messages == 0 {
+                85
+            } else {
+                0
+            };
+        }
         if self.source_messages == 0
             && self.destination_messages == 0
             && self.source_folders == self.destination_folders
@@ -205,8 +215,8 @@ impl StateStore {
         self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT);
-          CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = self
@@ -223,6 +233,26 @@ impl StateStore {
         if !columns.iter().any(|column| column == "destination_folders") {
             self.connection.execute(
                 "ALTER TABLE evidence ADD COLUMN destination_folders INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "authoritative") {
+            self.connection.execute(
+                "ALTER TABLE evidence ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        let history_columns = self
+            .connection
+            .prepare("PRAGMA table_info(evidence_history)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !history_columns
+            .iter()
+            .any(|column| column == "authoritative")
+        {
+            self.connection.execute(
+                "ALTER TABLE evidence_history ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
@@ -249,6 +279,29 @@ impl StateStore {
         )?;
         Ok(project)
     }
+    pub fn create_project_with_mailbox(
+        &self,
+        name: &str,
+        source: &str,
+        destination: &str,
+        source_mailbox: &str,
+        destination_mailbox: &str,
+    ) -> rusqlite::Result<(Project, String)> {
+        let project = Project {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            source_endpoint: source.into(),
+            destination_endpoint: destination.into(),
+            phase: Phase::Discovery,
+        };
+        let job_id = Uuid::new_v4().to_string();
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute("INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES(?1,?2,?3,?4,?5)", params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()])?;
+        tx.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')", params![job_id, project.id, source_mailbox, destination_mailbox])?;
+        tx.execute("INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created','Project created without credentials')", [&project.id])?;
+        tx.commit()?;
+        Ok((project, job_id))
+    }
     pub fn transition(&self, id: &str, phase: Phase) -> rusqlite::Result<()> {
         let current = self
             .project(id)?
@@ -260,6 +313,24 @@ impl StateStore {
                 || phase != Phase::Attention && phase_rank(phase) < phase_rank(current))
         {
             return Err(rusqlite::Error::InvalidQuery);
+        }
+        if phase == Phase::Verification && current == Phase::Discovery {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        if phase == Phase::Complete && current != phase {
+            let total: i64 = self.connection.query_row(
+                "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1",
+                [id],
+                |row| row.get(0),
+            )?;
+            let verified: i64 = self.connection.query_row(
+                "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1 AND state='verified'",
+                [id],
+                |row| row.get(0),
+            )?;
+            if total == 0 || total != verified || current != Phase::Verification {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
         }
         self.connection.execute(
             "UPDATE projects SET phase=?1 WHERE id=?2",
@@ -322,12 +393,14 @@ impl StateStore {
         run_id: &str,
         value: &MailboxEvidence,
     ) -> rusqlite::Result<()> {
-        self.connection.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders])?;
-        self.connection.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders])?;
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
+        tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
-        self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)? })).optional()
+        self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)?, authoritative:r.get::<_, i64>(8)? != 0 })).optional()
     }
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects WHERE id=?1", [id], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
@@ -420,12 +493,14 @@ mod tests {
             failed_messages: 0,
             source_folders: 1,
             destination_folders: 1,
+            authoritative: true,
         };
         db.record_evidence(&job, &e).unwrap();
         assert_eq!(
             db.evidence(&job).unwrap().unwrap().confidence_percent(),
             100
         );
+        db.transition(&project.id, Phase::Preflight).unwrap();
         db.transition(&project.id, Phase::Verification).unwrap();
         assert_eq!(
             db.project(&project.id).unwrap().unwrap().phase,
@@ -444,6 +519,7 @@ mod tests {
             failed_messages: 0,
             source_folders: 4,
             destination_folders: 3,
+            authoritative: false,
         };
         assert_eq!(evidence.confidence_percent(), 85);
     }
@@ -459,6 +535,7 @@ mod tests {
             failed_messages: 1,
             source_folders: 1,
             destination_folders: 1,
+            authoritative: false,
         };
         assert_eq!(evidence.confidence_percent(), 0);
     }
@@ -474,5 +551,21 @@ mod tests {
         db.set_mailbox_state(&job, "failed").unwrap();
         db.set_mailbox_state(&job, "running").unwrap();
         assert!(db.set_mailbox_state(&job, "queued").is_err());
+    }
+
+    #[test]
+    fn project_cannot_complete_without_verified_mailboxes() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.transition(&project.id, Phase::Preflight).unwrap();
+        db.transition(&project.id, Phase::Verification).unwrap();
+        assert!(db.transition(&project.id, Phase::Complete).is_err());
+        db.set_mailbox_state(&job, "running").unwrap();
+        db.set_mailbox_state(&job, "completed").unwrap();
+        db.set_mailbox_state(&job, "verified").unwrap();
+        db.transition(&project.id, Phase::Complete).unwrap();
     }
 }

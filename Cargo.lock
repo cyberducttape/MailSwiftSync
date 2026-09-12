@@ -1914,6 +1914,7 @@ dependencies = [
  "csv",
  "dirs-next",
  "eframe",
+ "libc",
  "rfd",
  "rusqlite",
  "rustls",

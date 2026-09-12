@@ -451,7 +451,7 @@ struct PreparedCommand {
 fn remove_option(args: &mut Vec<String>, option: &str) {
     if let Some(index) = args.iter().position(|arg| arg == option) {
         args.remove(index);
-        if index < args.len() && !args[index].starts_with("--") {
+        if index < args.len() {
             args.remove(index);
         }
     }
@@ -525,7 +525,7 @@ fn wait_with_timeout(
             return Ok(status);
         }
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
+            terminate_process_group(child);
             let _ = child.wait();
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
@@ -533,7 +533,7 @@ fn wait_with_timeout(
             ));
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
+            terminate_process_group(child);
             let _ = child.wait();
             return Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
@@ -542,6 +542,39 @@ fn wait_with_timeout(
         }
         thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn configure_process_group(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Each migration gets its own session so cancellation cannot leave a
+        // shell/wrapper descendant running against the destination.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+}
+
+fn terminate_process_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let process_group = -(child.id() as libc::pid_t);
+        unsafe {
+            let _ = libc::kill(process_group, libc::SIGTERM);
+        }
+        thread::sleep(Duration::from_millis(100));
+        unsafe {
+            let _ = libc::kill(process_group, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
 }
 
 fn number_after(line: &str, marker: &str) -> Option<u64> {
@@ -585,6 +618,7 @@ fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxEvidence> {
         failed_messages,
         source_folders,
         destination_folders,
+        authoritative: matched,
     })
 }
 
@@ -624,6 +658,7 @@ fn parse_dovecot_evidence(
         failed_messages: 0,
         source_folders,
         destination_folders,
+        authoritative: false,
     })
 }
 
@@ -644,11 +679,14 @@ fn run_streaming(
     cancel: &AtomicBool,
     secrets: &[String],
 ) -> Result<(), String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value)))
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
     let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
@@ -720,6 +758,7 @@ struct App {
     advanced_open: bool,
     engine_open: bool,
     store: core::StateStore,
+    persistence_available: bool,
     project_id: Option<String>,
     job_id: Option<String>,
     run_id: Option<String>,
@@ -790,6 +829,7 @@ impl Default for App {
             advanced_open: false,
             engine_open: true,
             store,
+            persistence_available: persistence_warning.is_none(),
             project_id,
             job_id,
             run_id: None,
@@ -1469,6 +1509,14 @@ impl App {
             return;
         }
         let jobs = self.bulk_jobs.clone();
+        if jobs.iter().any(|job| !job.form.dry_run) {
+            self.bulk_message = "One or more queued jobs were imported in live mode. Re-import them with Dry run enabled.".into();
+            return;
+        }
+        if !self.persistence_available {
+            self.bulk_message = "Batch validation requires durable SQLite storage.".into();
+            return;
+        }
         let project = match self
             .store
             .create_project("Batch validation", "batch", "batch")
@@ -1574,21 +1622,36 @@ impl App {
             self.status = e;
             return;
         }
+        if !self.form.dry_run {
+            if !self.persistence_available {
+                self.status =
+                    "Live migration is disabled because durable SQLite storage is unavailable."
+                        .into();
+                return;
+            }
+            let preflight_ready = self
+                .project_id
+                .as_deref()
+                .and_then(|id| self.store.project(id).ok().flatten())
+                .is_some_and(|project| {
+                    project.phase != core::Phase::Discovery
+                        && project.phase != core::Phase::Attention
+                });
+            if !preflight_ready || self.job_id.is_none() {
+                self.status = "Run and pass a dry preflight for this project before starting a live migration.".into();
+                return;
+            }
+        }
         if self.project_id.is_none() {
-            if let Ok(project) = self.store.create_project(
+            if let Ok((project, job)) = self.store.create_project_with_mailbox(
                 &self.form.profile.name,
                 &self.form.profile.source_host,
                 &self.form.profile.destination_host,
+                &self.form.profile.source_user,
+                &self.form.profile.destination_user,
             ) {
                 self.project_id = Some(project.id.clone());
-                self.job_id = self
-                    .store
-                    .add_mailbox(
-                        &project.id,
-                        &self.form.profile.source_user,
-                        &self.form.profile.destination_user,
-                    )
-                    .ok();
+                self.job_id = Some(job);
             } else {
                 self.status = "Could not create durable migration project".into();
                 return;
@@ -1642,13 +1705,14 @@ impl App {
             Vec::new()
         };
         thread::spawn(move || {
-            let mut child = match Command::new(&exe)
+            let mut command = Command::new(&exe);
+            command
                 .args(&args)
                 .envs(prepared_env.iter().map(|(key, value)| (key, value)))
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-            {
+                .stderr(Stdio::piped());
+            configure_process_group(&mut command);
+            let mut child = match command.spawn() {
                 Ok(c) => c,
                 Err(e) => {
                     for path in cleanup {
@@ -2302,6 +2366,18 @@ mod tests {
     }
 
     #[test]
+    fn removing_secret_options_removes_values_starting_with_dashes() {
+        let mut args = vec![
+            "--password1".into(),
+            "--looks-like-an-option".into(),
+            "--host".into(),
+            "mail".into(),
+        ];
+        remove_option(&mut args, "--password1");
+        assert_eq!(args, ["--host", "mail"]);
+    }
+
+    #[test]
     fn endpoint_parser_handles_ports_and_ipv6() {
         assert_eq!(
             endpoint_parts("mail.example:8143", 993).unwrap(),
@@ -2376,6 +2452,6 @@ mod tests {
         let evidence = parse_dovecot_evidence(&source, &destination).unwrap();
         assert_eq!(evidence.source_folders, 2);
         assert_eq!(evidence.source_messages, 12);
-        assert_eq!(evidence.confidence_percent(), 100);
+        assert_eq!(evidence.confidence_percent(), 85);
     }
 }
