@@ -48,6 +48,8 @@ Only after validation succeeds and the durable project still matches the display
 3. Click **Run synchronization**.
 4. Keep MailSwiftSync open until the journal reports completion. You can request cancellation from the activity controls; the configured 1–720 hour execution limit also bounds an abandoned child process.
 
+For dual-IMAPS imapsync plans, live admission performs a fresh certificate-validated authentication probe against both endpoints immediately before mutation. If the plan is edited while that probe is running, the probe and live confirmation no longer apply to the edited plan.
+
 Dovecot mode uses `sync -1` by default so destination-side changes are preserved during the migration. After a live run, MailSwiftSync queries both source and destination mailbox status and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion switches to `backup`; this can remove destination-only messages. In imapsync mode, the final summary is parsed when complete. Do not treat an incomplete summary or failed verification as success.
 
 For a production window, follow the [production migration runbook](Production-runbook.md), including the pilot sequence, crash/restart recovery, Attention review, and report export checklist.

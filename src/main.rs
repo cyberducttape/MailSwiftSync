@@ -1560,10 +1560,16 @@ struct App {
     preflight: Vec<(String, String, bool)>,
     capability_receiver:
         Option<Receiver<Result<(core::ServerCapabilities, core::ServerCapabilities), String>>>,
+    /// Fresh authentication completed immediately before an IMAPS live run.
+    /// Both digests are captured at probe launch and must still match when
+    /// the run is admitted.
+    live_auth_receiver: Option<Receiver<Result<(String, String), String>>>,
+    live_auth_proof: Option<(String, String)>,
     source_capabilities: Option<core::ServerCapabilities>,
     destination_capabilities: Option<core::ServerCapabilities>,
     live_confirm_open: bool,
     live_confirmed: bool,
+    live_confirmation_plan: Option<String>,
     durability_error: bool,
     keyring_open: bool,
     active_view: WorkspaceView,
@@ -1758,10 +1764,13 @@ impl Default for App {
             cockpit_open: false,
             preflight: Vec::new(),
             capability_receiver: None,
+            live_auth_receiver: None,
+            live_auth_proof: None,
             source_capabilities: None,
             destination_capabilities: None,
             live_confirm_open: false,
             live_confirmed: false,
+            live_confirmation_plan: None,
             durability_error: false,
             keyring_open: false,
             active_view: WorkspaceView::Overview,
@@ -1891,6 +1900,26 @@ fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), Strin
         return Ok((host.to_owned(), port));
     }
     Ok((input.to_owned(), default_port))
+}
+
+fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
+    let host = host.trim();
+    if configured_port.trim().is_empty() {
+        return Ok(host.to_owned());
+    }
+    let port = configured_port
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| "invalid endpoint port".to_owned())?;
+    if port == 0 {
+        return Err("endpoint port must be between 1 and 65535".into());
+    }
+    let (host, _) = endpoint_parts(host, 993)?;
+    if host.contains(':') {
+        Ok(format!("[{host}]:{port}"))
+    } else {
+        Ok(format!("{host}:{port}"))
+    }
 }
 
 fn imap_quote(value: &str) -> Result<String, String> {
@@ -2121,6 +2150,62 @@ impl App {
                         destination_password.as_str(),
                     )
                     .map(|right| (left, right))
+                });
+            let _ = tx.send(result);
+        });
+    }
+
+    fn requires_live_imaps_auth_probe(&self) -> bool {
+        !self.form.dry_run
+            && self.form.engine() == core::Engine::ImapSync
+            && self.form.profile.source_tls == "imaps"
+            && self.form.profile.destination_tls == "imaps"
+    }
+
+    fn start_live_imaps_auth_probe(
+        &mut self,
+        plan_fingerprint: String,
+        credential_fingerprint: String,
+    ) {
+        if self.live_auth_receiver.is_some() {
+            return;
+        }
+        let source = match endpoint_for_probe(
+            &self.form.profile.source_host,
+            &self.form.profile.source_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.status = format!("Live authentication probe blocked: {error}");
+                return;
+            }
+        };
+        let destination = match endpoint_for_probe(
+            &self.form.profile.destination_host,
+            &self.form.profile.destination_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.status = format!("Live authentication probe blocked: {error}");
+                return;
+            }
+        };
+        let source_user = self.form.profile.source_user.clone();
+        let source_password = self.form.source_password.clone();
+        let destination_user = self.form.profile.destination_user.clone();
+        let destination_password = self.form.destination_password.clone();
+        let (tx, rx) = mpsc::channel();
+        self.live_auth_receiver = Some(rx);
+        self.status = "Re-authenticating both IMAPS endpoints before live execution…".into();
+        thread::spawn(move || {
+            let result = probe_tls_capabilities(&source, &source_user, source_password.as_str())
+                .and_then(|_| {
+                    probe_tls_capabilities(
+                        &destination,
+                        &destination_user,
+                        destination_password.as_str(),
+                    )
+                    .map(|_| (plan_fingerprint, credential_fingerprint))
                 });
             let _ = tx.send(result);
         });
@@ -4045,12 +4130,16 @@ impl App {
         }
     }
     fn start(&mut self) {
-        if !self.form.dry_run && !self.live_confirmed {
-            self.live_confirm_open = true;
-            return;
-        }
         if !self.form.dry_run {
-            self.live_confirmed = false;
+            let current_plan = plan_fingerprint_digest(&self.form.plan_fingerprint());
+            if !self.live_confirmed
+                || self.live_confirmation_plan.as_deref() != Some(current_plan.as_str())
+            {
+                self.live_confirmed = false;
+                self.live_confirmation_plan = None;
+                self.live_confirm_open = true;
+                return;
+            }
         }
         if let Err(error) = self.form.load_configured_keyring_credentials() {
             self.status = error;
@@ -4094,6 +4183,16 @@ impl App {
         if !self.form.dry_run && self.form.requires_insecure_transport_ack() {
             self.status = "Live migration blocked: acknowledge the cleartext source-transport risk before continuing.".into();
             return;
+        }
+        if self.requires_live_imaps_auth_probe() {
+            let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
+            let credential_fingerprint = self.form.credential_fingerprint();
+            if self.live_auth_proof.as_ref()
+                != Some(&(plan_fingerprint.clone(), credential_fingerprint.clone()))
+            {
+                self.start_live_imaps_auth_probe(plan_fingerprint, credential_fingerprint);
+                return;
+            }
         }
         self.durability_error = false;
         if !self.form.dry_run {
@@ -4197,6 +4296,9 @@ impl App {
             self.status = format!("Could not record durable run; nothing was started: {error}");
             return;
         }
+        self.live_auth_proof = None;
+        self.live_confirmed = false;
+        self.live_confirmation_plan = None;
         self.run_id = Some(run_id.clone());
         self.active_run = Some(ActiveRunContext {
             run_id: run_id.clone(),
@@ -4315,6 +4417,26 @@ impl App {
         });
     }
     fn poll(&mut self) {
+        let live_auth_result = self
+            .live_auth_receiver
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        if let Some(result) = live_auth_result {
+            self.live_auth_receiver = None;
+            match result {
+                Ok(proof) => {
+                    self.live_auth_proof = Some(proof);
+                    self.status =
+                        "Fresh IMAPS authentication passed; continuing live admission…".into();
+                    self.start();
+                }
+                Err(error) => {
+                    self.live_auth_proof = None;
+                    self.status =
+                        format!("Live authentication failed; migration was not started: {error}");
+                }
+            }
+        }
         if let Some(receiver) = &self.capability_receiver
             && let Ok(result) = receiver.try_recv()
         {
@@ -5298,7 +5420,7 @@ impl App {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() { close_requested = true; }
-                if ui.add(egui::Button::new(RichText::new("I understand — start migration").color(Color32::WHITE)).fill(ALERT)).clicked() { close_requested = true; self.live_confirmed = true; self.start(); }
+                if ui.add(egui::Button::new(RichText::new("I understand — start migration").color(Color32::WHITE)).fill(ALERT)).clicked() { close_requested = true; self.live_confirmed = true; self.live_confirmation_plan = Some(plan_fingerprint_digest(&self.form.plan_fingerprint())); self.start(); }
             });
         });
         self.live_confirm_open = open && !close_requested;
@@ -6610,6 +6732,19 @@ mod tests {
         );
         assert!(endpoint_parts("mail.example:0", 993).is_err());
         assert!(endpoint_parts("[2001:db8::1]garbage", 993).is_err());
+    }
+
+    #[test]
+    fn probe_endpoint_preserves_explicit_ipv6_and_port() {
+        assert_eq!(
+            endpoint_for_probe("[2001:db8::1]", "993").unwrap(),
+            "[2001:db8::1]:993"
+        );
+        assert_eq!(
+            endpoint_for_probe("mail.example", "").unwrap(),
+            "mail.example"
+        );
+        assert!(endpoint_for_probe("mail.example", "0").is_err());
     }
 
     #[test]
