@@ -47,6 +47,7 @@ All notable changes to MailSwiftSync are documented here.
 - The IMAPS readiness probe now authenticates, refreshes post-auth capabilities, and requests `NAMESPACE` and `LIST` so capability results are not presented as sufficient migration readiness on their own.
 - IMAPS readiness now requires tagged `OK` responses for capability, authentication, namespace, and folder-inventory commands; completed `NO`/`BAD` responses are reported as failures.
 - Reject control characters in hosts, usernames, and passwords before validation, process execution, or authenticated IMAP probing.
+- Batch startup now atomically records the parent run and marks every child job as running before worker execution, so restart recovery cannot lose queued children between UI events.
 
 ### Changed
 

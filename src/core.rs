@@ -603,6 +603,50 @@ impl StateStore {
         )?;
         tx.commit()
     }
+    /// Start a batch as one durable boundary. Children are marked running
+    /// before the worker is spawned; after a crash, recovery can therefore
+    /// move every unresolved child into Attention instead of losing queued
+    /// work between the parent run and UI event polling.
+    pub fn begin_batch_run(
+        &self,
+        project_id: &str,
+        job_ids: &[String],
+        run_id: &str,
+        engine: &str,
+    ) -> rusqlite::Result<()> {
+        if job_ids.is_empty() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        for job_id in job_ids {
+            let current: String = tx.query_row(
+                "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+                params![job_id, project_id],
+                |row| row.get(0),
+            )?;
+            if current != "running" && !valid_mailbox_transition(&current, "running") {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
+        tx.execute(
+            "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES(?1,?2,NULL,?3,'running')",
+            params![run_id, project_id, engine],
+        )?;
+        for job_id in job_ids {
+            tx.execute(
+                "UPDATE mailbox_jobs SET state='running',attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
+                [job_id],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_started',?2)",
+            params![
+                project_id,
+                format!("{engine} ({run_id}); {} child jobs", job_ids.len())
+            ],
+        )?;
+        tx.commit()
+    }
     pub fn finish_run(&self, run_id: &str, status: &str, detail: &str) -> rusqlite::Result<()> {
         self.connection.execute(
             "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3",
@@ -984,6 +1028,29 @@ mod tests {
         assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
         assert_eq!(
             db.run_status("run-atomic").unwrap().as_deref(),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn begin_batch_run_covers_all_children_before_worker_start() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-atomic",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        db.begin_batch_run(&project.id, &jobs, "run-batch-atomic", "test")
+            .unwrap();
+        assert!(
+            jobs.iter()
+                .all(|job| db.mailbox_state(job).unwrap().as_deref() == Some("running"))
+        );
+        assert_eq!(
+            db.run_status("run-batch-atomic").unwrap().as_deref(),
             Some("running")
         );
     }

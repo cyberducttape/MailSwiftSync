@@ -2091,9 +2091,9 @@ impl App {
         self.bulk_job_ids = job_ids;
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
-        if let Err(error) = self
-            .store
-            .start_run(&project.id, None, &run_id, "batch validation")
+        if let Err(error) =
+            self.store
+                .begin_batch_run(&project.id, &self.bulk_job_ids, &run_id, "batch validation")
         {
             self.bulk_message = format!("Could not start durable batch run: {error}");
             return;
