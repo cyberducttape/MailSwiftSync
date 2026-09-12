@@ -1,6 +1,6 @@
 # Bulk migrations from CSV or Excel
 
-Sourcecraft can import a migration list from CSV, XLS, or XLSX and run each row sequentially. The queue is deliberately sequential so one migration's output stays readable and one problematic mailbox does not overload a server.
+Sourcecraft can import a migration list from CSV, XLS, or XLSX and run each row sequentially. The queue is deliberately sequential so one migration's output stays readable and one problematic mailbox does not overload a server. Bulk jobs use the currently selected engine.
 
 ![Batch migration queue interface](assets/batch-queue.png)
 
@@ -38,4 +38,4 @@ Optional columns are `name` and `extra_options`. Start from the [CSV template](.
 
 Batch runs use the current sync rules and keep `--dry` enabled when Dry run is selected in the main window. Run batch validation first. Review the execution journal for every job before considering a live migration.
 
-Do not commit a spreadsheet containing real passwords to Git. Imported data exists only in Sourcecraft memory for the current queue and is not written to the saved profile.
+Do not commit a spreadsheet containing real passwords to Git, and treat the file as sensitive after import. Imported data exists only in Sourcecraft memory for the current queue and is not written to the saved profile. A future keyring-backed credential source should be preferred for production batch work.

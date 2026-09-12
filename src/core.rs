@@ -8,6 +8,27 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, path::Path};
 use uuid::Uuid;
 
+/// The transfer engine is a policy decision, not an implementation detail.
+/// Dovecot destinations should use the destination server's own dsync engine;
+/// imapsync remains available for arbitrary IMAP destinations.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Engine {
+    #[default]
+    Auto,
+    Dovecot,
+    ImapSync,
+}
+
+impl Engine {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatic",
+            Self::Dovecot => "Dovecot native",
+            Self::ImapSync => "imapsync fallback",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Phase {
     Discovery,
@@ -67,16 +88,29 @@ pub struct MailboxEvidence {
     pub destination_bytes: u64,
     pub unmatched_messages: u64,
     pub failed_messages: u64,
+    pub source_folders: u64,
+    pub destination_folders: u64,
 }
 
 impl MailboxEvidence {
     pub fn confidence_percent(&self) -> u8 {
-        if self.source_messages == 0 && self.destination_messages == 0 {
+        if self.source_messages == 0
+            && self.destination_messages == 0
+            && self.source_folders == self.destination_folders
+            && self.unmatched_messages == 0
+            && self.failed_messages == 0
+        {
             return 100;
         }
         let count_ok = self.source_messages == self.destination_messages;
         let bytes_ok = self.source_bytes == self.destination_bytes;
-        if count_ok && bytes_ok && self.unmatched_messages == 0 && self.failed_messages == 0 {
+        let folders_ok = self.source_folders == self.destination_folders;
+        if count_ok
+            && bytes_ok
+            && folders_ok
+            && self.unmatched_messages == 0
+            && self.failed_messages == 0
+        {
             100
         } else if self.unmatched_messages == 0 && self.failed_messages == 0 {
             85
@@ -157,8 +191,18 @@ impl StateStore {
         self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT);
-          CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")
+          CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")?;
+        // Existing pre-0.1 databases need the new verification dimensions too.
+        let _ = self.connection.execute(
+            "ALTER TABLE evidence ADD COLUMN source_folders INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = self.connection.execute(
+            "ALTER TABLE evidence ADD COLUMN destination_folders INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        Ok(())
     }
     pub fn create_project(
         &self,
@@ -198,12 +242,22 @@ impl StateStore {
         self.connection.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')", params![id, project_id, source, destination])?;
         Ok(id)
     }
+    pub fn set_mailbox_state(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE mailbox_jobs SET state=?, attempt=attempt+1 WHERE id=?",
+            params![state, job_id],
+        )?;
+        Ok(())
+    }
+    pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
+        self.event(project_id, kind, detail)
+    }
     pub fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
-        self.connection.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages])?;
+        self.connection.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders])?;
         Ok(())
     }
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
-        self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)? })).optional()
+        self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)? })).optional()
     }
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects WHERE id=?1", [id], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
@@ -244,6 +298,8 @@ mod tests {
             destination_bytes: 10,
             unmatched_messages: 0,
             failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
         };
         db.record_evidence(&job, &e).unwrap();
         assert_eq!(
@@ -255,5 +311,35 @@ mod tests {
             db.project(&project.id).unwrap().unwrap().phase,
             Phase::Verification
         );
+    }
+
+    #[test]
+    fn folder_mismatch_cannot_claim_full_confidence() {
+        let evidence = MailboxEvidence {
+            source_messages: 10,
+            destination_messages: 10,
+            source_bytes: 100,
+            destination_bytes: 100,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 4,
+            destination_folders: 3,
+        };
+        assert_eq!(evidence.confidence_percent(), 85);
+    }
+
+    #[test]
+    fn empty_mailbox_with_failures_is_not_verified() {
+        let evidence = MailboxEvidence {
+            source_messages: 0,
+            destination_messages: 0,
+            source_bytes: 0,
+            destination_bytes: 0,
+            unmatched_messages: 0,
+            failed_messages: 1,
+            source_folders: 1,
+            destination_folders: 1,
+        };
+        assert_eq!(evidence.confidence_percent(), 0);
     }
 }

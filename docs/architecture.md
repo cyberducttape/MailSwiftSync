@@ -1,6 +1,6 @@
 # Architecture: the migration control plane
 
-Sourcecraft is moving from a desktop command launcher toward a durable migration control plane.
+Sourcecraft is a desktop migration control plane. It delegates transfer semantics to Dovecot's native dsync engine when selected and uses imapsync as the arbitrary-IMAP fallback; the application owns planning, safety gates, durable run state, and operator evidence.
 
 ## Core layers
 
@@ -19,7 +19,7 @@ Preflight Scheduler Verify
 
 The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, and verification evidence. It intentionally never persists passwords or mailbox content.
 
-The Project Cockpit also performs unauthenticated IMAPS capability discovery over certificate-verified TLS. It asks each endpoint for `CAPABILITY` and translates supported extensions into an explicit strategy, such as QRESYNC delta synchronization, CONDSTORE flag tracking, SPECIAL-USE folder mapping, or UIDPLUS acknowledgement. A failed certificate check blocks discovery rather than being silently ignored.
+The Project Cockpit also performs unauthenticated IMAPS capability discovery over certificate-verified TLS. It asks each endpoint for `CAPABILITY` and presents the result as planning context; it does not claim that these extensions replace Dovecot's server-side dsync behavior. A failed certificate check blocks discovery rather than being silently ignored.
 
 ## Migration phases
 
@@ -29,6 +29,6 @@ The Project Cockpit also performs unauthenticated IMAPS capability discovery ove
 
 ## Verification contract
 
-Every mailbox receives evidence containing source/destination message counts, byte counts, unmatched messages, and failed messages. A 100% confidence result requires exact count and byte agreement with no unmatched or failed messages.
+The evidence schema can hold source/destination folder and message counts, byte counts, unmatched messages, and failed messages. A 100% confidence result requires exact count, folder, and byte agreement with no unmatched or failed messages. Until a verifier has populated those fields, the UI must report evidence as unavailable rather than infer success from process exit status.
 
-This is the start of an evidence ledger; future engine work will add folder-level identities, UIDVALIDITY-aware checkpoints, and explainable mismatch records.
+The ledger records project lifecycle, redacted run output, and reconciliation evidence. The Dovecot adapter obtains aggregate folder/message/virtual-size status from both the remote `imapc` source and the destination after a live run. The imapsync adapter consumes its final summary. UIDVALIDITY-aware checkpoints and explainable message-level mismatch records remain future milestones.

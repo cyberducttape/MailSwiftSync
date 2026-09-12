@@ -13,6 +13,7 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         Arc,
@@ -37,6 +38,16 @@ struct Profile {
     destination_host: String,
     destination_user: String,
     imapsync_path: String,
+    #[serde(default)]
+    engine: core::Engine,
+    #[serde(default = "default_doveadm_path")]
+    doveadm_path: String,
+    #[serde(default = "default_ssh_path")]
+    ssh_path: String,
+    #[serde(default)]
+    dovecot_ssh_user: String,
+    #[serde(default)]
+    dovecot_config: String,
     automap: bool,
     addheader: bool,
     justfolders: bool,
@@ -48,6 +59,13 @@ struct Profile {
     allowsizemismatch: bool,
     delete2: bool,
     extra_options: String,
+}
+
+fn default_doveadm_path() -> String {
+    "doveadm".into()
+}
+fn default_ssh_path() -> String {
+    "ssh".into()
 }
 #[derive(Clone)]
 struct Form {
@@ -62,6 +80,8 @@ impl Default for Form {
             profile: Profile {
                 name: "New migration".into(),
                 imapsync_path: "imapsync".into(),
+                doveadm_path: default_doveadm_path(),
+                ssh_path: default_ssh_path(),
                 automap: true,
                 ..Default::default()
             },
@@ -98,14 +118,17 @@ impl Form {
         .map_err(|e| e.to_string())
     }
     fn validate(&self) -> Result<(), String> {
-        for (label, value) in [
+        let mut required = vec![
             ("Source IMAP host", &self.profile.source_host),
             ("Source username", &self.profile.source_user),
             ("Destination IMAP host", &self.profile.destination_host),
             ("Destination username", &self.profile.destination_user),
             ("Source password", &self.source_password),
-            ("Destination password", &self.destination_password),
-        ] {
+        ];
+        if self.engine() != core::Engine::Dovecot {
+            required.push(("Destination password", &self.destination_password));
+        }
+        for (label, value) in required {
             if value.trim().is_empty() {
                 return Err(format!("{label} is required."));
             }
@@ -170,9 +193,301 @@ impl Form {
         );
         a
     }
+    fn prepared_command(&self) -> Result<PreparedCommand, String> {
+        if self.engine() == core::Engine::Dovecot {
+            let (executable, args) = self.command(false);
+            return Ok(PreparedCommand {
+                executable,
+                args,
+                cleanup: Vec::new(),
+            });
+        }
+        let source_file = secret_file("source", &self.source_password)?;
+        let destination_file = match secret_file("destination", &self.destination_password) {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = std::fs::remove_file(&source_file);
+                return Err(error);
+            }
+        };
+        let mut args = self.args(false);
+        replace_option(&mut args, "--password1", "--passfile1", &source_file);
+        replace_option(&mut args, "--password2", "--passfile2", &destination_file);
+        Ok(PreparedCommand {
+            executable: self.profile.imapsync_path.clone(),
+            args,
+            cleanup: vec![source_file, destination_file],
+        })
+    }
+    fn engine(&self) -> core::Engine {
+        match self.profile.engine {
+            // The desktop cannot safely infer the destination's mail stack
+            // from a hostname or from a locally installed executable.
+            core::Engine::Auto => core::Engine::ImapSync,
+            selected => selected,
+        }
+    }
+    fn command(&self, redact: bool) -> (String, Vec<String>) {
+        if self.engine() != core::Engine::Dovecot {
+            return (self.profile.imapsync_path.clone(), self.args(redact));
+        }
+        let password = if redact {
+            "••••••••"
+        } else {
+            &self.source_password
+        };
+        let mut args = Vec::new();
+        if !self.profile.dovecot_config.trim().is_empty() {
+            args.extend(["-c".into(), self.profile.dovecot_config.clone()]);
+        }
+        args.extend([
+            "-o".into(),
+            format!("imapc_host={}", self.profile.source_host),
+            "-o".into(),
+            "imapc_ssl=imaps".into(),
+            "-o".into(),
+            format!("imapc_user={}", self.profile.source_user),
+            "-o".into(),
+            format!("imapc_password={password}"),
+        ]);
+        if self.dry_run {
+            args.extend([
+                "-o".into(),
+                "mail_driver=imapc".into(),
+                "-o".into(),
+                "mail_path=".into(),
+                "mailbox".into(),
+                "list".into(),
+                "-u".into(),
+                self.profile.source_user.clone(),
+            ]);
+        } else {
+            args.extend([if self.profile.delete2 {
+                "backup"
+            } else {
+                "sync"
+            }
+            .into()]);
+            if !self.profile.delete2 {
+                args.push("-1".into());
+            }
+            args.extend([
+                "-Ru".into(),
+                self.profile.destination_user.clone(),
+                "imapc:".into(),
+            ]);
+        }
+        self.wrap_dovecot(args)
+    }
+    fn wrap_dovecot(&self, args: Vec<String>) -> (String, Vec<String>) {
+        if self.profile.dovecot_ssh_user.trim().is_empty()
+            && ["localhost", "127.0.0.1", "::1"].contains(&self.profile.destination_host.trim())
+        {
+            (self.profile.doveadm_path.clone(), args)
+        } else {
+            let target = if self.profile.dovecot_ssh_user.trim().is_empty() {
+                self.profile.destination_host.clone()
+            } else {
+                format!(
+                    "{}@{}",
+                    self.profile.dovecot_ssh_user, self.profile.destination_host
+                )
+            };
+            let mut command_parts = vec![self.profile.doveadm_path.clone()];
+            command_parts.extend(args);
+            let ssh_args = vec![
+                "-o".into(),
+                "BatchMode=yes".into(),
+                target,
+                command_parts
+                    .iter()
+                    .map(|argument| shell_quote(argument))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ];
+            (self.profile.ssh_path.clone(), ssh_args)
+        }
+    }
+    fn dovecot_verification_commands(&self, redact: bool) -> Vec<(String, Vec<String>)> {
+        if self.engine() != core::Engine::Dovecot {
+            return Vec::new();
+        }
+        let password = if redact {
+            "••••••••"
+        } else {
+            &self.source_password
+        };
+        let mut source = Vec::new();
+        if !self.profile.dovecot_config.trim().is_empty() {
+            source.extend(["-c".into(), self.profile.dovecot_config.clone()]);
+        }
+        source.extend([
+            "-o".into(),
+            format!("imapc_host={}", self.profile.source_host),
+            "-o".into(),
+            "imapc_ssl=imaps".into(),
+            "-o".into(),
+            format!("imapc_user={}", self.profile.source_user),
+            "-o".into(),
+            format!("imapc_password={password}"),
+            "-o".into(),
+            "mail_driver=imapc".into(),
+            "-o".into(),
+            "mail_path=".into(),
+            "mailbox".into(),
+            "status".into(),
+            "-u".into(),
+            self.profile.source_user.clone(),
+            "-t".into(),
+            "messages,vsize".into(),
+            "*".into(),
+        ]);
+        let mut destination = Vec::new();
+        if !self.profile.dovecot_config.trim().is_empty() {
+            destination.extend(["-c".into(), self.profile.dovecot_config.clone()]);
+        }
+        destination.extend([
+            "mailbox".into(),
+            "status".into(),
+            "-u".into(),
+            self.profile.destination_user.clone(),
+            "-t".into(),
+            "messages,vsize".into(),
+            "*".into(),
+        ]);
+        vec![self.wrap_dovecot(source), self.wrap_dovecot(destination)]
+    }
 }
+
+struct PreparedCommand {
+    executable: String,
+    args: Vec<String>,
+    cleanup: Vec<PathBuf>,
+}
+
+fn replace_option(args: &mut [String], old: &str, new: &str, value: &Path) {
+    if let Some(index) = args.iter().position(|arg| arg == old) {
+        args[index] = new.into();
+        args[index + 1] = value.to_string_lossy().into_owned();
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "._/@=:-,".contains(character))
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn secret_file(label: &str, secret: &str) -> Result<PathBuf, String> {
+    let path = std::env::temp_dir().join(format!("sourcecraft-{label}-{}", uuid::Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
+        .open(&path)
+        .map_err(|error| format!("could not create protected credential file: {error}"))?;
+    if let Err(error) = writeln!(file, "{secret}") {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!(
+            "could not write protected credential file: {error}"
+        ));
+    }
+    Ok(path)
+}
+
+fn number_after(line: &str, marker: &str) -> Option<u64> {
+    line.split_once(marker)?
+        .1
+        .split_whitespace()
+        .find_map(|token| {
+            token
+                .trim_matches(|character: char| !character.is_ascii_digit())
+                .parse()
+                .ok()
+        })
+}
+
+/// Extracts the stable summary fields emitted by imapsync. We intentionally
+/// require both hosts and all three dimensions before writing evidence; a
+/// partial log must never look like a successful zero-message migration.
+fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxEvidence> {
+    let last = |marker: &str| {
+        lines
+            .iter()
+            .rev()
+            .find_map(|line| number_after(line, marker))
+    };
+    let source_folders = last("Host1 Nb folders:")?;
+    let destination_folders = last("Host2 Nb folders:")?;
+    let source_messages = last("Host1 Nb messages:")?;
+    let destination_messages = last("Host2 Nb messages:")?;
+    let source_bytes = last("Host1 Total size:")?;
+    let destination_bytes = last("Host2 Total size:")?;
+    let failed_messages = last("Detected ").unwrap_or(0);
+    let matched = lines
+        .iter()
+        .any(|line| line.contains("The sync looks good"));
+    Some(core::MailboxEvidence {
+        source_messages,
+        destination_messages,
+        source_bytes,
+        destination_bytes,
+        unmatched_messages: if matched { 0 } else { 1 },
+        failed_messages,
+        source_folders,
+        destination_folders,
+    })
+}
+
+fn parse_dovecot_status(lines: &[String]) -> Option<(u64, u64, u64)> {
+    let mut folders = 0;
+    let mut messages = 0;
+    let mut bytes = 0;
+    for line in lines {
+        let message_count = line
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("messages=")?.parse::<u64>().ok());
+        let virtual_size = line
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("vsize=")?.parse::<u64>().ok());
+        if let (Some(message_count), Some(virtual_size)) = (message_count, virtual_size) {
+            folders += 1;
+            messages += message_count;
+            bytes += virtual_size;
+        }
+    }
+    (folders > 0).then_some((folders, messages, bytes))
+}
+
+fn parse_dovecot_evidence(
+    source: &[String],
+    destination: &[String],
+) -> Option<core::MailboxEvidence> {
+    let (source_folders, source_messages, source_bytes) = parse_dovecot_status(source)?;
+    let (destination_folders, destination_messages, destination_bytes) =
+        parse_dovecot_status(destination)?;
+    Some(core::MailboxEvidence {
+        source_messages,
+        destination_messages,
+        source_bytes,
+        destination_bytes,
+        unmatched_messages: 0,
+        failed_messages: 0,
+        source_folders,
+        destination_folders,
+    })
+}
+
 enum Event {
     Line(String),
+    Evidence(core::MailboxEvidence),
+    VerificationFailed(String),
     Finished(Result<(), String>),
 }
 #[derive(Clone)]
@@ -199,8 +514,10 @@ struct App {
     bulk_open: bool,
     bulk_message: String,
     advanced_open: bool,
+    engine_open: bool,
     store: core::StateStore,
     project_id: Option<String>,
+    job_id: Option<String>,
     cockpit_open: bool,
     preflight: Vec<(String, String, bool)>,
     capability_receiver:
@@ -232,8 +549,10 @@ impl Default for App {
             bulk_open: false,
             bulk_message: "Import a CSV, XLS, or XLSX file to build a reviewable queue.".into(),
             advanced_open: false,
+            engine_open: true,
             store,
             project_id: None,
+            job_id: None,
             cockpit_open: false,
             preflight: Vec::new(),
             capability_receiver: None,
@@ -389,8 +708,9 @@ impl App {
                 &self.form.profile.source_user,
                 &self.form.profile.destination_user,
             ) {
-                Ok(_) => {
+                Ok(job) => {
                     self.project_id = Some(project.id);
+                    self.job_id = Some(job);
                     self.status = "Project created; ready for preflight review".into();
                 }
                 Err(e) => self.status = format!("Could not create mailbox job: {e}"),
@@ -647,9 +967,25 @@ impl App {
         ui.add_space(12.0);
         ui.group(|ui| {
             ui.heading("Evidence report");
-            ui.label("Message-level and folder-level reconciliation will appear here after the migration engine records evidence.");
-            ui.add_space(8.0);
-            for (label, value) in [("Folders", "—"), ("Messages", "—"), ("Bytes", "—"), ("Unmatched", "—"), ("Confidence", "Not available") ] { ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); }); }
+            if let Some(job) = &self.job_id {
+                match self.store.evidence(job) {
+                    Ok(Some(evidence)) => {
+                        ui.label("Durable mailbox reconciliation");
+                        for (label, value) in [
+                            ("Folders", format!("{} source / {} destination", evidence.source_folders, evidence.destination_folders)),
+                            ("Messages", format!("{} source / {} destination", evidence.source_messages, evidence.destination_messages)),
+                            ("Bytes", format!("{} source / {} destination", evidence.source_bytes, evidence.destination_bytes)),
+                            ("Unmatched", evidence.unmatched_messages.to_string()),
+                            ("Failed", evidence.failed_messages.to_string()),
+                            ("Confidence", format!("{}%", evidence.confidence_percent())),
+                        ] { ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); }); }
+                    }
+                    Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(ALERT)); }
+                    Err(error) => { ui.label(RichText::new(format!("Could not read evidence: {error}")).color(ALERT)); }
+                }
+            } else {
+                ui.label("Run a migration to create a durable mailbox evidence record.");
+            }
         });
     }
     fn job_from_values(
@@ -783,20 +1119,30 @@ impl App {
         self.status = format!("Batch validation: {} jobs", jobs.len());
         self.output.clear();
         thread::spawn(move || {
+            let mut failed = false;
             for (index, job) in jobs.into_iter().enumerate() {
                 let _ = tx.send(Event::Line(format!(
                     "══ Job {}: {} ══",
                     index + 1,
                     job.label
                 )));
-                let exe = job.form.profile.imapsync_path.clone();
-                let output = Command::new(&exe).args(job.form.args(false)).output();
+                let prepared = job.form.prepared_command();
+                let output = prepared
+                    .as_ref()
+                    .map_err(|error| error.clone())
+                    .and_then(|command| {
+                        Command::new(&command.executable)
+                            .args(&command.args)
+                            .output()
+                            .map_err(|error| error.to_string())
+                    });
                 match output {
                     Ok(result) => {
                         for line in String::from_utf8_lossy(&result.stdout).lines() {
                             let _ = tx.send(Event::Line(format!("[{}] {line}", index + 1)));
                         }
                         if !result.status.success() {
+                            failed = true;
                             let _ = tx.send(Event::Line(format!(
                                 "[{}] failed: {}",
                                 index + 1,
@@ -805,16 +1151,35 @@ impl App {
                         }
                     }
                     Err(e) => {
+                        failed = true;
                         let _ =
                             tx.send(Event::Line(format!("[{}] could not start: {e}", index + 1)));
                     }
                 }
+                if let Ok(command) = prepared {
+                    for path in command.cleanup {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
             }
-            let _ = tx.send(Event::Finished(Ok(())));
+            let _ = tx.send(Event::Finished(if failed {
+                Err("one or more batch jobs failed".into())
+            } else {
+                Ok(())
+            }));
         });
     }
     fn running(&self) -> bool {
         self.receiver.is_some()
+    }
+    fn redact_output(&self, line: &str) -> String {
+        let mut safe = line.to_owned();
+        for secret in [&self.form.source_password, &self.form.destination_password] {
+            if !secret.is_empty() {
+                safe = safe.replace(secret, "[REDACTED]");
+            }
+        }
+        safe
     }
     fn start(&mut self) {
         if !self.form.dry_run && !self.live_confirmed {
@@ -828,8 +1193,44 @@ impl App {
             self.status = e;
             return;
         }
-        let exe = self.form.profile.imapsync_path.clone();
-        let args = self.form.args(false);
+        if self.project_id.is_none() {
+            if let Ok(project) = self.store.create_project(
+                &self.form.profile.name,
+                &self.form.profile.source_host,
+                &self.form.profile.destination_host,
+            ) {
+                self.project_id = Some(project.id.clone());
+                self.job_id = self
+                    .store
+                    .add_mailbox(
+                        &project.id,
+                        &self.form.profile.source_user,
+                        &self.form.profile.destination_user,
+                    )
+                    .ok();
+            } else {
+                self.status = "Could not create durable migration project".into();
+                return;
+            }
+        }
+        if let Some(job) = &self.job_id {
+            let _ = self.store.set_mailbox_state(job, "running");
+        }
+        if let Some(project) = &self.project_id {
+            let _ = self
+                .store
+                .record_event(project, "run_started", self.form.engine().label());
+        }
+        let prepared = match self.form.prepared_command() {
+            Ok(command) => command,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let exe = prepared.executable;
+        let args = prepared.args;
+        let cleanup = prepared.cleanup;
         let (tx, rx) = mpsc::channel();
         self.receiver = Some(rx);
         self.status = if self.form.dry_run {
@@ -838,13 +1239,20 @@ impl App {
             "Sync in progress".into()
         };
         self.output = vec![format!(
-            "Starting {}…",
+            "Starting {} with {}…",
             if self.form.dry_run {
                 "safe dry run"
             } else {
                 "synchronization"
-            }
+            },
+            self.form.engine().label()
         )];
+        let engine_name = self.form.engine().label().to_owned();
+        let verification = if !self.form.dry_run && self.form.engine() == core::Engine::Dovecot {
+            self.form.dovecot_verification_commands(false)
+        } else {
+            Vec::new()
+        };
         thread::spawn(move || {
             let mut child = match Command::new(&exe)
                 .args(&args)
@@ -854,6 +1262,9 @@ impl App {
             {
                 Ok(c) => c,
                 Err(e) => {
+                    for path in cleanup {
+                        let _ = std::fs::remove_file(path);
+                    }
                     let _ = tx.send(Event::Finished(Err(format!("Could not start {exe}: {e}"))));
                     return;
                 }
@@ -872,15 +1283,74 @@ impl App {
                     let _ = b.send(Event::Line(format!("[stderr] {l}")));
                 }
             });
-            let result = child.wait().map_err(|e| e.to_string()).and_then(|s| {
+            let mut result = child.wait().map_err(|e| e.to_string()).and_then(|s| {
                 if s.success() {
                     Ok(())
                 } else {
-                    Err(format!("imapsync exited with {s}"))
+                    Err(format!("{engine_name} exited with {s}"))
                 }
             });
             let _ = t1.join();
             let _ = t2.join();
+            if result.is_ok() && !verification.is_empty() {
+                let mut reports = Vec::new();
+                for (index, (verify_exe, verify_args)) in verification.iter().enumerate() {
+                    match Command::new(verify_exe).args(verify_args).output() {
+                        Ok(output) => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            for line in stdout.lines() {
+                                let _ = tx.send(Event::Line(format!(
+                                    "[verification/{}] {line}",
+                                    index + 1
+                                )));
+                            }
+                            for line in stderr.lines() {
+                                let _ = tx.send(Event::Line(format!(
+                                    "[verification/{} stderr] {line}",
+                                    index + 1
+                                )));
+                            }
+                            let mut report = stdout.lines().map(str::to_owned).collect::<Vec<_>>();
+                            report.extend(stderr.lines().map(str::to_owned));
+                            if output.status.success() {
+                                reports.push(report);
+                            } else {
+                                let _ = tx.send(Event::VerificationFailed(format!(
+                                    "verification command {} exited with {}",
+                                    index + 1,
+                                    output.status
+                                )));
+                                result =
+                                    Err("migration completed; Dovecot verification failed".into());
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            let _ = tx.send(Event::VerificationFailed(format!(
+                                "could not start verification command {}: {error}",
+                                index + 1
+                            )));
+                            result =
+                                Err("migration completed; Dovecot verification could not start"
+                                    .into());
+                            break;
+                        }
+                    }
+                }
+                if result.is_ok() {
+                    if let Some(evidence) = parse_dovecot_evidence(&reports[0], &reports[1]) {
+                        let _ = tx.send(Event::Evidence(evidence));
+                    } else {
+                        let _ = tx.send(Event::VerificationFailed(
+                            "Dovecot status output was incomplete".into(),
+                        ));
+                    }
+                }
+            }
+            for path in cleanup {
+                let _ = std::fs::remove_file(path);
+            }
             let _ = tx.send(Event::Finished(result));
         });
     }
@@ -903,12 +1373,91 @@ impl App {
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
-                    Event::Line(s) => self.output.push(s),
+                    Event::Line(s) => {
+                        let safe = self.redact_output(&s);
+                        if let Some(project) = &self.project_id {
+                            let _ = self.store.record_event(project, "run_output", &safe);
+                        }
+                        self.output.push(safe);
+                    }
+                    Event::Evidence(evidence) => {
+                        if let Some(job) = &self.job_id {
+                            let _ = self.store.record_evidence(job, &evidence);
+                        }
+                        if let Some(project) = &self.project_id {
+                            let _ = self.store.record_event(
+                                project,
+                                "verification_evidence",
+                                &format!("{}% confidence", evidence.confidence_percent()),
+                            );
+                        }
+                    }
+                    Event::VerificationFailed(detail) => {
+                        let safe = self.redact_output(&detail);
+                        self.output.push(format!("[verification] {safe}"));
+                        if let Some(project) = &self.project_id {
+                            let _ = self
+                                .store
+                                .record_event(project, "verification_pending", &safe);
+                        }
+                    }
                     Event::Finished(r) => done = Some(r),
                 }
             }
         }
         if let Some(r) = done {
+            let succeeded = r.is_ok();
+            if succeeded && !self.form.dry_run && self.form.engine() == core::Engine::ImapSync {
+                if let Some(evidence) = parse_imapsync_evidence(&self.output) {
+                    if let Some(job) = &self.job_id {
+                        let _ = self.store.record_evidence(job, &evidence);
+                    }
+                    if let Some(project) = &self.project_id {
+                        let _ = self.store.record_event(
+                            project,
+                            "verification_evidence",
+                            &format!("{}% confidence", evidence.confidence_percent()),
+                        );
+                    }
+                } else if let Some(project) = &self.project_id {
+                    let _ = self.store.record_event(
+                        project,
+                        "verification_pending",
+                        "imapsync summary was incomplete",
+                    );
+                }
+            } else if succeeded
+                && !self.form.dry_run
+                && self.form.engine() == core::Engine::Dovecot
+                && self
+                    .store
+                    .evidence(self.job_id.as_deref().unwrap_or(""))
+                    .ok()
+                    .flatten()
+                    .is_none()
+                && let Some(project) = &self.project_id
+            {
+                let _ = self.store.record_event(
+                    project,
+                    "verification_pending",
+                    "doveadm completed; mailbox reconciliation was incomplete",
+                );
+            }
+            if let Some(job) = &self.job_id {
+                let _ = self
+                    .store
+                    .set_mailbox_state(job, if succeeded { "completed" } else { "failed" });
+            }
+            if let Some(project) = &self.project_id {
+                let _ = self.store.record_event(
+                    project,
+                    "run_finished",
+                    if succeeded { "success" } else { "failure" },
+                );
+                if succeeded {
+                    let _ = self.store.transition(project, core::Phase::Verification);
+                }
+            }
             self.status = match r {
                 Ok(()) => "Completed successfully".into(),
                 Err(e) => format!("Failed: {e}"),
@@ -956,11 +1505,8 @@ impl App {
                     )
                     .color(MUTED),
                 );
-                let mut cmd = format!(
-                    "{} {}",
-                    self.form.profile.imapsync_path,
-                    self.form.args(true).join(" ")
-                );
+                let (exe, args) = self.form.command(true);
+                let mut cmd = format!("{} {}", exe, args.join(" "));
                 ui.add(
                     egui::TextEdit::multiline(&mut cmd)
                         .code_editor()
@@ -1001,8 +1547,8 @@ impl App {
         if !self.advanced_open {
             return;
         }
-        egui::Window::new("Advanced imapsync options").open(&mut self.advanced_open).default_width(620.0).show(ctx, |ui| {
-            ui.label(RichText::new("These controls add documented imapsync flags to the preview and active run. Keep Dry run on while testing changes.").color(MUTED));
+        egui::Window::new("Advanced migration options").open(&mut self.advanced_open).default_width(620.0).show(ctx, |ui| {
+            ui.label(RichText::new("These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules.").color(MUTED));
             ui.add_space(8.0);
             ui.group(|ui| { ui.heading("Reliability and metadata"); ui.checkbox(&mut self.form.profile.sync_internaldates, "Sync internal dates  (--syncinternaldates)"); ui.checkbox(&mut self.form.profile.useuid, "Use message UIDs when available  (--useuid)"); ui.checkbox(&mut self.form.profile.usecache, "Use imapsync cache  (--usecache)"); ui.checkbox(&mut self.form.profile.allowsizemismatch, "Allow message-size mismatch  (--allowsizemismatch)"); });
             ui.add_space(8.0);
@@ -1011,6 +1557,32 @@ impl App {
             ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
             ui.add_space(8.0); ui.label("For any other documented flag, use the Extra imapsync options field in the migration plan. Each option is passed as separate whitespace-delimited arguments.");
         });
+    }
+    fn engine_dialog(&mut self, ctx: &egui::Context) {
+        if !self.engine_open {
+            return;
+        }
+        let mut open = self.engine_open;
+        let mut close_requested = false;
+        egui::Window::new("Choose migration engine").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            ui.heading("How should this migration run?");
+            ui.label(RichText::new("Use Dovecot's native engine when the destination is Dovecot. Keep imapsync for arbitrary IMAP destinations.").color(MUTED));
+            ui.add_space(8.0);
+            for engine in [core::Engine::Auto, core::Engine::Dovecot, core::Engine::ImapSync] {
+                ui.radio_value(&mut self.form.profile.engine, engine, engine.label());
+            }
+            if self.form.profile.engine == core::Engine::Dovecot {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| { ui.label("doveadm"); ui.text_edit_singleline(&mut self.form.profile.doveadm_path); });
+                ui.horizontal(|ui| { ui.label("SSH executable"); ui.text_edit_singleline(&mut self.form.profile.ssh_path); });
+                ui.horizontal(|ui| { ui.label("SSH user (optional)"); ui.text_edit_singleline(&mut self.form.profile.dovecot_ssh_user); });
+                ui.horizontal(|ui| { ui.label("Config"); ui.text_edit_singleline(&mut self.form.profile.dovecot_config); });
+                ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(MUTED));
+            }
+            ui.add_space(8.0);
+            if ui.button("Continue to migration plan").clicked() { close_requested = true; }
+        });
+        self.engine_open = open && !close_requested;
     }
 
     fn live_confirmation(&mut self, ctx: &egui::Context) {
@@ -1021,7 +1593,7 @@ impl App {
         let mut close_requested = false;
         egui::Window::new("Confirm live migration").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
             ui.heading(RichText::new("Destination changes require confirmation").color(ALERT));
-            ui.label("This will invoke imapsync with the current credentials and rules.");
+            ui.label(format!("This will invoke {} with the current credentials and rules.", self.form.engine().label()));
             ui.add_space(8.0);
             ui.label(RichText::new(format!("Project: {}", self.form.profile.name)).strong());
             ui.label(format!("{}  →  {}", self.form.profile.source_host, self.form.profile.destination_host));
@@ -1061,6 +1633,12 @@ impl eframe::App for App {
                     );
                     if ui.button("Batch queue").clicked() {
                         self.bulk_open = true;
+                    }
+                    if ui
+                        .button(format!("Engine: {}", self.form.engine().label()))
+                        .clicked()
+                    {
+                        self.engine_open = true;
                     }
                     if ui.button("Advanced options").clicked() {
                         self.advanced_open = true;
@@ -1139,6 +1717,12 @@ impl eframe::App for App {
                 if ui.button("Batch queue").clicked() {
                     self.bulk_open = true;
                 }
+                if ui
+                    .button(format!("Engine: {}", self.form.engine().label()))
+                    .clicked()
+                {
+                    self.engine_open = true;
+                }
                 if ui.button("Advanced options").clicked() {
                     self.advanced_open = true;
                 }
@@ -1147,15 +1731,17 @@ impl eframe::App for App {
                     self.assess_plan();
                 }
             });
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. imapsync receives them only for the active process.").size(11.0).color(MUTED)); });
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
         self.preview(ctx);
         self.bulk_dialog(ctx);
         self.advanced_dialog(ctx);
+        self.engine_dialog(ctx);
         self.cockpit(ctx);
         self.live_confirmation(ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
+
 fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Sourcecraft IMAP Sync",
@@ -1167,4 +1753,128 @@ fn main() -> eframe::Result<()> {
         },
         Box::new(|_| Ok(Box::<App>::default())),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dovecot_form() -> Form {
+        let mut form = Form::default();
+        form.profile.engine = core::Engine::Dovecot;
+        form.profile.source_host = "old.example".into();
+        form.profile.source_user = "old-user".into();
+        form.profile.destination_host = "localhost".into();
+        form.profile.destination_user = "new-user".into();
+        form.source_password = "secret".into();
+        form.destination_password = "unused".into();
+        form
+    }
+
+    #[test]
+    fn dovecot_plan_uses_additive_sync_by_default() {
+        let mut form = dovecot_form();
+        form.dry_run = false;
+        let (exe, args) = form.command(true);
+        assert_eq!(exe, "doveadm");
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-o", "imapc_host=old.example"])
+        );
+        assert!(args.contains(&"sync".into()));
+        assert!(args.contains(&"-1".into()));
+        assert!(!args.iter().any(|arg| arg == "secret"));
+    }
+
+    #[test]
+    fn dovecot_dry_plan_is_non_mutating() {
+        let form = dovecot_form();
+        let (_, args) = form.command(true);
+        assert!(args.windows(2).any(|pair| pair == ["mailbox", "list"]));
+        assert!(!args.contains(&"backup".into()));
+        assert!(!args.contains(&"sync".into()));
+    }
+
+    #[test]
+    fn remote_dovecot_plan_uses_batch_ssh_to_destination() {
+        let mut form = dovecot_form();
+        form.profile.dovecot_ssh_user = "migration".into();
+        let (exe, args) = form.command(true);
+        assert_eq!(exe, "ssh");
+        assert!(args.starts_with(&[
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "migration@localhost".into()
+        ]));
+        assert!(
+            args.last()
+                .is_some_and(|command| command.contains("doveadm"))
+        );
+        assert!(
+            args.last()
+                .is_some_and(|command| command.contains("imapc_host=old.example"))
+        );
+    }
+
+    #[test]
+    fn remote_arguments_are_shell_quoted() {
+        assert_eq!(shell_quote("plain-value"), "plain-value");
+        assert_eq!(shell_quote("pa ss'word"), "'pa ss'\\''word'");
+    }
+
+    #[test]
+    fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        let prepared = form.prepared_command().unwrap();
+        assert!(prepared.args.contains(&"--passfile1".into()));
+        assert!(prepared.args.contains(&"--passfile2".into()));
+        assert!(!prepared.args.iter().any(|arg| arg == "secret"));
+        for path in &prepared.cleanup {
+            assert!(path.exists());
+            let content = std::fs::read_to_string(path).unwrap();
+            assert!(content == "secret\n" || content == "unused\n");
+        }
+        for path in prepared.cleanup {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn imapsync_summary_becomes_durable_evidence_input() {
+        let lines = [
+            "Host1 Nb folders: 3 folders".into(),
+            "Host2 Nb folders: 3 folders".into(),
+            "Host1 Nb messages: 42 messages".into(),
+            "Host2 Nb messages: 42 messages".into(),
+            "Host1 Total size: 1000 bytes".into(),
+            "Host2 Total size: 1000 bytes".into(),
+            "The sync looks good, all 42 identified messages in host1 are on host2.".into(),
+            "Detected 0 errors".into(),
+        ];
+        let evidence = parse_imapsync_evidence(&lines).unwrap();
+        assert_eq!(evidence.confidence_percent(), 100);
+        assert_eq!(evidence.source_messages, 42);
+    }
+
+    #[test]
+    fn incomplete_imapsync_summary_is_not_evidence() {
+        assert!(parse_imapsync_evidence(&["Detected 0 errors".into()]).is_none());
+    }
+
+    #[test]
+    fn dovecot_status_aggregates_mailbox_evidence() {
+        let source = vec![
+            "INBOX messages=10 vsize=100".into(),
+            "Archive messages=2 vsize=50".into(),
+        ];
+        let destination = vec![
+            "INBOX messages=10 vsize=100".into(),
+            "Archive messages=2 vsize=50".into(),
+        ];
+        let evidence = parse_dovecot_evidence(&source, &destination).unwrap();
+        assert_eq!(evidence.source_folders, 2);
+        assert_eq!(evidence.source_messages, 12);
+        assert_eq!(evidence.confidence_percent(), 100);
+    }
 }

@@ -1,8 +1,10 @@
 # Sourcecraft IMAP Sync
 
-> A local-first Rust desktop console for safe, deliberate `imapsync` migrations.
+> A local-first migration control plane: Dovecot-native execution when possible, `imapsync` when necessary.
 
-Sourcecraft IMAP Sync is independently designed from scratch and does not reuse or inspect any other IMAP GUI. It configures a source and destination mailbox, produces a redacted command preview, saves non-secret profiles, runs dry validation by default, and streams `imapsync` output.
+Sourcecraft helps operators plan, execute, record, and verify mailbox migrations. When the destination is a Dovecot server, it can run Dovecot's native `doveadm`/dsync workflow with a remote IMAP source through `imapc`. For arbitrary IMAP-to-IMAP migrations it falls back to a locally installed `imapsync` executable. Both paths provide a redacted command plan, durable project state, phased execution, and an operator journal.
+
+The important distinction is that Sourcecraft does not try to replace Dovecot's migration engine. It makes the surrounding migration work repeatable: endpoint checks, pilot and cutover planning, mailbox scope, durable run records, and evidence-led verification.
 
 ## Install
 
@@ -22,7 +24,7 @@ imapsync --version
 
 Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
 
-Sourcecraft itself uses Rustls with bundled WebPKI certificate roots for its TLS preflight probe. It does **not** require OpenSSL development headers or `pkg-config` to build.
+Sourcecraft itself uses Rustls with bundled WebPKI certificate roots for its TLS preflight probe. It does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you.
 
 ### 2. Build and run Sourcecraft
 
@@ -34,10 +36,11 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 
 ### 3. First migration
 
-1. Enter source details on the left and destination details on the right.
-2. Leave **Dry run** selected and click **Preview redacted command**.
-3. Run validation and inspect the execution journal for successful logins and folder mapping.
-4. Only then disable Dry run and launch a live migration.
+1. Choose **Dovecot native** when the destination is managed by Dovecot; otherwise choose **imapsync fallback**.
+2. Enter source details on the left and destination details on the right.
+3. Leave **Dry run** selected and click **Preview safe command**.
+4. Run validation and inspect the execution journal for successful access and folder mapping.
+5. Only then disable Dry run and launch a live migration.
 
 Use **Project cockpit → Discover server capabilities over verified TLS** before a pilot to see whether each endpoint advertises modern IMAP extensions such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE. This probe does not authenticate and does not send account passwords.
 
@@ -46,11 +49,15 @@ Use **Project cockpit → Discover server capabilities over verified TLS** befor
 - **Local first.** The app does not send mail data itself; it invokes your local `imapsync` executable only when you start a run.
 - **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination.
-- **Redacted preview.** Passwords are hidden in the preview. Be aware that `imapsync` itself receives passwords during the active process; run it under an account with appropriate process visibility controls.
+- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs use ephemeral protected passfiles; Dovecot's remote `imapc_password` override is still visible to the destination-side process and should be treated accordingly.
 
 ### Current security boundary
 
-The current desktop runner is a prototype bridge to the local `imapsync` executable. It does not persist passwords, but imapsync receives them during its active process. The production control-plane architecture is being introduced with a no-secret SQLite project ledger; OS-keyring/OAuth credential handling and a native IMAP worker are required before treating this as an enterprise release.
+The desktop runner does not persist passwords. imapsync credentials are written to short-lived mode-600 files and removed after the child exits; Dovecot credentials currently use `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Treat this as an operator workstation tool until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
+
+### Dovecot mode
+
+Dovecot mode configures the destination-side command in the form `doveadm ... sync -1Ru DESTINATION imapc:`. This is an additive final-delta-safe default. After a live run, Sourcecraft queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion selects `doveadm backup`, which makes the destination mirror the source and can remove destination-only mail. The dry command performs a non-mutating `imapc` mailbox listing against the source; it is a connectivity/configuration check, not proof that the full migration will succeed.
 
 ## Verification
 

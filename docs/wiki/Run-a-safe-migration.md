@@ -1,12 +1,16 @@
 # Run a safe migration
 
-## 1. Keep Safe Mode enabled
+## 1. Choose the right engine
+
+Choose **Dovecot native** when the destination is managed by Dovecot. Sourcecraft then prepares a destination-side `doveadm` command using `imapc` for the remote source. Choose **imapsync fallback** when the destination is another arbitrary IMAP server.
+
+## 2. Keep Safe Mode enabled
 
 The **Dry run** checkbox adds `--dry` to imapsync. It validates both logins and displays the proposed folder mapping without copying mail to the destination.
 
 Leave it checked for your first run. The imapsync tutorial recommends testing with a real source account and a test destination before a live run.
 
-## 2. Choose sync rules
+## 3. Choose sync rules
 
 Sourcecraft exposes the most common options:
 
@@ -19,20 +23,20 @@ Sourcecraft exposes the most common options:
 
 Click **Advanced options** for guided controls for `--syncinternaldates`, `--useuid`, `--usecache`, `--fastio1`, `--fastio2`, and `--allowsizemismatch`. The `--delete2` setting is marked destructive and should only be considered for a deliberately exact backup after a successful dry run.
 
-## 3. Preview the command
+## 4. Preview the command
 
 Click **Preview redacted command**. Confirm:
 
-- `--host1` and `--user1` describe the source.
-- `--host2` and `--user2` describe the destination.
-- `--dry` appears for the first run.
+- In Dovecot mode, `imapc_host`/`imapc_user` describe the source and `-Ru` describes the destination user.
+- In imapsync mode, `--host1`/`--user1` and `--host2`/`--user2` describe the endpoints.
+- Dovecot dry mode uses a non-mutating `imapc` mailbox listing against the source; imapsync dry mode adds `--dry`.
 - Passwords show as dots, never readable text.
 
-## 4. Run validation
+## 5. Run validation
 
-Click **Run dry validation**. The **Execution journal** streams output from imapsync. A successful run should show both logins succeeding and a sensible folder map.
+Click **Run dry validation**. The **Execution journal** streams output from the selected engine. A successful Dovecot check should authenticate to the remote source and list its mailboxes; a successful imapsync check should show both logins succeeding and a sensible folder map.
 
-## 5. Run the live migration
+## 6. Run the live migration
 
 Only after validation succeeds:
 
@@ -41,4 +45,4 @@ Only after validation succeeds:
 3. Click **Run synchronization**.
 4. Keep Sourcecraft open until the journal reports completion.
 
-Normal imapsync behavior is additive: it copies messages from the source and avoids already-synced duplicates. Do not add destructive options such as `--delete2` unless you have an independently verified backup and understand their effect.
+Dovecot mode uses `sync -1` by default so destination-side changes are preserved during the migration. After a live run, Sourcecraft queries both source and destination mailbox status and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion switches to `backup`; this can remove destination-only messages. In imapsync mode, the final summary is parsed when complete. Do not treat an incomplete summary or failed verification as success.

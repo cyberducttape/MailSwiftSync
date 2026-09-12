@@ -8,9 +8,11 @@ Saved profiles contain only non-secret configuration: profile name, hosts, usern
 
 Sourcecraft does not save passwords, sync output, or mailbox contents. Password fields are blank after a restart.
 
-## Process visibility
+## Credential delivery and process visibility
 
-imapsync receives account passwords for the active run. Use a private operating-system account and do not run untrusted local software during a migration. The command preview intentionally redacts passwords, but the preview is not a substitute for host-level process security.
+For imapsync runs, Sourcecraft writes each password to a short-lived mode-600 passfile and passes only the filename to the child process. The files are removed when the child exits, including startup failures. For Dovecot runs, the source password is currently supplied through the destination-side `imapc_password` override; remote process inspection can therefore expose it. Use SSH keys with `BatchMode=yes`, restrict access to the destination host, and do not run untrusted local software during a migration.
+
+The command preview intentionally redacts passwords, but the preview is not a substitute for host-level process security. No credential mechanism should be described as enterprise-grade until keyring/OAuth or an equivalent secret broker is implemented for both engines.
 
 ## Recommended practice
 
