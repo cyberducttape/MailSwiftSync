@@ -1273,6 +1273,13 @@ impl StateStore {
         {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        // `verified` is a claim about the evidence, not merely a requested
+        // mailbox state. Keep this invariant in the store so a future caller
+        // cannot accidentally promote mismatching aggregate evidence by
+        // bypassing the current UI decision logic.
+        if mailbox_state == "verified" && !value.is_exact_match() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let tx = self.connection.unchecked_transaction()?;
         let current: String = tx.query_row(
             "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
@@ -2247,6 +2254,23 @@ mod tests {
             destination_folders: 2,
             authoritative: false,
         };
+        assert!(
+            db.finish_run_for_mailbox_with_evidence(
+                &project.id,
+                &job,
+                "run-difference",
+                "completed",
+                "verified",
+                "mismatching evidence",
+                &evidence,
+            )
+            .is_err()
+        );
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
+        assert_eq!(
+            db.run_status("run-difference").unwrap().as_deref(),
+            Some("running")
+        );
         db.finish_run_for_mailbox_with_evidence(
             &project.id,
             &job,
