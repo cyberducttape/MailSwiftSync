@@ -1,6 +1,6 @@
 # Bulk migrations from CSV or Excel
 
-Sourcecraft can import a migration list from CSV, XLS, or XLSX and run each row sequentially. The queue is deliberately sequential so one migration's output stays readable and one problematic mailbox does not overload a server. Bulk jobs use the currently selected engine.
+MailSwiftSync can import a migration list from CSV, XLS, or XLSX and validate each row sequentially. The queue is deliberately sequential so one migration's output stays readable and one problematic mailbox does not overload a server. Bulk validation uses the currently selected engine; live migrations remain individually confirmed until scheduler and concurrency work is complete.
 
 ![Batch migration queue interface](assets/batch-queue.png)
 
@@ -28,7 +28,7 @@ Optional columns are `name` and `extra_options`. Start from the [CSV template](.
 
 ## Import and review
 
-1. Click **Batch queue** in the Sourcecraft header.
+1. Click **Batch queue** in the MailSwiftSync header.
 2. Click **Import CSV / XLSX…** and select the file.
 3. Review each source and destination in the queue table. The passwords are never shown in the table.
 4. Correct the spreadsheet and import it again if any account is wrong.
@@ -38,4 +38,4 @@ Optional columns are `name` and `extra_options`. Start from the [CSV template](.
 
 Batch runs are deliberately validation-only and require Dry run to be enabled. Each imported row is recorded as a durable mailbox job, and the queue streams output sequentially so individual failures remain visible. Review the execution journal for every job before considering a live migration. Use the main single-mailbox workflow for a confirmed live migration.
 
-Do not commit a spreadsheet containing real passwords to Git, and treat the file as sensitive after import. Imported data exists only in Sourcecraft memory for the current queue and is not written to the saved profile. A future keyring-backed credential source should be preferred for production batch work.
+Do not commit a spreadsheet containing real passwords to Git, and treat the file as sensitive after import. Imported data exists only in MailSwiftSync memory for the current queue and is not written to the saved profile. A future keyring-backed credential source should be preferred for production batch work.

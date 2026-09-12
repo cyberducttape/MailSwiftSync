@@ -2,7 +2,7 @@
 
 ## 1. Choose the right engine
 
-Choose **Dovecot native** when the destination is managed by Dovecot. Sourcecraft then prepares a destination-side `doveadm` command using `imapc` for the remote source. Choose **imapsync fallback** when the destination is another arbitrary IMAP server.
+Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available. MailSwiftSync then prepares a destination-side `doveadm` command using `imapc` for the remote source. Choose **imapsync fallback** when the destination is another arbitrary IMAP server.
 
 ## 2. Keep Safe Mode enabled
 
@@ -12,7 +12,7 @@ Leave it checked for your first run. The imapsync tutorial recommends testing wi
 
 ## 3. Choose sync rules
 
-Sourcecraft exposes the most common options:
+MailSwiftSync exposes the most common options:
 
 | Setting | What it does |
 | --- | --- |
@@ -43,6 +43,6 @@ Only after validation succeeds:
 1. Confirm the destination is the intended mailbox.
 2. Uncheck **Dry run**. The header changes from **SAFE MODE** to **LIVE MODE**.
 3. Click **Run synchronization**.
-4. Keep Sourcecraft open until the journal reports completion. You can request cancellation from the activity controls; a one-day execution limit also prevents an abandoned child process from running forever.
+4. Keep MailSwiftSync open until the journal reports completion. You can request cancellation from the activity controls; a one-day execution limit also prevents an abandoned child process from running forever.
 
-Dovecot mode uses `sync -1` by default so destination-side changes are preserved during the migration. After a live run, Sourcecraft queries both source and destination mailbox status and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion switches to `backup`; this can remove destination-only messages. In imapsync mode, the final summary is parsed when complete. Do not treat an incomplete summary or failed verification as success.
+Dovecot mode uses `sync -1` by default so destination-side changes are preserved during the migration. After a live run, MailSwiftSync queries both source and destination mailbox status and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion switches to `backup`; this can remove destination-only messages. In imapsync mode, the final summary is parsed when complete. Do not treat an incomplete summary or failed verification as success.

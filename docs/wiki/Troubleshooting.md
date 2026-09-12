@@ -2,7 +2,7 @@
 
 ## “Could not start imapsync”
 
-Sourcecraft could not find or execute the configured program. Install imapsync, then either add it to PATH or enter its complete file path in **imapsync executable**.
+MailSwiftSync could not find or execute the configured program. Install imapsync, then either add it to PATH or enter its complete file path in **imapsync executable**.
 
 ## Login failure
 
@@ -18,4 +18,4 @@ Stop using live mode and preserve the journal. Do not add deletion options as a 
 
 ## The journal stops changing
 
-Large mailboxes can take time. Check network connectivity and leave the application open. If imapsync exits, Sourcecraft reports either **Completed successfully** or a failure status with the exit condition.
+Large mailboxes can take time. Check network connectivity and leave the application open. If imapsync exits, MailSwiftSync reports either **Completed successfully** or a failure status with the exit condition.

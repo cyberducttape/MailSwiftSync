@@ -1,22 +1,45 @@
-# Sourcecraft IMAP Sync
+# MailSwiftSync
 
-> A local-first migration control plane: Dovecot-native execution when possible, `imapsync` when necessary.
+> A local-first mailbox migration control plane: plan, execute, verify, and audit bulk migrations with the best available engine.
 
-Sourcecraft helps operators plan, execute, record, and verify mailbox migrations. When the destination is a Dovecot server, it can run Dovecot's native `doveadm`/dsync workflow with a remote IMAP source through `imapc`. For arbitrary IMAP-to-IMAP migrations it falls back to a locally installed `imapsync` executable. Both paths provide a redacted command plan, durable project state, phased execution, and an operator journal.
+MailSwiftSync helps administrators and MSPs plan, execute, verify, and audit mailbox migrations. It selects the migration engine based on the environment: Dovecot destinations can use native `doveadm`/dsync with a remote IMAP source through `imapc`; arbitrary IMAP-to-IMAP migrations can use a locally installed `imapsync` executable. Both paths provide a redacted plan, durable project state, phased execution, and an operator journal.
 
-The important distinction is that Sourcecraft does not try to replace Dovecot's migration engine. It makes the surrounding migration work repeatable: endpoint checks, pilot and cutover planning, mailbox scope, durable run records, and evidence-led verification.
+The product value is the control plane around the transfer engine: endpoint checks, pilot and cutover planning, mailbox scope, controlled execution, durable run records, and evidence-led verification. MailSwiftSync is not a prettier imapsync launcher.
+
+## Project status
+
+MailSwiftSync is an early, usable 0.1 release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, and aggregate verification evidence are available today. Treat credential delivery, packaged installers, high-volume scheduling, message-level reconciliation, and unattended production operation as experimental or planned until the relevant release criteria are published.
+
+Stable today:
+
+- Dovecot-native `doveadm sync -1`/`backup` planning and execution, including remote `imapc` sources.
+- `imapsync` fallback for arbitrary IMAP endpoints.
+- CSV/XLS/XLSX validation-only batch queue.
+- Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
+- Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
+
+Experimental or planned:
+
+- OS-keyring/OAuth credential delivery and unattended secret brokering.
+- Native installers, signed releases, and cross-platform binary distribution.
+- Concurrency controls, retry/resume checkpoints, maintenance windows, throttling, and scheduler/API operation.
+- UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
+- Published large-scale migration case studies and compatibility matrix.
 
 ## Install
 
-### 1. Install `imapsync`
+### 1. Install the selected migration engine
 
-Sourcecraft is a GUI for a locally installed `imapsync`; it does not download or operate a remote sync service for you.
+MailSwiftSync does not bundle or operate a remote sync service. Install the engine appropriate to the destination:
+
+- **Dovecot destination:** provide `doveadm` on the destination host, either locally or through the configured SSH wrapper. The destination administrator must permit the `imapc` source connection.
+- **Arbitrary IMAP destination:** install `imapsync` locally.
 
 - **Ubuntu/Debian:** download the current `.deb` from the official imapsync distribution, then install it with `sudo apt install ./imapsync-*.deb`.
 - **macOS:** install imapsync using the vendor distribution or your approved package-management workflow.
-- **Windows:** install the official Windows package and enter the full path to `imapsync.exe` in Sourcecraft.
+- **Windows:** install the official Windows package and enter the full path to `imapsync.exe` in MailSwiftSync.
 
-Verify the installation in a terminal before configuring accounts:
+Verify an imapsync installation in a terminal before configuring accounts:
 
 ```bash
 imapsync --version
@@ -24,19 +47,19 @@ imapsync --version
 
 Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
 
-Sourcecraft itself uses Rustls with bundled WebPKI certificate roots for its TLS preflight probe. It does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a one-day safety timeout plus an operator cancellation control.
+MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its TLS preflight probe. It does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a one-day safety timeout plus an operator cancellation control.
 
-### 2. Build and run Sourcecraft
+### 2. Build and run MailSwiftSync
 
 ```bash
 cargo run --release
 ```
 
-If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox.
+If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox. Prebuilt installers are planned; until then, Rust/Cargo is developer installation UX.
 
 ### 3. First migration
 
-1. Choose **Dovecot native** when the destination is managed by Dovecot; otherwise choose **imapsync fallback**.
+1. Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available; otherwise choose **imapsync fallback**.
 2. Enter source details on the left and destination details on the right.
 3. Leave **Dry run** selected and click **Preview safe command**.
 4. Run validation and inspect the execution journal for successful access and folder mapping.
@@ -44,9 +67,13 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 
 Use **Project cockpit → Discover server capabilities over verified TLS** before a pilot to see whether each endpoint advertises modern IMAP extensions such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE. This probe does not authenticate and does not send account passwords.
 
+## Why MailSwiftSync exists
+
+Bulk migration alone is not the differentiator: scripts and existing IMAP tools can already loop over accounts. MailSwiftSync is intended to answer the operational questions that matter during a migration window: which engine fits this destination, which accounts are ready, what failed, what needs a delta, and can the final result be demonstrated to another administrator?
+
 ## Security model
 
-- **Local first.** The app does not send mail data itself; it invokes your local `imapsync` executable only when you start a run.
+- **Local first.** The app does not relay mail data through a MailSwiftSync service; it invokes the selected local or destination-side engine only when you start a run.
 - **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination.
 - **Redacted preview.** Passwords are hidden in the preview. imapsync live runs use ephemeral protected passfiles; Dovecot's remote `imapc_password` override is still visible to the destination-side process and should be treated accordingly.
@@ -57,9 +84,11 @@ The desktop runner does not persist passwords. imapsync credentials are written 
 
 ### Dovecot mode
 
-Dovecot mode configures the destination-side command in the form `doveadm ... sync -1Ru DESTINATION imapc:`. This is an additive final-delta-safe default. After a live run, Sourcecraft queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion selects `doveadm backup`, which makes the destination mirror the source and can remove destination-only mail. The dry command performs a non-mutating `imapc` mailbox listing against the source; it is a connectivity/configuration check, not proof that the full migration will succeed.
+Dovecot mode configures the destination-side command in the form `doveadm ... sync -1Ru DESTINATION imapc:`. This is an additive final-delta-safe default. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion selects `doveadm backup`, which makes the destination mirror the source and can remove destination-only mail. The dry command performs a non-mutating `imapc` mailbox listing against the source; it is a connectivity/configuration check, not proof that the full migration will succeed.
 
 ## Verification
+
+Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and confidence result. A successful process with incomplete evidence remains pending review. Aggregate evidence is not a substitute for message-level reconciliation; that distinction is explicit in the architecture and release criteria.
 
 ```bash
 cargo fmt --check
@@ -70,11 +99,13 @@ cargo build --release
 
 ## Documentation
 
-Begin with the [Sourcecraft IMAP Migrator Wiki](docs/wiki/Home.md) for illustrated, step-by-step setup and migration guidance.
+Begin with the [MailSwiftSync Wiki](docs/wiki/Home.md) for illustrated, step-by-step setup and migration guidance.
 
 For the durable project, phase, and verification model, see the [control-plane architecture](docs/architecture.md).
 
 For batch work, see [Bulk migrations from CSV or Excel](docs/wiki/Bulk-migrations.md) and start from the included template. Never commit a populated spreadsheet containing passwords.
+
+See the [release-readiness criteria](docs/release-readiness.md) for the boundary between the current operator-focused 0.1 release and production-ready 1.0 work.
 
 ## Advanced options
 

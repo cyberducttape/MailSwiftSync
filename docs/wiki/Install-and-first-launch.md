@@ -2,12 +2,12 @@
 
 ## What you need
 
-- A computer running Sourcecraft.
+- A computer running MailSwiftSync.
 - A working `imapsync` installation.
 - Login details for both IMAP accounts.
 - A test mailbox at the destination, strongly recommended for the first run.
 
-## Start Sourcecraft
+## Start MailSwiftSync
 
 Build and start from the project folder:
 
@@ -15,7 +15,7 @@ Build and start from the project folder:
 cargo run --release
 ```
 
-Sourcecraft looks for `imapsync` on your PATH. If it is installed elsewhere, enter the full path in **imapsync executable** near the bottom of the window.
+MailSwiftSync looks for `imapsync` on your PATH. If it is installed elsewhere, enter the full path in **imapsync executable** near the bottom of the window.
 
 ## Fill in the two account panels
 
@@ -29,8 +29,8 @@ For each panel enter:
 - **User** — usually the complete email address.
 - **Password** — the account password or an app password, if your mail provider requires one.
 
-Do not reverse the panels. Sourcecraft never treats the destination as a source unless you put it in the left panel.
+Do not reverse the panels. MailSwiftSync never treats the destination as a source unless you put it in the left panel.
 
 ## Save a profile
 
-Click **Save non-secret profile** to remember the profile name, server names, usernames, selected rules, and executable path. Passwords are deliberately excluded. You must re-enter them after restarting Sourcecraft.
+Click **Save non-secret profile** to remember the profile name, server names, usernames, selected rules, and executable path. Passwords are deliberately excluded. You must re-enter them after restarting MailSwiftSync.

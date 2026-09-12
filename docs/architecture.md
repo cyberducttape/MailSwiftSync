@@ -1,6 +1,6 @@
 # Architecture: the migration control plane
 
-Sourcecraft is a desktop migration control plane. It delegates transfer semantics to Dovecot's native dsync engine when selected and uses imapsync as the arbitrary-IMAP fallback; the application owns planning, safety gates, durable run state, and operator evidence.
+MailSwiftSync is a desktop migration control plane. It delegates transfer semantics to Dovecot's native dsync engine when selected and uses imapsync as the arbitrary-IMAP fallback; the application owns planning, safety gates, durable run state, and operator evidence.
 
 ## Core layers
 
@@ -17,7 +17,7 @@ Preflight Scheduler Verify
  Durable SQLite state + evidence ledger
 ```
 
-The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, and verification evidence. It intentionally never persists passwords or mailbox content.
+The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, and verification evidence. It intentionally never persists passwords or mailbox content.
 
 The Project Cockpit also performs unauthenticated IMAPS capability discovery over certificate-verified TLS. It asks each endpoint for `CAPABILITY` and presents the result as planning context; it does not claim that these extensions replace Dovecot's server-side dsync behavior. A failed certificate check blocks discovery rather than being silently ignored.
 

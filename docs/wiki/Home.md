@@ -1,6 +1,6 @@
-# Sourcecraft IMAP Migrator Wiki
+# MailSwiftSync Wiki
 
-Sourcecraft is a local migration control plane. It uses Dovecot's native `doveadm`/dsync workflow when the destination is Dovecot, and `imapsync` for arbitrary IMAP-to-IMAP work. It helps you plan a migration, test it safely, keep a durable project record, and verify the result.
+MailSwiftSync is a local mailbox migration control plane. It uses Dovecot's native `doveadm`/dsync workflow when the destination is Dovecot, and `imapsync` for arbitrary IMAP-to-IMAP work. It helps you plan a migration, test it safely, keep a durable project record, and verify the result.
 
 ![Migration plan screen](assets/migration-plan.png)
 
@@ -9,7 +9,7 @@ Sourcecraft is a local migration control plane. It uses Dovecot's native `dovead
 ## Start here
 
 1. Install `doveadm` on or use an operator-managed wrapper for the Dovecot destination; install `imapsync` for the fallback path.
-2. Open Sourcecraft and choose the migration engine.
+2. Open MailSwiftSync and choose the migration engine.
 3. Leave **Dry run** turned on.
 4. Enter the source and destination account details.
 5. Preview the redacted command and check the servers and usernames.
