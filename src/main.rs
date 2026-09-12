@@ -180,9 +180,11 @@ impl Form {
         } else {
             &self.destination_password
         };
+        let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
+            .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
         let mut a = vec![
             "--host1".into(),
-            self.profile.source_host.clone(),
+            source_host,
             "--user1".into(),
             self.profile.source_user.clone(),
             "--password1".into(),
@@ -194,9 +196,14 @@ impl Form {
             "--password2".into(),
             p2.into(),
         ];
-        if !self.profile.source_port.trim().is_empty() {
-            a.extend(["--port1".into(), self.profile.source_port.trim().into()]);
-        }
+        a.extend([
+            "--port1".into(),
+            if self.profile.source_port.trim().is_empty() {
+                endpoint_port.to_string()
+            } else {
+                self.profile.source_port.trim().into()
+            },
+        ]);
         if self.profile.source_tls == "plain" {
             a.push("--nossl1".into());
         }
@@ -1229,6 +1236,39 @@ impl App {
         });
     }
 
+    fn export_verification_report(&self) -> Result<(), String> {
+        let job = self
+            .job_id
+            .as_deref()
+            .ok_or("No mailbox evidence is available yet.")?;
+        let evidence = self
+            .store
+            .evidence(job)
+            .map_err(|e| e.to_string())?
+            .ok_or("No mailbox evidence is available yet.")?;
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-verification.md")
+            .save_file()
+            .ok_or("Report export cancelled.")?;
+        let report = format!(
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Confidence: {}%\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report contains aggregate evidence. Message-level reconciliation and provider-specific warnings require additional verification.",
+            self.form.profile.name,
+            self.form.profile.source_host,
+            self.form.profile.destination_host,
+            self.form.engine().label(),
+            evidence.confidence_percent(),
+            evidence.source_folders,
+            evidence.destination_folders,
+            evidence.source_messages,
+            evidence.destination_messages,
+            evidence.source_bytes,
+            evidence.destination_bytes,
+            evidence.unmatched_messages,
+            evidence.failed_messages
+        );
+        std::fs::write(path, report).map_err(|e| e.to_string())
+    }
+
     fn verification_view(&self, ui: &mut egui::Ui) {
         ui.heading("Verification");
         ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
@@ -1239,6 +1279,9 @@ impl App {
                 match self.store.evidence(job) {
                     Ok(Some(evidence)) => {
                         ui.label("Durable mailbox reconciliation");
+                        if ui.button("Export verification report…").clicked() {
+                            let _ = self.export_verification_report();
+                        }
                         for (label, value) in [
                             ("Folders", format!("{} source / {} destination", evidence.source_folders, evidence.destination_folders)),
                             ("Messages", format!("{} source / {} destination", evidence.source_messages, evidence.destination_messages)),
