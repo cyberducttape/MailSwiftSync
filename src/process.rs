@@ -163,6 +163,38 @@ mod tests {
         assert!(lines[0].ends_with("[line truncated by MailSwiftSync]"));
         assert!(lines[0].len() < MAX_SUBPROCESS_LINE_BYTES + 64);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_reports_operator_cancellation_as_a_typed_outcome() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let cancel = AtomicBool::new(true);
+
+        let outcome = wait_with_timeout(&mut child, Duration::from_secs(5), &cancel).unwrap();
+
+        assert_eq!(outcome.exit_code, None);
+        assert!(outcome.cancelled);
+        assert!(!outcome.timed_out);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wait_reports_timeout_as_a_typed_outcome() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let cancel = AtomicBool::new(false);
+
+        let outcome = wait_with_timeout(&mut child, Duration::from_millis(1), &cancel).unwrap();
+
+        assert_eq!(outcome.exit_code, None);
+        assert!(!outcome.cancelled);
+        assert!(outcome.timed_out);
+    }
 }
 
 #[derive(Debug)]
