@@ -22,12 +22,20 @@ pub(crate) fn imapsync_args(
         destination_password
     };
     let source_default_port = super::default_imap_port(&profile.source_tls);
-    let (source_host, endpoint_port) =
+    let (source_host, source_endpoint_port) =
         super::endpoint_parts(&profile.source_host, source_default_port)
             .unwrap_or_else(|_| (profile.source_host.clone(), source_default_port));
-    let (destination_host, destination_port) =
-        super::endpoint_parts(&profile.destination_host, 993)
-            .unwrap_or_else(|_| (profile.destination_host.clone(), 993));
+    let destination_tls = super::effective_destination_tls(&profile.destination_tls);
+    let destination_default_port = super::default_imap_port(destination_tls);
+    let (destination_host, endpoint_port) =
+        super::endpoint_parts(&profile.destination_host, destination_default_port)
+            .unwrap_or_else(|_| (profile.destination_host.clone(), destination_default_port));
+    let destination_port = profile.destination_port.trim();
+    let destination_port = if destination_port.is_empty() {
+        endpoint_port.to_string()
+    } else {
+        destination_port.to_owned()
+    };
     let source_port = profile.source_port.trim();
     let mut args = vec![
         "--host1".into(),
@@ -44,7 +52,7 @@ pub(crate) fn imapsync_args(
         p2.into(),
         "--port1".into(),
         if source_port.is_empty() {
-            endpoint_port.to_string()
+            source_endpoint_port.to_string()
         } else {
             source_port.into()
         },
@@ -64,13 +72,20 @@ pub(crate) fn imapsync_args(
             "SSL_verify_mode=1".into(),
         ]);
     }
-    args.extend([
-        "--port2".into(),
-        destination_port.to_string(),
-        "--ssl2".into(),
-        "--sslargs2".into(),
-        "SSL_verify_mode=1".into(),
-    ]);
+    args.extend(["--port2".into(), destination_port]);
+    if destination_tls == "starttls" {
+        args.extend([
+            "--tls2".into(),
+            "--tlsargs2".into(),
+            "SSL_verify_mode=1".into(),
+        ]);
+    } else {
+        args.extend([
+            "--ssl2".into(),
+            "--sslargs2".into(),
+            "SSL_verify_mode=1".into(),
+        ]);
+    }
     for (enabled, flag) in [
         (profile.automap, "--automap"),
         (profile.addheader, "--addheader"),

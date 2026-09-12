@@ -74,6 +74,10 @@ struct Profile {
     destination_user: String,
     #[serde(default)]
     destination_credential_id: String,
+    #[serde(default)]
+    destination_port: String,
+    #[serde(default = "default_destination_tls")]
+    destination_tls: String,
     imapsync_path: String,
     #[serde(default)]
     engine: core::Engine,
@@ -142,6 +146,8 @@ struct RunProfileSnapshot {
     destination_host: String,
     destination_user: String,
     destination_credential_id: String,
+    destination_port: String,
+    destination_tls: String,
     imapsync_path: String,
     engine: core::Engine,
     doveadm_path: String,
@@ -185,6 +191,18 @@ fn default_migration_timeout_hours() -> u64 {
 }
 fn default_source_tls() -> String {
     "imaps".into()
+}
+
+fn default_destination_tls() -> String {
+    "imaps".into()
+}
+
+fn effective_destination_tls(mode: &str) -> &str {
+    if mode == "starttls" {
+        "starttls"
+    } else {
+        "imaps"
+    }
 }
 
 fn plan_snapshot_sha256(snapshot: &str) -> String {
@@ -395,6 +413,18 @@ impl Form {
         ) {
             return Err("Source TLS mode must be imaps, starttls, or plain.".into());
         }
+        let destination_port = self.profile.destination_port.trim();
+        if (!destination_port.is_empty() && destination_port.parse::<u16>().is_err())
+            || destination_port == "0"
+        {
+            return Err("Destination IMAP port must be a number between 1 and 65535.".into());
+        }
+        if !matches!(
+            self.profile.destination_tls.as_str(),
+            "" | "imaps" | "starttls"
+        ) {
+            return Err("Destination TLS mode must be imaps or starttls.".into());
+        }
         if !(1..=720).contains(&self.profile.migration_timeout_hours) {
             return Err("Migration timeout must be between 1 and 720 hours.".into());
         }
@@ -583,6 +613,8 @@ impl Form {
                 destination_host: profile.destination_host.clone(),
                 destination_user: profile.destination_user.clone(),
                 destination_credential_id: profile.destination_credential_id.clone(),
+                destination_port: profile.destination_port.clone(),
+                destination_tls: profile.destination_tls.clone(),
                 imapsync_path: profile.imapsync_path.clone(),
                 engine: profile.engine,
                 doveadm_path: profile.doveadm_path.clone(),
@@ -5148,7 +5180,7 @@ impl eframe::App for App {
                     ui.add_space(5.0);
                 }
             });
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.horizontal(|ui| { ui.label("Source port"); ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(90.0)); ui.label("TLS"); egui::ComboBox::from_id_salt("source_tls").selected_text(&self.form.profile.source_tls).show_ui(ui, |ui| { for mode in ["imaps", "starttls", "plain"] { ui.selectable_value(&mut self.form.profile.source_tls, mode.into(), mode); } }); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } if self.running() { if ui.button("Cancel running process").clicked() { if let Some(cancel) = &self.cancel_requested { cancel.store(true, Ordering::Relaxed); self.status = "Cancellation requested…".into(); } } } else { let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); } } if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.horizontal(|ui| { ui.label("Source port"); ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(70.0)); ui.label("TLS"); egui::ComboBox::from_id_salt("source_tls").selected_text(&self.form.profile.source_tls).show_ui(ui, |ui| { for mode in ["imaps", "starttls", "plain"] { ui.selectable_value(&mut self.form.profile.source_tls, mode.into(), mode); } }); ui.separator(); ui.label("Destination port"); ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_port).desired_width(70.0)); ui.label("TLS"); egui::ComboBox::from_id_salt("destination_tls").selected_text(&self.form.profile.destination_tls).show_ui(ui, |ui| { for mode in ["imaps", "starttls"] { ui.selectable_value(&mut self.form.profile.destination_tls, mode.into(), mode); } }); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } if self.running() { if ui.button("Cancel running process").clicked() { if let Some(cancel) = &self.cancel_requested { cancel.store(true, Ordering::Relaxed); self.status = "Cancellation requested…".into(); } } } else { let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); } } if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
         self.preview(ctx);
         self.bulk_dialog(ctx);
         self.bulk_live_confirmation(ctx);
@@ -5969,6 +6001,29 @@ mod tests {
         assert_eq!(default_imap_port("imaps"), 993);
         assert_eq!(default_imap_port("starttls"), 143);
         assert_eq!(default_imap_port("plain"), 143);
+    }
+
+    #[test]
+    fn imapsync_destination_transport_and_port_are_typed() {
+        let mut form = Form::default();
+        form.profile.source_host = "source.example".into();
+        form.profile.source_user = "source-user".into();
+        form.profile.destination_host = "destination.example".into();
+        form.profile.destination_user = "destination-user".into();
+        form.source_password = String::from("source-secret").into();
+        form.destination_password = String::from("destination-secret").into();
+        form.profile.destination_tls = "starttls".into();
+        let args = form.args(true);
+        assert!(args.windows(2).any(|pair| pair == ["--port2", "143"]));
+        assert!(args.contains(&"--tls2".into()));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--tlsargs2", "SSL_verify_mode=1"])
+        );
+        assert!(!args.iter().any(|arg| arg == "--ssl2"));
+        form.profile.destination_port = "8143".into();
+        let args = form.args(true);
+        assert!(args.windows(2).any(|pair| pair == ["--port2", "8143"]));
     }
 
     #[test]

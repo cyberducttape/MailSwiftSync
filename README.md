@@ -92,6 +92,7 @@ If `imapsync` is not on your PATH, enter its absolute path in **imapsync executa
 
 1. Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available; otherwise choose **imapsync fallback**.
 2. Enter source details on the left and destination details on the right.
+   For imapsync, destination transport is typed separately: implicit TLS defaults to port 993 and STARTTLS defaults to port 143; enter an explicit destination port when the provider uses a nonstandard endpoint.
 3. Leave **Dry run** selected and click **Preview safe command**.
 4. Run validation and inspect the execution journal for successful access and folder mapping.
 5. Only then disable Dry run and launch a live migration.
