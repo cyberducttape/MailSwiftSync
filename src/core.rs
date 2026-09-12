@@ -108,6 +108,10 @@ pub struct RunSummary {
     pub id: String,
     pub job_id: Option<String>,
     pub engine: String,
+    /// Serialized execution plan captured when the run started. Session
+    /// passwords are excluded; operator-supplied extra options remain part of
+    /// the recorded configuration and must be treated as sensitive metadata.
+    pub plan_snapshot: String,
     pub status: String,
     pub started_at: String,
     pub finished_at: Option<String>,
@@ -294,7 +298,7 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
+          CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
           CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, start_ticks INTEGER, process_group INTEGER, session_id INTEGER, executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
@@ -341,6 +345,17 @@ impl StateStore {
         if !job_columns.iter().any(|column| column == "config") {
             self.connection
                 .execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
+        }
+        let run_columns = self
+            .connection
+            .prepare("PRAGMA table_info(runs)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !run_columns.iter().any(|column| column == "plan_snapshot") {
+            self.connection.execute(
+                "ALTER TABLE runs ADD COLUMN plan_snapshot TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
         }
         let process_columns = self
             .connection
@@ -761,7 +776,7 @@ impl StateStore {
         engine: &str,
     ) -> rusqlite::Result<()> {
         self.connection.execute(
-            "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES(?1,?2,?3,?4,'running')",
+            "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,'','running')",
             params![run_id, project_id, job_id, engine],
         )?;
         Ok(())
@@ -776,6 +791,18 @@ impl StateStore {
         run_id: &str,
         engine: &str,
     ) -> rusqlite::Result<()> {
+        self.begin_run_with_snapshot(project_id, job_id, run_id, engine, "")
+    }
+    /// Atomically starts a mailbox run and persists its immutable, secret-free
+    /// execution-plan snapshot (with session passwords excluded).
+    pub fn begin_run_with_snapshot(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        engine: &str,
+        plan_snapshot: &str,
+    ) -> rusqlite::Result<()> {
         let tx = self.connection.unchecked_transaction()?;
         let current: String = tx.query_row(
             "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
@@ -788,8 +815,8 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         tx.execute(
-            "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES(?1,?2,?3,?4,'running')",
-            params![run_id, project_id, job_id, engine],
+            "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,'running')",
+            params![run_id, project_id, job_id, engine, plan_snapshot],
         )?;
         tx.execute(
             "UPDATE mailbox_jobs SET state='running',attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
@@ -812,6 +839,19 @@ impl StateStore {
         run_id: &str,
         engine: &str,
         expected_plans: &[String],
+    ) -> rusqlite::Result<()> {
+        self.begin_batch_run_with_snapshot(project_id, job_ids, run_id, engine, expected_plans, "")
+    }
+    /// Atomically starts a batch and stores its immutable, secret-free plan
+    /// snapshot alongside the parent run (with session passwords excluded).
+    pub fn begin_batch_run_with_snapshot(
+        &self,
+        project_id: &str,
+        job_ids: &[String],
+        run_id: &str,
+        engine: &str,
+        expected_plans: &[String],
+        plan_snapshot: &str,
     ) -> rusqlite::Result<()> {
         if job_ids.is_empty()
             || (!expected_plans.is_empty() && expected_plans.len() != job_ids.len())
@@ -843,8 +883,8 @@ impl StateStore {
             }
         }
         tx.execute(
-            "INSERT INTO runs(id,project_id,job_id,engine,status) VALUES(?1,?2,NULL,?3,'running')",
-            params![run_id, project_id, engine],
+            "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,NULL,?3,?4,'running')",
+            params![run_id, project_id, engine, plan_snapshot],
         )?;
         for job_id in job_ids {
             tx.execute(
@@ -1010,17 +1050,18 @@ impl StateStore {
     pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,engine,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                "SELECT id,job_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok(RunSummary {
                         id: row.get(0)?,
                         job_id: row.get(1)?,
                         engine: row.get(2)?,
-                        status: row.get(3)?,
-                        started_at: row.get(4)?,
-                        finished_at: row.get(5)?,
-                        detail: row.get(6)?,
+                        plan_snapshot: row.get(3)?,
+                        status: row.get(4)?,
+                        started_at: row.get(5)?,
+                        finished_at: row.get(6)?,
+                        detail: row.get(7)?,
                     })
                 },
             )
@@ -1029,17 +1070,18 @@ impl StateStore {
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,engine,status,started_at,finished_at,detail FROM runs WHERE id=?1",
+                "SELECT id,job_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1",
                 [run_id],
                 |row| {
                     Ok(RunSummary {
                         id: row.get(0)?,
                         job_id: row.get(1)?,
                         engine: row.get(2)?,
-                        status: row.get(3)?,
-                        started_at: row.get(4)?,
-                        finished_at: row.get(5)?,
-                        detail: row.get(6)?,
+                        plan_snapshot: row.get(3)?,
+                        status: row.get(4)?,
+                        started_at: row.get(5)?,
+                        finished_at: row.get(6)?,
+                        detail: row.get(7)?,
                     })
                 },
             )
@@ -1047,7 +1089,7 @@ impl StateStore {
     }
     pub fn recent_runs(&self, project_id: &str, limit: u32) -> rusqlite::Result<Vec<RunSummary>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,engine,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+            "SELECT id,job_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
         )?;
         statement
             .query_map(params![project_id, limit], |row| {
@@ -1055,10 +1097,11 @@ impl StateStore {
                     id: row.get(0)?,
                     job_id: row.get(1)?,
                     engine: row.get(2)?,
-                    status: row.get(3)?,
-                    started_at: row.get(4)?,
-                    finished_at: row.get(5)?,
-                    detail: row.get(6)?,
+                    plan_snapshot: row.get(3)?,
+                    status: row.get(4)?,
+                    started_at: row.get(5)?,
+                    finished_at: row.get(6)?,
+                    detail: row.get(7)?,
                 })
             })?
             .collect()
@@ -1793,6 +1836,27 @@ mod tests {
             db.run_status("run-atomic").unwrap().as_deref(),
             Some("running")
         );
+    }
+
+    #[test]
+    fn run_plan_snapshot_is_persisted_at_start() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("snapshot", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run_with_snapshot(
+            &project.id,
+            &job,
+            "run-snapshot",
+            "imapsync fallback",
+            "dry_run=false\nsource_host = \"source\"",
+        )
+        .unwrap();
+        let run = db.run("run-snapshot").unwrap().unwrap();
+        assert_eq!(run.plan_snapshot, "dry_run=false\nsource_host = \"source\"");
     }
 
     #[test]

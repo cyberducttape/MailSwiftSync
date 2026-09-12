@@ -595,6 +595,14 @@ impl Form {
         )
     }
 
+    /// Serialize the launch configuration without session passwords. This is
+    /// persisted with the run so historical reports do not depend on the
+    /// currently edited form.
+    fn plan_snapshot(&self) -> String {
+        let profile = toml::to_string(&self.profile).unwrap_or_default();
+        format!("dry_run={}\n{profile}", self.dry_run)
+    }
+
     fn requires_insecure_transport_ack(&self) -> bool {
         self.profile.source_tls == "plain" && !self.profile.allow_insecure_source_transport
     }
@@ -2710,7 +2718,7 @@ impl App {
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Compatibility metric: {}% (not a probability of correctness)\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Compatibility metric: {}% (not a probability of correctness)\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords. Operator-supplied options may still contain sensitive metadata.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
             markdown_escape(&project.name),
             markdown_escape(&project.source_endpoint),
             markdown_escape(&project.destination_endpoint),
@@ -2729,6 +2737,7 @@ impl App {
                 "aggregate mailbox totals"
             },
             evidence.confidence_percent(),
+            run.plan_snapshot,
             evidence.source_folders,
             evidence.destination_folders,
             evidence.source_messages,
@@ -3269,9 +3278,14 @@ impl App {
         } else {
             Vec::new()
         };
+        let plan_snapshot = jobs
+            .iter()
+            .map(|job| job.form.plan_snapshot())
+            .collect::<Vec<_>>()
+            .join("\n--- batch mailbox plan ---\n");
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
-        if let Err(error) = self.store.begin_batch_run(
+        if let Err(error) = self.store.begin_batch_run_with_snapshot(
             &project_id,
             &self.bulk_job_ids,
             &run_id,
@@ -3281,6 +3295,7 @@ impl App {
                 "batch validation"
             },
             &expected_plans,
+            &plan_snapshot,
         ) {
             self.bulk_message = format!("Could not start durable batch run: {error}");
             return;
@@ -3625,6 +3640,7 @@ impl App {
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
         let plan_fingerprint = self.form.plan_fingerprint();
+        let plan_snapshot = self.form.plan_snapshot();
         let run_engine = self.form.engine();
         let run_dry_run = self.form.dry_run;
         let (run_project_id, run_job_id) = match (self.project_id.clone(), self.job_id.clone()) {
@@ -3636,10 +3652,13 @@ impl App {
             }
         };
         let run_id = uuid::Uuid::new_v4().to_string();
-        if let Err(error) =
-            self.store
-                .begin_run(&run_project_id, &run_job_id, &run_id, run_engine.label())
-        {
+        if let Err(error) = self.store.begin_run_with_snapshot(
+            &run_project_id,
+            &run_job_id,
+            &run_id,
+            run_engine.label(),
+            &plan_snapshot,
+        ) {
             cleanup_paths(&cleanup);
             self.status = format!("Could not record durable run; nothing was started: {error}");
             return;
