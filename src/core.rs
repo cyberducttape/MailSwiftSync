@@ -127,8 +127,8 @@ pub struct MailboxEvidence {
     pub failed_messages: u64,
     pub source_folders: u64,
     pub destination_folders: u64,
-    /// True only when the engine supplied message-level/authoritative proof.
-    /// Aggregate mailbox totals must never be presented as full verification.
+    /// True only when the engine supplied a stronger engine-confirmed summary.
+    /// Aggregate mailbox totals must never be presented as message-level proof.
     pub authoritative: bool,
 }
 

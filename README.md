@@ -74,7 +74,7 @@ imapsync --version
 
 Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
 
-MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its authenticated IMAPS readiness probe. The probe validates the certificate, authenticates, refreshes capabilities after authentication, and inspects namespace/folder listing; it does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a one-day safety timeout plus an operator cancellation control. Plain and STARTTLS plans still use the selected engine's dry preflight for authentication validation.
+MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its authenticated IMAPS readiness probe. The probe validates the certificate, authenticates, refreshes capabilities after authentication, and inspects namespace/folder listing; it does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a configurable 1–720 hour safety timeout plus an operator cancellation control. Plain and STARTTLS plans still use the selected engine's dry preflight for authentication validation.
 
 ### 2. Download or build MailSwiftSync
 
@@ -86,7 +86,7 @@ For contributors or users building from source:
 cargo run --release
 ```
 
-If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; until a tagged release is published, Rust/Cargo is developer installation UX. Release artifacts include SHA-256 checksums.
+If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
 
 ### 3. First migration
 
