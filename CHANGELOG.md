@@ -175,3 +175,4 @@ All notable changes to MailSwiftSync are documented here.
 - Dovecot source credentials still use a destination-side `imapc_password` override for remote execution and may be visible to process inspection; provider OAuth and unattended secret brokering remain future work.
 - Automatically advances fully evidence-verified live projects through Verification to Complete; incomplete projects remain in Verification for operator review.
 - Batch workers now wait for an acknowledged durable child/mailbox claim before launching an engine process, eliminating the asynchronous unclaimed-process window.
+- Project Markdown and JSON reports now include the durable run ID that produced each mailbox's latest evidence.

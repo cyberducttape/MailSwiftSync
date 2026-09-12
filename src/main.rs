@@ -2550,7 +2550,7 @@ impl App {
             .filter(|job| needs_operator_review(&job.state))
             .count();
         let mut report = format!(
-            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence | Confidence | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---:|---:|---:|---:|---:|\n",
+            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence run | Evidence | Confidence | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---:|---:|---:|---:|---:|\n",
             markdown_escape(&project.name),
             project.id,
             markdown_escape(&project.source_endpoint),
@@ -2561,12 +2561,17 @@ impl App {
             attention,
         );
         for job in jobs {
-            if let Some(evidence) = self.store.evidence(&job.id).map_err(|e| e.to_string())? {
+            if let Some((evidence_run_id, evidence)) = self
+                .store
+                .latest_evidence_for_run(&job.id)
+                .map_err(|e| e.to_string())?
+            {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | {} | {}% | {} | {} | {} | {} |\n",
+                    "| {} | {} | `{}` | `{}` | {} | {}% | {} | {} | {} | {} |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
+                    evidence_run_id,
                     evidence.evidence_level(),
                     evidence.confidence_percent(),
                     evidence.source_messages,
@@ -2576,7 +2581,7 @@ impl App {
                 ));
             } else {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | missing | 0% | — | — | — | — |\n",
+                    "| {} | {} | `{}` | — | missing | 0% | — | — | — | — |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
@@ -2626,14 +2631,18 @@ impl App {
         let mailboxes = jobs
             .into_iter()
             .map(|job| {
-                let evidence = self.store.evidence(&job.id).map_err(|e| e.to_string())?;
+                let evidence = self
+                    .store
+                    .latest_evidence_for_run(&job.id)
+                    .map_err(|e| e.to_string())?;
                 Ok(match evidence {
-                    Some(evidence) => serde_json::json!({
+                    Some((evidence_run_id, evidence)) => serde_json::json!({
                         "id": job.id,
                         "source_mailbox": job.source_mailbox,
                         "destination_mailbox": job.destination_mailbox,
                         "state": job.state,
                         "evidence": {
+                            "run_id": evidence_run_id,
                             "scope": if evidence.authoritative { "engine-confirmed" } else { "aggregate" },
                             "evidence_level": evidence.evidence_level(),
                             "authoritative": evidence.authoritative,
