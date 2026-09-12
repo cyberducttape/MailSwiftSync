@@ -30,6 +30,7 @@ const TEAL: Color32 = Color32::from_rgb(24, 158, 166);
 const SKY: Color32 = Color32::from_rgb(235, 243, 252);
 const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
+const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Profile {
@@ -2057,7 +2058,7 @@ impl App {
                         if let Some(project) = self.active_project_id() {
                             let _ = self.store.record_event(project, "run_output", &safe);
                         }
-                        self.output.push(safe);
+                        push_visible_output(&mut self.output, safe);
                     }
                     Event::JobState(index, state) => {
                         if let Some(job) = self.bulk_jobs.get_mut(index) {
@@ -2099,7 +2100,7 @@ impl App {
                     }
                     Event::VerificationFailed(detail) => {
                         let safe = self.redact_output(&detail);
-                        self.output.push(format!("[verification] {safe}"));
+                        push_visible_output(&mut self.output, format!("[verification] {safe}"));
                         if let Some(project) = self.active_project_id() {
                             let _ = self
                                 .store
@@ -2409,6 +2410,14 @@ fn markdown_escape(value: &str) -> String {
         .replace('|', "\\|")
         .replace('\n', " ")
 }
+
+fn push_visible_output(output: &mut Vec<String>, line: String) {
+    if output.len() >= MAX_VISIBLE_OUTPUT_LINES {
+        output.remove(0);
+    }
+    output.push(line);
+}
+
 impl eframe::App for App {
     #[allow(clippy::possible_missing_else, clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {

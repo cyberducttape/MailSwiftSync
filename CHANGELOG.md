@@ -30,6 +30,7 @@ All notable changes to MailSwiftSync are documented here.
 - Made batch project and mailbox creation atomic, attached batch validation to a durable run record, and journaled batch activity under its project.
 - Restored the selected mailbox identity from durable state and marked interrupted run records as abandoned with recovery events on restart.
 - Corrected IMAP capability discovery to consume the server greeting first, honor configured ports, and clearly limit the probe to IMAPS.
+- Bounded the in-memory visible execution journal to 10,000 lines while retaining the durable event ledger.
 
 ### Changed
 
