@@ -1212,6 +1212,12 @@ fn read_imap_tagged(
     }
 }
 
+fn imap_command_succeeded(response: &str, tag: &str) -> bool {
+    response
+        .lines()
+        .any(|line| line.starts_with(&format!("{tag} OK")))
+}
+
 fn probe_tls_capabilities(
     host: &str,
     user: &str,
@@ -1265,6 +1271,9 @@ fn probe_tls_capabilities(
         .write_all(b"a001 CAPABILITY\r\n")
         .map_err(|e| e.to_string())?;
     read_imap_tagged(&mut stream, "a001", &mut response, &mut buffer)?;
+    if !imap_command_succeeded(&response, "a001") {
+        return Err(format!("{host}: pre-auth CAPABILITY failed"));
+    }
     let preauth = greeting.contains("* PREAUTH");
     if !preauth {
         let login = format!(
@@ -1276,7 +1285,7 @@ fn probe_tls_capabilities(
             .write_all(login.as_bytes())
             .map_err(|e| e.to_string())?;
         read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
-        if !response.to_ascii_lowercase().contains("a002 ok") {
+        if !imap_command_succeeded(&response, "a002") {
             return Err(format!("{host}: IMAP authentication failed"));
         }
     }
@@ -1286,14 +1295,23 @@ fn probe_tls_capabilities(
         .write_all(b"a003 CAPABILITY\r\n")
         .map_err(|e| e.to_string())?;
     read_imap_tagged(&mut stream, "a003", &mut response, &mut buffer)?;
+    if !imap_command_succeeded(&response, "a003") {
+        return Err(format!("{host}: post-auth CAPABILITY failed"));
+    }
     stream
         .write_all(b"a004 NAMESPACE\r\n")
         .map_err(|e| e.to_string())?;
     read_imap_tagged(&mut stream, "a004", &mut response, &mut buffer)?;
+    if !imap_command_succeeded(&response, "a004") {
+        return Err(format!("{host}: NAMESPACE is not available"));
+    }
     stream
         .write_all(b"a005 LIST \"\" \"*\"\r\n")
         .map_err(|e| e.to_string())?;
     read_imap_tagged(&mut stream, "a005", &mut response, &mut buffer)?;
+    if !imap_command_succeeded(&response, "a005") {
+        return Err(format!("{host}: folder inventory failed"));
+    }
     let _ = stream.write_all(b"a006 LOGOUT\r\n");
     let caps = core::ServerCapabilities::parse(&response);
     if caps.values.is_empty() {
@@ -3071,6 +3089,22 @@ mod tests {
         assert!(form.validate().unwrap_err().contains("controlled"));
         form.profile.extra_options = "--password2 leaked".into();
         assert!(form.validate().is_err());
+    }
+
+    #[test]
+    fn imap_preflight_requires_tagged_ok_responses() {
+        assert!(imap_command_succeeded(
+            "* CAPABILITY IMAP4rev1\na001 OK done",
+            "a001"
+        ));
+        assert!(!imap_command_succeeded(
+            "* CAPABILITY IMAP4rev1\na001 NO denied",
+            "a001"
+        ));
+        assert!(!imap_command_succeeded(
+            "* CAPABILITY IMAP4rev1\na001 BAD denied",
+            "a001"
+        ));
     }
 
     #[test]
