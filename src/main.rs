@@ -6231,6 +6231,57 @@ mod tests {
     }
 
     #[test]
+    fn batch_retry_scopes_select_only_the_intended_durable_states() {
+        let states = [
+            "ready",
+            "failed",
+            "attention",
+            "delta_required",
+            "verification_difference",
+            "completed",
+            "verified",
+        ];
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| BulkRetryScope::Unresolved.includes(state))
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![
+                "ready",
+                "failed",
+                "attention",
+                "delta_required",
+                "verification_difference",
+                "completed",
+            ]
+        );
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| BulkRetryScope::FailedAttention.includes(state))
+                .copied()
+                .collect::<Vec<_>>(),
+            vec!["failed", "attention"]
+        );
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| BulkRetryScope::DeltaRequired.includes(state))
+                .copied()
+                .collect::<Vec<_>>(),
+            vec!["delta_required"]
+        );
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| BulkRetryScope::All.includes(state))
+                .count(),
+            states.len()
+        );
+    }
+
+    #[test]
     fn failure_taxonomy_keeps_operator_actions_distinct() {
         assert_eq!(
             classify_failure("AUTHENTICATIONFAILED"),

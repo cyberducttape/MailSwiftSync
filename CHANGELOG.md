@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Batch retry-scope selection now has direct coverage for every durable state category, protecting the default Verified exclusion and explicit all-row re-run behavior.
 - Live batch execution now has explicit retry scopes for unresolved rows, failed/Attention rows, delta-required rows, or an all-row re-run. The default skips verified mailboxes, and live plan/fingerprint validation is performed only for the selected durable rows.
 - Activity queries now use a lightweight run-list projection that omits full immutable plan snapshots; detailed snapshots remain available through explicit run lookup for reports and forensic review.
 - Verification now exposes a typed `EvidenceScope` (`engine-confirmed` or `aggregate-reconciled`) at the core boundary, and exported JSON uses those explicit labels instead of inventing scope from report-local conditionals.
