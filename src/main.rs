@@ -1080,7 +1080,7 @@ fn run_streaming(
             record_process_tail(&out_tail, &safe);
             record_evidence_line(&out_evidence_lines, &safe);
             let _ = out_tx.send(Event::Line(format!("{out_prefix}{safe}")));
-        });
+        })
     });
     let err_tx = tx.clone();
     let err_prefix = prefix.to_owned();
@@ -1098,7 +1098,7 @@ fn run_streaming(
             record_process_tail(&err_tail, &safe);
             record_evidence_line(&err_evidence_lines, &safe);
             let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {safe}")));
-        });
+        })
     });
     let result = wait_with_timeout(&mut child, timeout, cancel)
         .map_err(|error| error.to_string())
@@ -1111,10 +1111,22 @@ fn run_streaming(
                 Err(format!("process exited with {status}"))
             }
         });
-    let _ = out_thread.join();
-    let _ = err_thread.join();
+    let stdout_reader = out_thread
+        .join()
+        .map_err(|_| "stdout reader thread panicked".to_owned())?;
+    let stderr_reader = err_thread
+        .join()
+        .map_err(|_| "stderr reader thread panicked".to_owned())?;
+    let reader_error = stdout_reader
+        .err()
+        .map(|error| format!("stdout reader failed: {error}"))
+        .or_else(|| {
+            stderr_reader
+                .err()
+                .map(|error| format!("stderr reader failed: {error}"))
+        });
     match result {
-        Ok(outcome) => {
+        Ok(outcome) if reader_error.is_none() => {
             let imapsync_evidence = evidence_lines
                 .lock()
                 .ok()
@@ -1124,7 +1136,17 @@ fn run_streaming(
                 imapsync_evidence,
             })
         }
-        Err(error) => {
+        result => {
+            let reader_error = reader_error.unwrap_or_default();
+            let process_error = match result {
+                Ok(_) => String::new(),
+                Err(error) => error,
+            };
+            let error = [process_error, reader_error]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
             let recent = process_tail_text(&tail);
             if recent.is_empty() {
                 Err(error)
@@ -1197,11 +1219,13 @@ fn run_capture_lines(
         wait_with_timeout(&mut child, timeout, cancel).map_err(|error| error.to_string())?;
     let mut lines = out_thread
         .join()
-        .map_err(|_| "stdout reader failed".to_owned())?;
+        .map_err(|_| "stdout reader thread panicked".to_owned())?
+        .map_err(|error| format!("stdout reader failed: {error}"))?;
     lines.extend(
         err_thread
             .join()
-            .map_err(|_| "stderr reader failed".to_owned())?
+            .map_err(|_| "stderr reader thread panicked".to_owned())?
+            .map_err(|error| format!("stderr reader failed: {error}"))?
             .into_iter()
             .map(|line| format!("[stderr] {line}")),
     );

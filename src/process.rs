@@ -11,7 +11,10 @@ use std::{
 
 use crate::core;
 
-pub(crate) fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> Vec<String> {
+pub(crate) fn collect_redacted_lines<R: Read>(
+    reader: R,
+    secrets: &[String],
+) -> std::io::Result<Vec<String>> {
     let mut lines = Vec::new();
     for_each_lossy_line(reader, |mut line| {
         for secret in secrets {
@@ -20,27 +23,27 @@ pub(crate) fn collect_redacted_lines<R: Read>(reader: R, secrets: &[String]) -> 
             }
         }
         lines.push(line);
-    });
-    lines
+    })?;
+    Ok(lines)
 }
 
 #[cfg(test)]
 pub(crate) fn read_lossy_lines<R: Read>(reader: R) -> Vec<String> {
     let mut lines = Vec::new();
-    for_each_lossy_line(reader, |line| lines.push(line));
+    for_each_lossy_line(reader, |line| lines.push(line)).expect("test reader should not fail");
     lines
 }
 
 /// Consume subprocess output incrementally while tolerating malformed UTF-8.
-pub(crate) fn for_each_lossy_line<R: Read, F: FnMut(String)>(reader: R, mut callback: F) {
+pub(crate) fn for_each_lossy_line<R: Read, F: FnMut(String)>(
+    reader: R,
+    mut callback: F,
+) -> std::io::Result<()> {
     let mut reader = BufReader::new(reader);
     let mut buffer = Vec::new();
     loop {
         buffer.clear();
-        let bytes_read = match reader.read_until(b'\n', &mut buffer) {
-            Ok(bytes_read) => bytes_read,
-            Err(_) => break,
-        };
+        let bytes_read = reader.read_until(b'\n', &mut buffer)?;
         if bytes_read == 0 {
             break;
         }
@@ -48,6 +51,44 @@ pub(crate) fn for_each_lossy_line<R: Read, F: FnMut(String)>(reader: R, mut call
             .trim_end_matches(['\r', '\n'])
             .to_owned();
         callback(line);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    struct FailingReader {
+        emitted: bool,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.emitted {
+                Err(io::Error::other("synthetic reader failure"))
+            } else {
+                self.emitted = true;
+                buffer[..6].copy_from_slice(b"first\n");
+                Ok(6)
+            }
+        }
+    }
+
+    #[test]
+    fn lossy_line_reader_reports_pipe_errors_after_emitting_lines() {
+        let mut lines = Vec::new();
+        let result = for_each_lossy_line(FailingReader { emitted: false }, |line| {
+            lines.push(line);
+        });
+
+        assert_eq!(lines, ["first"]);
+        assert_eq!(
+            result.unwrap_err().kind(),
+            io::ErrorKind::Other,
+            "reader errors must not be mistaken for clean EOF"
+        );
     }
 }
 
