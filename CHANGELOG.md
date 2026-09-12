@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Bulk imports now accept optional per-row `source_credential_id` and `destination_credential_id` references, allowing password-free queues to resolve distinct OS-keyring entries without copying secrets into spreadsheets.
 - Bulk CSV/XLS/XLSX imports now reject `extra_options`; executable engine settings remain trusted application configuration rather than spreadsheet-controlled input. The shipped template and migration guide now reflect that boundary.
 - Extracted imapsync argument construction and expert-option safety validation into `src/engine.rs`, including transport policy, per-worker throttle shaping, and product-owned logging controls.
 - Added regression coverage proving sequential process-launch admission is paced and that durable plan snapshots retain the expert-option digest while excluding its raw value.

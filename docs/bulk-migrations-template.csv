@@ -1,2 +1,2 @@
-name,source_host,source_user,source_password,destination_host,destination_user,destination_password
-Example migration,imap.source.example,source@example.com,REPLACE_ME,imap.destination.example,destination@example.com,REPLACE_ME
+name,source_host,source_user,source_password,source_credential_id,destination_host,destination_user,destination_password,destination_credential_id
+Example migration,imap.source.example,source@example.com,,source-keyring-id,imap.destination.example,destination@example.com,,destination-keyring-id

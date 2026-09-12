@@ -2942,11 +2942,17 @@ impl App {
         let mut form = base.clone();
         form.profile.source_host = get("source_host");
         form.profile.source_user = get("source_user");
+        if let Some(value) = values.get("source_credential_id") {
+            form.profile.source_credential_id = value.trim().to_owned();
+        }
         // Whitespace is meaningful in passwords. Trim only semantic fields;
         // otherwise a valid credential such as ` Secret ` is silently changed.
         form.source_password = values.get("source_password").cloned().unwrap_or_default();
         form.profile.destination_host = get("destination_host");
         form.profile.destination_user = get("destination_user");
+        if let Some(value) = values.get("destination_credential_id") {
+            form.profile.destination_credential_id = value.trim().to_owned();
+        }
         form.destination_password = values
             .get("destination_password")
             .cloned()
@@ -4296,7 +4302,7 @@ impl App {
             if apply_destination {
                 self.apply_bulk_keyring_id(false);
             }
-            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, name. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, source_credential_id, destination_credential_id, name. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Grid::new("bulk_jobs").striped(true).min_col_width(120.0).show(ui, |ui| {
@@ -5293,6 +5299,48 @@ mod tests {
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
         assert_eq!(job.form.source_password, " Secret123 ");
         assert_eq!(job.form.destination_password, " Destination! ");
+    }
+
+    #[test]
+    fn bulk_import_preserves_per_row_keyring_references() {
+        let mut values = HashMap::new();
+        values.insert("source_host".into(), "old.example".into());
+        values.insert("source_user".into(), "old@example".into());
+        values.insert("source_credential_id".into(), "source-alice".into());
+        values.insert("destination_host".into(), "new.example".into());
+        values.insert("destination_user".into(), "new@example".into());
+        values.insert(
+            "destination_credential_id".into(),
+            "destination-alice".into(),
+        );
+        let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
+        assert_eq!(job.form.profile.source_credential_id, "source-alice");
+        assert_eq!(
+            job.form.profile.destination_credential_id,
+            "destination-alice"
+        );
+        assert!(job.form.source_password.is_empty());
+        assert!(job.form.destination_password.is_empty());
+
+        let mut base = Form::default();
+        base.profile.source_credential_id = "shared-source".into();
+        base.profile.destination_credential_id = "shared-destination".into();
+        let inherited = App::job_from_values(
+            &values
+                .into_iter()
+                .filter(|(key, _)| {
+                    key != "source_credential_id" && key != "destination_credential_id"
+                })
+                .collect(),
+            &base,
+            3,
+        )
+        .unwrap();
+        assert_eq!(inherited.form.profile.source_credential_id, "shared-source");
+        assert_eq!(
+            inherited.form.profile.destination_credential_id,
+            "shared-destination"
+        );
     }
 
     #[test]
