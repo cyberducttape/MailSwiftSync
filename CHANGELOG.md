@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Execution output and verification events now persist their producing `run_id` in SQLite; the run resolves its project identity transactionally, improving forensic reconstruction without changing legacy project-scoped event compatibility.
 - Batch dry/live waves now reuse an existing durable queue only when every row's mailbox identity and secret-free persisted configuration match; edited queues receive a fresh project association instead of reusing stale mailbox IDs.
 - Moved application instance-lock ownership and acquisition into `src/process.rs`, while centralizing restrictive file permissions in `src/credentials.rs`; lock/recovery policy is now separated from the UI controller.
 - Subprocess line framing now reads in fixed-size chunks and caps any single unterminated line at 64 KiB with an explicit truncation marker, preventing pathological engine output from causing unbounded allocation.

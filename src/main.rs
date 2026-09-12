@@ -4004,7 +4004,7 @@ impl App {
             self.capability_receiver = None;
         }
         let mut done = None;
-        let mut pending_db_events: Vec<(String, String, String)> = Vec::new();
+        let mut pending_db_events: Vec<(String, String, String, String)> = Vec::new();
         let mut durability_errors = Vec::new();
         let active_run = self.active_run.clone();
         if let Some(rx) = &self.receiver {
@@ -4064,9 +4064,11 @@ impl App {
                         let safe = s;
                         if let Some(project) =
                             active_run.as_ref().map(|run| run.project_id.as_str())
+                            && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
                             pending_db_events.push((
                                 project.to_owned(),
+                                run_id.to_owned(),
                                 "run_output".into(),
                                 safe.clone(),
                             ));
@@ -4226,9 +4228,11 @@ impl App {
                         self.pending_evidence = Some(evidence);
                         if let Some(project) =
                             active_run.as_ref().map(|run| run.project_id.as_str())
+                            && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
                             pending_db_events.push((
                                 project.to_owned(),
+                                run_id.to_owned(),
                                 "verification_evidence".into(),
                                 format!("evidence level: {evidence_level}"),
                             ));
@@ -4239,9 +4243,11 @@ impl App {
                         push_visible_output(&mut self.output, format!("[verification] {safe}"));
                         if let Some(project) =
                             active_run.as_ref().map(|run| run.project_id.as_str())
+                            && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
                             pending_db_events.push((
                                 project.to_owned(),
+                                run_id.to_owned(),
                                 "verification_pending".into(),
                                 safe,
                             ));
@@ -4254,9 +4260,12 @@ impl App {
         if !pending_db_events.is_empty() {
             let batch = pending_db_events
                 .iter()
-                .map(|(project, kind, detail)| (project.as_str(), kind.as_str(), detail.as_str()))
+                .map(|(_, _, kind, detail)| (kind.as_str(), detail.as_str()))
                 .collect::<Vec<_>>();
-            let result = self.store.record_events_batch(&batch);
+            let result = active_run.as_ref().map_or_else(
+                || Err(rusqlite::Error::InvalidQuery),
+                |run| self.store.record_run_events_batch(&run.run_id, &batch),
+            );
             self.report_store_error("record execution events", result);
         }
         for error in durability_errors {

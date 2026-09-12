@@ -309,7 +309,7 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
           CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, start_ticks INTEGER, process_group INTEGER, session_id INTEGER, executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
-          CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
           CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
           CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
@@ -374,6 +374,21 @@ impl StateStore {
                 [],
             )?;
         }
+        let event_columns = self
+            .connection
+            .prepare("PRAGMA table_info(events)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !event_columns.iter().any(|column| column == "run_id") {
+            self.connection.execute(
+                "ALTER TABLE events ADD COLUMN run_id TEXT REFERENCES runs(id)",
+                [],
+            )?;
+        }
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_run_created ON events(run_id, created_at DESC)",
+            [],
+        )?;
         let process_columns = self
             .connection
             .prepare("PRAGMA table_info(active_processes)")?
@@ -788,6 +803,38 @@ impl StateStore {
                 params![project_id, MAX_DURABLE_RUN_OUTPUT_EVENTS],
             )?;
         }
+        tx.commit()
+    }
+
+    /// Record diagnostic or verification events against the run that emitted
+    /// them. The run supplies the project identity inside the same
+    /// transaction, so callers cannot accidentally cross-wire a project and
+    /// run while persisting asynchronous output.
+    pub fn record_run_events_batch(
+        &self,
+        run_id: &str,
+        events: &[(&str, &str)],
+    ) -> rusqlite::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let project_id: String =
+            tx.query_row("SELECT project_id FROM runs WHERE id=?1", [run_id], |row| {
+                row.get(0)
+            })?;
+        {
+            let mut statement = tx.prepare_cached(
+                "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,?3,?4)",
+            )?;
+            for (kind, detail) in events {
+                statement.execute(params![project_id, run_id, kind, detail])?;
+            }
+        }
+        tx.execute(
+            "DELETE FROM events WHERE project_id=?1 AND kind='run_output' AND id NOT IN (SELECT id FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id DESC LIMIT ?2)",
+            params![project_id, MAX_DURABLE_RUN_OUTPUT_EVENTS],
+        )?;
         tx.commit()
     }
     #[cfg(test)]
@@ -2445,6 +2492,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn run_events_are_bound_to_their_durable_run() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("run-events", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source-user", "destination-user")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-events-1", "test")
+            .unwrap();
+
+        db.record_run_events_batch(
+            "run-events-1",
+            &[
+                ("run_output", "transfer output"),
+                ("verification_evidence", "aggregate"),
+            ],
+        )
+        .unwrap();
+
+        let rows: Vec<(String, String, String)> = db
+            .connection
+            .prepare("SELECT project_id, run_id, detail FROM events WHERE run_id=?1 ORDER BY id")
+            .unwrap()
+            .query_map(["run-events-1"], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|(project_id, run_id, _)| {
+            project_id == &project.id && run_id == "run-events-1"
+        }));
+        assert_eq!(rows[0].2, "transfer output");
     }
 
     #[test]
