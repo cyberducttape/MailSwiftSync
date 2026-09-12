@@ -15,6 +15,7 @@ All notable changes to MailSwiftSync are documented here.
 - Added `imapsync` summary parsing for automatic evidence capture.
 - Added child-process-only `IMAPSYNC_PASSWORD1/2` environment credentials for live `imapsync` runs.
 - Added exportable Markdown verification reports and a tagged-release workflow for Linux, Windows, and macOS artifacts.
+- Added explicit `ready`/`Preflight` outcomes for successful dry runs; dry validation no longer masquerades as a completed migration.
 - Added regression coverage for command generation, credential handling, evidence parsing, and verification confidence.
 - Added durable batch validation jobs, per-run evidence IDs, bounded execution, and operator cancellation.
 
