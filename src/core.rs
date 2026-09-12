@@ -363,7 +363,7 @@ fn valid_mailbox_transition(current: &str, next: &str) -> bool {
         "ready" => matches!(next, "running" | "failed" | "cancelled"),
         "running" => matches!(
             next,
-            "completed" | "delta_required" | "failed" | "cancelled" | "attention"
+            "ready" | "completed" | "delta_required" | "failed" | "cancelled" | "attention"
         ),
         "delta_required" => matches!(next, "running" | "failed" | "cancelled"),
         "completed" => matches!(

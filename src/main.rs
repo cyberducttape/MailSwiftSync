@@ -1870,7 +1870,9 @@ impl App {
                 );
             }
             if let Some(job) = &self.job_id {
-                let final_state = if !succeeded {
+                let final_state = if succeeded && self.form.dry_run {
+                    "ready"
+                } else if !succeeded {
                     if r.as_ref()
                         .err()
                         .is_some_and(|error| error.contains("cancelled"))
@@ -1899,10 +1901,18 @@ impl App {
                     if succeeded { "success" } else { "failure" },
                 );
                 if succeeded {
-                    let _ = self.store.transition(project, core::Phase::Verification);
+                    let _ = self.store.transition(
+                        project,
+                        if self.form.dry_run {
+                            core::Phase::Preflight
+                        } else {
+                            core::Phase::Verification
+                        },
+                    );
                 }
             }
             self.status = match r {
+                Ok(()) if self.form.dry_run => "Preflight completed successfully".into(),
                 Ok(()) => "Completed successfully".into(),
                 Err(e) => format!("Failed: {e}"),
             };
