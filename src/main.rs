@@ -1184,7 +1184,39 @@ fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), Strin
     Ok((input.to_owned(), default_port))
 }
 
-fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String> {
+fn imap_quote(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn read_imap_tagged(
+    stream: &mut StreamOwned<ClientConnection, TcpStream>,
+    tag: &str,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+) -> Result<(), String> {
+    loop {
+        let count = stream.read(buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            return Err(format!("IMAP connection closed before {tag} completed"));
+        }
+        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        if response
+            .lines()
+            .any(|line| line.starts_with(&format!("{tag} ")))
+        {
+            return Ok(());
+        }
+        if response.len() > 1_048_576 {
+            return Err("IMAP preflight response exceeded 1 MiB".into());
+        }
+    }
+}
+
+fn probe_tls_capabilities(
+    host: &str,
+    user: &str,
+    password: &str,
+) -> Result<core::ServerCapabilities, String> {
     let (server_name, port) =
         endpoint_parts(host, 993).map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
     let address = if server_name.contains(':') {
@@ -1232,16 +1264,37 @@ fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String
     stream
         .write_all(b"a001 CAPABILITY\r\n")
         .map_err(|e| e.to_string())?;
-    loop {
-        let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-        if count == 0 {
-            break;
-        }
-        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
-        if response.to_ascii_lowercase().contains("a001 ok") || response.len() > 65_536 {
-            break;
+    read_imap_tagged(&mut stream, "a001", &mut response, &mut buffer)?;
+    let preauth = greeting.contains("* PREAUTH");
+    if !preauth {
+        let login = format!(
+            "a002 LOGIN {} {}\r\n",
+            imap_quote(user),
+            imap_quote(password)
+        );
+        stream
+            .write_all(login.as_bytes())
+            .map_err(|e| e.to_string())?;
+        read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
+        if !response.to_ascii_lowercase().contains("a002 ok") {
+            return Err(format!("{host}: IMAP authentication failed"));
         }
     }
+    // RFC 9051 permits capabilities to change after authentication, so the
+    // post-auth response is the one used for readiness decisions.
+    stream
+        .write_all(b"a003 CAPABILITY\r\n")
+        .map_err(|e| e.to_string())?;
+    read_imap_tagged(&mut stream, "a003", &mut response, &mut buffer)?;
+    stream
+        .write_all(b"a004 NAMESPACE\r\n")
+        .map_err(|e| e.to_string())?;
+    read_imap_tagged(&mut stream, "a004", &mut response, &mut buffer)?;
+    stream
+        .write_all(b"a005 LIST \"\" \"*\"\r\n")
+        .map_err(|e| e.to_string())?;
+    read_imap_tagged(&mut stream, "a005", &mut response, &mut buffer)?;
+    let _ = stream.write_all(b"a006 LOGOUT\r\n");
     let caps = core::ServerCapabilities::parse(&response);
     if caps.values.is_empty() {
         return Err(format!(
@@ -1282,10 +1335,17 @@ impl App {
         }
         let (tx, rx) = mpsc::channel();
         self.capability_receiver = Some(rx);
-        self.status = "Discovering TLS capabilities…".into();
+        self.status = "Authenticating and inspecting IMAPS readiness…".into();
+        let source_user = self.form.profile.source_user.clone();
+        let source_password = self.form.source_password.clone();
+        let destination_user = self.form.profile.destination_user.clone();
+        let destination_password = self.form.destination_password.clone();
         thread::spawn(move || {
-            let result = probe_tls_capabilities(&source)
-                .and_then(|left| probe_tls_capabilities(&destination).map(|right| (left, right)));
+            let result =
+                probe_tls_capabilities(&source, &source_user, &source_password).and_then(|left| {
+                    probe_tls_capabilities(&destination, &destination_user, &destination_password)
+                        .map(|right| (left, right))
+                });
             let _ = tx.send(result);
         });
     }
@@ -1393,7 +1453,7 @@ impl App {
         let mut open = self.cockpit_open;
         egui::Window::new("Migration Project Cockpit").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
             ui.heading("Operator view"); ui.label(RichText::new("A durable migration project records phases and evidence independently of the desktop session.").color(MUTED)); ui.add_space(10.0);
-            if ui.add_enabled(self.capability_receiver.is_none(), egui::Button::new("Discover server capabilities over verified TLS")).clicked() { self.start_capability_probe(); }
+            if ui.add_enabled(self.capability_receiver.is_none(), egui::Button::new("Run authenticated IMAPS readiness probe")).clicked() { self.start_capability_probe(); }
             if self.project_id.is_none() && ui.button("Create project from current migration plan").clicked() { self.create_project(); }
             if let Some(id) = &self.project_id {
                 match self.store.project(id) {
