@@ -192,16 +192,26 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+          CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
-        let _ = self.connection.execute(
-            "ALTER TABLE evidence ADD COLUMN source_folders INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
-        let _ = self.connection.execute(
-            "ALTER TABLE evidence ADD COLUMN destination_folders INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
+        let columns = self
+            .connection
+            .prepare("PRAGMA table_info(evidence)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !columns.iter().any(|column| column == "source_folders") {
+            self.connection.execute(
+                "ALTER TABLE evidence ADD COLUMN source_folders INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "destination_folders") {
+            self.connection.execute(
+                "ALTER TABLE evidence ADD COLUMN destination_folders INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         Ok(())
     }
     pub fn create_project(
@@ -226,6 +236,17 @@ impl StateStore {
         Ok(project)
     }
     pub fn transition(&self, id: &str, phase: Phase) -> rusqlite::Result<()> {
+        let current = self
+            .project(id)?
+            .ok_or(rusqlite::Error::QueryReturnedNoRows)?
+            .phase;
+        if current != phase
+            && (current == Phase::Complete
+                || current == Phase::Attention
+                || phase != Phase::Attention && phase_rank(phase) < phase_rank(current))
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         self.connection.execute(
             "UPDATE projects SET phase=?1 WHERE id=?2",
             params![phase.as_str(), id],
@@ -243,16 +264,28 @@ impl StateStore {
         Ok(id)
     }
     pub fn set_mailbox_state(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
-        self.connection.execute(
-            "UPDATE mailbox_jobs SET state=?, attempt=attempt+1 WHERE id=?",
-            params![state, job_id],
+        let changed = self.connection.execute(
+            "UPDATE mailbox_jobs SET state=?, attempt=CASE WHEN ?='running' THEN attempt+1 ELSE attempt END WHERE id=?",
+            params![state, state, job_id],
         )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.event(project_id, kind, detail)
     }
     pub fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
+        self.record_evidence_for_run(job_id, "legacy", value)
+    }
+    pub fn record_evidence_for_run(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        value: &MailboxEvidence,
+    ) -> rusqlite::Result<()> {
+        self.connection.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders])?;
         self.connection.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders])?;
         Ok(())
     }
@@ -262,12 +295,38 @@ impl StateStore {
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects WHERE id=?1", [id], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
     }
+    pub fn latest_project(&self) -> rusqlite::Result<Option<Project>> {
+        self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects ORDER BY created_at DESC, rowid DESC LIMIT 1", [], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
+    }
+    pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT id FROM mailbox_jobs WHERE project_id=?1 LIMIT 1",
+                [project_id],
+                |r| r.get(0),
+            )
+            .optional()
+    }
     fn event(&self, id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.connection.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)",
             params![id, kind, detail],
         )?;
         Ok(())
+    }
+}
+
+fn phase_rank(phase: Phase) -> u8 {
+    match phase {
+        Phase::Discovery => 0,
+        Phase::Preflight => 1,
+        Phase::Pilot => 2,
+        Phase::Seed => 3,
+        Phase::CatchUp => 4,
+        Phase::FinalDelta => 5,
+        Phase::Verification => 6,
+        Phase::Complete => 7,
+        Phase::Attention => 255,
     }
 }
 

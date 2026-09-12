@@ -10,13 +10,14 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Read, Write},
-    net::TcpStream,
+    net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         Arc,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
     thread,
@@ -34,6 +35,10 @@ const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 struct Profile {
     name: String,
     source_host: String,
+    #[serde(default)]
+    source_port: String,
+    #[serde(default = "default_source_tls")]
+    source_tls: String,
     source_user: String,
     destination_host: String,
     destination_user: String,
@@ -67,6 +72,16 @@ fn default_doveadm_path() -> String {
 fn default_ssh_path() -> String {
     "ssh".into()
 }
+fn default_source_tls() -> String {
+    "imaps".into()
+}
+
+fn dovecot_ssl_mode(mode: &str) -> &str {
+    match mode {
+        "plain" => "no",
+        other => other,
+    }
+}
 #[derive(Clone)]
 struct Form {
     profile: Profile,
@@ -80,6 +95,7 @@ impl Default for Form {
             profile: Profile {
                 name: "New migration".into(),
                 imapsync_path: "imapsync".into(),
+                source_tls: default_source_tls(),
                 doveadm_path: default_doveadm_path(),
                 ssh_path: default_ssh_path(),
                 automap: true,
@@ -128,11 +144,24 @@ impl Form {
         if self.engine() != core::Engine::Dovecot {
             required.push(("Destination password", &self.destination_password));
         }
+        if (!self.profile.source_port.trim().is_empty()
+            && self.profile.source_port.parse::<u16>().is_err())
+            || self.profile.source_port.trim() == "0"
+        {
+            return Err("Source IMAP port must be a number between 1 and 65535.".into());
+        }
+        if !matches!(
+            self.profile.source_tls.as_str(),
+            "imaps" | "starttls" | "plain"
+        ) {
+            return Err("Source TLS mode must be imaps, starttls, or plain.".into());
+        }
         for (label, value) in required {
             if value.trim().is_empty() {
                 return Err(format!("{label} is required."));
             }
         }
+        self.extra_options_valid()?;
         Ok(())
     }
     fn args(&self, redact: bool) -> Vec<String> {
@@ -160,6 +189,15 @@ impl Form {
             "--password2".into(),
             p2.into(),
         ];
+        if !self.profile.source_port.trim().is_empty() {
+            a.extend(["--port1".into(), self.profile.source_port.trim().into()]);
+        }
+        if self.profile.source_tls == "plain" {
+            a.push("--nossl1".into());
+        }
+        if self.profile.source_tls == "starttls" {
+            a.push("--tls1".into());
+        }
         if self.profile.automap {
             a.push("--automap".into());
         }
@@ -185,13 +223,15 @@ impl Form {
         if self.dry_run {
             a.push("--dry".into());
         }
-        a.extend(
-            self.profile
-                .extra_options
-                .split_whitespace()
-                .map(str::to_owned),
-        );
+        if let Ok(extra) = parse_shell_words(&self.profile.extra_options) {
+            a.extend(extra);
+        }
         a
+    }
+    fn extra_options_valid(&self) -> Result<(), String> {
+        parse_shell_words(&self.profile.extra_options)
+            .map(|_| ())
+            .map_err(|error| format!("Extra options: {error}"))
     }
     fn prepared_command(&self) -> Result<PreparedCommand, String> {
         if self.engine() == core::Engine::Dovecot {
@@ -236,20 +276,35 @@ impl Form {
         } else {
             &self.source_password
         };
+        let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
+            .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
+        let source_port = self
+            .profile
+            .source_port
+            .parse::<u16>()
+            .unwrap_or(endpoint_port);
         let mut args = Vec::new();
         if !self.profile.dovecot_config.trim().is_empty() {
             args.extend(["-c".into(), self.profile.dovecot_config.clone()]);
         }
         args.extend([
             "-o".into(),
-            format!("imapc_host={}", self.profile.source_host),
+            format!("imapc_host={source_host}"),
             "-o".into(),
-            "imapc_ssl=imaps".into(),
+            format!("imapc_ssl={}", dovecot_ssl_mode(&self.profile.source_tls)),
             "-o".into(),
             format!("imapc_user={}", self.profile.source_user),
             "-o".into(),
             format!("imapc_password={password}"),
         ]);
+        if !self.profile.source_port.trim().is_empty() {
+            args.extend([
+                "-o".into(),
+                format!("imapc_port={}", self.profile.source_port.trim()),
+            ]);
+        } else {
+            args.extend(["-o".into(), format!("imapc_port={source_port}")]);
+        }
         if self.dry_run {
             args.extend([
                 "-o".into(),
@@ -317,15 +372,22 @@ impl Form {
         } else {
             &self.source_password
         };
+        let (source_host, endpoint_port) = endpoint_parts(&self.profile.source_host, 993)
+            .unwrap_or_else(|_| (self.profile.source_host.clone(), 993));
+        let source_port = self
+            .profile
+            .source_port
+            .parse::<u16>()
+            .unwrap_or(endpoint_port);
         let mut source = Vec::new();
         if !self.profile.dovecot_config.trim().is_empty() {
             source.extend(["-c".into(), self.profile.dovecot_config.clone()]);
         }
         source.extend([
             "-o".into(),
-            format!("imapc_host={}", self.profile.source_host),
+            format!("imapc_host={source_host}"),
             "-o".into(),
-            "imapc_ssl=imaps".into(),
+            format!("imapc_ssl={}", dovecot_ssl_mode(&self.profile.source_tls)),
             "-o".into(),
             format!("imapc_user={}", self.profile.source_user),
             "-o".into(),
@@ -342,6 +404,14 @@ impl Form {
             "messages,vsize".into(),
             "*".into(),
         ]);
+        if !self.profile.source_port.trim().is_empty() {
+            source.extend([
+                "-o".into(),
+                format!("imapc_port={}", self.profile.source_port.trim()),
+            ]);
+        } else {
+            source.extend(["-o".into(), format!("imapc_port={source_port}")]);
+        }
         let mut destination = Vec::new();
         if !self.profile.dovecot_config.trim().is_empty() {
             destination.extend(["-c".into(), self.profile.dovecot_config.clone()]);
@@ -380,6 +450,82 @@ fn shell_quote(value: &str) -> String {
         value.to_owned()
     } else {
         format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn parse_shell_words(input: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut in_token = false;
+    for character in input.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            in_token = true;
+            continue;
+        }
+        if character == '\\' && quote != Some('\'') {
+            escaped = true;
+            in_token = true;
+            continue;
+        }
+        match quote {
+            Some(active) if character == active => quote = None,
+            Some(_) => current.push(character),
+            None if character == '\'' || character == '"' => quote = Some(character),
+            None if character.is_whitespace() => {
+                if in_token {
+                    words.push(std::mem::take(&mut current));
+                    in_token = false;
+                }
+            }
+            None => current.push(character),
+        }
+        if !character.is_whitespace() || quote.is_some() {
+            in_token = true;
+        }
+    }
+    if escaped {
+        return Err("unfinished escape".into());
+    }
+    if quote.is_some() {
+        return Err("unterminated quote".into());
+    }
+    if in_token {
+        words.push(current);
+    }
+    Ok(words)
+}
+
+fn wait_with_timeout(
+    child: &mut Child,
+    timeout: Duration,
+    cancel: &AtomicBool,
+) -> std::io::Result<ExitStatus> {
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled by operator",
+            ));
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "migration exceeded the one-day execution limit",
+            ));
+        }
+        thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -486,9 +632,53 @@ fn parse_dovecot_evidence(
 
 enum Event {
     Line(String),
+    JobState(usize, String),
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
     Finished(Result<(), String>),
+}
+
+fn run_streaming(
+    executable: &str,
+    args: &[String],
+    tx: &mpsc::Sender<Event>,
+    prefix: &str,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let mut child = Command::new(executable)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
+    let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
+    let out_tx = tx.clone();
+    let out_prefix = prefix.to_owned();
+    let out_thread = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = out_tx.send(Event::Line(format!("{out_prefix}{line}")));
+        }
+    });
+    let err_tx = tx.clone();
+    let err_prefix = prefix.to_owned();
+    let err_thread = thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = err_tx.send(Event::Line(format!("{err_prefix}[stderr] {line}")));
+        }
+    });
+    let result = wait_with_timeout(&mut child, Duration::from_secs(24 * 60 * 60), cancel)
+        .map_err(|error| error.to_string())
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("process exited with {status}"))
+            }
+        });
+    let _ = out_thread.join();
+    let _ = err_thread.join();
+    result
 }
 #[derive(Clone)]
 struct BulkJob {
@@ -518,6 +708,10 @@ struct App {
     store: core::StateStore,
     project_id: Option<String>,
     job_id: Option<String>,
+    run_id: Option<String>,
+    cancel_requested: Option<Arc<AtomicBool>>,
+    bulk_project_id: Option<String>,
+    bulk_job_ids: Vec<String>,
     cockpit_open: bool,
     preflight: Vec<(String, String, bool)>,
     capability_receiver:
@@ -536,14 +730,45 @@ impl Default for App {
         if let Some(parent) = state_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let store = core::StateStore::open(&state_path)
-            .or_else(|_| core::StateStore::in_memory())
-            .expect("SQLite state store must be available");
+        let (store, persistence_warning) = match core::StateStore::open(&state_path) {
+            Ok(store) => (store, None),
+            Err(error) => (
+                core::StateStore::in_memory().expect("SQLite memory store must be available"),
+                Some(format!("Persistent SQLite state unavailable: {error}")),
+            ),
+        };
+        let initial_output = persistence_warning.clone().map_or_else(
+            || vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
+            |warning| {
+                vec![
+                    warning.clone(),
+                    "WARNING: this session is not durable.".into(),
+                ]
+            },
+        );
+        let form = Form::load();
+        let restored_project = persistence_warning
+            .is_none()
+            .then(|| store.latest_project().ok().flatten())
+            .flatten();
+        let (project_id, job_id) = restored_project
+            .as_ref()
+            .filter(|project| {
+                project.source_endpoint == form.profile.source_host
+                    && project.destination_endpoint == form.profile.destination_host
+            })
+            .map(|project| {
+                (
+                    Some(project.id.clone()),
+                    store.first_mailbox(&project.id).ok().flatten(),
+                )
+            })
+            .unwrap_or((None, None));
         Self {
-            form: Form::load(),
-            output: vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
+            form,
+            output: initial_output,
             receiver: None,
-            status: "Idle".into(),
+            status: persistence_warning.clone().unwrap_or_else(|| "Idle".into()),
             preview: false,
             bulk_jobs: Vec::new(),
             bulk_open: false,
@@ -551,8 +776,12 @@ impl Default for App {
             advanced_open: false,
             engine_open: true,
             store,
-            project_id: None,
-            job_id: None,
+            project_id,
+            job_id,
+            run_id: None,
+            cancel_requested: None,
+            bulk_project_id: None,
+            bulk_job_ids: Vec::new(),
             cockpit_open: false,
             preflight: Vec::new(),
             capability_receiver: None,
@@ -565,22 +794,54 @@ impl Default for App {
     }
 }
 
+fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Err("empty endpoint".into());
+    }
+    if let Some(rest) = input.strip_prefix('[') {
+        let end = rest.find(']').ok_or("IPv6 endpoint is missing ]")?;
+        let host = rest[..end].to_owned();
+        let port = rest[end + 1..]
+            .strip_prefix(':')
+            .map(|value| value.parse::<u16>())
+            .transpose()
+            .map_err(|_| "invalid endpoint port".to_owned())?
+            .unwrap_or(default_port);
+        if port == 0 {
+            return Err("endpoint port must be between 1 and 65535".into());
+        }
+        return Ok((host, port));
+    }
+    if input.matches(':').count() == 1
+        && let Some((host, port)) = input.rsplit_once(':')
+        && let Ok(port) = port.parse::<u16>()
+    {
+        if port == 0 {
+            return Err("endpoint port must be between 1 and 65535".into());
+        }
+        return Ok((host.to_owned(), port));
+    }
+    Ok((input.to_owned(), default_port))
+}
+
 fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String> {
-    let address = if host.contains(':') {
-        host.to_owned()
+    let (server_name, port) =
+        endpoint_parts(host, 993).map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
+    let address = if server_name.contains(':') {
+        format!("[{server_name}]:{port}")
     } else {
-        format!("{host}:993")
+        format!("{server_name}:{port}")
     };
-    let tcp = TcpStream::connect_timeout(
-        &address
-            .parse()
-            .map_err(|_| format!("Invalid IMAP host: {host}"))?,
-        Duration::from_secs(8),
-    )
-    .map_err(|e| format!("{host}: {e}"))?;
+    let socket = address
+        .to_socket_addrs()
+        .map_err(|error| format!("{host}: {error}"))?
+        .next()
+        .ok_or_else(|| format!("{host}: no address found"))?;
+    let tcp = TcpStream::connect_timeout(&socket, Duration::from_secs(8))
+        .map_err(|e| format!("{host}: {e}"))?;
     tcp.set_read_timeout(Some(Duration::from_secs(8)))
         .map_err(|e| e.to_string())?;
-    let server_name = host.split(':').next().unwrap_or(host);
     let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = ClientConfig::builder()
         .with_root_certificates(roots)
@@ -601,7 +862,7 @@ fn probe_tls_capabilities(host: &str) -> Result<core::ServerCapabilities, String
             break;
         }
         response.push_str(&String::from_utf8_lossy(&buffer[..count]));
-        if response.contains("a001 OK") || response.len() > 65_536 {
+        if response.to_ascii_lowercase().contains("a001 ok") || response.len() > 65_536 {
             break;
         }
     }
@@ -1060,9 +1321,18 @@ impl App {
             .iter()
             .map(|s| s.trim().to_ascii_lowercase())
             .collect::<Vec<_>>();
+        Self::validate_headers(&headers, base)?;
         let mut jobs = Vec::new();
         for (index, record) in reader.records().enumerate() {
             let record = record.map_err(|e| e.to_string())?;
+            if record.len() != headers.len() {
+                return Err(format!(
+                    "Row {} has {} values but the header has {} columns.",
+                    index + 2,
+                    record.len(),
+                    headers.len()
+                ));
+            }
             let values = headers
                 .iter()
                 .zip(record.iter())
@@ -1088,6 +1358,7 @@ impl App {
             .iter()
             .map(|x| x.to_string().trim().to_ascii_lowercase())
             .collect::<Vec<_>>();
+        Self::validate_headers(&headers, base)?;
         let mut jobs = Vec::new();
         for (index, row) in rows.enumerate() {
             if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
@@ -1105,16 +1376,80 @@ impl App {
         }
         Ok(jobs)
     }
+    fn validate_headers(headers: &[String], base: &Form) -> Result<(), String> {
+        let mut seen = HashSet::new();
+        for header in headers {
+            if header.is_empty() || !seen.insert(header.clone()) {
+                return Err(
+                    "The migration file contains an empty or duplicate column header.".into(),
+                );
+            }
+        }
+        let mut required = vec![
+            "source_host",
+            "source_user",
+            "source_password",
+            "destination_host",
+            "destination_user",
+        ];
+        if base.engine() != core::Engine::Dovecot {
+            required.push("destination_password");
+        }
+        let missing = required
+            .into_iter()
+            .filter(|header| !seen.contains(*header))
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Missing required column(s): {}.",
+                missing.join(", ")
+            ))
+        }
+    }
     fn start_bulk(&mut self) {
         if self.bulk_jobs.is_empty() {
             self.bulk_message = "Import a file before starting the queue.".into();
             return;
         }
+        if !self.form.dry_run {
+            self.bulk_message = "Batch validation is always non-mutating. Re-enable Dry run before starting the queue.".into();
+            return;
+        }
         let jobs = self.bulk_jobs.clone();
+        let project = match self
+            .store
+            .create_project("Batch validation", "batch", "batch")
+        {
+            Ok(project) => project,
+            Err(error) => {
+                self.bulk_message = format!("Could not create durable batch: {error}");
+                return;
+            }
+        };
+        let mut job_ids = Vec::with_capacity(jobs.len());
+        for job in &jobs {
+            match self.store.add_mailbox(
+                &project.id,
+                &job.form.profile.source_user,
+                &job.form.profile.destination_user,
+            ) {
+                Ok(id) => job_ids.push(id),
+                Err(error) => {
+                    self.bulk_message = format!("Could not create durable batch job: {error}");
+                    return;
+                }
+            }
+        }
+        self.bulk_project_id = Some(project.id.clone());
+        self.bulk_job_ids = job_ids;
         for job in &mut self.bulk_jobs {
             job.state = "Queued".into();
         }
         let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
         self.status = format!("Batch validation: {} jobs", jobs.len());
         self.output.clear();
@@ -1126,40 +1461,30 @@ impl App {
                     index + 1,
                     job.label
                 )));
+                let _ = tx.send(Event::JobState(index, "Running".into()));
                 let prepared = job.form.prepared_command();
-                let output = prepared
-                    .as_ref()
-                    .map_err(|error| error.clone())
-                    .and_then(|command| {
-                        Command::new(&command.executable)
-                            .args(&command.args)
-                            .output()
-                            .map_err(|error| error.to_string())
-                    });
-                match output {
-                    Ok(result) => {
-                        for line in String::from_utf8_lossy(&result.stdout).lines() {
-                            let _ = tx.send(Event::Line(format!("[{}] {line}", index + 1)));
+                let result = match prepared {
+                    Ok(command) => {
+                        let result = run_streaming(
+                            &command.executable,
+                            &command.args,
+                            &tx,
+                            &format!("[{}] ", index + 1),
+                            &cancel,
+                        );
+                        for path in command.cleanup {
+                            let _ = std::fs::remove_file(path);
                         }
-                        if !result.status.success() {
-                            failed = true;
-                            let _ = tx.send(Event::Line(format!(
-                                "[{}] failed: {}",
-                                index + 1,
-                                String::from_utf8_lossy(&result.stderr).trim()
-                            )));
-                        }
+                        result
                     }
-                    Err(e) => {
-                        failed = true;
-                        let _ =
-                            tx.send(Event::Line(format!("[{}] could not start: {e}", index + 1)));
-                    }
-                }
-                if let Ok(command) = prepared {
-                    for path in command.cleanup {
-                        let _ = std::fs::remove_file(path);
-                    }
+                    Err(error) => Err(error),
+                };
+                if let Err(error) = result {
+                    failed = true;
+                    let _ = tx.send(Event::Line(format!("[{}] failed: {error}", index + 1)));
+                    let _ = tx.send(Event::JobState(index, "Failed".into()));
+                } else {
+                    let _ = tx.send(Event::JobState(index, "Completed".into()));
                 }
             }
             let _ = tx.send(Event::Finished(if failed {
@@ -1213,14 +1538,6 @@ impl App {
                 return;
             }
         }
-        if let Some(job) = &self.job_id {
-            let _ = self.store.set_mailbox_state(job, "running");
-        }
-        if let Some(project) = &self.project_id {
-            let _ = self
-                .store
-                .record_event(project, "run_started", self.form.engine().label());
-        }
         let prepared = match self.form.prepared_command() {
             Ok(command) => command,
             Err(error) => {
@@ -1231,7 +1548,21 @@ impl App {
         let exe = prepared.executable;
         let args = prepared.args;
         let cleanup = prepared.cleanup;
+        let run_id = uuid::Uuid::new_v4().to_string();
+        self.run_id = Some(run_id.clone());
+        if let Some(job) = &self.job_id {
+            let _ = self.store.set_mailbox_state(job, "running");
+        }
+        if let Some(project) = &self.project_id {
+            let _ = self.store.record_event(
+                project,
+                "run_started",
+                &format!("{} ({run_id})", self.form.engine().label()),
+            );
+        }
         let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
         self.status = if self.form.dry_run {
             "Dry run in progress".into()
@@ -1283,13 +1614,16 @@ impl App {
                     let _ = b.send(Event::Line(format!("[stderr] {l}")));
                 }
             });
-            let mut result = child.wait().map_err(|e| e.to_string()).and_then(|s| {
-                if s.success() {
-                    Ok(())
-                } else {
-                    Err(format!("{engine_name} exited with {s}"))
-                }
-            });
+            let mut result =
+                wait_with_timeout(&mut child, Duration::from_secs(24 * 60 * 60), &cancel)
+                    .map_err(|e| e.to_string())
+                    .and_then(|s| {
+                        if s.success() {
+                            Ok(())
+                        } else {
+                            Err(format!("{engine_name} exited with {s}"))
+                        }
+                    });
             let _ = t1.join();
             let _ = t2.join();
             if result.is_ok() && !verification.is_empty() {
@@ -1380,9 +1714,28 @@ impl App {
                         }
                         self.output.push(safe);
                     }
+                    Event::JobState(index, state) => {
+                        if let Some(job) = self.bulk_jobs.get_mut(index) {
+                            job.state = state.clone();
+                        }
+                        if let Some(job_id) = self.bulk_job_ids.get(index) {
+                            let durable_state = match state.as_str() {
+                                "Running" => "running",
+                                "Completed" => "completed",
+                                "Failed" => "failed",
+                                "Queued" => "queued",
+                                _ => "attention",
+                            };
+                            let _ = self.store.set_mailbox_state(job_id, durable_state);
+                        }
+                    }
                     Event::Evidence(evidence) => {
                         if let Some(job) = &self.job_id {
-                            let _ = self.store.record_evidence(job, &evidence);
+                            let _ = self.store.record_evidence_for_run(
+                                job,
+                                self.run_id.as_deref().unwrap_or("unknown"),
+                                &evidence,
+                            );
                         }
                         if let Some(project) = &self.project_id {
                             let _ = self.store.record_event(
@@ -1410,7 +1763,11 @@ impl App {
             if succeeded && !self.form.dry_run && self.form.engine() == core::Engine::ImapSync {
                 if let Some(evidence) = parse_imapsync_evidence(&self.output) {
                     if let Some(job) = &self.job_id {
-                        let _ = self.store.record_evidence(job, &evidence);
+                        let _ = self.store.record_evidence_for_run(
+                            job,
+                            self.run_id.as_deref().unwrap_or("unknown"),
+                            &evidence,
+                        );
                     }
                     if let Some(project) = &self.project_id {
                         let _ = self.store.record_event(
@@ -1463,6 +1820,12 @@ impl App {
                 Err(e) => format!("Failed: {e}"),
             };
             self.receiver = None;
+            self.cancel_requested = None;
+            self.run_id = None;
+            if self.bulk_project_id.is_some() {
+                self.bulk_project_id = None;
+                self.bulk_job_ids.clear();
+            }
             self.live_confirmed = false;
         }
     }
@@ -1608,6 +1971,7 @@ impl App {
     }
 }
 impl eframe::App for App {
+    #[allow(clippy::possible_missing_else, clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll();
         let mut v = egui::Visuals::light();
@@ -1731,7 +2095,7 @@ impl eframe::App for App {
                     self.assess_plan();
                 }
             });
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; let start_clicked = ui.add_enabled(!self.running(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked(); if start_clicked { self.start(); } else if !self.form.dry_run { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(SKY).inner_margin(egui::Margin::same(24))).show(ctx, |ui| { self.project_summary(ui); ui.add_space(14.0); ui.heading("Migration plan"); ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED)); ui.add_space(14.0); ui.horizontal(|ui| { ui.label("Project name"); ui.text_edit_singleline(&mut self.form.profile.name); ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; }); }); ui.add_space(10.0); ui.columns(2, |c| { Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE); Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL); }); ui.horizontal(|ui| { ui.label("Source port"); ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(90.0)); ui.label("TLS"); egui::ComboBox::from_id_salt("source_tls").selected_text(&self.form.profile.source_tls).show_ui(ui, |ui| { for mode in ["imaps", "starttls", "plain"] { ui.selectable_value(&mut self.form.profile.source_tls, mode.into(), mode); } }); }); ui.add_space(14.0); ui.group(|ui| { ui.heading("03  SYNC RULES"); ui.checkbox(&mut self.form.dry_run, "Simulation mode — validate access and mapping without changing the destination"); ui.horizontal(|ui| { ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically"); ui.checkbox(&mut self.form.profile.justfolders, "Folders only"); ui.checkbox(&mut self.form.profile.addheader, "Add Message-ID header when needed"); }); ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); }); ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); }); }); ui.add_space(14.0); ui.horizontal(|ui| { if ui.button("Preview safe command").clicked() { self.preview = true; } if self.running() { if ui.button("Cancel running process").clicked() { if let Some(cancel) = &self.cancel_requested { cancel.store(true, Ordering::Relaxed); self.status = "Cancellation requested…".into(); } } } else { let label = if self.form.dry_run { "Run preflight simulation  →" } else { "Start live migration  →" }; if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); } } if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live mode can add mail to the destination. Review Project Cockpit first.").color(ALERT)); } }); ui.add_space(14.0); ui.group(|ui| { ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); }); egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); }); }); ui.add_space(8.0); ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED)); });
         self.preview(ctx);
         self.bulk_dialog(ctx);
         self.advanced_dialog(ctx);
@@ -1820,6 +2184,36 @@ mod tests {
     fn remote_arguments_are_shell_quoted() {
         assert_eq!(shell_quote("plain-value"), "plain-value");
         assert_eq!(shell_quote("pa ss'word"), "'pa ss'\\''word'");
+    }
+
+    #[test]
+    fn extra_options_preserve_quoted_arguments() {
+        assert_eq!(
+            parse_shell_words("--foo 'two words' \"three four\"").unwrap(),
+            ["--foo", "two words", "three four"]
+        );
+        assert!(parse_shell_words("--broken '").is_err());
+    }
+
+    #[test]
+    fn endpoint_parser_handles_ports_and_ipv6() {
+        assert_eq!(
+            endpoint_parts("mail.example:8143", 993).unwrap(),
+            ("mail.example".into(), 8143)
+        );
+        assert_eq!(
+            endpoint_parts("[2001:db8::1]:993", 143).unwrap(),
+            ("2001:db8::1".into(), 993)
+        );
+        assert!(endpoint_parts("mail.example:0", 993).is_err());
+    }
+
+    #[test]
+    fn dovecot_plain_tls_maps_to_dovecot_no() {
+        let mut form = dovecot_form();
+        form.profile.source_tls = "plain".into();
+        let (_, args) = form.command(true);
+        assert!(args.iter().any(|arg| arg == "imapc_ssl=no"));
     }
 
     #[test]

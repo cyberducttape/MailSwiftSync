@@ -24,7 +24,7 @@ imapsync --version
 
 Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
 
-Sourcecraft itself uses Rustls with bundled WebPKI certificate roots for its TLS preflight probe. It does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you.
+Sourcecraft itself uses Rustls with bundled WebPKI certificate roots for its TLS preflight probe. It does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a one-day safety timeout plus an operator cancellation control.
 
 ### 2. Build and run Sourcecraft
 
