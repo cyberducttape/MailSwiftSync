@@ -109,8 +109,8 @@ pub struct RunSummary {
     pub job_id: Option<String>,
     pub engine: String,
     /// Serialized execution plan captured when the run started. Session
-    /// passwords are excluded; operator-supplied extra options remain part of
-    /// the recorded configuration and must be treated as sensitive metadata.
+    /// passwords and raw operator-supplied extra-option values are excluded;
+    /// the application may retain a digest of those options for identity.
     pub plan_snapshot: String,
     pub status: String,
     pub started_at: String,
@@ -688,7 +688,7 @@ impl StateStore {
     /// operator to retry the mailbox.
     pub fn register_process(&self, process: &ActiveProcess) -> rusqlite::Result<()> {
         let consistent: bool = self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=?2 AND r.project_id=j.project_id WHERE r.id=?1 AND r.status='running')",
+            "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=?2 AND r.project_id=j.project_id WHERE r.id=?1 AND r.status='running' AND (r.job_id IS NULL OR r.job_id=j.id))",
             params![process.run_id, process.job_id],
             |row| row.get(0),
         )?;
@@ -1558,6 +1558,34 @@ mod tests {
 
         let result = db.register_process(&ActiveProcess {
             run_id: "run-first".into(),
+            job_id: second_job,
+            pid: 4242,
+            start_ticks: Some(7),
+            process_group: Some(4242),
+            session_id: Some(4242),
+            executable: "test".into(),
+        });
+        assert!(result.is_err());
+        assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn active_process_rejects_wrong_mailbox_for_single_mailbox_run() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("same-project", "source", "destination")
+            .unwrap();
+        let first_job = db
+            .add_mailbox(&project.id, "source-one", "destination-one")
+            .unwrap();
+        let second_job = db
+            .add_mailbox(&project.id, "source-two", "destination-two")
+            .unwrap();
+        db.begin_run(&project.id, &first_job, "run-single", "test")
+            .unwrap();
+
+        let result = db.register_process(&ActiveProcess {
+            run_id: "run-single".into(),
             job_id: second_job,
             pid: 4242,
             start_ticks: Some(7),

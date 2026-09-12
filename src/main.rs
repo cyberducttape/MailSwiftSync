@@ -14,6 +14,7 @@ use keyring::Entry;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -103,6 +104,54 @@ struct Profile {
     allowsizemismatch: bool,
     delete2: bool,
     extra_options: String,
+}
+
+/// The durable run snapshot deliberately does not serialize `Profile`.
+/// Operator-supplied extra options are retained only as a digest so a
+/// password or token embedded in an expert option cannot enter SQLite or an
+/// exported report.
+#[derive(Serialize)]
+struct RunPlanSnapshot {
+    dry_run: bool,
+    profile: RunProfileSnapshot,
+}
+
+#[derive(Serialize)]
+struct RunProfileSnapshot {
+    name: String,
+    source_host: String,
+    source_port: String,
+    source_tls: String,
+    allow_insecure_source_transport: bool,
+    source_user: String,
+    source_credential_id: String,
+    destination_host: String,
+    destination_user: String,
+    destination_credential_id: String,
+    imapsync_path: String,
+    engine: core::Engine,
+    doveadm_path: String,
+    ssh_path: String,
+    dovecot_execution: String,
+    dovecot_ssh_user: String,
+    dovecot_config: String,
+    batch_concurrency: usize,
+    batch_retry_count: usize,
+    max_messages_per_second: u32,
+    max_bytes_per_second: u64,
+    migration_timeout_hours: u64,
+    allow_remote_password_in_argv: bool,
+    automap: bool,
+    addheader: bool,
+    justfolders: bool,
+    sync_internaldates: bool,
+    useuid: bool,
+    usecache: bool,
+    fastio1: bool,
+    fastio2: bool,
+    allowsizemismatch: bool,
+    delete2: bool,
+    extra_options_sha256: String,
 }
 
 fn default_doveadm_path() -> String {
@@ -629,12 +678,55 @@ impl Form {
         )
     }
 
-    /// Serialize the launch configuration without session passwords. This is
-    /// persisted with the run so historical reports do not depend on the
-    /// currently edited form.
+    /// Serialize the launch configuration without session passwords or raw
+    /// expert-option values. This is persisted with the run so historical
+    /// reports do not depend on the currently edited form.
     fn plan_snapshot(&self) -> String {
-        let profile = toml::to_string(&self.profile).unwrap_or_default();
-        format!("dry_run={}\n{profile}", self.dry_run)
+        let extra_options_sha256 = format!(
+            "{:x}",
+            Sha256::digest(self.profile.extra_options.as_bytes())
+        );
+        let profile = &self.profile;
+        let snapshot = RunPlanSnapshot {
+            dry_run: self.dry_run,
+            profile: RunProfileSnapshot {
+                name: profile.name.clone(),
+                source_host: profile.source_host.clone(),
+                source_port: profile.source_port.clone(),
+                source_tls: profile.source_tls.clone(),
+                allow_insecure_source_transport: profile.allow_insecure_source_transport,
+                source_user: profile.source_user.clone(),
+                source_credential_id: profile.source_credential_id.clone(),
+                destination_host: profile.destination_host.clone(),
+                destination_user: profile.destination_user.clone(),
+                destination_credential_id: profile.destination_credential_id.clone(),
+                imapsync_path: profile.imapsync_path.clone(),
+                engine: profile.engine,
+                doveadm_path: profile.doveadm_path.clone(),
+                ssh_path: profile.ssh_path.clone(),
+                dovecot_execution: profile.dovecot_execution.clone(),
+                dovecot_ssh_user: profile.dovecot_ssh_user.clone(),
+                dovecot_config: profile.dovecot_config.clone(),
+                batch_concurrency: profile.batch_concurrency,
+                batch_retry_count: profile.batch_retry_count,
+                max_messages_per_second: profile.max_messages_per_second,
+                max_bytes_per_second: profile.max_bytes_per_second,
+                migration_timeout_hours: profile.migration_timeout_hours,
+                allow_remote_password_in_argv: profile.allow_remote_password_in_argv,
+                automap: profile.automap,
+                addheader: profile.addheader,
+                justfolders: profile.justfolders,
+                sync_internaldates: profile.sync_internaldates,
+                useuid: profile.useuid,
+                usecache: profile.usecache,
+                fastio1: profile.fastio1,
+                fastio2: profile.fastio2,
+                allowsizemismatch: profile.allowsizemismatch,
+                delete2: profile.delete2,
+                extra_options_sha256,
+            },
+        };
+        toml::to_string(&snapshot).unwrap_or_default()
     }
 
     fn requires_insecure_transport_ack(&self) -> bool {
@@ -2763,7 +2855,7 @@ impl App {
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Compatibility metric: {}% (not a probability of correctness)\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords. Operator-supplied options may still contain sensitive metadata.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Compatibility metric: {}% (not a probability of correctness)\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
             markdown_escape(&project.name),
             markdown_escape(&project.source_endpoint),
             markdown_escape(&project.destination_endpoint),
@@ -5127,6 +5219,15 @@ mod tests {
         assert!(validate_batch_throttle(&profile, 2).is_ok());
         profile.max_bytes_per_second = 1;
         assert!(validate_batch_throttle(&profile, 2).is_err());
+    }
+
+    #[test]
+    fn plan_snapshot_excludes_raw_extra_options() {
+        let mut form = dovecot_form();
+        form.profile.extra_options = "--custom-secret bearer-token-value".into();
+        let snapshot = form.plan_snapshot();
+        assert!(!snapshot.contains("bearer-token-value"));
+        assert!(snapshot.contains("extra_options_sha256"));
     }
 
     #[test]

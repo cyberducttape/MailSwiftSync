@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Hardened run-plan snapshots with a dedicated serialized schema: raw expert-option values are excluded from SQLite and reports while an SHA-256 digest preserves configuration identity. Process registration now also rejects a same-project mailbox that does not match the single-mailbox run.
 - Began separating process orchestration from the UI controller by extracting the shared batch process-launch limiter into `src/process.rs`; the seam is behavior-preserving and covered by the existing limiter tests.
 - Added a shared cancellation-aware process-launch token bucket for batch workers and aggregate imapsync throttle shaping, preventing configured message/byte ceilings from multiplying with batch concurrency while smoothing connection bursts; unsafe targets below worker count are rejected.
 - Added a production migration runbook covering pilot-to-bulk sequencing, instance-lock and crash recovery, Attention review, evidence/health exports, and the policy exceptions for plain IMAP and remote Dovecot credentials.
