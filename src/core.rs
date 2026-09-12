@@ -590,7 +590,6 @@ impl StateStore {
                 | "running"
                 | "delta_required"
                 | "completed"
-                | "verified"
                 | "failed"
                 | "cancelled"
                 | "attention"
@@ -602,15 +601,11 @@ impl StateStore {
             [job_id],
             |row| row.get(0),
         )?;
+        // Verification is owned by the evidence terminal methods below. A
+        // generic state setter must not reuse evidence from an older run to
+        // manufacture a verified result for a newer one.
         if state == "verified" {
-            let evidence_exists: bool = self.connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM evidence WHERE job_id=?1)",
-                [job_id],
-                |row| row.get(0),
-            )?;
-            if !evidence_exists {
-                return Err(rusqlite::Error::InvalidQuery);
-            }
+            return Err(rusqlite::Error::InvalidQuery);
         }
         if current != state && !valid_mailbox_transition(&current, state) {
             return Err(rusqlite::Error::InvalidQuery);
@@ -1514,6 +1509,52 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn newer_run_cannot_reuse_older_evidence_for_verified_state() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("evidence-age", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 10,
+            destination_bytes: 10,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+        };
+        db.begin_run(&project.id, &job, "run-with-evidence", "test")
+            .unwrap();
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "run-with-evidence",
+            "completed",
+            "verified",
+            "",
+            &evidence,
+        )
+        .unwrap();
+        db.begin_run(&project.id, &job, "run-without-evidence", "test")
+            .unwrap();
+        db.finish_run_for_mailbox(
+            &project.id,
+            &job,
+            "run-without-evidence",
+            "completed",
+            "completed",
+            "verification unavailable",
+        )
+        .unwrap();
+        assert!(db.set_mailbox_state(&job, "verified").is_err());
     }
 
     #[test]
