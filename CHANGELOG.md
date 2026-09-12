@@ -31,6 +31,7 @@ All notable changes to MailSwiftSync are documented here.
 - Restored the selected mailbox identity from durable state and marked interrupted run records as abandoned with recovery events on restart.
 - Corrected IMAP capability discovery to consume the server greeting first, honor configured ports, and clearly limit the probe to IMAPS.
 - Bounded the in-memory visible execution journal to 10,000 lines while retaining the durable event ledger.
+- Persisted secret-free batch row configuration and restored durable batch queues for review after restart; credentials remain session-only.
 
 ### Changed
 

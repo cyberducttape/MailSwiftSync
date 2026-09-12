@@ -95,6 +95,15 @@ pub struct Project {
     pub phase: Phase,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxJob {
+    pub id: String,
+    pub source_mailbox: String,
+    pub destination_mailbox: String,
+    pub state: String,
+    /// Secret-free serialized configuration, if the importer supplied one.
+    pub config: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxEvidence {
     pub source_messages: u64,
     pub destination_messages: u64,
@@ -214,7 +223,7 @@ impl StateStore {
     fn migrate(&self) -> rusqlite::Result<()> {
         self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT);
+          CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
@@ -253,6 +262,10 @@ impl StateStore {
                 "ALTER TABLE mailbox_jobs ADD COLUMN preflight_plan TEXT",
                 [],
             )?;
+        }
+        if !job_columns.iter().any(|column| column == "config") {
+            self.connection
+                .execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
         }
         let history_columns = self
             .connection
@@ -342,6 +355,47 @@ impl StateStore {
             tx.execute(
                 "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')",
                 params![id, project.id, source_mailbox, destination_mailbox],
+            )?;
+            ids.push(id);
+        }
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created',?2)",
+            params![
+                project.id,
+                format!("Batch created with {} mailbox jobs", ids.len())
+            ],
+        )?;
+        tx.commit()?;
+        Ok((project, ids))
+    }
+    pub fn create_project_with_mailbox_configs(
+        &self,
+        name: &str,
+        source: &str,
+        destination: &str,
+        mailboxes: &[(String, String, String)],
+    ) -> rusqlite::Result<(Project, Vec<String>)> {
+        if mailboxes.is_empty() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let project = Project {
+            id: Uuid::new_v4().to_string(),
+            name: name.into(),
+            source_endpoint: source.into(),
+            destination_endpoint: destination.into(),
+            phase: Phase::Discovery,
+        };
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES(?1,?2,?3,?4,?5)",
+            params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
+        )?;
+        let mut ids = Vec::with_capacity(mailboxes.len());
+        for (source_mailbox, destination_mailbox, config) in mailboxes {
+            let id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state,config) VALUES(?1,?2,?3,?4,'queued',?5)",
+                params![id, project.id, source_mailbox, destination_mailbox, config],
             )?;
             ids.push(id);
         }
@@ -562,6 +616,22 @@ impl StateStore {
             )
             .optional()
     }
+    pub fn mailboxes(&self, project_id: &str) -> rusqlite::Result<Vec<MailboxJob>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
+        )?;
+        statement
+            .query_map([project_id], |row| {
+                Ok(MailboxJob {
+                    id: row.get(0)?,
+                    source_mailbox: row.get(1)?,
+                    destination_mailbox: row.get(2)?,
+                    state: row.get(3)?,
+                    config: row.get(4)?,
+                })
+            })?
+            .collect()
+    }
     fn event(&self, id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.connection.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)",
@@ -756,5 +826,24 @@ mod tests {
             db.mailbox_identity(&jobs[0]).unwrap().unwrap(),
             ("one".into(), "one".into(), "queued".into())
         );
+    }
+
+    #[test]
+    fn batch_configuration_is_persisted_without_credentials() {
+        let db = StateStore::in_memory().unwrap();
+        let (_, jobs) = db
+            .create_project_with_mailbox_configs(
+                "batch",
+                "source",
+                "destination",
+                &[("one".into(), "one".into(), "engine = \"imap\"".into())],
+            )
+            .unwrap();
+        let restored = db
+            .mailboxes(&db.latest_project().unwrap().unwrap().id)
+            .unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, jobs[0]);
+        assert_eq!(restored[0].config.as_deref(), Some("engine = \"imap\""));
     }
 }

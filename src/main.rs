@@ -935,15 +935,50 @@ impl Default for App {
                 (Some(project.id.clone()), job_id)
             })
             .unwrap_or((None, None));
+        let mut restored_bulk_jobs = Vec::new();
+        let mut restored_bulk_job_ids = Vec::new();
+        let restored_bulk_project_id = restored_project.as_ref().and_then(|project| {
+            if project.name != "Batch validation"
+                || project.source_endpoint != "batch"
+                || project.destination_endpoint != "batch"
+            {
+                return None;
+            }
+            let jobs = store.mailboxes(&project.id).ok()?;
+            for job in jobs {
+                let profile = job
+                    .config
+                    .as_deref()
+                    .and_then(|config| toml::from_str::<Profile>(config).ok())
+                    .unwrap_or_default();
+                restored_bulk_jobs.push(BulkJob {
+                    label: format!("{} → {}", job.source_mailbox, job.destination_mailbox),
+                    form: Form {
+                        profile,
+                        source_password: String::new(),
+                        destination_password: String::new(),
+                        dry_run: true,
+                    },
+                    state: display_job_state(&job.state).into(),
+                });
+                restored_bulk_job_ids.push(job.id);
+            }
+            Some(project.id.clone())
+        });
         Self {
             form,
             output: initial_output,
             receiver: None,
             status: persistence_warning.clone().unwrap_or_else(|| "Idle".into()),
             preview: false,
-            bulk_jobs: Vec::new(),
+            bulk_jobs: restored_bulk_jobs,
             bulk_open: false,
-            bulk_message: "Import a CSV, XLS, or XLSX file to build a reviewable queue.".into(),
+            bulk_message: if restored_bulk_project_id.is_some() {
+                "Restored durable batch queue; credentials must be entered again before validation."
+                    .into()
+            } else {
+                "Import a CSV, XLS, or XLSX file to build a reviewable queue.".into()
+            },
             advanced_open: false,
             engine_open: true,
             store,
@@ -952,8 +987,8 @@ impl Default for App {
             job_id,
             run_id: None,
             cancel_requested: None,
-            bulk_project_id: None,
-            bulk_job_ids: Vec::new(),
+            bulk_project_id: restored_bulk_project_id,
+            bulk_job_ids: restored_bulk_job_ids,
             cockpit_open: false,
             preflight: Vec::new(),
             capability_receiver: None,
@@ -1693,13 +1728,23 @@ impl App {
         let mailboxes = jobs
             .iter()
             .map(|job| {
-                (
+                let config = toml::to_string(&job.form.profile)
+                    .map_err(|error| format!("Could not serialize batch plan: {error}"))?;
+                Ok((
                     job.form.profile.source_user.clone(),
                     job.form.profile.destination_user.clone(),
-                )
+                    config,
+                ))
             })
-            .collect::<Vec<_>>();
-        let (project, job_ids) = match self.store.create_project_with_mailboxes(
+            .collect::<Result<Vec<_>, String>>();
+        let mailboxes = match mailboxes {
+            Ok(value) => value,
+            Err(error) => {
+                self.bulk_message = error;
+                return;
+            }
+        };
+        let (project, job_ids) = match self.store.create_project_with_mailbox_configs(
             "Batch validation",
             "batch",
             "batch",
@@ -2416,6 +2461,22 @@ fn push_visible_output(output: &mut Vec<String>, line: String) {
         output.remove(0);
     }
     output.push(line);
+}
+
+fn display_job_state(state: &str) -> &'static str {
+    match state {
+        "queued" => "Queued",
+        "preflight" => "Preflight",
+        "ready" => "Ready",
+        "running" => "Running",
+        "delta_required" => "Delta required",
+        "completed" => "Completed",
+        "verified" => "Verified",
+        "failed" => "Failed",
+        "cancelled" => "Cancelled",
+        "attention" => "Attention",
+        _ => "Unknown",
+    }
 }
 
 impl eframe::App for App {
