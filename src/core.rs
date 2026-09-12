@@ -870,8 +870,8 @@ impl StateStore {
     }
 
     /// Atomically starts a batch parent and one durable child run per
-    /// mailbox. Child runs are created as active execution records while the
-    /// mailbox rows remain queued until workers claim them.
+    /// mailbox. Child runs and mailbox rows remain queued until workers claim
+    /// them, so durable state reflects actual worker ownership.
     #[allow(clippy::too_many_arguments)]
     pub fn begin_batch_run_with_children(
         &self,
@@ -928,7 +928,7 @@ impl StateStore {
                 .map(|plan| plan.plan_snapshot.as_str())
                 .unwrap_or("");
             tx.execute(
-                "INSERT INTO runs(id,project_id,job_id,parent_run_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,'running')",
+                "INSERT INTO runs(id,project_id,job_id,parent_run_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,'queued')",
                 params![
                     child_run_id,
                     project_id,
@@ -1007,12 +1007,12 @@ impl StateStore {
             params![parent_run_id, project_id],
             |row| row.get(0),
         )?;
-        let child_is_running: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND parent_run_id=?4 AND status='running')",
+        let child_status: String = tx.query_row(
+            "SELECT status FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND parent_run_id=?4",
             params![child_run_id, project_id, job_id, parent_run_id],
             |row| row.get(0),
         )?;
-        if !parent_is_running || !child_is_running {
+        if !parent_is_running || !matches!(child_status.as_str(), "queued" | "running") {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let current: String = tx.query_row(
@@ -1021,6 +1021,9 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if current == "running" {
+            if child_status != "running" {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             return tx.commit();
         }
         if !valid_mailbox_transition(&current, "running") {
@@ -1029,6 +1032,10 @@ impl StateStore {
         tx.execute(
             "UPDATE mailbox_jobs SET state='running',attempt=attempt+1 WHERE id=?1 AND project_id=?2",
             params![job_id, project_id],
+        )?;
+        tx.execute(
+            "UPDATE runs SET status='running' WHERE id=?1 AND project_id=?2 AND job_id=?3 AND parent_run_id=?4 AND status='queued'",
+            params![child_run_id, project_id, job_id, parent_run_id],
         )?;
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'mailbox_claimed',?2)",
@@ -1102,7 +1109,7 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let run_changed = tx.execute(
-            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND project_id=?4 AND job_id=?5 AND status='running'",
+            "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND project_id=?4 AND job_id=?5 AND (status='running' OR (status='queued' AND ?1 IN ('cancelled','failed','verification_failed'))) ",
             params![run_status, detail, run_id, project_id, job_id],
         )?;
         if run_changed != 1 {
@@ -2235,9 +2242,11 @@ mod tests {
         let first = db.run(&child_runs[0]).unwrap().unwrap();
         let second = db.run(&child_runs[1]).unwrap().unwrap();
         assert_eq!(first.job_id.as_deref(), Some(jobs[0].as_str()));
+        assert_eq!(first.status, "queued");
         assert_eq!(first.engine, "imapsync");
         assert_eq!(first.plan_snapshot, "snapshot one");
         assert_eq!(second.job_id.as_deref(), Some(jobs[1].as_str()));
+        assert_eq!(second.status, "queued");
         assert_eq!(second.engine, "dovecot");
         assert_eq!(second.plan_snapshot, "snapshot two");
         db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-parent", &child_runs[0])
