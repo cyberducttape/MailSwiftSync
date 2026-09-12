@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added a Linux startup-recovery integration test covering the complete orphan path: persist a real process identity, verify ownership, terminate the matching process group, recover the mailbox to `Attention`, clear the active-process row, and mark the run abandoned.
 - Remote Dovecot validation now rejects SSH hosts and usernames beginning with `-` or containing whitespace, preventing imported endpoint values from being interpreted as SSH options.
 - Added a Unix process-group termination regression test that launches a dedicated child session and verifies recorded-process cleanup actually stops it, complementing the existing identity-mismatch safety test.
 - Plain source IMAP transport now requires an explicit live-execution acknowledgement. The acknowledgement is visible in the workspace, included in the secret-free plan fingerprint, and applies to batch runs so cleartext credentials/data cannot be enabled accidentally during promotion.

@@ -5266,6 +5266,50 @@ mod tests {
         assert!(!status.success());
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn startup_reaps_matching_process_before_recovering_mailbox() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "trap '' TERM; sleep 30"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        let (start_ticks, process_group, session_id) = linux_process_identity(pid).unwrap();
+        let process = core::ActiveProcess {
+            run_id: "run-startup-recovery".into(),
+            job_id: String::new(),
+            pid,
+            start_ticks: Some(start_ticks),
+            process_group: Some(process_group),
+            session_id: Some(session_id),
+            executable: "sh".into(),
+        };
+        let db = core::StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        let mut process = process;
+        process.job_id = job.clone();
+        db.begin_run(&project.id, &job, &process.run_id, "test")
+            .unwrap();
+        db.register_process(&process).unwrap();
+
+        assert!(recorded_process_matches(&process));
+        terminate_recorded_process_group(process.pid);
+        assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);
+        assert_eq!(
+            db.mailbox_state(&job).unwrap().as_deref(),
+            Some("attention")
+        );
+        assert!(db.active_processes().unwrap().is_empty());
+        assert_eq!(
+            db.run_status(&process.run_id).unwrap().as_deref(),
+            Some("abandoned")
+        );
+        assert!(!child.wait().unwrap().success());
+    }
+
     #[test]
     fn recommended_action_prioritizes_interrupted_work() {
         assert_eq!(
