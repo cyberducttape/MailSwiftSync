@@ -979,6 +979,22 @@ fn force_kill_process_group(child: &mut Child) {
     let _ = child.kill();
 }
 
+fn terminate_recorded_process_group(pid: u32) {
+    #[cfg(unix)]
+    {
+        let process_group = -(pid as libc::pid_t);
+        unsafe {
+            let _ = libc::kill(process_group, libc::SIGTERM);
+        }
+        thread::sleep(Duration::from_secs(2));
+        unsafe {
+            let _ = libc::kill(process_group, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
 fn number_after(line: &str, marker: &str) -> Option<u64> {
     line.split_once(marker)?
         .1
@@ -1069,6 +1085,7 @@ fn parse_dovecot_evidence(
 
 enum Event {
     Line(String),
+    ProcessStarted(usize, u32),
     JobState(usize, String),
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
@@ -1084,6 +1101,7 @@ fn run_streaming(
     args: &[String],
     env: &[(String, String)],
     tx: &mpsc::Sender<Event>,
+    job_index: usize,
     prefix: &str,
     cancel: &AtomicBool,
     secrets: &[String],
@@ -1099,6 +1117,7 @@ fn run_streaming(
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let _ = tx.send(Event::ProcessStarted(job_index, child.id()));
     let stdout = child.stdout.take().ok_or("stdout pipe unavailable")?;
     let stderr = child.stderr.take().ok_or("stderr pipe unavailable")?;
     let out_tx = tx.clone();
@@ -1291,10 +1310,14 @@ impl Default for App {
                 Some(format!("Persistent SQLite state unavailable: {error}")),
             ),
         };
-        let recovered = if persistence_warning.is_none() {
-            store.recover_abandoned_jobs().unwrap_or(0)
+        let (recovered, orphaned) = if persistence_warning.is_none() {
+            let processes = store.active_processes().unwrap_or_default();
+            for (_, _, pid) in &processes {
+                terminate_recorded_process_group(*pid);
+            }
+            (store.recover_abandoned_jobs().unwrap_or(0), processes.len())
         } else {
-            0
+            (0, 0)
         };
         let mut initial_output = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
@@ -1305,6 +1328,11 @@ impl Default for App {
                 ]
             },
         );
+        if orphaned > 0 {
+            initial_output.push(format!(
+                "Startup reconciled {orphaned} recorded migration process(es) before recovery."
+            ));
+        }
         if recovered > 0 {
             initial_output.push(format!(
                 "Recovered {recovered} interrupted job(s) into Attention for review."
@@ -2795,6 +2823,7 @@ impl App {
                                         &command.args,
                                         &command.env,
                                         &tx,
+                                        index,
                                         &format!("[{}] ", index + 1),
                                         &cancel,
                                         &[
@@ -3045,6 +3074,7 @@ impl App {
                 &args,
                 &prepared_env,
                 &tx,
+                0,
                 "",
                 &cancel,
                 &output_secrets,
@@ -3126,6 +3156,19 @@ impl App {
         if let Some(rx) = &self.receiver {
             while let Ok(event) = rx.try_recv() {
                 match event {
+                    Event::ProcessStarted(index, pid) => {
+                        let job_id = self
+                            .bulk_job_ids
+                            .get(index)
+                            .cloned()
+                            .or_else(|| self.job_id.clone());
+                        if let (Some(run_id), Some(job_id)) = (self.run_id.as_deref(), job_id)
+                            && let Err(error) = self.store.register_process(run_id, &job_id, pid)
+                        {
+                            durability_errors
+                                .push(format!("persist process identity failed: {error}"));
+                        }
+                    }
                     Event::Line(s) => {
                         let safe = self.redact_output(&s);
                         if let Some(project) = self.active_project_id() {

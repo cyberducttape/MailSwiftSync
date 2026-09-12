@@ -277,6 +277,7 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
+          CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = self
@@ -582,6 +583,7 @@ impl StateStore {
             "UPDATE runs SET status='abandoned',finished_at=CURRENT_TIMESTAMP,detail='Application restarted before completion' WHERE status='running'",
             [],
         )?;
+        tx.execute("DELETE FROM active_processes", [])?;
         for project in projects {
             tx.execute(
                 "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_recovered','Running mailbox jobs moved to Attention after application restart')",
@@ -590,6 +592,33 @@ impl StateStore {
         }
         tx.commit()?;
         Ok(count)
+    }
+
+    /// Record the OS process belonging to a durable run. Startup reconciliation
+    /// uses this identity to terminate a recorded orphan before allowing an
+    /// operator to retry the mailbox.
+    pub fn register_process(&self, run_id: &str, job_id: &str, pid: u32) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "INSERT INTO active_processes(run_id,job_id,pid) VALUES(?1,?2,?3) ON CONFLICT(run_id,job_id) DO UPDATE SET pid=excluded.pid,started_at=CURRENT_TIMESTAMP",
+            params![run_id, job_id, i64::from(pid)],
+        )?;
+        Ok(())
+    }
+
+    pub fn active_processes(&self) -> rusqlite::Result<Vec<(String, String, u32)>> {
+        self.connection
+            .prepare("SELECT run_id,job_id,pid FROM active_processes")?
+            .query_map([], |row| {
+                let pid: i64 = row.get(2)?;
+                Ok((row.get(0)?, row.get(1)?, u32::try_from(pid).unwrap_or(0)))
+            })?
+            .collect()
+    }
+
+    pub fn clear_processes(&self, run_id: &str) -> rusqlite::Result<()> {
+        self.connection
+            .execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
+        Ok(())
     }
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.event(project_id, kind, detail)
@@ -715,6 +744,7 @@ impl StateStore {
             "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3",
             params![status, detail, run_id],
         )?;
+        self.clear_processes(run_id)?;
         Ok(())
     }
     /// Atomically completes a single-mailbox run and records the durable
@@ -764,10 +794,12 @@ impl StateStore {
         if run_changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
+        tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
             "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
             params![mailbox_state, job_id, project_id],
         )?;
+        tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_finished',?2)",
             params![
@@ -1149,6 +1181,24 @@ mod tests {
             db.run_status("run-1").unwrap().as_deref(),
             Some("abandoned")
         );
+    }
+
+    #[test]
+    fn active_process_identity_is_durable_and_cleared_on_recovery() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db.create_project("test", "source", "destination").unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-process", "test")
+            .unwrap();
+        db.register_process("run-process", &job, 4242).unwrap();
+        assert_eq!(
+            db.active_processes().unwrap(),
+            vec![("run-process".into(), job.clone(), 4242)]
+        );
+        db.recover_abandoned_jobs().unwrap();
+        assert!(db.active_processes().unwrap().is_empty());
     }
 
     #[test]
