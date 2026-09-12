@@ -557,6 +557,25 @@ impl StateStore {
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.event(project_id, kind, detail)
     }
+    pub fn record_events(
+        &self,
+        project_id: &str,
+        kind: &str,
+        details: &[String],
+    ) -> rusqlite::Result<()> {
+        if details.is_empty() {
+            return Ok(());
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        {
+            let mut statement =
+                tx.prepare("INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)")?;
+            for detail in details {
+                statement.execute(params![project_id, kind, detail])?;
+            }
+        }
+        tx.commit()
+    }
     pub fn start_run(
         &self,
         project_id: &str,
@@ -1053,6 +1072,26 @@ mod tests {
             db.run_status("run-batch-atomic").unwrap().as_deref(),
             Some("running")
         );
+    }
+
+    #[test]
+    fn output_events_are_committed_as_one_batch() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("events", "source", "destination")
+            .unwrap();
+        let details = vec!["first".into(), "second".into(), "third".into()];
+        db.record_events(&project.id, "run_output", &details)
+            .unwrap();
+        let count: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='run_output'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 3);
     }
 
     #[test]

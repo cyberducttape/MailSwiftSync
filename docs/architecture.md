@@ -19,6 +19,8 @@ Preflight Scheduler Verify
 
 The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, and verification evidence. It intentionally never persists passwords or mailbox content.
 
+Batch validation uses a bounded standard-thread worker pool (1–16 workers) over an immutable in-memory job list. Each child is marked `running` in the same transaction as the parent run before workers start, allowing forced-restart recovery to surface every unresolved child. Worker output is redacted in the UI and committed to the event ledger in batches per UI cycle rather than issuing one disk transaction per output line.
+
 The Project Cockpit also performs an authenticated dual-endpoint IMAPS readiness probe in imapsync mode over certificate-verified TLS. It consumes the server greeting, authenticates, re-issues `CAPABILITY` after authentication, then requests `NAMESPACE` and `LIST` before presenting the result as planning context. The probe is intentionally limited to dual-IMAPS plans; plain and STARTTLS sources are handled by engine preflight rather than being mislabeled as TLS-verified. Dovecot mode uses the destination's native dry preflight instead, since administrative `doveadm` access does not imply a destination IMAP password. Credentials are held only by the probe thread and are never written to the project ledger or command-line arguments; control characters are rejected before they can enter the IMAP command stream. The probe does not claim that these extensions replace Dovecot's server-side dsync behavior. A failed certificate or authentication check blocks discovery rather than being silently ignored.
 
 ## Migration phases

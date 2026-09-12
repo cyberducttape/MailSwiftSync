@@ -54,6 +54,7 @@ All notable changes to MailSwiftSync are documented here.
 - Separated structural bulk-import validation from credential-required execution validation, so passwordless identity imports are accepted but cannot be launched until credentials are supplied.
 - Added project-level Markdown verification reports covering every durable mailbox job, evidence scope, confidence, unresolved states, and recent runs.
 - Replaced sequential batch validation with a bounded 1–16 worker pool and an operator-selected concurrency setting; cancellation and indexed output remain shared across workers.
+- Batched concurrent worker output into one SQLite transaction per UI cycle, retaining redacted durable output while avoiding one synchronous disk transaction per line.
 
 ### Changed
 
