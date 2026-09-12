@@ -1351,7 +1351,7 @@ struct ActiveRunContext {
 }
 struct App {
     form: Form,
-    output: Vec<String>,
+    output: VecDeque<String>,
     receiver: Option<Receiver<Event>>,
     status: String,
     preview: bool,
@@ -1465,6 +1465,7 @@ impl Default for App {
                 "Recovered {recovered} interrupted job(s) into Attention for review."
             ));
         }
+        let initial_output: VecDeque<String> = initial_output.into_iter().collect();
         let mut form = Form::load();
         if form.profile.destination_tls.is_empty() {
             form.profile.destination_tls = default_destination_tls();
@@ -3868,7 +3869,7 @@ impl App {
         } else {
             "Sync in progress".into()
         };
-        self.output = vec![format!(
+        self.output = VecDeque::from([format!(
             "Starting {} with {}…",
             if self.form.dry_run {
                 "safe dry run"
@@ -3876,7 +3877,7 @@ impl App {
                 "synchronization"
             },
             self.form.engine().label()
-        )];
+        )]);
         let verification = if !self.form.dry_run && self.form.engine() == core::Engine::Dovecot {
             self.form.dovecot_verification_commands(false)
         } else {
@@ -4250,7 +4251,10 @@ impl App {
             let terminal_evidence = if succeeded && !run_context.dry_run {
                 self.pending_evidence.take().or_else(|| {
                     (run_context.engine == core::Engine::ImapSync)
-                        .then(|| verification::parse_imapsync_evidence(&self.output))
+                        .then(|| {
+                            let output = self.output.iter().cloned().collect::<Vec<_>>();
+                            verification::parse_imapsync_evidence(&output)
+                        })
                         .flatten()
                 })
             } else {
@@ -4859,11 +4863,11 @@ fn markdown_escape(value: &str) -> String {
         .replace('\n', " ")
 }
 
-fn push_visible_output(output: &mut Vec<String>, line: String) {
+fn push_visible_output(output: &mut VecDeque<String>, line: String) {
     if output.len() >= MAX_VISIBLE_OUTPUT_LINES {
-        output.remove(0);
+        output.pop_front();
     }
-    output.push(line);
+    output.push_back(line);
 }
 
 fn display_job_state(state: &str) -> &'static str {
@@ -5865,6 +5869,21 @@ mod tests {
         let bytes = b"first\n\xff\xfe\nlast\n";
         let lines = process::read_lossy_lines(std::io::Cursor::new(bytes));
         assert_eq!(lines, ["first", "��", "last"]);
+    }
+
+    #[test]
+    fn visible_output_retention_is_bounded_without_shifting() {
+        let mut output = VecDeque::new();
+        for index in 0..=MAX_VISIBLE_OUTPUT_LINES {
+            push_visible_output(&mut output, index.to_string());
+        }
+
+        assert_eq!(output.len(), MAX_VISIBLE_OUTPUT_LINES);
+        assert_eq!(output.front().map(String::as_str), Some("1"));
+        assert_eq!(
+            output.back().and_then(|line| line.parse::<usize>().ok()),
+            Some(MAX_VISIBLE_OUTPUT_LINES)
+        );
     }
 
     #[cfg(unix)]

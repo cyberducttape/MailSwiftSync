@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Visible journal retention now uses `VecDeque`, keeping the 10,000-line UI window bounded without repeatedly shifting the entire log.
 - Batch admission now creates a durable child run for every mailbox with its own engine and secret-free plan snapshot; the parent run remains the wave-level record while child identities are available for process and terminal-result attribution.
 - Batch child runs now retain their parent wave relationship in SQLite, and claims/process registration verify that relationship before a worker can own a mailbox.
 - Batch worker state and completion events now carry durable mailbox and child-run IDs instead of routing persistence by queue index.
