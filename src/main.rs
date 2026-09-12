@@ -5152,6 +5152,16 @@ mod tests {
     }
 
     #[test]
+    fn process_launch_limiter_spaces_sequential_starts() {
+        let limiter = ProcessLaunchLimiter::new(20);
+        let cancel = AtomicBool::new(false);
+        assert!(limiter.acquire(&cancel));
+        let started = std::time::Instant::now();
+        assert!(limiter.acquire(&cancel));
+        assert!(started.elapsed() >= Duration::from_millis(35));
+    }
+
+    #[test]
     fn batch_throttle_rejects_target_below_worker_count() {
         let mut profile = Profile {
             max_messages_per_second: 1,
@@ -5171,6 +5181,11 @@ mod tests {
         let snapshot = form.plan_snapshot();
         assert!(!snapshot.contains("bearer-token-value"));
         assert!(snapshot.contains("extra_options_sha256"));
+        let expected = format!(
+            "{:x}",
+            Sha256::digest(form.profile.extra_options.as_bytes())
+        );
+        assert!(snapshot.contains(&expected));
     }
 
     #[test]
