@@ -56,6 +56,8 @@ struct Profile {
     dovecot_config: String,
     #[serde(default = "default_batch_concurrency")]
     batch_concurrency: usize,
+    #[serde(default)]
+    batch_retry_count: usize,
     /// Remote Dovecot currently receives this value in a destination-side
     /// command override. Keep the unsafe compatibility path opt-in until a
     /// deployment-independent secret broker is available.
@@ -2225,6 +2227,7 @@ impl App {
         self.status = format!("Batch validation: {} jobs", jobs.len());
         self.output.clear();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
+        let retry_count = self.form.profile.batch_retry_count.min(3);
         thread::spawn(move || {
             let queue = Arc::new(Mutex::new(jobs.into_iter().enumerate()));
             let failed = Arc::new(AtomicBool::new(false));
@@ -2248,37 +2251,83 @@ impl App {
                             job.label
                         )));
                         let _ = tx.send(Event::JobState(index, "Running".into()));
-                        let prepared = job.form.prepared_command();
-                        let result = match prepared {
-                            Ok(command) => {
-                                let result = run_streaming(
-                                    &command.executable,
-                                    &command.args,
-                                    &command.env,
-                                    &tx,
-                                    &format!("[{}] ", index + 1),
-                                    &cancel,
-                                    &[
-                                        job.form.source_password.clone(),
-                                        job.form.destination_password.clone(),
-                                    ],
-                                );
-                                cleanup_paths(&command.cleanup);
-                                result
+                        let mut completed = false;
+                        for attempt in 0..=retry_count {
+                            if attempt > 0 {
+                                let _ = tx.send(Event::Line(format!(
+                                    "[{}] retry attempt {attempt}/{retry_count}",
+                                    index + 1
+                                )));
+                                let _ = tx.send(Event::JobState(index, "Running".into()));
                             }
-                            Err(error) => Err(error),
-                        };
-                        if let Err(error) = result {
-                            let cancelled = error.contains("cancelled");
-                            failed.store(true, Ordering::Relaxed);
-                            let _ =
-                                tx.send(Event::Line(format!("[{}] failed: {error}", index + 1)));
-                            let _ = tx.send(Event::JobState(
-                                index,
-                                if cancelled { "Cancelled" } else { "Failed" }.into(),
-                            ));
-                        } else {
+                            let prepared = job.form.prepared_command();
+                            let result = match prepared {
+                                Ok(command) => {
+                                    let result = run_streaming(
+                                        &command.executable,
+                                        &command.args,
+                                        &command.env,
+                                        &tx,
+                                        &format!("[{}] ", index + 1),
+                                        &cancel,
+                                        &[
+                                            job.form.source_password.clone(),
+                                            job.form.destination_password.clone(),
+                                        ],
+                                    );
+                                    cleanup_paths(&command.cleanup);
+                                    result
+                                }
+                                Err(error) => Err(error),
+                            };
+                            match result {
+                                Ok(()) => {
+                                    completed = true;
+                                    break;
+                                }
+                                Err(error)
+                                    if !error.contains("cancelled")
+                                        && attempt < retry_count
+                                        && is_transient_batch_error(&error) =>
+                                {
+                                    let _ = tx.send(Event::Line(format!(
+                                        "[{}] transient failure; retrying: {error}",
+                                        index + 1
+                                    )));
+                                    let _ = tx.send(Event::JobState(index, "Failed".into()));
+                                    let delay = Duration::from_secs(1_u64 << attempt.min(5));
+                                    let started = std::time::Instant::now();
+                                    while started.elapsed() < delay {
+                                        if cancel.load(Ordering::Relaxed) {
+                                            break;
+                                        }
+                                        thread::sleep(Duration::from_millis(100));
+                                    }
+                                    if cancel.load(Ordering::Relaxed) {
+                                        break;
+                                    }
+                                }
+                                Err(error) => {
+                                    let cancelled = error.contains("cancelled");
+                                    if !cancelled {
+                                        failed.store(true, Ordering::Relaxed);
+                                    }
+                                    let _ = tx.send(Event::Line(format!(
+                                        "[{}] failed: {error}",
+                                        index + 1
+                                    )));
+                                    let _ = tx.send(Event::JobState(
+                                        index,
+                                        if cancelled { "Cancelled" } else { "Failed" }.into(),
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                        if completed {
                             let _ = tx.send(Event::JobState(index, "Completed".into()));
+                        } else if cancel.load(Ordering::Relaxed) {
+                            let _ = tx.send(Event::JobState(index, "Cancelled".into()));
                         }
                     }
                 }));
@@ -2858,6 +2907,11 @@ impl App {
                 ui.add(egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16));
                 ui.label(RichText::new("bounded 1–16 workers").size(11.0).color(MUTED));
             });
+            ui.horizontal(|ui| {
+                ui.label("Transient retries");
+                ui.add(egui::Slider::new(&mut self.form.profile.batch_retry_count, 0..=3));
+                ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(MUTED));
+            });
             ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, name, extra_options. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2977,6 +3031,22 @@ fn display_job_state(state: &str) -> &'static str {
         "attention" => "Attention",
         _ => "Unknown",
     }
+}
+
+fn is_transient_batch_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection refused",
+        "network is unreachable",
+        "broken pipe",
+        "temporarily unavailable",
+        "try again",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
 }
 
 #[cfg(unix)]
@@ -3355,6 +3425,16 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn batch_retry_classifier_excludes_authentication_failures() {
+        assert!(is_transient_batch_error("connection reset by peer"));
+        assert!(is_transient_batch_error("operation timed out"));
+        assert!(!is_transient_batch_error("IMAP authentication failed"));
+        assert!(!is_transient_batch_error(
+            "invalid destination configuration"
+        ));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 # Bulk migrations from CSV or Excel
 
+Use the **Transient retries** control for short-lived transport failures. Authentication and configuration errors are not retried, and backoff is cancellation-aware.
+
 MailSwiftSync can import a migration list from CSV, XLS, or XLSX and validate rows with a bounded worker pool. Choose 1–16 concurrent validations to balance migration-window speed against provider throttling. Bulk validation uses the currently selected engine; live migrations remain individually confirmed until scheduler and durable live-concurrency work are complete.
 
 ![Batch migration queue interface](assets/batch-queue.png)

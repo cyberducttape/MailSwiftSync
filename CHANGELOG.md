@@ -58,6 +58,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Batch validation retries only classified transient transport failures up to three times with exponential backoff; authentication and configuration failures remain terminal.
+
 - Verification exports are now written atomically, flushed before rename, and restricted to owner-only permissions on Unix.
 
 - Dovecot migrations default to additive `sync -1`; destination mirroring requires explicit destructive configuration.
