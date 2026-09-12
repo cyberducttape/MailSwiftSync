@@ -4351,7 +4351,7 @@ impl App {
             });
             ui.add_space(8.0);
             ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
-            ui.add_space(8.0); ui.label("For any other documented flag, use the Extra imapsync options field in the migration plan. Each option is passed as separate whitespace-delimited arguments.");
+                ui.add_space(8.0); ui.label("The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.");
         });
     }
     fn keyring_dialog(&mut self, ctx: &egui::Context) {
@@ -5174,6 +5174,16 @@ mod tests {
         assert!(form.validate().is_err());
         form.profile.extra_options = "--logdir /tmp/elsewhere".into();
         assert!(form.validate().is_err());
+    }
+
+    #[test]
+    fn extra_options_require_the_safe_engine_allowlist() {
+        let mut form = dovecot_form();
+        form.profile.extra_options = "--nofoldersizes --timeout=30".into();
+        assert!(form.validate().is_ok());
+        form.profile.extra_options = "--custom-helper /tmp/helper".into();
+        let error = form.validate().unwrap_err();
+        assert!(error.contains("safe imapsync option allowlist"));
     }
 
     #[test]

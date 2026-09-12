@@ -19,7 +19,7 @@ MailSwiftSync exposes the most common options:
 | Map standard folders automatically | Adds `--automap` to map common folders such as Sent and Trash. |
 | Folders only | Adds `--justfolders`; useful for checking folder structure without messages. |
 | Add Message-ID header when needed | Adds `--addheader`; this can help imapsync identify messages that lack a usable Message-ID. |
-| Extra imapsync options | Adds non-connection advanced command-line options exactly as typed. Connection, credential, TLS, dry-run, and destructive deletion flags are controlled by the migration plan and rejected here. |
+| Extra imapsync options | Accepts only the application’s safe allowlist of non-connection tuning/debug options. Connection, credential, TLS, dry-run, destructive deletion, logging, and unknown flags are rejected; bulk spreadsheets cannot provide this field. |
 | Performance throttles | In Advanced options, optional message/byte-per-second targets are passed to imapsync; for batches MailSwiftSync divides them across workers and globally paces process starts. A finite batch target must be at least the worker count; `0` means unlimited. These controls do not affect Dovecot-native runs. |
 | Process timeout | Bounds one migration process from 1 to 720 hours. Increase it for very large or slow mailboxes; cancellation remains available at any time. |
 

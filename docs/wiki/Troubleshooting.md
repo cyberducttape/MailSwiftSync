@@ -10,7 +10,7 @@ Check the server name, username, and password for the affected side. Many provid
 
 ## Folder mapping is wrong
 
-Run Dry validation and examine the journal. Enable **Map standard folders automatically** first. For unusual folder names, add an imapsync `--f1f2` mapping in **Extra imapsync options** after verifying its syntax in the imapsync documentation.
+Run Dry validation and examine the journal. Enable **Map standard folders automatically** first. The Extra imapsync options field is intentionally limited to MailSwiftSync’s documented safe tuning options; unsupported mapping flags must be handled through a typed product control or a reviewed engine-specific workflow.
 
 ## The destination has unexpected mail
 

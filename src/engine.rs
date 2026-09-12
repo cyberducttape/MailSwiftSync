@@ -118,52 +118,35 @@ pub(crate) fn imapsync_args(
 pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> {
     let options = super::parse_shell_words(extra_options)
         .map_err(|error| format!("Extra options: {error}"))?;
-    const RESERVED: &[&str] = &[
-        "--host1",
-        "--host2",
-        "--user1",
-        "--user2",
-        "--password1",
-        "--password2",
-        "--passfile1",
-        "--passfile2",
-        "--port1",
-        "--port2",
-        "--ssl1",
-        "--ssl2",
-        "--sslargs1",
-        "--sslargs2",
-        "--nossl1",
-        "--nossl2",
-        "--tls1",
-        "--tls2",
-        "--tlsargs1",
-        "--tlsargs2",
-        "--dry",
-        "--delete2",
-        "--delete1",
-        "--expunge1",
-        "--expunge2",
-        "--log",
-        "--logfile",
-        "--logdir",
-        "--nolog",
-        "--showpasswords",
+    // This is deliberately an allowlist. The field is trusted application
+    // configuration, but imapsync's option surface is powerful and changes
+    // over time; an ever-growing denylist cannot establish a safe boundary.
+    // Connection, credential, destructive, logging, and execution options
+    // remain owned by the typed migration plan.
+    const ALLOWED: &[&str] = &[
+        "nofoldersizes",
+        "skipcrossduplicates",
+        "maxlinelength",
+        "timeout",
+        "reconnectretry1",
+        "reconnectretry2",
+        "errorsmax",
+        "pipemess",
+        "maxsleep",
+        "sleep",
+        "subscribe",
+        "debug",
+        "debugimap1",
+        "debugimap2",
     ];
     for option in options {
         let name = option
             .split_once('=')
             .map_or(option.as_str(), |(name, _)| name);
         let normalized_name = name.trim_start_matches('-');
-        let reserved = RESERVED
-            .iter()
-            .any(|reserved| reserved.trim_start_matches('-') == normalized_name);
-        if reserved
-            || normalized_name.starts_with("delete")
-            || normalized_name.starts_with("expunge")
-        {
+        if !ALLOWED.contains(&normalized_name) {
             return Err(format!(
-                "Extra options: {name} is controlled by the migration plan"
+                "Extra options: {name} is not in the safe imapsync option allowlist; use the typed migration controls for settings controlled by the plan"
             ));
         }
     }
