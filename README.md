@@ -76,11 +76,11 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 - **Local first.** The app does not relay mail data through a MailSwiftSync service; it invokes the selected local or destination-side engine only when you start a run.
 - **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination.
-- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through `IMAPSYNC_PASSWORD1/2` child-process environment variables; Dovecot's remote `imapc_password` override is still visible to the destination-side process and should be treated accordingly.
+- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through `IMAPSYNC_PASSWORD1/2` child-process environment variables; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion, while remote Dovecot runs still use a destination-side `imapc_password` override and should be treated accordingly.
 
 ### Current security boundary
 
-The desktop runner does not persist passwords. imapsync credentials are supplied only to the child process through environment variables; Dovecot credentials currently use `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Treat this as an operator workstation tool until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
+The desktop runner does not persist passwords. imapsync credentials are supplied only to the child process through environment variables. Local Dovecot credentials use a child environment variable and Dovecot config expansion; remote Dovecot credentials currently use `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Treat remote Dovecot and all unattended use as operator-managed until OS-keyring/OAuth delivery or an equivalent secret broker is added. Never put real passwords in a committed CSV.
 
 ### Dovecot mode
 

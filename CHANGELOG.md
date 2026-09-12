@@ -35,6 +35,7 @@ All notable changes to MailSwiftSync are documented here.
 - Upgraded the GUI/spreadsheet dependency line to remove the reported high-severity `quick-xml` vulnerabilities and added `cargo audit` to CI.
 - Batch startup now validates every row before launching any process, preventing restored queues with blank credentials from running.
 - Tightened the live project-phase gate to recognized execution and verification phases only.
+- Local Dovecot commands and verification now receive source credentials through a child environment variable and Dovecot `$ENV:` expansion; remote SSH exposure remains documented.
 
 ### Changed
 

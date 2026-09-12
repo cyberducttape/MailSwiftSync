@@ -281,11 +281,19 @@ impl Form {
     fn prepared_command(&self) -> Result<PreparedCommand, String> {
         if self.engine() == core::Engine::Dovecot {
             let (executable, args) = self.command(false);
+            let env = if self.local_doveadm() {
+                vec![(
+                    "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
+                    self.source_password.clone(),
+                )]
+            } else {
+                Vec::new()
+            };
             return Ok(PreparedCommand {
                 executable,
                 args,
                 cleanup: Vec::new(),
-                env: Vec::new(),
+                env,
             });
         }
         let mut args = self.args(false);
@@ -329,7 +337,9 @@ impl Form {
         if self.engine() != core::Engine::Dovecot {
             return (self.profile.imapsync_path.clone(), self.args(redact));
         }
-        let password = if redact {
+        let password = if self.local_doveadm() {
+            "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD"
+        } else if redact {
             "••••••••"
         } else {
             &self.source_password
@@ -342,6 +352,9 @@ impl Form {
             .parse::<u16>()
             .unwrap_or(endpoint_port);
         let mut args = Vec::new();
+        if self.local_doveadm() {
+            args.push("-k".into());
+        }
         if !self.profile.dovecot_config.trim().is_empty() {
             args.extend(["-c".into(), self.profile.dovecot_config.clone()]);
         }
@@ -393,9 +406,7 @@ impl Form {
         self.wrap_dovecot(args)
     }
     fn wrap_dovecot(&self, args: Vec<String>) -> (String, Vec<String>) {
-        if self.profile.dovecot_ssh_user.trim().is_empty()
-            && ["localhost", "127.0.0.1", "::1"].contains(&self.profile.destination_host.trim())
-        {
+        if self.local_doveadm() {
             (self.profile.doveadm_path.clone(), args)
         } else {
             let target = if self.profile.dovecot_ssh_user.trim().is_empty() {
@@ -421,11 +432,17 @@ impl Form {
             (self.profile.ssh_path.clone(), ssh_args)
         }
     }
+    fn local_doveadm(&self) -> bool {
+        self.profile.dovecot_ssh_user.trim().is_empty()
+            && ["localhost", "127.0.0.1", "::1"].contains(&self.profile.destination_host.trim())
+    }
     fn dovecot_verification_commands(&self, redact: bool) -> Vec<(String, Vec<String>)> {
         if self.engine() != core::Engine::Dovecot {
             return Vec::new();
         }
-        let password = if redact {
+        let password = if self.local_doveadm() {
+            "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD"
+        } else if redact {
             "••••••••"
         } else {
             &self.source_password
@@ -438,6 +455,9 @@ impl Form {
             .parse::<u16>()
             .unwrap_or(endpoint_port);
         let mut source = Vec::new();
+        if self.local_doveadm() {
+            source.push("-k".into());
+        }
         if !self.profile.dovecot_config.trim().is_empty() {
             source.extend(["-c".into(), self.profile.dovecot_config.clone()]);
         }
@@ -782,12 +802,14 @@ fn run_streaming(
 fn run_capture_lines(
     executable: &str,
     args: &[String],
+    env: &[(String, String)],
     cancel: &AtomicBool,
     secrets: &[String],
 ) -> Result<(ExitStatus, Vec<String>), String> {
     let mut command = Command::new(executable);
     command
         .args(args)
+        .envs(env.iter().map(|(key, value)| (key, value)))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     configure_process_group(&mut command);
@@ -1978,6 +2000,14 @@ impl App {
             Vec::new()
         };
         let verification_secret = self.form.source_password.clone();
+        let verification_env = if self.form.local_doveadm() {
+            vec![(
+                "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
+                self.form.source_password.clone(),
+            )]
+        } else {
+            Vec::new()
+        };
         let output_secrets = vec![
             self.form.source_password.clone(),
             self.form.destination_password.clone(),
@@ -2044,6 +2074,7 @@ impl App {
                     match run_capture_lines(
                         verify_exe,
                         verify_args,
+                        if index == 0 { &verification_env } else { &[] },
                         &cancel,
                         std::slice::from_ref(&verification_secret),
                     ) {
@@ -2678,6 +2709,24 @@ mod tests {
         assert!(args.contains(&"sync".into()));
         assert!(args.contains(&"-1".into()));
         assert!(!args.iter().any(|arg| arg == "secret"));
+    }
+
+    #[test]
+    fn local_dovecot_credentials_use_child_environment() {
+        let mut form = dovecot_form();
+        form.source_password = "secret".into();
+        let prepared = form.prepared_command().unwrap();
+        assert!(
+            prepared
+                .args
+                .iter()
+                .any(|arg| { arg == "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD" })
+        );
+        assert!(!prepared.args.iter().any(|arg| arg.contains("secret")));
+        assert_eq!(
+            prepared.env,
+            vec![("MAILSWIFTSYNC_IMAPC_PASSWORD".into(), "secret".into())]
+        );
     }
 
     #[test]
