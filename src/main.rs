@@ -1009,7 +1009,7 @@ fn parse_dovecot_evidence(
 
 enum Event {
     Line(String),
-    ProcessStarted(usize, u32, Option<u64>, Option<u32>, Option<u32>, String),
+    ProcessStarted(String, u32, Option<u64>, Option<u32>, Option<u32>, String),
     JobState(usize, String),
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
@@ -1031,7 +1031,7 @@ fn run_streaming(
     args: &[String],
     env: &[(String, String)],
     tx: &mpsc::SyncSender<Event>,
-    job_index: usize,
+    job_id: &str,
     prefix: &str,
     cancel: &AtomicBool,
     secrets: &[String],
@@ -1054,7 +1054,7 @@ fn run_streaming(
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
         .unwrap_or((None, None, None));
     let _ = tx.send(Event::ProcessStarted(
-        job_index,
+        job_id.to_owned(),
         child.id(),
         start_ticks,
         process_group,
@@ -3156,9 +3156,10 @@ impl App {
         let retry_count = self.form.profile.batch_retry_count.min(3);
         let job_count = jobs.len();
         let (job_tx, job_rx) = crossbeam_channel::unbounded();
+        let queue_job_ids = self.bulk_job_ids.clone();
         for (index, job) in jobs.into_iter().enumerate() {
             job_tx
-                .send((index, job))
+                .send((index, queue_job_ids[index].clone(), job))
                 .expect("batch workers are created immediately after queue setup");
         }
         drop(job_tx);
@@ -3175,7 +3176,7 @@ impl App {
                 let cancel = Arc::clone(&cancel);
                 let launch_limiter = Arc::clone(&launch_limiter);
                 workers.push(thread::spawn(move || {
-                    while let Ok((index, job)) = job_rx.recv() {
+                    while let Ok((index, job_id, job)) = job_rx.recv() {
                         if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState(index, "Cancelled".into()));
                             if let Ok(mut terminal) = terminal_jobs.lock() {
@@ -3213,7 +3214,7 @@ impl App {
                                         &command.args,
                                         &command.env,
                                         &tx,
-                                        index,
+                                        &job_id,
                                         &format!("[{}] ", index + 1),
                                         &cancel,
                                         &[
@@ -3537,7 +3538,7 @@ impl App {
         self.active_run = Some(ActiveRunContext {
             run_id: run_id.clone(),
             project_id: run_project_id,
-            job_id: Some(run_job_id),
+            job_id: Some(run_job_id.clone()),
             kind: RunKind::Single,
             dry_run: run_dry_run,
             engine: run_engine,
@@ -3588,6 +3589,7 @@ impl App {
         ];
         let migration_timeout =
             Duration::from_secs(self.form.profile.migration_timeout_hours * 60 * 60);
+        let process_job_id = run_job_id.clone();
         let cleanup_guard = CleanupGuard::new(cleanup.clone());
         thread::spawn(move || {
             let _cleanup_guard = cleanup_guard;
@@ -3596,7 +3598,7 @@ impl App {
                 &args,
                 &prepared_env,
                 &tx,
-                0,
+                &process_job_id,
                 "",
                 &cancel,
                 &output_secrets,
@@ -3694,21 +3696,14 @@ impl App {
             while let Ok(event) = rx.try_recv() {
                 match event {
                     Event::ProcessStarted(
-                        index,
+                        job_id,
                         pid,
                         start_ticks,
                         process_group,
                         session_id,
                         executable,
                     ) => {
-                        let job_id = match active_run.as_ref().map(|run| run.kind) {
-                            Some(RunKind::Batch) => self.bulk_job_ids.get(index).cloned(),
-                            Some(RunKind::Single) => {
-                                active_run.as_ref().and_then(|run| run.job_id.clone())
-                            }
-                            None => None,
-                        };
-                        if let (Some(run), Some(job_id)) = (active_run.as_ref(), job_id)
+                        if let Some(run) = active_run.as_ref()
                             && let Err(error) = self.store.register_process(&core::ActiveProcess {
                                 run_id: run.run_id.clone(),
                                 job_id,
@@ -5396,7 +5391,7 @@ mod tests {
             &args,
             &[],
             &tx,
-            0,
+            "test-job",
             "",
             &cancel,
             &[],
@@ -5418,7 +5413,7 @@ mod tests {
             &args,
             &[],
             &tx,
-            0,
+            "test-job",
             "",
             &cancel,
             &[],
