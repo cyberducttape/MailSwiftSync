@@ -214,7 +214,7 @@ impl StateStore {
     fn migrate(&self) -> rusqlite::Result<()> {
         self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT);
+          CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), engine TEXT NOT NULL, status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
@@ -240,6 +240,17 @@ impl StateStore {
         if !columns.iter().any(|column| column == "authoritative") {
             self.connection.execute(
                 "ALTER TABLE evidence ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        let job_columns = self
+            .connection
+            .prepare("PRAGMA table_info(mailbox_jobs)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !job_columns.iter().any(|column| column == "preflight_plan") {
+            self.connection.execute(
+                "ALTER TABLE mailbox_jobs ADD COLUMN preflight_plan TEXT",
                 [],
             )?;
         }
@@ -382,6 +393,31 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         Ok(())
+    }
+    pub fn mailbox_state(&self, job_id: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT state FROM mailbox_jobs WHERE id=?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+    pub fn set_preflight_plan(&self, job_id: &str, plan: &str) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE mailbox_jobs SET preflight_plan=?1 WHERE id=?2",
+            params![plan, job_id],
+        )?;
+        Ok(())
+    }
+    pub fn preflight_plan(&self, job_id: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT preflight_plan FROM mailbox_jobs WHERE id=?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .optional()
     }
     /// A desktop restart cannot prove that a previous child process still
     /// exists. Running jobs are therefore made reviewable rather than left in

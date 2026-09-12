@@ -88,7 +88,7 @@ Dovecot mode configures the destination-side command in the form `doveadm ... sy
 
 ## Verification
 
-Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and confidence result. A successful process with incomplete evidence remains pending review. Aggregate evidence is not a substitute for message-level reconciliation; that distinction is explicit in the architecture and release criteria.
+Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and confidence result. A successful process with incomplete evidence remains pending review. Aggregate evidence is not a substitute for message-level reconciliation; that distinction is explicit in the architecture and release criteria. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
 
 ```bash
 cargo fmt --check

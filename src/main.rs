@@ -243,9 +243,39 @@ impl Form {
         a
     }
     fn extra_options_valid(&self) -> Result<(), String> {
-        parse_shell_words(&self.profile.extra_options)
-            .map(|_| ())
-            .map_err(|error| format!("Extra options: {error}"))
+        let options = parse_shell_words(&self.profile.extra_options)
+            .map_err(|error| format!("Extra options: {error}"))?;
+        const RESERVED: &[&str] = &[
+            "--host1",
+            "--host2",
+            "--user1",
+            "--user2",
+            "--password1",
+            "--password2",
+            "--passfile1",
+            "--passfile2",
+            "--port1",
+            "--port2",
+            "--ssl1",
+            "--ssl2",
+            "--nossl1",
+            "--nossl2",
+            "--tls1",
+            "--tls2",
+            "--dry",
+            "--delete2",
+        ];
+        for option in options {
+            let name = option
+                .split_once('=')
+                .map_or(option.as_str(), |(name, _)| name);
+            if RESERVED.contains(&name) {
+                return Err(format!(
+                    "Extra options: {name} is controlled by the migration plan"
+                ));
+            }
+        }
+        Ok(())
     }
     fn prepared_command(&self) -> Result<PreparedCommand, String> {
         if self.engine() == core::Engine::Dovecot {
@@ -272,6 +302,19 @@ impl Form {
                 ),
             ],
         })
+    }
+    /// A deterministic, secret-free description of the live execution plan.
+    /// It intentionally includes the generated arguments so changing an
+    /// option, endpoint, engine, or mapping invalidates an earlier preflight.
+    fn plan_fingerprint(&self) -> String {
+        let mut planned = self.clone();
+        planned.dry_run = false;
+        let (executable, mut args) = planned.command(true);
+        if planned.engine() == core::Engine::ImapSync {
+            remove_option(&mut args, "--password1");
+            remove_option(&mut args, "--password2");
+        }
+        format!("{}\n{}", executable, args.join("\u{1f}"))
     }
     fn engine(&self) -> core::Engine {
         match self.profile.engine {
@@ -1086,23 +1129,18 @@ impl App {
             self.status = "Enter source and destination hosts before creating a project.".into();
             return;
         }
-        match self.store.create_project(
+        match self.store.create_project_with_mailbox(
             &self.form.profile.name,
             &self.form.profile.source_host,
             &self.form.profile.destination_host,
+            &self.form.profile.source_user,
+            &self.form.profile.destination_user,
         ) {
-            Ok(project) => match self.store.add_mailbox(
-                &project.id,
-                &self.form.profile.source_user,
-                &self.form.profile.destination_user,
-            ) {
-                Ok(job) => {
-                    self.project_id = Some(project.id);
-                    self.job_id = Some(job);
-                    self.status = "Project created; ready for preflight review".into();
-                }
-                Err(e) => self.status = format!("Could not create mailbox job: {e}"),
-            },
+            Ok((project, job)) => {
+                self.project_id = Some(project.id);
+                self.job_id = Some(job);
+                self.status = "Project created; ready for preflight review".into();
+            }
             Err(e) => self.status = format!("Could not create project: {e}"),
         }
     }
@@ -1359,16 +1397,28 @@ impl App {
             .evidence(job)
             .map_err(|e| e.to_string())?
             .ok_or("No mailbox evidence is available yet.")?;
+        let state = self
+            .store
+            .mailbox_state(job)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| "unknown".into());
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-verification.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
         let report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Confidence: {}%\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report contains aggregate evidence. Message-level reconciliation and provider-specific warnings require additional verification.",
-            self.form.profile.name,
-            self.form.profile.source_host,
-            self.form.profile.destination_host,
+            "# MailSwiftSync verification report\n\n- Project: {}\n- Source: {}\n- Destination: {}\n- Engine: {}\n- Mailbox state: `{}`\n- Evidence scope: {}\n- Authoritative: `{}`\n- Confidence: {}%\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report contains aggregate evidence. Message-level reconciliation and provider-specific warnings require additional verification.",
+            markdown_escape(&self.form.profile.name),
+            markdown_escape(&self.form.profile.source_host),
+            markdown_escape(&self.form.profile.destination_host),
             self.form.engine().label(),
+            state,
+            if evidence.authoritative {
+                "message-level summary"
+            } else {
+                "aggregate mailbox totals"
+            },
+            evidence.authoritative,
             evidence.confidence_percent(),
             evidence.source_folders,
             evidence.destination_folders,
@@ -1723,8 +1773,22 @@ impl App {
                     project.phase != core::Phase::Discovery
                         && project.phase != core::Phase::Attention
                 });
-            if !preflight_ready || self.job_id.is_none() {
-                self.status = "Run and pass a dry preflight for this project before starting a live migration.".into();
+            let plan_matches = self.job_id.as_deref().is_some_and(|job| {
+                self.store
+                    .preflight_plan(job)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|plan| plan == self.form.plan_fingerprint())
+            });
+            let mailbox_ready = self.job_id.as_deref().is_some_and(|job| {
+                self.store
+                    .mailbox_state(job)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|state| state == "ready" || state == "delta_required")
+            });
+            if !preflight_ready || !mailbox_ready || !plan_matches {
+                self.status = "Run a successful dry preflight for this exact mailbox plan before starting live migration.".into();
                 return;
             }
         }
@@ -1797,6 +1861,10 @@ impl App {
             Vec::new()
         };
         let verification_secret = self.form.source_password.clone();
+        let output_secrets = vec![
+            self.form.source_password.clone(),
+            self.form.destination_password.clone(),
+        ];
         thread::spawn(move || {
             let mut command = Command::new(&exe);
             command
@@ -1817,15 +1885,27 @@ impl App {
             };
             let out = child.stdout.take().expect("piped");
             let err = child.stderr.take().expect("piped");
+            let stdout_secrets = output_secrets.clone();
             let a = tx.clone();
             let t1 = thread::spawn(move || {
-                for l in BufReader::new(out).lines().map_while(Result::ok) {
+                for mut l in BufReader::new(out).lines().map_while(Result::ok) {
+                    for secret in &stdout_secrets {
+                        if !secret.is_empty() {
+                            l = l.replace(secret, "[REDACTED]");
+                        }
+                    }
                     let _ = a.send(Event::Line(l));
                 }
             });
+            let stderr_secrets = output_secrets;
             let b = tx.clone();
             let t2 = thread::spawn(move || {
-                for l in BufReader::new(err).lines().map_while(Result::ok) {
+                for mut l in BufReader::new(err).lines().map_while(Result::ok) {
+                    for secret in &stderr_secrets {
+                        if !secret.is_empty() {
+                            l = l.replace(secret, "[REDACTED]");
+                        }
+                    }
                     let _ = b.send(Event::Line(format!("[stderr] {l}")));
                 }
             });
@@ -2024,6 +2104,11 @@ impl App {
                 );
             }
             if let Some(job) = &self.job_id {
+                if succeeded && self.form.dry_run {
+                    let _ = self
+                        .store
+                        .set_preflight_plan(job, &self.form.plan_fingerprint());
+                }
                 let final_state = if succeeded && self.form.dry_run {
                     "ready"
                 } else if !succeeded {
@@ -2064,6 +2149,12 @@ impl App {
                         .is_some_and(|error| error.contains("verification"))
                     {
                         "verification_failed"
+                    } else if r
+                        .as_ref()
+                        .err()
+                        .is_some_and(|error| error.contains("cancelled"))
+                    {
+                        "cancelled"
                     } else {
                         "failed"
                     };
@@ -2253,6 +2344,13 @@ impl App {
         });
         self.live_confirm_open = open && !close_requested;
     }
+}
+
+fn markdown_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace('\n', " ")
 }
 impl eframe::App for App {
     #[allow(clippy::possible_missing_else, clippy::collapsible_if)]
@@ -2482,6 +2580,16 @@ mod tests {
             ["--foo", "two words", "three four"]
         );
         assert!(parse_shell_words("--broken '").is_err());
+    }
+
+    #[test]
+    fn extra_options_cannot_override_preflighted_connection() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.extra_options = "--host1=attacker.example".into();
+        assert!(form.validate().unwrap_err().contains("controlled"));
+        form.profile.extra_options = "--password2 leaked".into();
+        assert!(form.validate().is_err());
     }
 
     #[test]
