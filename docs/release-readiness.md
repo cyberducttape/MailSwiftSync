@@ -24,6 +24,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Integration tests using disposable IMAP/Dovecot environments in CI or a documented reproducible harness.
 - A clean `cargo audit` result for vulnerabilities; unmaintained transitive dependencies must be tracked and reviewed before each release.
+- CI and release workflows should keep third-party GitHub Actions pinned to reviewed commit SHAs; update pins deliberately with the corresponding release version documented in a comment.
 
 ## Proposed eight-week sequence
 

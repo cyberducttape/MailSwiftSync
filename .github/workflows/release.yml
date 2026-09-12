@@ -27,8 +27,8 @@ jobs:
             binary: mailswiftsync
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
         with:
           targets: ${{ matrix.target }}
       - name: Build
@@ -50,7 +50,7 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}.exe
           Compress-Archive -Path dist/mailswiftsync-${{ matrix.target }}.exe -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
           (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: mailswiftsync-${{ matrix.target }}
           path: dist/*
@@ -59,12 +59,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           pattern: mailswiftsync-*
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           files: dist/*
           prerelease: true

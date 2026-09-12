@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- CI and release workflows now pin third-party GitHub Actions to reviewed commit SHAs while retaining release-version comments, reducing supply-chain drift in builds and artifact publication.
 - Batch live promotion now reloads referenced keyring credentials and compares each selected row against a process-local digest captured by its successful dry validation; changed or missing credentials require a new dry validation without persisting secret-derived material.
 - Single-mailbox live promotion now reloads referenced keyring credentials and compares a process-local credential digest captured by the successful dry preflight; changed or missing session credentials require a new dry preflight without persisting secret-derived material.
 - Live batch retries now exclude evidence-backed `Verified` mailboxes by default, with an explicit operator opt-in for intentional re-runs; selected child runs and event updates retain their original queue-row identity. Excluded rows no longer need restored session credentials loaded or revalidated.
