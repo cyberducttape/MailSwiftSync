@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Extracted secret-runtime, passfile, cleanup-guard, and permission helpers into `src/credentials.rs`; per-run secret creation no longer triggers stale-directory sweeping, keeping cleanup under the instance-owned startup path.
 - Scoped Dovecot exit-code-2 `DeltaRequired` handling to live sync/backup runs; dry source and destination readiness checks now require ordinary successful exit status.
 - Moved application-owned state-directory permission setup into the desktop layer; `StateStore::open` now secures only the database and SQLite sidecars instead of changing permissions on an arbitrary caller-supplied parent directory. Stale secret cleanup now runs only after instance ownership and startup recovery are established.
 - Single-mailbox starts now compare the edited form with the durable project/mailbox identity: dry runs create a fresh project for a changed identity, while live starts require a new matching preflight instead of attaching work to stale metadata.
