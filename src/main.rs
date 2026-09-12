@@ -56,6 +56,10 @@ struct Profile {
     doveadm_path: String,
     #[serde(default = "default_ssh_path")]
     ssh_path: String,
+    /// Where to invoke doveadm. `automatic` preserves legacy hostname-based
+    /// inference; new profiles should prefer an explicit location.
+    #[serde(default = "default_dovecot_execution")]
+    dovecot_execution: String,
     #[serde(default)]
     dovecot_ssh_user: String,
     #[serde(default)]
@@ -97,6 +101,9 @@ fn default_doveadm_path() -> String {
 fn default_ssh_path() -> String {
     "ssh".into()
 }
+fn default_dovecot_execution() -> String {
+    "automatic".into()
+}
 fn default_batch_concurrency() -> usize {
     2
 }
@@ -129,6 +136,7 @@ impl Default for Form {
                 source_tls: default_source_tls(),
                 doveadm_path: default_doveadm_path(),
                 ssh_path: default_ssh_path(),
+                dovecot_execution: default_dovecot_execution(),
                 migration_timeout_hours: default_migration_timeout_hours(),
                 automap: true,
                 ..Default::default()
@@ -273,6 +281,12 @@ impl Form {
         }
         if !(1..=720).contains(&self.profile.migration_timeout_hours) {
             return Err("Migration timeout must be between 1 and 720 hours.".into());
+        }
+        if !matches!(
+            self.profile.dovecot_execution.as_str(),
+            "automatic" | "local" | "ssh"
+        ) {
+            return Err("Dovecot execution must be automatic, local, or ssh.".into());
         }
         for (label, value) in required {
             if value.trim().is_empty() {
@@ -639,8 +653,15 @@ impl Form {
         }
     }
     fn local_doveadm(&self) -> bool {
-        self.profile.dovecot_ssh_user.trim().is_empty()
-            && ["localhost", "127.0.0.1", "::1"].contains(&self.profile.destination_host.trim())
+        match self.profile.dovecot_execution.as_str() {
+            "local" => true,
+            "ssh" => false,
+            _ => {
+                self.profile.dovecot_ssh_user.trim().is_empty()
+                    && ["localhost", "127.0.0.1", "::1"]
+                        .contains(&self.profile.destination_host.trim())
+            }
+        }
     }
     fn dovecot_verification_commands(&self, redact: bool) -> Vec<(String, Vec<String>)> {
         if self.engine() != core::Engine::Dovecot {
@@ -3707,6 +3728,34 @@ impl App {
             }
             if self.form.profile.engine == core::Engine::Dovecot {
                 ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("doveadm execution").on_hover_text(
+                        "Choose where doveadm runs. Automatic preserves legacy localhost/SSH inference; explicit modes avoid hostname ambiguity.",
+                    );
+                    egui::ComboBox::from_id_salt("dovecot_execution")
+                        .selected_text(match self.form.profile.dovecot_execution.as_str() {
+                            "local" => "Local machine",
+                            "ssh" => "Destination over SSH",
+                            _ => "Automatic (legacy inference)",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.form.profile.dovecot_execution,
+                                "local".into(),
+                                "Local machine",
+                            );
+                            ui.selectable_value(
+                                &mut self.form.profile.dovecot_execution,
+                                "ssh".into(),
+                                "Destination over SSH",
+                            );
+                            ui.selectable_value(
+                                &mut self.form.profile.dovecot_execution,
+                                "automatic".into(),
+                                "Automatic (legacy inference)",
+                            );
+                        });
+                });
                 ui.horizontal(|ui| { ui.label("doveadm"); ui.text_edit_singleline(&mut self.form.profile.doveadm_path); });
                 ui.horizontal(|ui| { ui.label("SSH executable"); ui.text_edit_singleline(&mut self.form.profile.ssh_path); });
                 ui.horizontal(|ui| { ui.label("SSH user (optional)"); ui.text_edit_singleline(&mut self.form.profile.dovecot_ssh_user); });
@@ -4233,6 +4282,18 @@ mod tests {
         );
         form.profile.allow_remote_password_in_argv = true;
         assert!(form.prepared_command().is_ok());
+    }
+
+    #[test]
+    fn dovecot_execution_location_can_be_explicit() {
+        let mut form = dovecot_form();
+        form.profile.destination_host = "mail.example".into();
+        form.profile.dovecot_execution = "local".into();
+        assert!(form.local_doveadm());
+        form.profile.dovecot_execution = "ssh".into();
+        assert!(!form.local_doveadm());
+        form.profile.dovecot_execution = "invalid".into();
+        assert!(form.validate().is_err());
     }
 
     #[test]

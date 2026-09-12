@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added explicit Dovecot execution-location choices for local or SSH invocation; automatic hostname inference remains available only for legacy compatibility.
 - Added durable active-process records and startup reconciliation so recorded Unix migration process groups are terminated before interrupted runs become retryable operator-review jobs.
 - imapsync execution now requests certificate verification for both encrypted endpoints (`SSL_verify_mode=1`); expert options cannot override the transport policy.
 - Added bounded redacted stdout/stderr tails to process failures so failure classification and transient retry decisions receive the engine's actual diagnostic output.
