@@ -2313,6 +2313,7 @@ impl StateStore {
         Ok(total > 0 && total == verified)
     }
     fn event(&self, id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
+        let detail = bounded_event_detail(kind, detail);
         self.connection.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)",
             params![id, kind, detail],
@@ -4808,6 +4809,19 @@ destination_port = "143"
             .unwrap();
         assert!(stored_error.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
         assert!(stored_error.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
+
+        db.record_event(&project.id, "operator_error", oversized.as_str())
+            .unwrap();
+        let stored_direct: String = db
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE project_id=?1 AND kind='operator_error'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored_direct.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
+        assert!(stored_direct.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
     }
 
     #[test]
