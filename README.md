@@ -153,6 +153,15 @@ mailswiftsync backup /path/to/state.db /path/to/state-backup.db
 
 The command takes the same instance lock as the GUI, refuses to overwrite an existing destination, and verifies SQLite integrity before reporting success. Backups contain durable project metadata and evidence, never mailbox passwords.
 
+To restore a verified backup, stop every controller using the ledger and run:
+
+```text
+mailswiftsync restore /path/to/state-backup.db /path/to/state.db
+```
+
+The source is validated before installation. If the destination already exists,
+it is preserved as a unique `*.pre-restore-<id>.db` rollback artifact.
+
 For automation and incident response, the same durable ledger can be inspected
 or recovered without opening the GUI:
 

@@ -36,8 +36,10 @@ mailswiftsync backup /path/to/state.db /path/to/state-20260913.db
 The command takes the instance lock, refuses to overwrite an existing file,
 and runs SQLite integrity verification. Preserve the backup with the matching
 exported report. To recover, stop the controller, preserve the current
-database, and validate a copy of the backup before restoring it; never edit a
-live SQLite file or delete the lock to bypass ownership. Opening an older
+database, and run `mailswiftsync restore /path/to/backup.db /path/to/state.db`.
+The restore validates the copy before installation and preserves an existing
+destination under a rollback filename; never edit a live SQLite file or delete
+the lock to bypass ownership. Opening an older
 schema also creates a unique `state.db.pre-migrate-vN.<id>.db` backup before
 the transactional migration; preserve that artifact until the upgrade is
 validated.

@@ -2688,6 +2688,73 @@ fn persistent_state_path() -> PathBuf {
         })
 }
 
+/// Restore a verified SQLite ledger without ever replacing the destination
+/// with an unchecked or partially copied file. An existing destination is
+/// retained as a uniquely named rollback artifact.
+fn restore_ledger(
+    backup: &std::path::Path,
+    destination: &std::path::Path,
+) -> Result<Option<PathBuf>, String> {
+    if backup == destination {
+        return Err("Restore source and destination must be different files.".into());
+    }
+    core::StateStore::open_readonly(backup)
+        .map_err(|error| format!("restore source is not a valid current ledger: {error}"))?;
+    let parent = destination
+        .parent()
+        .ok_or("Restore destination has no parent directory.")?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("could not create restore directory: {error}"))?;
+    restrict_directory_permissions(parent)
+        .map_err(|error| format!("could not secure restore directory: {error}"))?;
+    let temporary = parent.join(format!(
+        ".{}.restore-{}.tmp",
+        destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("state.db"),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::copy(backup, &temporary)
+        .map_err(|error| format!("could not copy restore source: {error}"))?;
+    if let Err(error) = restrict_file_permissions(&temporary) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("could not secure restored ledger: {error}"));
+    }
+    if let Err(error) = core::StateStore::open_readonly(&temporary) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "copied restore ledger failed integrity/schema validation: {error}"
+        ));
+    }
+    let previous = if destination.exists() {
+        let path = parent.join(format!(
+            "{}.pre-restore-{}.db",
+            destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("state"),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::rename(destination, &path)
+            .map_err(|error| format!("could not preserve existing destination: {error}"))?;
+        Some(path)
+    } else {
+        None
+    };
+    if let Err(error) = std::fs::rename(&temporary, destination) {
+        if let Some(previous) = &previous {
+            let _ = std::fs::rename(previous, destination);
+        }
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("could not install restored ledger: {error}"));
+    }
+    restrict_file_permissions(destination).map_err(|error| {
+        format!("restored ledger was installed but could not be secured: {error}")
+    })?;
+    Ok(previous)
+}
+
 fn format_phase_name(phase: core::Phase) -> &'static str {
     match phase {
         core::Phase::Discovery => "Discovery",
@@ -9061,6 +9128,43 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("restore") {
+        let (Some(backup), Some(destination)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync restore <backup.db> <state.db>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync restore <backup.db> <state.db>");
+            std::process::exit(2);
+        }
+        let backup = std::path::PathBuf::from(backup);
+        let destination = std::path::PathBuf::from(destination);
+        let _lock = match acquire_instance_lock(&destination) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Ledger restore refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match restore_ledger(&backup, &destination) {
+            Ok(Some(previous)) => {
+                println!(
+                    "Restored verified ledger to {}; previous ledger preserved at {}.",
+                    destination.display(),
+                    previous.display()
+                );
+                return Ok(());
+            }
+            Ok(None) => {
+                println!("Restored verified ledger to {}.", destination.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Ledger restore failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("status") {
         let Some(state) = arguments.next() else {
             eprintln!("Usage: mailswiftsync status <state.db> [project-id]");
@@ -10595,6 +10699,31 @@ mod tests {
                 0o600
             );
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn ledger_restore_validates_copy_and_preserves_previous_state() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-restore-{}", Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let source = directory.join("backup.db");
+        let destination = directory.join("state.db");
+        core::StateStore::in_memory()
+            .unwrap()
+            .backup_to(&source)
+            .unwrap();
+
+        assert!(restore_ledger(&source, &destination).unwrap().is_none());
+        core::StateStore::open_readonly(&destination).unwrap();
+
+        core::StateStore::in_memory()
+            .unwrap()
+            .backup_to(&destination.with_extension("replacement.db"))
+            .unwrap();
+        let previous = restore_ledger(&source, &destination).unwrap().unwrap();
+        core::StateStore::open_readonly(&previous).unwrap();
+        core::StateStore::open_readonly(&destination).unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
 
