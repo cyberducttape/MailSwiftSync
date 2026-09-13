@@ -464,6 +464,41 @@ impl StateStore {
         self.connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
         )?;
+        if stored_schema_version == CURRENT_SCHEMA_VERSION {
+            // A version number alone is not sufficient: an older alpha can
+            // have stamped the version before a later repair, and tests or a
+            // manually recovered ledger may contain invalid rows. Perform a
+            // small invariant probe before skipping the migration transaction
+            // rather than rewriting every row on every application launch.
+            let current_schema_is_clean = (|| -> rusqlite::Result<bool> {
+                let indexes: i64 = self.connection.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('one_running_run_per_job','one_active_run_per_job','idx_events_project_kind_id')",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if indexes != 3 {
+                    return Ok(false);
+                }
+                let legacy_plan: i64 = self.connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE preflight_plan IS NOT NULL AND (length(preflight_plan) <> 64 OR preflight_plan GLOB '*[^0-9A-Fa-f]*'))",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if legacy_plan != 0 {
+                    return Ok(false);
+                }
+                let duplicate_active_run: i64 = self.connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM (SELECT job_id FROM runs WHERE job_id IS NOT NULL AND status IN ('queued','running') GROUP BY job_id HAVING COUNT(*) > 1))",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok(duplicate_active_run == 0)
+            })()
+            .unwrap_or(false);
+            if current_schema_is_clean {
+                return Ok(());
+            }
+        }
         // Keep all compatibility repairs, constraint creation, and the
         // version stamp in one transaction. If an upgrade fails halfway
         // through, SQLite can roll back to the prior durable ledger.
