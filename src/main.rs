@@ -1003,6 +1003,7 @@ enum Event {
         Option<u32>,
         Option<u32>,
         String,
+        mpsc::SyncSender<Result<(), String>>,
     ),
     ClaimBatch {
         project_id: String,
@@ -1147,6 +1148,7 @@ fn run_streaming(
     // Start both drainers before the reliable lifecycle send. If the
     // bounded event queue is temporarily full, this send may wait, but the
     // child pipes are already being drained and cannot deadlock the engine.
+    let (registration_tx, registration_rx) = mpsc::sync_channel(1);
     let process_started = tx
         .send(Event::ProcessStarted(
             run_id.to_owned(),
@@ -1156,25 +1158,46 @@ fn run_streaming(
             process_group,
             session_id,
             executable.to_owned(),
+            registration_tx,
         ))
         .is_ok();
     let result = if process_started {
-        match wait_with_timeout(&mut child, timeout, cancel) {
-            Err(error) => Err(error.to_string()),
-            Ok(ProcessOutcome {
-                cancelled: true, ..
-            }) => Err("cancelled by operator".into()),
-            Ok(ProcessOutcome {
-                timed_out: true, ..
-            }) => Err("migration exceeded its configured execution timeout".into()),
-            Ok(ProcessOutcome {
-                exit_code: Some(0), ..
-            }) => Ok(StreamOutcome::Completed),
-            Ok(ProcessOutcome {
-                exit_code: Some(2), ..
-            }) if dovecot_exit_two_is_delta => Ok(StreamOutcome::DeltaRequired),
-            Ok(ProcessOutcome { exit_code, .. }) => {
-                Err(format!("process exited with code {:?}", exit_code))
+        let registration = loop {
+            if cancel.load(Ordering::Relaxed) {
+                break Err("cancelled before durable process registration".to_owned());
+            }
+            match registration_rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(result) => break result,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break Err("durable process registration response was lost".to_owned());
+                }
+            }
+        };
+        if let Err(error) = registration {
+            cancel.store(true, Ordering::Relaxed);
+            let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
+            Err(format!(
+                "process registration failed; child cancelled: {error}"
+            ))
+        } else {
+            match wait_with_timeout(&mut child, timeout, cancel) {
+                Err(error) => Err(error.to_string()),
+                Ok(ProcessOutcome {
+                    cancelled: true, ..
+                }) => Err("cancelled by operator".into()),
+                Ok(ProcessOutcome {
+                    timed_out: true, ..
+                }) => Err("migration exceeded its configured execution timeout".into()),
+                Ok(ProcessOutcome {
+                    exit_code: Some(0), ..
+                }) => Ok(StreamOutcome::Completed),
+                Ok(ProcessOutcome {
+                    exit_code: Some(2), ..
+                }) if dovecot_exit_two_is_delta => Ok(StreamOutcome::DeltaRequired),
+                Ok(ProcessOutcome { exit_code, .. }) => {
+                    Err(format!("process exited with code {:?}", exit_code))
+                }
             }
         }
     } else {
@@ -4569,18 +4592,25 @@ impl App {
                         process_group,
                         session_id,
                         executable,
+                        reply,
                     ) => {
-                        if active_run.is_some()
-                            && let Err(error) = self.store.register_process(&core::ActiveProcess {
-                                run_id: process_run_id,
-                                job_id,
-                                pid,
-                                start_ticks,
-                                process_group,
-                                session_id,
-                                executable,
-                            })
-                        {
+                        let result = if active_run.is_some() {
+                            self.store
+                                .register_process(&core::ActiveProcess {
+                                    run_id: process_run_id,
+                                    job_id,
+                                    pid,
+                                    start_ticks,
+                                    process_group,
+                                    session_id,
+                                    executable,
+                                })
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Err("execution has no active durable run context".to_owned())
+                        };
+                        let _ = reply.send(result.clone());
+                        if let Err(error) = result {
                             durability_errors.push(format!(
                                 "persist process identity failed; cancellation requested before an untracked engine can continue: {error}"
                             ));
@@ -6650,7 +6680,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn live_dovecot_exit_code_two_is_a_delta_outcome() {
-        let (tx, _rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let acknowledger = thread::spawn(move || {
+            while let Ok(event) = rx.recv() {
+                if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
+                    let _ = reply.send(Ok(()));
+                }
+            }
+        });
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
         let outcome = run_streaming(
@@ -6667,13 +6704,22 @@ mod tests {
             true,
         )
         .unwrap();
+        drop(tx);
+        acknowledger.join().unwrap();
         assert_eq!(outcome.outcome, StreamOutcome::DeltaRequired);
     }
 
     #[cfg(unix)]
     #[test]
     fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
-        let (tx, _rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let acknowledger = thread::spawn(move || {
+            while let Ok(event) = rx.recv() {
+                if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
+                    let _ = reply.send(Ok(()));
+                }
+            }
+        });
         let cancel = AtomicBool::new(false);
         let args = vec![
             "-c".into(),
@@ -6693,6 +6739,8 @@ mod tests {
             false,
         )
         .unwrap();
+        drop(tx);
+        acknowledger.join().unwrap();
         assert_eq!(result.outcome, StreamOutcome::Completed);
         let evidence = result.imapsync_evidence.unwrap();
         assert_eq!(evidence.source_messages, 7);
@@ -6703,7 +6751,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn dry_dovecot_exit_code_two_is_not_a_delta_outcome() {
-        let (tx, _rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let acknowledger = thread::spawn(move || {
+            while let Ok(event) = rx.recv() {
+                if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
+                    let _ = reply.send(Ok(()));
+                }
+            }
+        });
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
         let outcome = run_streaming(
@@ -6719,6 +6774,8 @@ mod tests {
             Duration::from_secs(5),
             false,
         );
+        drop(tx);
+        acknowledger.join().unwrap();
         assert!(outcome.is_err());
     }
 

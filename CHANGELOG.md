@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Process startup now waits for an explicit durable-registration acknowledgement before supervising the child; lost or rejected registration cancels and reaps the process instead of allowing an untracked engine to continue.
 - Parent-run terminal statuses are now validated at the core boundary; unknown status values cannot enter the durable run ledger.
 - The durable store now refuses to finish a parent batch while any queued or running child remains, preventing incomplete waves from being recorded as terminal.
 - Live dual-IMAPS batch children now re-authenticate both endpoints immediately before each launch attempt, so credential rotation cannot bypass the successful dry-preflight gate.
