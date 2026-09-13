@@ -64,6 +64,7 @@ All notable changes to MailSwiftSync are documented here.
 - Batch concurrency, retry scope, row credentials, and keyring-application controls are now disabled while workers are active, keeping the visible queue immutable for the lifetime of a wave.
 - Live batch admission now forcibly reloads each selected row's referenced keyring credentials before comparing dry-validation fingerprints, so rotated secrets cannot be hidden by cached row passwords.
 - Verification, project, JSON, and health export failures now appear in the operator status and journal instead of being silently discarded.
+- Security documentation now matches runtime-secret cleanup timing and identifies exported verification/health artifacts, rather than describing the visible journal as the audit record.
 - Moved application instance-lock ownership and acquisition into `src/process.rs`, while centralizing restrictive file permissions in `src/credentials.rs`; lock/recovery policy is now separated from the UI controller.
 - Subprocess line framing now reads in fixed-size chunks and caps any single unterminated line at 64 KiB with an explicit truncation marker, preventing pathological engine output from causing unbounded allocation.
 - Subprocess stdout/stderr readers are joined on every completion path, including timeout and cancellation, so reader failures or panics cannot be silently discarded or leave unmanaged reader threads.
