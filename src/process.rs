@@ -56,9 +56,22 @@ pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, S
     Ok(InstanceLock(file))
 }
 
+#[cfg(test)]
 pub(crate) fn collect_redacted_lines<R: Read>(
     reader: R,
     secrets: &[String],
+) -> std::io::Result<CapturedOutput> {
+    collect_redacted_lines_with_callback(reader, secrets, |_| {})
+}
+
+/// Drain and redact a stream while giving a separate consumer every complete
+/// line. The callback is intentionally invoked before bounded diagnostic
+/// retention, allowing semantic reducers to process arbitrarily large engine
+/// reports in constant memory.
+pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
+    reader: R,
+    secrets: &[String],
+    mut callback: F,
 ) -> std::io::Result<CapturedOutput> {
     let mut lines = Vec::new();
     let mut retained_bytes: usize = 0;
@@ -69,6 +82,7 @@ pub(crate) fn collect_redacted_lines<R: Read>(
                 line = line.replace(secret, "[REDACTED]");
             }
         }
+        callback(&line);
         let within_limits = lines.len() < MAX_CAPTURED_OUTPUT_LINES
             && retained_bytes.saturating_add(line.len()) <= MAX_CAPTURED_OUTPUT_BYTES;
         if within_limits {

@@ -60,11 +60,15 @@ pub(crate) fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxE
     })
 }
 
-fn parse_dovecot_status(lines: &[String]) -> Option<(u64, u64, u64)> {
-    let mut folders = 0;
-    let mut messages = 0;
-    let mut bytes = 0;
-    for line in lines {
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DovecotStatusAccumulator {
+    pub(crate) folders: u64,
+    pub(crate) messages: u64,
+    pub(crate) bytes: u64,
+}
+
+impl DovecotStatusAccumulator {
+    pub(crate) fn observe(&mut self, line: &str) {
         let message_count = line
             .split_whitespace()
             .find_map(|token| token.strip_prefix("messages=")?.parse::<u64>().ok());
@@ -72,30 +76,68 @@ fn parse_dovecot_status(lines: &[String]) -> Option<(u64, u64, u64)> {
             .split_whitespace()
             .find_map(|token| token.strip_prefix("vsize=")?.parse::<u64>().ok());
         if let (Some(message_count), Some(virtual_size)) = (message_count, virtual_size) {
-            folders += 1;
-            messages += message_count;
-            bytes += virtual_size;
+            self.folders = self.folders.saturating_add(1);
+            self.messages = self.messages.saturating_add(message_count);
+            self.bytes = self.bytes.saturating_add(virtual_size);
         }
     }
-    (folders > 0).then_some((folders, messages, bytes))
 }
 
+pub(crate) fn dovecot_evidence_from_accumulators(
+    source: &DovecotStatusAccumulator,
+    destination: &DovecotStatusAccumulator,
+) -> Option<core::MailboxEvidence> {
+    (source.folders > 0 && destination.folders > 0).then_some(core::MailboxEvidence {
+        source_messages: source.messages,
+        destination_messages: destination.messages,
+        source_bytes: source.bytes,
+        destination_bytes: destination.bytes,
+        unmatched_messages: 0,
+        failed_messages: 0,
+        source_folders: source.folders,
+        destination_folders: destination.folders,
+        authoritative: false,
+    })
+}
+
+#[cfg(test)]
 pub(crate) fn parse_dovecot_evidence(
     source: &[String],
     destination: &[String],
 ) -> Option<core::MailboxEvidence> {
-    let (source_folders, source_messages, source_bytes) = parse_dovecot_status(source)?;
-    let (destination_folders, destination_messages, destination_bytes) =
-        parse_dovecot_status(destination)?;
-    Some(core::MailboxEvidence {
-        source_messages,
-        destination_messages,
-        source_bytes,
-        destination_bytes,
-        unmatched_messages: 0,
-        failed_messages: 0,
-        source_folders,
-        destination_folders,
-        authoritative: false,
-    })
+    let mut source_status = DovecotStatusAccumulator::default();
+    let mut destination_status = DovecotStatusAccumulator::default();
+    source.iter().for_each(|line| source_status.observe(line));
+    destination
+        .iter()
+        .for_each(|line| destination_status.observe(line));
+    dovecot_evidence_from_accumulators(&source_status, &destination_status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dovecot_accumulator_reduces_large_reports_without_retaining_lines() {
+        let mut source = DovecotStatusAccumulator::default();
+        let mut destination = DovecotStatusAccumulator::default();
+        for _ in 0..100_000 {
+            source.observe("mailbox messages=2 vsize=40");
+            destination.observe("mailbox messages=2 vsize=40");
+        }
+        let evidence = dovecot_evidence_from_accumulators(&source, &destination).unwrap();
+        assert_eq!(evidence.source_folders, 100_000);
+        assert_eq!(evidence.source_messages, 200_000);
+        assert_eq!(evidence.source_bytes, 4_000_000);
+        assert!(evidence.is_exact_match());
+    }
+
+    #[test]
+    fn dovecot_accumulator_ignores_incomplete_status_lines() {
+        let mut status = DovecotStatusAccumulator::default();
+        status.observe("mailbox messages=not-a-number vsize=40");
+        status.observe("mailbox messages=3");
+        assert_eq!(status.folders, 0);
+    }
 }

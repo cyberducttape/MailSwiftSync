@@ -14,9 +14,9 @@ use credentials::{
 use process::terminate_process_group_by_pid;
 use process::{
     InstanceLock, ProcessLaunchLimiter, ProcessOutcome, acquire_instance_lock,
-    collect_redacted_lines, configure_process_group, for_each_lossy_line, linux_process_identity,
-    recorded_process_matches, terminate_process_group, terminate_recorded_process_group,
-    wait_with_timeout,
+    collect_redacted_lines_with_callback, configure_process_group, for_each_lossy_line,
+    linux_process_identity, recorded_process_matches, terminate_process_group,
+    terminate_recorded_process_group, wait_with_timeout,
 };
 
 use calamine::{Reader, open_workbook_auto};
@@ -57,6 +57,8 @@ const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const DOVECOT_SYNC_LOCK_WAIT_SECONDS: u64 = 300;
 const MAX_PENDING_EVENTS: usize = 4_096;
 const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Profile {
@@ -1437,6 +1439,7 @@ fn run_capture_lines(
     cancel: &AtomicBool,
     secrets: &[String],
     timeout: Duration,
+    observer: Option<OutputObserver>,
 ) -> Result<(ProcessOutcome, Vec<String>, bool), String> {
     let mut command = Command::new(executable);
     command
@@ -1466,9 +1469,23 @@ fn run_capture_lines(
         }
     };
     let out_secrets = secrets.to_vec();
-    let out_thread = thread::spawn(move || collect_redacted_lines(stdout, &out_secrets));
+    let out_observer = observer.clone();
+    let out_thread = thread::spawn(move || {
+        collect_redacted_lines_with_callback(stdout, &out_secrets, |line| {
+            if let Some(observer) = &out_observer {
+                observer(line);
+            }
+        })
+    });
     let err_secrets = secrets.to_vec();
-    let err_thread = thread::spawn(move || collect_redacted_lines(stderr, &err_secrets));
+    let err_observer = observer;
+    let err_thread = thread::spawn(move || {
+        collect_redacted_lines_with_callback(stderr, &err_secrets, |line| {
+            if let Some(observer) = &err_observer {
+                observer(line);
+            }
+        })
+    });
     let status = wait_with_timeout(&mut child, timeout, cancel).map_err(|error| error.to_string());
     let stdout_lines = out_thread
         .join()
@@ -1505,7 +1522,8 @@ fn run_dovecot_destination_preflight(
     job_id: &str,
 ) -> Result<(), String> {
     for (index, (executable, args)) in commands.iter().enumerate() {
-        let (status, lines, _) = run_capture_lines(executable, args, &[], cancel, &[], timeout)?;
+        let (status, lines, _) =
+            run_capture_lines(executable, args, &[], cancel, &[], timeout, None)?;
         for line in lines {
             let _ = tx.send(Event::RunLine {
                 run_id: run_id.to_owned(),
@@ -1538,6 +1556,13 @@ fn run_dovecot_verification(
 ) -> Result<core::MailboxEvidence, String> {
     let mut reports = Vec::with_capacity(commands.len());
     for (index, (verify_exe, verify_args)) in commands.iter().enumerate() {
+        let accumulator = Arc::new(Mutex::new(verification::DovecotStatusAccumulator::default()));
+        let observer_accumulator = Arc::clone(&accumulator);
+        let observer: OutputObserver = Arc::new(move |line| {
+            if let Ok(mut accumulator) = observer_accumulator.lock() {
+                accumulator.observe(line);
+            }
+        });
         let (status, report, truncated) = run_capture_lines(
             verify_exe,
             verify_args,
@@ -1545,6 +1570,7 @@ fn run_dovecot_verification(
             cancel,
             secrets,
             timeout,
+            Some(observer),
         )?;
         for line in &report {
             let _ = tx.send(Event::RunLine {
@@ -1566,12 +1592,16 @@ fn run_dovecot_verification(
                 index + 1
             ));
         }
-        reports.push(report);
+        let status = accumulator
+            .lock()
+            .map_err(|_| "Dovecot verification accumulator was poisoned".to_owned())?
+            .clone();
+        reports.push((report, status));
     }
     if reports.len() < 2 {
         return Err("Dovecot verification returned incomplete reports".into());
     }
-    verification::parse_dovecot_evidence(&reports[0], &reports[1])
+    verification::dovecot_evidence_from_accumulators(&reports[0].1, &reports[1].1)
         .ok_or_else(|| "Dovecot status output was incomplete".into())
 }
 
