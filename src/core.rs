@@ -406,6 +406,14 @@ impl StateStore {
             self.connection
                 .execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
         }
+        // Older releases stored the generated preflight plan itself. Do not
+        // carry that potentially sensitive configuration into the hardened
+        // schema; an invalidated row must be preflighted again before live
+        // admission.
+        self.connection.execute(
+            "UPDATE mailbox_jobs SET preflight_plan=NULL WHERE preflight_plan IS NOT NULL AND (length(preflight_plan) <> 64 OR preflight_plan GLOB '*[^0-9A-Fa-f]*')",
+            [],
+        )?;
         let run_columns = self
             .connection
             .prepare("PRAGMA table_info(runs)")?
@@ -2648,6 +2656,27 @@ mod tests {
         drop(connection);
         assert!(StateStore::open(&path).is_err());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn migration_clears_legacy_raw_preflight_plans() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("legacy-plan", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET preflight_plan=?1 WHERE id=?2",
+                params!["--host1 source.example --password1 secret", job],
+            )
+            .unwrap();
+
+        db.migrate().unwrap();
+
+        assert_eq!(db.preflight_plan(&job).unwrap(), None);
     }
 
     #[test]
