@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
@@ -5605,8 +5605,8 @@ impl FailureClass {
     }
 }
 
-fn project_health_state_counts(jobs: &[core::MailboxJob]) -> HashMap<String, usize> {
-    let mut counts = HashMap::new();
+fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
     for job in jobs {
         *counts.entry(job.state.clone()).or_insert(0) += 1;
     }
