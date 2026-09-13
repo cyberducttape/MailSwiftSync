@@ -2259,6 +2259,11 @@ struct App {
     /// This is deliberately separate from `active_run`, which is execution
     /// ownership and must never be inferred from UI selection.
     selected_project_id: Option<String>,
+    /// A selected project that is not the current editable execution context
+    /// is a historical read-only view. Keeping this explicit prevents the
+    /// header/project browser from implying that the visible plan is safe to
+    /// mutate or execute for that project.
+    workspace_read_only: bool,
     projects_open: bool,
     project_search: String,
     project_id: Option<String>,
@@ -2588,6 +2593,7 @@ impl Default for App {
             selected_project_id: restored_bulk_project_id
                 .clone()
                 .or_else(|| project_id.clone()),
+            workspace_read_only: false,
             projects_open: false,
             project_search: String::new(),
             project_id,
@@ -3051,6 +3057,59 @@ fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
 }
 
 impl App {
+    fn current_editable_project_id(&self) -> Option<&str> {
+        self.active_run
+            .as_ref()
+            .map(|run| run.project_id.as_str())
+            .or(self.bulk_project_id.as_deref())
+            .or(self.project_id.as_deref())
+    }
+
+    fn select_workspace_project(&mut self, project_id: String) {
+        if self.running() {
+            self.status = "Project switching is disabled while a migration is running.".into();
+            return;
+        }
+        let editable_id = self.current_editable_project_id().map(str::to_owned);
+        self.workspace_read_only = editable_id.as_deref() != Some(project_id.as_str());
+        self.selected_project_id = Some(project_id);
+        self.active_view = WorkspaceView::Overview;
+        if self.workspace_read_only {
+            self.preflight.clear();
+            self.source_capabilities = None;
+            self.destination_capabilities = None;
+            self.status = "Viewing a historical project read-only. Start a new migration to edit or execute a plan.".into();
+        }
+    }
+
+    fn start_new_migration(&mut self) {
+        if self.running() {
+            self.status =
+                "A migration is running; finish or stop it before starting a new workspace.".into();
+            return;
+        }
+        self.selected_project_id = None;
+        self.workspace_read_only = false;
+        self.project_id = None;
+        self.job_id = None;
+        self.bulk_project_id = None;
+        self.bulk_job_ids.clear();
+        self.bulk_job_index_by_id.clear();
+        self.bulk_selected_ids.clear();
+        self.bulk_preflight_credential_fingerprints.clear();
+        self.bulk_jobs.clear();
+        self.preflight.clear();
+        self.source_capabilities = None;
+        self.destination_capabilities = None;
+        self.live_auth_proof = None;
+        self.live_confirmed = false;
+        self.live_confirmation_plan = None;
+        self.form = Form::default();
+        self.active_view = WorkspaceView::Plan;
+        self.status =
+            "New migration workspace ready; configure the endpoints before preflight.".into();
+    }
+
     fn active_project_id(&self) -> Option<&str> {
         preferred_project_id(
             self.active_run.as_ref().map(|run| run.project_id.as_str()),
@@ -3355,8 +3414,7 @@ impl App {
                                     for project in visible {
                                         let selected = self.selected_project_id.as_deref() == Some(project.id.as_str());
                                         if ui.selectable_label(selected, &project.name).clicked() {
-                                            self.selected_project_id = Some(project.id.clone());
-                                            self.active_view = WorkspaceView::Overview;
+                                            self.select_workspace_project(project.id.clone());
                                             self.projects_open = false;
                                         }
                                         ui.label(format_phase_name(project.phase));
@@ -3373,8 +3431,7 @@ impl App {
                 }
                 ui.add_space(8.0);
                 if ui.button("New migration plan").clicked() {
-                    self.selected_project_id = None;
-                    self.active_view = WorkspaceView::Plan;
+                    self.start_new_migration();
                     self.projects_open = false;
                 }
             });
@@ -3580,7 +3637,19 @@ impl App {
                 }
             });
         }
-        self.source_transport_warning(ui);
+        if !self.workspace_read_only {
+            self.source_transport_warning(ui);
+        }
+        if self.workspace_read_only {
+            ui.group(|ui| {
+                ui.label(RichText::new("HISTORICAL PROJECT · READ ONLY").strong().color(BLUE));
+                ui.label("You are viewing durable history for this project. The editable migration plan and execution controls are detached until you start a new migration.");
+                if ui.button("Start a new migration").clicked() {
+                    self.start_new_migration();
+                }
+            });
+            ui.add_space(8.0);
+        }
         if self.active_view != WorkspaceView::Plan {
             match self.active_view {
                 WorkspaceView::Overview => self.overview_view(ui),
@@ -3892,6 +3961,55 @@ impl App {
         ui.heading("Mailboxes");
         ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(MUTED));
         ui.add_space(12.0);
+        if self.workspace_read_only {
+            let Some(project_id) = self.active_project_id().map(str::to_owned) else {
+                ui.label("No historical project is selected.");
+                return;
+            };
+            match self.store.mailboxes(&project_id) {
+                Ok(jobs) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "{} durable mailbox record(s) · read-only",
+                            jobs.len()
+                        ))
+                        .strong(),
+                    );
+                    egui::ScrollArea::vertical().max_height(520.0).show_rows(
+                        ui,
+                        32.0,
+                        jobs.len(),
+                        |ui, rows| {
+                            egui::Grid::new("historical_mailboxes")
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    if rows.start == 0 {
+                                        ui.strong("Source");
+                                        ui.strong("Destination");
+                                        ui.strong("State");
+                                        ui.end_row();
+                                    }
+                                    for index in rows {
+                                        let job = &jobs[index];
+                                        ui.label(&job.source_mailbox);
+                                        ui.label(&job.destination_mailbox);
+                                        let (badge, color) = job_state_badge(&job.state);
+                                        ui.label(RichText::new(badge).color(color));
+                                        ui.end_row();
+                                    }
+                                });
+                        },
+                    );
+                }
+                Err(error) => {
+                    ui.label(
+                        RichText::new(format!("Historical mailbox records unavailable: {error}"))
+                            .color(ALERT),
+                    );
+                }
+            }
+            return;
+        }
         if self.bulk_jobs.is_empty() {
             ui.group(|ui| {
                 ui.heading("No bulk mailbox list loaded");
@@ -4081,7 +4199,9 @@ impl App {
         ui.heading("Activity");
         ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(MUTED));
         ui.add_space(12.0);
-        if let Some(job) = self.job_id.as_deref() {
+        if !self.workspace_read_only
+            && let Some(job) = self.job_id.as_deref()
+        {
             match self.store.mailbox_state(job) {
                 Ok(Some(state)) if needs_operator_review(&state) => {
                     if ui.button("Prepare safe retry  →").clicked() {
@@ -5100,6 +5220,12 @@ impl App {
         }
     }
     fn start_bulk(&mut self) {
+        if self.workspace_read_only {
+            self.bulk_message =
+                "This project is being viewed read-only. Start a new migration to execute a batch."
+                    .into();
+            return;
+        }
         if self.process_review_required {
             self.bulk_message = "Execution is blocked until you confirm that no unverified migration process remains on this host.".into();
             return;
@@ -6039,6 +6165,12 @@ impl App {
     }
 
     fn start(&mut self) {
+        if self.workspace_read_only {
+            self.status =
+                "This project is being viewed read-only. Start a new migration to execute a plan."
+                    .into();
+            return;
+        }
         if self.process_review_required {
             self.status = "Execution is blocked until you confirm that no unverified migration process remains on this host.".into();
             return;
@@ -8143,7 +8275,7 @@ impl eframe::App for App {
         // for a future persisted Appearance preference.
         ctx.set_zoom_factor(self.ui_scale);
         self.poll();
-        let plan_controls_enabled = !self.running();
+        let plan_controls_enabled = !self.running() && !self.workspace_read_only;
         ctx.data_mut(|data| {
             data.insert_temp(
                 egui::Id::new("plan_controls_enabled"),
@@ -8204,38 +8336,51 @@ impl eframe::App for App {
                             .italics()
                             .color(MUTED),
                     );
-                    if let Ok(projects) = self.store.recent_projects(8)
-                        && !projects.is_empty()
+                    if let Ok(mut projects) = self.store.recent_projects(8)
+                        && (!projects.is_empty() || self.selected_project_id.is_some())
                     {
+                        if let Some(selected_id) = self.selected_project_id.as_deref()
+                            && !projects.iter().any(|project| project.id == selected_id)
+                            && let Ok(Some(project)) = self.store.project(selected_id)
+                        {
+                            projects.push(core::ProjectListItem {
+                                id: project.id,
+                                name: project.name,
+                                source_endpoint: project.source_endpoint,
+                                destination_endpoint: project.destination_endpoint,
+                                phase: project.phase,
+                            });
+                        }
                         let selected_name = self
                             .selected_project_id
                             .as_deref()
                             .and_then(|id| projects.iter().find(|project| project.id == id))
-                            .map(|project| project.name.as_str())
-                            .unwrap_or("Select project");
-                        egui::ComboBox::from_id_salt("project_switcher")
-                            .selected_text(selected_name)
-                            .width(180.0)
-                            .show_ui(ui, |ui| {
-                                for project in projects {
-                                    let selected = self.selected_project_id.as_deref()
-                                        == Some(project.id.as_str());
-                                    if ui
-                                        .selectable_label(
-                                            selected,
-                                            format!(
-                                                "{} · {}",
-                                                project.name,
-                                                format_phase_name(project.phase)
-                                            ),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.selected_project_id = Some(project.id.clone());
-                                        self.active_view = WorkspaceView::Overview;
+                            .map(|project| project.name.clone())
+                            .unwrap_or_else(|| "Select project".into());
+                        ui.add_enabled_ui(!self.running(), |ui| {
+                            egui::ComboBox::from_id_salt("project_switcher")
+                                .selected_text(selected_name)
+                                .width(180.0)
+                                .show_ui(ui, |ui| {
+                                    for project in projects {
+                                        let selected = self.selected_project_id.as_deref()
+                                            == Some(project.id.as_str());
+                                        if ui
+                                            .selectable_label(
+                                                selected,
+                                                format!(
+                                                    "{} · {}",
+                                                    project.name,
+                                                    format_phase_name(project.phase)
+                                                ),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.select_workspace_project(project.id.clone());
+                                        }
                                     }
-                                }
-                            });
+                                });
+                        });
                     }
                     if ui.button("⚙ Settings").clicked() {
                         self.settings_open = true;
@@ -8250,13 +8395,17 @@ impl eframe::App for App {
                         ui.label(RichText::new(&self.status).color(status_color(&self.status)));
                         ui.separator();
                         ui.label(
-                            RichText::new(if self.form.dry_run {
+                            RichText::new(if self.workspace_read_only {
+                                "HISTORICAL VIEW"
+                            } else if self.form.dry_run {
                                 "PREFLIGHT"
                             } else {
                                 "LIVE MIGRATION"
                             })
                             .strong()
-                            .color(if self.form.dry_run {
+                            .color(if self.workspace_read_only {
+                                BLUE
+                            } else if self.form.dry_run {
                                 TEAL
                             } else {
                                 ALERT
