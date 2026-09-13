@@ -5101,6 +5101,10 @@ impl App {
         password: &mut String,
         color: Color32,
     ) {
+        let editable = ui.ctx().data(|data| {
+            data.get_temp::<bool>(egui::Id::new("plan_controls_enabled"))
+                .unwrap_or(true)
+        });
         let inline_error = |ui: &mut egui::Ui, label: &str, value: &str, required: bool| {
             let message = if required && value.trim().is_empty() {
                 Some(format!("{label} is required."))
@@ -5118,12 +5122,12 @@ impl App {
             ui.label(RichText::new("IMAP connection").size(11.0).color(MUTED));
             ui.horizontal(|ui| {
                 ui.label("Server");
-                ui.text_edit_singleline(host);
+                ui.add_enabled(editable, egui::TextEdit::singleline(host));
             });
             inline_error(ui, "Server", host, true);
             ui.horizontal(|ui| {
                 ui.label("User");
-                ui.text_edit_singleline(user);
+                ui.add_enabled(editable, egui::TextEdit::singleline(user));
             });
             inline_error(ui, "User", user, true);
             ui.horizontal(|ui| {
@@ -5132,7 +5136,10 @@ impl App {
                 let visible = ui
                     .ctx()
                     .data_mut(|data| data.get_temp::<bool>(visibility_id).unwrap_or(false));
-                ui.add(egui::TextEdit::singleline(password).password(!visible));
+                ui.add_enabled(
+                    editable,
+                    egui::TextEdit::singleline(password).password(!visible),
+                );
                 if ui.button(if visible { "Hide" } else { "Show" }).clicked() {
                     ui.ctx()
                         .data_mut(|data| data.insert_temp(visibility_id, !visible));
@@ -5727,6 +5734,13 @@ impl eframe::App for App {
     #[allow(clippy::possible_missing_else, clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll();
+        let plan_controls_enabled = !self.running();
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("plan_controls_enabled"),
+                plan_controls_enabled,
+            );
+        });
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) && self.running() {
             if let Some(cancel) = &self.cancel_requested {
                 cancel.store(true, Ordering::Relaxed);
