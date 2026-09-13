@@ -9095,6 +9095,18 @@ fn main() -> eframe::Result<()> {
             Box::new(|_| Ok(Box::<App>::default())),
         );
     };
+    if matches!(command.to_str(), Some("help" | "--help" | "-h")) {
+        print_cli_help();
+        return Ok(());
+    }
+    if matches!(command.to_str(), Some("--version" | "-V" | "version")) {
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync --version");
+            std::process::exit(2);
+        }
+        println!("MailSwiftSync {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if command == std::ffi::OsStr::new("verify") {
         let Some(path) = arguments.next() else {
             eprintln!("Usage: mailswiftsync verify <project-report.json> [trusted-public-key-hex]");
@@ -9431,9 +9443,19 @@ fn main() -> eframe::Result<()> {
         }
     }
     eprintln!(
-        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, `support-bundle`, `customer-proof`, `supervise`, or `headless`; run without a command for the GUI."
+        "Unknown command. Run `mailswiftsync --help` for available commands; run without a command for the GUI."
     );
     std::process::exit(2);
+}
+
+fn print_cli_help() {
+    println!(
+        "MailSwiftSync — durable, evidence-first mailbox migration control plane\n\n\
+Usage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation\n\n\
+Commands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit secret-free JSON status\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export customer-safe migration evidence\n  supervise <state> [poll] [n]   Run automation-safe supervision\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n\n\
+Options:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\n\
+Headless live operations fail nonzero for unresolved verification, delta,\noperator-attention, or durability states."
+    );
 }
 
 #[derive(Debug, Serialize)]

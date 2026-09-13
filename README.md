@@ -178,6 +178,11 @@ mailswiftsync headless /path/to/state.db batch-preflight
 mailswiftsync headless /path/to/state.db batch-live
 ```
 
+Use `mailswiftsync --help` for the complete command contract and
+`mailswiftsync --version` when collecting support or audit metadata. Headless
+live commands return nonzero when work remains unresolved; a zero exit status
+means the requested operation reached its documented terminal condition.
+
 `status` emits secret-free JSON containing project/mailbox states and recorded
 process identities. `recover` takes the application lock, verifies recorded
 process ownership before signalling anything, preserves identities it cannot
