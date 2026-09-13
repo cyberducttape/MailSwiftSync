@@ -1,8 +1,12 @@
 //! Presentation primitives shared by the egui views.
 
+mod account;
 mod status;
 mod theme;
 
+#[cfg(test)]
+pub(crate) use account::password_reveal_allowed;
+pub(crate) use account::{password_visibility_id, render_account};
 #[cfg(test)]
 pub(crate) use status::{StatusSeverity, status_severity};
 pub(crate) use status::{

@@ -75,11 +75,11 @@ use std::{
     time::Duration,
 };
 #[cfg(test)]
-use ui::{StatusSeverity, contrast_ratio, status_severity};
+use ui::{StatusSeverity, contrast_ratio, password_reveal_allowed, status_severity};
 use ui::{
     ThemeColors, display_job_state, display_state_key, format_phase_name, job_state_badge,
-    needs_operator_review, project_health_state_counts, recommended_next_action, status_color,
-    workflow_step_index,
+    needs_operator_review, password_visibility_id, project_health_state_counts,
+    recommended_next_action, render_account, status_color, workflow_step_index,
 };
 
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
@@ -7152,143 +7152,6 @@ impl App {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn account(
-        ui: &mut egui::Ui,
-        title: &str,
-        host: &mut String,
-        user: &mut String,
-        auth_method: &mut String,
-        password: &mut SecretString,
-        password_required: bool,
-        saved_credential: bool,
-        color: Color32,
-    ) {
-        let editable = ui.ctx().data(|data| {
-            data.get_temp::<bool>(egui::Id::new("plan_controls_enabled"))
-                .unwrap_or(true)
-        });
-        let danger = if ui.visuals().dark_mode {
-            ThemeColors::dark().danger
-        } else {
-            ThemeColors::light().danger
-        };
-        let inline_error = |ui: &mut egui::Ui, label: &str, value: &str, required: bool| {
-            let message = if required && value.trim().is_empty() {
-                Some(format!("{label} is required."))
-            } else if !value.is_empty() && value.chars().any(char::is_control) {
-                Some(format!("{label} contains an invalid control character."))
-            } else {
-                None
-            };
-            if let Some(message) = message {
-                ui.label(RichText::new(message).color(danger).size(11.0));
-            }
-        };
-        ui.group(|ui| {
-            ui.heading(RichText::new(title).color(color));
-            ui.label(RichText::new("IMAP connection").size(11.0).color(
-                if ui.visuals().dark_mode {
-                    ThemeColors::dark().text_secondary
-                } else {
-                    ThemeColors::light().text_secondary
-                },
-            ));
-            ui.horizontal(|ui| {
-                ui.label("Server");
-                ui.add_enabled(editable, egui::TextEdit::singleline(host));
-            });
-            inline_error(ui, "Server", host, true);
-            ui.horizontal(|ui| {
-                ui.label("User");
-                ui.add_enabled(editable, egui::TextEdit::singleline(user));
-            });
-            inline_error(ui, "User", user, true);
-            ui.horizontal(|ui| {
-                ui.label("Authentication");
-                egui::ComboBox::from_id_salt(("auth_method", title))
-                    .selected_text(if auth_method_is_oauth(auth_method) {
-                        "OAuth 2.0 / XOAUTH2"
-                    } else {
-                        "Password"
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(auth_method, "password".into(), "Password");
-                        ui.selectable_value(auth_method, "oauth2".into(), "OAuth 2.0 / XOAUTH2");
-                    });
-            });
-            if auth_method_is_oauth(auth_method) {
-                ui.label(
-                    RichText::new(
-                        "Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring; MailSwiftSync does not request consent or refresh tokens yet.",
-                    )
-                    .size(11.0)
-                    .color(if ui.visuals().dark_mode {
-                        ThemeColors::dark().text_secondary
-                    } else {
-                        ThemeColors::light().text_secondary
-                    }),
-                );
-            }
-            ui.horizontal(|ui| {
-                ui.label(if auth_method_is_oauth(auth_method) {
-                    "Access token"
-                } else {
-                    "Password"
-                });
-                let visibility_id = password_visibility_id(title);
-                let visible = ui.ctx().data_mut(|data| {
-                    let requested = data.get_temp::<bool>(visibility_id).unwrap_or(false);
-                    if !editable {
-                        // A lock transition must not leave a disclosure state
-                        // waiting to be resurrected when the form is unlocked.
-                        data.remove::<bool>(visibility_id);
-                    }
-                    password_reveal_allowed(editable, requested)
-                });
-                ui.add_enabled(
-                    editable,
-                    egui::TextEdit::singleline(password.as_mut_string()).password(!visible),
-                );
-                if ui
-                    .add_enabled(
-                        editable,
-                        egui::Button::new(if visible { "Hide" } else { "Show" }),
-                    )
-                    .clicked()
-                {
-                    ui.ctx()
-                        .data_mut(|data| data.insert_temp(visibility_id, !visible));
-                }
-            });
-            if saved_credential && password.is_empty() {
-                ui.label(
-                    RichText::new(if auth_method_is_oauth(auth_method) {
-                        "Saved OAuth credential configured; session token not required."
-                    } else {
-                        "Saved credential configured; session password not required."
-                    })
-                    .color(if ui.visuals().dark_mode {
-                        ThemeColors::dark().success
-                    } else {
-                        ThemeColors::light().success
-                    })
-                    .size(12.0),
-                );
-            } else {
-                inline_error(
-                    ui,
-                    if auth_method_is_oauth(auth_method) {
-                        "Access token"
-                    } else {
-                        "Password"
-                    },
-                    password.as_str(),
-                    password_required && !saved_credential,
-                );
-            }
-        });
-    }
     fn preview(&mut self, ctx: &egui::Context) {
         if !self.preview {
             return;
@@ -8266,14 +8129,6 @@ fn classified_failure_detail(error: &str) -> String {
     )
 }
 
-fn password_reveal_allowed(editable: bool, requested: bool) -> bool {
-    editable && requested
-}
-
-fn password_visibility_id(title: &str) -> egui::Id {
-    egui::Id::new(("password_visibility", title))
-}
-
 struct BoundedLineBuffer {
     lines: VecDeque<String>,
     bytes: usize,
@@ -8550,13 +8405,13 @@ impl eframe::App for App {
                                 self.form.engine() != core::Engine::Dovecot;
                             if ui.available_width() > 900.0 {
                                 ui.columns(2, |c| {
-                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
-                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
+                                    render_account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
+                                    render_account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                                 });
                             } else {
-                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
+                                render_account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
                                 ui.add_space(8.0);
-                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
+                                render_account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                             }
                             ui.horizontal_wrapped(|ui| {
                                 ui.label("Source port");

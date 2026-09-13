@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the source/destination account editor and password-visibility
+  policy into `src/ui/account.rs`, reducing UI responsibility in `App` while
+  keeping secret edits behind the dedicated `SecretString` boundary.
 - Kept password and OAuth-token copies in zeroizing containers throughout
   process redaction, Dovecot verification environments, and worker handoff;
   imapsync argument construction now always uses placeholders and never
