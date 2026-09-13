@@ -34,8 +34,8 @@ or container restart policy. The container does not grant the process access
 to a secret manager, OAuth provider, host Dovecot socket, or a display; those
 must be explicitly integrated and documented by the deployment owner.
 
-The image installs Debian's `dovecot-core` and `dovecot-imapd` packages and a pinned upstream
-`imapsync` Debian artifact because Bookworm does not provide `imapsync` in its
+The image installs pinned Debian Bookworm `dovecot-core` and `dovecot-imapd`
+packages and a pinned upstream `imapsync` Debian artifact because Bookworm does not provide `imapsync` in its
 default repositories. The artifact version and SHA-256 are recorded in the
 Dockerfile and verified before installation. Record the image digest and the
 reported engine versions in the migration change record. Native image signing
