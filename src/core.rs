@@ -460,50 +460,51 @@ impl StateStore {
           CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
           CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
           CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);")?;
+        // Keep all compatibility repairs, constraint creation, and the
+        // version stamp in one transaction. If an upgrade fails halfway
+        // through, SQLite can roll back to the prior durable ledger.
+        let tx = self.connection.unchecked_transaction()?;
         // Existing pre-0.1 databases need the new verification dimensions too.
-        let columns = self
-            .connection
+        let columns = tx
             .prepare("PRAGMA table_info(evidence)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if !columns.iter().any(|column| column == "source_folders") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE evidence ADD COLUMN source_folders INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
         if !columns.iter().any(|column| column == "destination_folders") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE evidence ADD COLUMN destination_folders INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
         if !columns.iter().any(|column| column == "authoritative") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE evidence ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
-        let job_columns = self
-            .connection
+        let job_columns = tx
             .prepare("PRAGMA table_info(mailbox_jobs)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if !job_columns.iter().any(|column| column == "preflight_plan") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE mailbox_jobs ADD COLUMN preflight_plan TEXT",
                 [],
             )?;
         }
         if !job_columns.iter().any(|column| column == "config") {
-            self.connection
-                .execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
+            tx.execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
         }
         if !job_columns
             .iter()
             .any(|column| column == "destination_identity")
         {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE mailbox_jobs ADD COLUMN destination_identity TEXT NOT NULL DEFAULT ''",
                 [],
             )?;
@@ -512,59 +513,56 @@ impl StateStore {
         // carry that potentially sensitive configuration into the hardened
         // schema; an invalidated row must be preflighted again before live
         // admission.
-        self.connection.execute(
+        tx.execute(
             "UPDATE mailbox_jobs SET preflight_plan=NULL WHERE preflight_plan IS NOT NULL AND (length(preflight_plan) <> 64 OR preflight_plan GLOB '*[^0-9A-Fa-f]*')",
             [],
         )?;
-        let run_columns = self
-            .connection
+        let run_columns = tx
             .prepare("PRAGMA table_info(runs)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if !run_columns.iter().any(|column| column == "plan_snapshot") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE runs ADD COLUMN plan_snapshot TEXT NOT NULL DEFAULT ''",
                 [],
             )?;
         }
         if !run_columns.iter().any(|column| column == "parent_run_id") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE runs ADD COLUMN parent_run_id TEXT REFERENCES runs(id)",
                 [],
             )?;
         }
         if !run_columns.iter().any(|column| column == "phase_at_start") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE runs ADD COLUMN phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown'",
                 [],
             )?;
         }
-        let event_columns = self
-            .connection
+        let event_columns = tx
             .prepare("PRAGMA table_info(events)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if !event_columns.iter().any(|column| column == "run_id") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE events ADD COLUMN run_id TEXT REFERENCES runs(id)",
                 [],
             )?;
         }
-        self.connection.execute(
+        tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_run_created ON events(run_id, created_at DESC)",
             [],
         )?;
-        self.connection.execute(
+        tx.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC)",
             [],
         )?;
-        let process_columns = self
-            .connection
+        let process_columns = tx
             .prepare("PRAGMA table_info(active_processes)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if !process_columns.iter().any(|column| column == "start_ticks") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE active_processes ADD COLUMN start_ticks INTEGER",
                 [],
             )?;
@@ -573,25 +571,24 @@ impl StateStore {
             .iter()
             .any(|column| column == "process_group")
         {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE active_processes ADD COLUMN process_group INTEGER",
                 [],
             )?;
         }
         if !process_columns.iter().any(|column| column == "session_id") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE active_processes ADD COLUMN session_id INTEGER",
                 [],
             )?;
         }
         if !process_columns.iter().any(|column| column == "executable") {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE active_processes ADD COLUMN executable TEXT NOT NULL DEFAULT ''",
                 [],
             )?;
         }
-        let history_columns = self
-            .connection
+        let history_columns = tx
             .prepare("PRAGMA table_info(evidence_history)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -599,7 +596,7 @@ impl StateStore {
             .iter()
             .any(|column| column == "authoritative")
         {
-            self.connection.execute(
+            tx.execute(
                 "ALTER TABLE evidence_history ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
@@ -607,19 +604,18 @@ impl StateStore {
         // Older alpha versions did not enforce one active run per mailbox.
         // Reconcile those ledgers before creating the partial unique indexes;
         // otherwise an otherwise recoverable database would fail to open.
-        self.reconcile_duplicate_active_runs()?;
-        self.connection.execute_batch(
+        Self::reconcile_duplicate_active_runs(&tx)?;
+        tx.execute_batch(
             "CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
              CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');",
         )?;
-        self.connection
-            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
+        tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
+        tx.commit()?;
         Ok(())
     }
 
-    fn reconcile_duplicate_active_runs(&self) -> rusqlite::Result<()> {
-        let duplicate_jobs = self
-            .connection
+    fn reconcile_duplicate_active_runs(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        let duplicate_jobs = tx
             .prepare(
                 "SELECT job_id FROM runs WHERE job_id IS NOT NULL AND status IN ('queued','running') GROUP BY job_id HAVING COUNT(*) > 1",
             )?
@@ -628,7 +624,6 @@ impl StateStore {
         if duplicate_jobs.is_empty() {
             return Ok(());
         }
-        let tx = self.connection.unchecked_transaction()?;
         for job_id in duplicate_jobs {
             let run_ids = tx
                 .prepare(
@@ -652,7 +647,7 @@ impl StateStore {
                 )?;
             }
         }
-        tx.commit()
+        Ok(())
     }
     pub fn create_project(
         &self,
