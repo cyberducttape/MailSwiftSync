@@ -2711,6 +2711,17 @@ fn restore_ledger(
         .map_err(|error| format!("could not create restore directory: {error}"))?;
     restrict_directory_permissions(parent)
         .map_err(|error| format!("could not secure restore directory: {error}"))?;
+    if !destination.exists() {
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{}", destination.display(), suffix));
+            if sidecar.exists() {
+                return Err(format!(
+                    "restore destination has an orphaned SQLite sidecar {}; remove or recover it before restoring",
+                    sidecar.display()
+                ));
+            }
+        }
+    }
     let temporary = parent.join(format!(
         ".{}.restore-{}.tmp",
         destination
@@ -10746,6 +10757,12 @@ mod tests {
 
         assert!(restore_ledger(&source, &destination).unwrap().is_none());
         core::StateStore::open_readonly(&destination).unwrap();
+        std::fs::remove_file(&destination).unwrap();
+        let orphaned_sidecar = PathBuf::from(format!("{}-wal", destination.display()));
+        std::fs::write(&orphaned_sidecar, b"orphaned sqlite sidecar").unwrap();
+        assert!(restore_ledger(&source, &destination).is_err());
+        std::fs::remove_file(orphaned_sidecar).unwrap();
+        assert!(restore_ledger(&source, &destination).unwrap().is_none());
 
         core::StateStore::in_memory()
             .unwrap()
