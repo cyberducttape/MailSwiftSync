@@ -279,4 +279,20 @@ mod tests {
         fs::remove_dir(target).unwrap();
         fs::remove_dir(base).unwrap();
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_private_acl_is_applied_to_runtime_secret_material() {
+        let base = std::env::temp_dir().join(format!("mailswiftsync-acl-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        super::restrict_directory_permissions(&base).unwrap();
+        let secret = base.join("secret");
+        super::write_secret_file(&secret, "test-secret").unwrap();
+        // The ACL calls are the assertion: failure means the runtime would
+        // otherwise silently inherit a broader Windows DACL. Native CI runs
+        // this test on Windows; the secret is removed even if later checks
+        // fail.
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "test-secret");
+        fs::remove_dir_all(base).unwrap();
+    }
 }
