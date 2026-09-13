@@ -1980,6 +1980,7 @@ struct App {
     cancel_requested: Option<Arc<AtomicBool>>,
     bulk_project_id: Option<String>,
     bulk_job_ids: Vec<String>,
+    bulk_job_index_by_id: HashMap<String, usize>,
     /// Process-local credential material from the last successful dry
     /// validation for each durable queue row. Restored queues start empty.
     bulk_preflight_credential_fingerprints: Vec<Option<String>>,
@@ -2251,6 +2252,11 @@ impl Default for App {
             );
         }
         let restored_bulk_preflight_credential_fingerprints = vec![None; restored_bulk_jobs.len()];
+        let restored_bulk_job_index_by_id = restored_bulk_job_ids
+            .iter()
+            .enumerate()
+            .map(|(index, job_id)| (job_id.clone(), index))
+            .collect();
         Self {
             form,
             output: initial_output,
@@ -2293,6 +2299,7 @@ impl Default for App {
             cancel_requested: None,
             bulk_project_id: restored_bulk_project_id,
             bulk_job_ids: restored_bulk_job_ids,
+            bulk_job_index_by_id: restored_bulk_job_index_by_id,
             bulk_preflight_credential_fingerprints: restored_bulk_preflight_credential_fingerprints,
             preflight: Vec::new(),
             capability_receiver: None,
@@ -4371,6 +4378,7 @@ impl App {
                 }
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
+                self.bulk_job_index_by_id.clear();
                 self.bulk_retry_scope = BulkRetryScope::default();
                 self.bulk_selected_ids.clear();
                 self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
@@ -4378,6 +4386,15 @@ impl App {
             }
             Err(e) => self.bulk_message = e,
         }
+    }
+
+    fn rebuild_bulk_job_index(&mut self) {
+        self.bulk_job_index_by_id = self
+            .bulk_job_ids
+            .iter()
+            .enumerate()
+            .map(|(index, job_id)| (job_id.clone(), index))
+            .collect();
     }
 
     fn apply_bulk_keyring_id(&mut self, source: bool) {
@@ -4729,6 +4746,7 @@ impl App {
         self.bulk_project_id = Some(project_id.clone());
         self.selected_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
+        self.rebuild_bulk_job_index();
         // Resolve queue-row indices to the durable IDs of the project chosen
         // above. A freshly imported dry queue has no old IDs at all, and an
         // edited queue may have IDs from a different project; using those
@@ -5998,9 +6016,9 @@ impl App {
                             && let Some(index) = run.batch_child_index(&job_id, &child_run_id)
                         {
                             let bulk_index = self
-                                .bulk_job_ids
-                                .iter()
-                                .position(|id| id == &job_id)
+                                .bulk_job_index_by_id
+                                .get(&job_id)
+                                .copied()
                                 .unwrap_or(index);
                             if let Some(job) = self.bulk_jobs.get_mut(bulk_index) {
                                 job.state = state.clone();
@@ -6132,7 +6150,7 @@ impl App {
                             // the run/mailbox transaction has committed.
                             if completion_persisted
                                 && let Some(bulk_index) =
-                                    self.bulk_job_ids.iter().position(|id| id == &job_id)
+                                    self.bulk_job_index_by_id.get(&job_id).copied()
                                 && let Some(job) = self.bulk_jobs.get_mut(bulk_index)
                             {
                                 job.state = display_job_state(&final_state).into();
@@ -6168,7 +6186,7 @@ impl App {
                                 && state == "ready"
                                 && let Some(fingerprint) = credential_fingerprint
                                 && let Some(bulk_index) =
-                                    self.bulk_job_ids.iter().position(|id| id == &job_id)
+                                    self.bulk_job_index_by_id.get(&job_id).copied()
                                 && let Some(saved) = self
                                     .bulk_preflight_credential_fingerprints
                                     .get_mut(bulk_index)
@@ -6572,6 +6590,7 @@ impl App {
                 }
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
+                self.bulk_job_index_by_id.clear();
             }
             self.bulk_live_run = false;
             self.live_confirmed = false;
@@ -6704,6 +6723,7 @@ impl App {
                     }
                     self.bulk_project_id = None;
                     self.bulk_job_ids.clear();
+                    self.bulk_job_index_by_id.clear();
                     self.bulk_retry_scope = BulkRetryScope::default();
                     self.bulk_preflight_credential_fingerprints.clear();
                     self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
