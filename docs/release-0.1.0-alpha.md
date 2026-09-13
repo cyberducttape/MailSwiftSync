@@ -6,7 +6,7 @@ This is a technical preview for administrators who want to test the local-first 
 
 - Dovecot-native `doveadm`/`dsync` planning and execution when destination administration is available.
 - `imapsync` fallback for arbitrary IMAP endpoints.
-- Dry-run-first planning, authenticated IMAPS readiness checks, bounded validation concurrency, cancellation, and transient validation retries.
+- Dry-run-first planning, certificate-verified authenticated IMAPS/STARTTLS readiness checks, bounded validation concurrency, cancellation, and transient validation retries.
 - Durable SQLite project state, crash recovery to operator Attention, redacted event history, and Markdown/JSON verification reports.
 - Portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums.
 
