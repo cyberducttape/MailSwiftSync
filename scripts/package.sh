@@ -9,19 +9,20 @@ cd "$project_root"
 
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --locked --release
 target_name="mailswiftsync-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
-mkdir -p dist
-cp target/release/mailswiftsync dist/mailswiftsync
-chmod 0755 dist/mailswiftsync
+mkdir -p dist/package
+cp target/release/mailswiftsync dist/package/mailswiftsync
+cp README.md LICENSE docs/distribution/INSTALL.md docs/wiki/Install-and-first-launch.md dist/package/
+chmod 0755 dist/package/mailswiftsync
 archive="dist/${target_name}.tar.gz"
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
   SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
 fi
 export SOURCE_DATE_EPOCH
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner \
-  -C dist -czf "$archive" mailswiftsync
+  -C dist/package -czf "$archive" .
 if command -v sha256sum >/dev/null 2>&1; then
   (cd dist && sha256sum "$(basename "$archive")") > "${archive}.sha256"
 else
   (cd dist && shasum -a 256 "$(basename "$archive")") > "${archive}.sha256"
 fi
-rm -f dist/mailswiftsync
+rm -rf dist/package

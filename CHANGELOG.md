@@ -16,6 +16,9 @@ All notable changes to MailSwiftSync are documented here.
 
 - Added a guided first-run empty state with a clear **Connect → Assess →
   Prove** path and a direct action to configure the first mailbox.
+- Release archives now include installation guidance, the first-launch guide,
+  README, and license alongside the binary so operators know to install the
+  selected migration engine before starting MailSwiftSync.
 
 - Added separate dark and light semantic UI palettes with high-contrast
   primary, secondary, informational, success, warning, danger, link, border,

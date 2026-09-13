@@ -57,18 +57,22 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}
-          chmod 0755 dist/mailswiftsync-${{ matrix.target }}
+          mkdir -p bundle
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}
+          cp README.md LICENSE docs/distribution/INSTALL.md docs/wiki/Install-and-first-launch.md bundle/
+          chmod 0755 bundle/mailswiftsync-${{ matrix.target }}
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
-          tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -C dist -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz mailswiftsync-${{ matrix.target }}
+          tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -C bundle -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz .
           (cd dist && shasum -a 256 mailswiftsync-${{ matrix.target }}.tar.gz) > dist/mailswiftsync-${{ matrix.target }}.tar.gz.sha256
       - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}.exe
-          Compress-Archive -Path dist/mailswiftsync-${{ matrix.target }}.exe -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
+          New-Item -ItemType Directory -Force bundle | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}.exe
+          Copy-Item README.md,LICENSE,docs/distribution/INSTALL.md,docs/wiki/Install-and-first-launch.md bundle/
+          Compress-Archive -Path bundle/* -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
           (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
