@@ -289,6 +289,53 @@ fn evidence_digest(run_id: &str, plan_snapshot: &str, evidence: &core::MailboxEv
     plan_snapshot_sha256(&canonical)
 }
 
+/// Add a deterministic, bundle-level integrity reference to a structured
+/// report. The digest is calculated over the canonical JSON representation
+/// without the digest field itself, so whitespace changes do not invalidate a
+/// proof while any semantic report change does.
+fn with_proof_digest(mut value: serde_json::Value) -> Result<serde_json::Value, String> {
+    if !value.is_object() {
+        return Err("Migration proof must be a JSON object.".into());
+    }
+    value
+        .as_object_mut()
+        .expect("object checked above")
+        .remove("proof_digest");
+    let canonical = serde_json::to_string(&value).map_err(|error| error.to_string())?;
+    let digest = plan_snapshot_sha256(&canonical);
+    value
+        .as_object_mut()
+        .expect("object checked above")
+        .insert("proof_digest".into(), serde_json::Value::String(digest));
+    Ok(value)
+}
+
+fn verify_proof_file(path: &std::path::Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or("Migration proof must be a JSON object.")?;
+    if object.get("format").and_then(serde_json::Value::as_str)
+        != Some("mailswiftsync-project-report")
+    {
+        return Err("Unsupported migration proof format.".into());
+    }
+    let expected = object
+        .remove("proof_digest")
+        .and_then(|digest| digest.as_str().map(str::to_owned))
+        .ok_or("Migration proof is missing proof_digest.")?;
+    let canonical = serde_json::to_string(&value).map_err(|error| error.to_string())?;
+    let actual = plan_snapshot_sha256(&canonical);
+    if expected != actual {
+        return Err(format!(
+            "Migration proof digest mismatch: expected {expected}, calculated {actual}."
+        ));
+    }
+    Ok(format!("Migration proof verified: {actual}"))
+}
+
 /// Persist only an opaque identity for a preflighted plan. The full
 /// canonical fingerprint is used in memory for the live gate, but the
 /// database only needs equality and should not retain generated arguments.
@@ -3812,6 +3859,7 @@ impl App {
             "runs": run_values,
             "note": "Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
         });
+        let value = with_proof_digest(value)?;
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-project-report.json")
             .save_file()
@@ -7314,6 +7362,28 @@ impl eframe::App for App {
 }
 
 fn main() -> eframe::Result<()> {
+    let mut arguments = std::env::args_os();
+    let _program = arguments.next();
+    if arguments.next().as_deref() == Some(std::ffi::OsStr::new("verify")) {
+        let Some(path) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync verify <project-report.json>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync verify <project-report.json>");
+            std::process::exit(2);
+        }
+        match verify_proof_file(std::path::Path::new(&path)) {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration proof verification failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     eframe::run_native(
         "MailSwiftSync",
         eframe::NativeOptions {
@@ -7410,6 +7480,30 @@ mod tests {
         let mut changed = evidence.clone();
         changed.destination_messages = 9;
         assert_ne!(first, evidence_digest("run-one", "snapshot-one", &changed));
+    }
+
+    #[test]
+    fn migration_proof_digest_detects_semantic_tampering() {
+        let original = serde_json::json!({
+            "format": "mailswiftsync-project-report",
+            "format_version": 1,
+            "project": { "name": "Example migration" },
+            "mailboxes": [],
+            "runs": []
+        });
+        let proof = with_proof_digest(original).unwrap();
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-proof-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("proof.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+        assert!(verify_proof_file(&path).unwrap().contains("verified"));
+
+        let mut tampered = proof;
+        tampered["project"]["name"] = "Altered migration".into();
+        std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+        assert!(verify_proof_file(&path).is_err());
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

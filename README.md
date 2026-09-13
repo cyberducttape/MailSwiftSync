@@ -125,6 +125,14 @@ The desktop runner does not persist passwords. You may enter a password for the 
 
 Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches can be accepted as `Aggregate match`, but they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
 
+The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
+
+```bash
+mailswiftsync verify path/to/mailswiftsync-project-report.json
+```
+
+This command does not contact either mailbox or require the application database. It verifies report integrity only; it does not upgrade aggregate evidence into message-level reconciliation.
+
 ![Batch migration review](docs/wiki/assets/batch-queue.png)
 
 The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the redacted durable event ledger remains the longer-lived audit record.
