@@ -257,13 +257,31 @@ run_product() {
   timeout --foreground 180 "$binary" "$@"
 }
 
+assert_mailbox_state() {
+  local expected="$1"
+  local status_json
+  status_json="$(run_product status "$state")"
+  if ! grep -q "\"state\": \"$expected\"" <<<"$status_json"; then
+    echo "FAIL: durable status did not contain mailbox state '$expected'" >&2
+    printf '%s\n' "$status_json" >&2
+    exit 1
+  fi
+  echo "PASS: durable ledger records mailbox state '$expected'"
+}
+
 run_product headless "$state" preflight \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
 echo "PASS: packaged MailSwiftSync preflight completed against real STARTTLS servers"
+assert_mailbox_state ready
 
 run_product headless "$state" live \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
 echo "PASS: packaged MailSwiftSync live migration completed"
+if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions)?"'; then
+  echo "FAIL: durable ledger did not record a verified terminal state" >&2
+  exit 1
+fi
+echo "PASS: durable ledger records a verified terminal state"
 
 proof="$workspace/customer-proof.json"
 run_product customer-proof "$state" "$proof"
@@ -285,6 +303,11 @@ EOF
 run_product headless "$state" live \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
 echo "PASS: packaged MailSwiftSync incremental live migration completed"
+if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions)?"'; then
+  echo "FAIL: incremental orchestration did not leave a verified terminal state" >&2
+  exit 1
+fi
+echo "PASS: incremental orchestration preserved verified terminal state"
 
 destination_messages="$(find "$workspace/destination/mail/$user/Maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
 if [[ "$destination_messages" -lt 1 ]]; then

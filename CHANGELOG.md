@@ -18,7 +18,8 @@ All notable changes to MailSwiftSync are documented here.
   and checks the resulting Maildir. The fixture selects Dovecot 2.3 or 2.4
   configuration syntax to match the runtime, uses bounded 180-second product
   invocations, and the Docker image now includes OpenSSL for deterministic test
-  certificates.
+  certificates. The lab now also asserts the durable `ready` and verified
+  terminal states after each controller operation.
 - Added paired `--source-secret-file` and `--destination-secret-file` options
   for single-mailbox headless runs. Secret files are size-limited, owner-only
   on Unix, and handed to the zeroizing credential path without entering the
