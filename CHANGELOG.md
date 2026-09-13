@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Batch retry, authentication, claim, and failure diagnostics now use the
+  mailbox child run identity instead of the parent batch run; parent-level
+  output is reserved for wave summaries.
 - Process supervision now treats a migration leader exiting with surviving
   process-group descendants as an abnormal result, terminates the remaining
   group, and refuses to report clean success; a Unix regression test covers

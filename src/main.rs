@@ -4004,11 +4004,11 @@ impl App {
                             }
                             continue;
                         }
-                        let _ = tx.send(Event::Line(format!(
-                            "══ Job {}: {} ══",
-                            index + 1,
-                            job.label
-                        )));
+                        let _ = tx.send(Event::RunLine {
+                            run_id: child_run_id.clone(),
+                            job_id: job_id.clone(),
+                            text: format!("══ Job {}: {} ══", index + 1, job.label),
+                        });
                         let mut completed = false;
                         let mut delta_required = false;
                         for attempt in 0..=retry_count {
@@ -4019,10 +4019,14 @@ impl App {
                                 && let Err(error) = fresh_dual_imaps_authentication(&job.form)
                             {
                                 failed.store(true, Ordering::Relaxed);
-                                let _ = tx.send(Event::Line(format!(
-                                    "[{}] fresh live authentication failed before launch: {error}",
-                                    index + 1
-                                )));
+                                let _ = tx.send(Event::RunLine {
+                                    run_id: child_run_id.clone(),
+                                    job_id: job_id.clone(),
+                                    text: format!(
+                                        "[{}] fresh live authentication failed before launch: {error}",
+                                        index + 1
+                                    ),
+                                });
                                 let _ = tx.send(Event::JobState {
                                     job_id: job_id.clone(),
                                     child_run_id: child_run_id.clone(),
@@ -4073,11 +4077,11 @@ impl App {
                                 if !cancelled {
                                     failed.store(true, Ordering::Relaxed);
                                 }
-                                let _ = tx.send(Event::Line(format!(
-                                    "[{}] {}",
-                                    index + 1,
-                                    error
-                                )));
+                                let _ = tx.send(Event::RunLine {
+                                    run_id: child_run_id.clone(),
+                                    job_id: job_id.clone(),
+                                    text: format!("[{}] {}", index + 1, error),
+                                });
                                 let _ = tx.send(Event::JobState {
                                     job_id: job_id.clone(),
                                     child_run_id: child_run_id.clone(),
@@ -4101,10 +4105,14 @@ impl App {
                                 state: "Running".into(),
                             });
                             if attempt > 0 {
-                                let _ = tx.send(Event::Line(format!(
-                                    "[{}] retry attempt {attempt}/{retry_count}",
-                                    index + 1
-                                )));
+                                let _ = tx.send(Event::RunLine {
+                                    run_id: child_run_id.clone(),
+                                    job_id: job_id.clone(),
+                                    text: format!(
+                                        "[{}] retry attempt {attempt}/{retry_count}",
+                                        index + 1
+                                    ),
+                                });
                                 let _ = tx.send(Event::JobState {
                                     job_id: job_id.clone(),
                                     child_run_id: child_run_id.clone(),
@@ -4219,10 +4227,14 @@ impl App {
                             match result {
                                 Ok(outcome) => {
                                     if outcome == StreamOutcome::DeltaRequired {
-                                        let _ = tx.send(Event::Line(format!(
-                                            "[{}] Dovecot reports an incomplete synchronization; another delta pass is required",
-                                            index + 1
-                                        )));
+                                        let _ = tx.send(Event::RunLine {
+                                            run_id: child_run_id.clone(),
+                                            job_id: job_id.clone(),
+                                            text: format!(
+                                                "[{}] Dovecot reports an incomplete synchronization; another delta pass is required",
+                                                index + 1
+                                            ),
+                                        });
                                         delta_required = true;
                                     }
                                     completed = true;
@@ -4233,11 +4245,15 @@ impl App {
                                         && attempt < retry_count
                                         && is_transient_batch_error(&error) =>
                                 {
-                                    let _ = tx.send(Event::Line(format!(
-                                        "[{}] [{}] transient failure; retrying: {error}",
-                                        index + 1,
-                                        classify_failure(&error).label()
-                                    )));
+                                    let _ = tx.send(Event::RunLine {
+                                        run_id: child_run_id.clone(),
+                                        job_id: job_id.clone(),
+                                        text: format!(
+                                            "[{}] [{}] transient failure; retrying: {error}",
+                                            index + 1,
+                                            classify_failure(&error).label()
+                                        ),
+                                    });
                                     let _ = tx.send(Event::JobState {
                                         job_id: job_id.clone(),
                                         child_run_id: child_run_id.clone(),
@@ -4260,11 +4276,15 @@ impl App {
                                     if !cancelled {
                                         failed.store(true, Ordering::Relaxed);
                                     }
-                                    let _ = tx.send(Event::Line(format!(
-                                        "[{}] [{}] failed: {error}",
-                                        index + 1,
-                                        classify_failure(&error).label()
-                                    )));
+                                    let _ = tx.send(Event::RunLine {
+                                        run_id: child_run_id.clone(),
+                                        job_id: job_id.clone(),
+                                        text: format!(
+                                            "[{}] [{}] failed: {error}",
+                                            index + 1,
+                                            classify_failure(&error).label()
+                                        ),
+                                    });
                                     let _ = tx.send(Event::JobState {
                                         job_id: job_id.clone(),
                                         child_run_id: child_run_id.clone(),
@@ -4373,10 +4393,14 @@ impl App {
                     let Some(child_run_id) = child_run_ids.get(index).cloned() else {
                         continue;
                     };
-                    let _ = tx.send(Event::Line(format!(
-                        "[{}] worker stopped unexpectedly; job moved to Attention",
-                        index + 1
-                    )));
+                    let _ = tx.send(Event::RunLine {
+                        run_id: child_run_id.clone(),
+                        job_id: job_id.clone(),
+                        text: format!(
+                            "[{}] worker stopped unexpectedly; job moved to Attention",
+                            index + 1
+                        ),
+                    });
                     let _ = tx.send(Event::JobState {
                         job_id: job_id.clone(),
                         child_run_id: child_run_id.clone(),
