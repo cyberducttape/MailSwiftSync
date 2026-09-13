@@ -90,6 +90,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   runtime volumes, non-root execution, and packaged `imapsync`/`doveadm`
   dependencies. CI builds the image and smoke-tests its version command;
   official registry publication and image signing remain release gates.
+- Tagged binary publication now depends on a dedicated release quality gate
+  covering formatting, shell syntax, strict Clippy, the locked test suite, and
+  RustSec auditing in addition to cross-platform compilation.
 - The default ledger path is resolved only from `MAILSWIFTSYNC_STATE_PATH` or
   the OS data directory. If neither is available, the controller enters a
   clearly blocked non-durable mode instead of silently placing the ledger in
