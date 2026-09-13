@@ -4450,7 +4450,9 @@ impl App {
         if live {
             self.bulk_live_confirmed = false;
             if self.bulk_project_id.is_none() || self.bulk_job_ids.len() != self.bulk_jobs.len() {
-                self.bulk_message = "Run a successful dry validation for this queue before starting live migrations.".into();
+                self.bulk_message =
+                    "Run a successful preflight for this queue before starting live migrations."
+                        .into();
                 return;
             }
         }
@@ -4458,17 +4460,21 @@ impl App {
             self.bulk_message = "Batch execution requires durable SQLite storage.".into();
             return;
         }
-        let durable_states = if live {
+        let durable_admissions = if live {
+            let Some(project_id) = self.bulk_project_id.as_deref() else {
+                self.bulk_message =
+                    "Run a successful preflight for this queue before starting live migrations."
+                        .into();
+                return;
+            };
             match self
-                .bulk_job_ids
-                .iter()
-                .map(|job_id| self.store.mailbox_state(job_id))
-                .collect::<rusqlite::Result<Vec<_>>>()
+                .store
+                .batch_admission_states(project_id, &self.bulk_job_ids)
             {
-                Ok(states) => states,
+                Ok(states) => states.into_iter().map(Some).collect::<Vec<_>>(),
                 Err(error) => {
                     self.bulk_message = format!(
-                        "Could not read durable mailbox states; batch was not started: {error}"
+                        "Could not read durable batch admission state; batch was not started: {error}"
                     );
                     return;
                 }
@@ -4476,6 +4482,10 @@ impl App {
         } else {
             vec![None; self.bulk_jobs.len()]
         };
+        let durable_states = durable_admissions
+            .iter()
+            .map(|admission| admission.as_ref().map(|value| value.state.clone()))
+            .collect::<Vec<_>>();
         let selected_indices = self
             .bulk_jobs
             .iter()
@@ -4504,19 +4514,12 @@ impl App {
         }
         if live {
             for &index in &selected_indices {
-                let job_id = &self.bulk_job_ids[index];
                 let job = &self.bulk_jobs[index];
                 let state = durable_states[index].as_deref();
-                let preflight = match self.store.preflight_plan(job_id) {
-                    Ok(preflight) => preflight,
-                    Err(error) => {
-                        self.bulk_message = format!(
-                            "Could not read the durable preflight for mailbox {}; batch was not started: {error}",
-                            index + 1
-                        );
-                        return;
-                    }
-                };
+                let preflight = durable_admissions
+                    .get(index)
+                    .and_then(|admission| admission.as_ref())
+                    .and_then(|admission| admission.preflight_plan.as_deref());
                 if !matches!(
                     state,
                     Some(
@@ -4529,7 +4532,7 @@ impl App {
                             | "completed"
                             | "verified"
                     )
-                ) || preflight.as_deref()
+                ) || preflight
                     != Some(plan_fingerprint_digest(&job.form.plan_fingerprint()).as_str())
                 {
                     self.bulk_message = format!(
@@ -4670,26 +4673,19 @@ impl App {
             .iter()
             .map(|&index| self.bulk_job_ids[index].clone())
             .collect::<Vec<_>>();
-        let queue_checkpoints = selected_job_ids
+        let queue_checkpoints = selected_indices
             .iter()
-            .zip(jobs.iter())
-            .map(|(job_id, job)| {
-                if live && job.form.engine() == core::Engine::Dovecot {
-                    self.store.mailbox_checkpoint(job_id)
+            .map(|index| {
+                if live && self.bulk_jobs[*index].form.engine() == core::Engine::Dovecot {
+                    durable_admissions
+                        .get(*index)
+                        .and_then(|admission| admission.as_ref())
+                        .and_then(|admission| admission.checkpoint.clone())
                 } else {
-                    Ok(None)
+                    None
                 }
             })
-            .collect::<rusqlite::Result<Vec<_>>>();
-        let queue_checkpoints = match queue_checkpoints {
-            Ok(value) => value,
-            Err(error) => {
-                self.bulk_message = format!(
-                    "Could not read durable Dovecot checkpoints; batch was not started: {error}"
-                );
-                return;
-            }
-        };
+            .collect::<Vec<_>>();
         self.bulk_live_run = live;
         let expected_plans = if live {
             jobs.iter()

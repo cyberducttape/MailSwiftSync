@@ -5,7 +5,10 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::Path,
+};
 use uuid::Uuid;
 
 fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
@@ -165,6 +168,18 @@ pub struct MailboxJob {
     pub state: String,
     /// Secret-free serialized configuration, if the importer supplied one.
     pub config: Option<String>,
+}
+
+/// The immutable durable facts needed to admit a selected batch. Keeping the
+/// values together prevents the controller from reading state, preflight, and
+/// checkpoint in separate N+1 query passes that could observe different
+/// database versions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchAdmissionState {
+    pub job_id: String,
+    pub state: String,
+    pub preflight_plan: Option<String>,
+    pub checkpoint: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSummary {
@@ -978,6 +993,51 @@ impl StateStore {
             )
             .optional()
             .map(|value| value.flatten())
+    }
+
+    /// Read all durable facts needed for batch admission in one consistent
+    /// query. The returned vector always follows `job_ids` order and rejects
+    /// an ID that is missing from the selected project.
+    pub fn batch_admission_states(
+        &self,
+        project_id: &str,
+        job_ids: &[String],
+    ) -> rusqlite::Result<Vec<BatchAdmissionState>> {
+        if job_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat_n("?", job_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id,state,preflight_plan,checkpoint FROM mailbox_jobs WHERE project_id=?1 AND id IN ({placeholders})"
+        );
+        let mut values = Vec::with_capacity(job_ids.len() + 1);
+        values.push(project_id.to_owned());
+        values.extend(job_ids.iter().cloned());
+        let mut statement = self.connection.prepare(&sql)?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                Ok(BatchAdmissionState {
+                    job_id: row.get(0)?,
+                    state: row.get(1)?,
+                    preflight_plan: row.get(2)?,
+                    checkpoint: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut by_id = rows
+            .into_iter()
+            .map(|row| (row.job_id.clone(), row))
+            .collect::<HashMap<_, _>>();
+        job_ids
+            .iter()
+            .map(|job_id| {
+                by_id
+                    .remove(job_id)
+                    .ok_or(rusqlite::Error::QueryReturnedNoRows)
+            })
+            .collect()
     }
     /// Persist the opaque digest of a preflighted plan. Callers should pass a
     /// canonical plan hash rather than generated command arguments; the
@@ -2337,6 +2397,46 @@ mod tests {
         assert_eq!(events[1].0, "mailbox_added");
         assert!(events[1].1.contains("destination@example"));
         assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("queued"));
+    }
+
+    #[test]
+    fn batch_admission_state_is_read_once_and_returned_in_request_order() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("batch", "old.example", "new.example")
+            .unwrap();
+        let first = db
+            .add_mailbox(&project.id, "first-source", "first-destination")
+            .unwrap();
+        let second = db
+            .add_mailbox(&project.id, "second-source", "second-destination")
+            .unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='ready', preflight_plan='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', checkpoint='checkpoint-2' WHERE id=?1",
+                [&second],
+            )
+            .unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET state='failed', preflight_plan='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' WHERE id=?1",
+                [&first],
+            )
+            .unwrap();
+
+        let rows = db
+            .batch_admission_states(&project.id, &[second.clone(), first.clone()])
+            .unwrap();
+        assert_eq!(rows[0].job_id, second);
+        assert_eq!(rows[0].state, "ready");
+        assert_eq!(rows[0].checkpoint.as_deref(), Some("checkpoint-2"));
+        assert_eq!(rows[1].job_id, first);
+        assert_eq!(rows[1].state, "failed");
+        assert_eq!(rows[1].checkpoint, None);
+        assert!(
+            db.batch_admission_states(&project.id, &["missing".into()])
+                .is_err()
+        );
     }
 
     #[test]
