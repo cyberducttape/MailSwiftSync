@@ -1598,6 +1598,10 @@ struct App {
     /// released automatically if the process crashes, so a later instance
     /// can safely perform orphan recovery without killing a live sibling.
     _instance_lock: Option<InstanceLock>,
+    /// Startup could not prove that every recorded process identity was
+    /// gone or owned by this application. No new execution is allowed until
+    /// the operator confirms the host has been checked.
+    process_review_required: bool,
     persistence_available: bool,
     project_id: Option<String>,
     job_id: Option<String>,
@@ -1812,6 +1816,7 @@ impl Default for App {
             engine_open: true,
             store,
             _instance_lock: instance_lock.ok(),
+            process_review_required: unverified_processes > 0,
             persistence_available: persistence_warning.is_none(),
             project_id,
             job_id,
@@ -2537,6 +2542,16 @@ impl App {
 
     fn project_summary(&mut self, ui: &mut egui::Ui) {
         self.lifecycle_stepper(ui);
+        if self.process_review_required {
+            ui.group(|ui| {
+                ui.label(RichText::new("PROCESS OWNERSHIP REVIEW REQUIRED").strong().color(ALERT));
+                ui.label("MailSwiftSync could not prove that a previously recorded migration process is gone. Do not start another migration until you have checked the host process list and confirmed no MailSwiftSync engine remains.");
+                if ui.button("I confirmed no unverified migration process remains").clicked() {
+                    self.process_review_required = false;
+                    self.status = "Process review acknowledged; execution gates are available again.".into();
+                }
+            });
+        }
         self.source_transport_warning(ui);
         if self.active_view != WorkspaceView::Plan {
             match self.active_view {
@@ -3521,6 +3536,10 @@ impl App {
         }
     }
     fn start_bulk(&mut self) {
+        if self.process_review_required {
+            self.bulk_message = "Execution is blocked until you confirm that no unverified migration process remains on this host.".into();
+            return;
+        }
         if self.bulk_jobs.is_empty() {
             self.bulk_message = "Import a file before starting the queue.".into();
             return;
@@ -4280,6 +4299,10 @@ impl App {
     }
 
     fn start(&mut self) {
+        if self.process_review_required {
+            self.status = "Execution is blocked until you confirm that no unverified migration process remains on this host.".into();
+            return;
+        }
         if !self.form.dry_run {
             let current_plan = plan_fingerprint_digest(&self.form.plan_fingerprint());
             if !self.live_confirmed
