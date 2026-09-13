@@ -4249,7 +4249,12 @@ impl App {
                 return;
             }
         }
-        if let Err(error) = self.form.load_configured_keyring_credentials() {
+        let credential_load = if self.form.dry_run {
+            self.form.load_configured_keyring_credentials()
+        } else {
+            self.form.reload_configured_keyring_credentials()
+        };
+        if let Err(error) = credential_load {
             self.status = error;
             return;
         }

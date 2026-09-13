@@ -60,6 +60,7 @@ All notable changes to MailSwiftSync are documented here.
 - Batch dry/live waves now reuse an existing durable queue only when every row's mailbox identity and secret-free persisted configuration match; edited queues receive a fresh project association instead of reusing stale mailbox IDs.
 - Durable subprocess diagnostic and error event details now have a UTF-8-safe per-entry size cap with an explicit truncation marker, preventing pathological engine output from creating oversized SQLite records.
 - Account identity and credential fields are now locked while an execution is active, keeping the visible plan aligned with the immutable run context and preventing edits from contaminating the next retry.
+- Live single-mailbox startup now forcibly reloads referenced keyring credentials before credential fingerprinting and fresh authentication, so keyring rotation cannot be silently ignored by an older in-memory password.
 - Moved application instance-lock ownership and acquisition into `src/process.rs`, while centralizing restrictive file permissions in `src/credentials.rs`; lock/recovery policy is now separated from the UI controller.
 - Subprocess line framing now reads in fixed-size chunks and caps any single unterminated line at 64 KiB with an explicit truncation marker, preventing pathological engine output from causing unbounded allocation.
 - Subprocess stdout/stderr readers are joined on every completion path, including timeout and cancellation, so reader failures or panics cannot be silently discarded or leave unmanaged reader threads.
