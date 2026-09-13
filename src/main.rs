@@ -50,12 +50,80 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-const NAVY: Color32 = Color32::from_rgb(17, 26, 43);
 const BLUE: Color32 = Color32::from_rgb(45, 113, 205);
 const TEAL: Color32 = Color32::from_rgb(24, 158, 166);
-const SKY: Color32 = Color32::from_rgb(235, 243, 252);
 const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
+
+#[derive(Clone, Copy)]
+struct ThemeColors {
+    background: Color32,
+    panel: Color32,
+    window: Color32,
+    text_primary: Color32,
+    text_secondary: Color32,
+    info: Color32,
+    success: Color32,
+    warning: Color32,
+    danger: Color32,
+    link: Color32,
+    selection: Color32,
+    border: Color32,
+}
+
+impl ThemeColors {
+    fn dark() -> Self {
+        Self {
+            background: Color32::from_rgb(10, 17, 28),
+            panel: Color32::from_rgb(15, 23, 36),
+            window: Color32::from_rgb(24, 35, 51),
+            text_primary: Color32::from_rgb(238, 244, 251),
+            text_secondary: Color32::from_rgb(184, 197, 214),
+            info: Color32::from_rgb(117, 184, 255),
+            success: Color32::from_rgb(88, 213, 192),
+            warning: Color32::from_rgb(245, 193, 92),
+            danger: Color32::from_rgb(255, 142, 130),
+            link: Color32::from_rgb(140, 200, 255),
+            selection: Color32::from_rgb(43, 62, 88),
+            border: Color32::from_rgb(116, 139, 169),
+        }
+    }
+
+    fn light() -> Self {
+        Self {
+            background: Color32::from_rgb(235, 243, 252),
+            panel: Color32::WHITE,
+            window: Color32::WHITE,
+            text_primary: Color32::from_rgb(17, 26, 43),
+            text_secondary: Color32::from_rgb(66, 84, 106),
+            info: Color32::from_rgb(7, 89, 166),
+            success: Color32::from_rgb(8, 127, 112),
+            warning: Color32::from_rgb(128, 91, 0),
+            danger: Color32::from_rgb(161, 38, 26),
+            link: Color32::from_rgb(7, 94, 175),
+            selection: Color32::from_rgb(215, 230, 248),
+            border: Color32::from_rgb(111, 132, 157),
+        }
+    }
+}
+
+#[cfg(test)]
+fn contrast_ratio(foreground: Color32, background: Color32) -> f32 {
+    fn luminance(color: Color32) -> f32 {
+        let channel = |value: u8| {
+            let value = f32::from(value) / 255.0;
+            if value <= 0.03928 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
+    }
+    let foreground = luminance(foreground);
+    let background = luminance(background);
+    (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
+}
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const MAX_VISIBLE_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROCESS_TAIL_LINES: usize = 200;
@@ -3296,6 +3364,14 @@ fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
 }
 
 impl App {
+    fn theme_colors(&self) -> ThemeColors {
+        if self.dark_mode {
+            ThemeColors::dark()
+        } else {
+            ThemeColors::light()
+        }
+    }
+
     /// Refresh the database-backed UI read model at a low frequency. egui may
     /// repaint many times per second while a process is producing output;
     /// those repaints must not turn into repeated SQLite reads.
@@ -4216,6 +4292,7 @@ impl App {
     }
 
     fn mailbox_view(&mut self, ui: &mut egui::Ui) {
+        let colors = self.theme_colors();
         ui.heading("Mailboxes");
         ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(MUTED));
         ui.add_space(12.0);
@@ -4251,7 +4328,7 @@ impl App {
                                         let job = &jobs[index];
                                         ui.label(&job.source_mailbox);
                                         ui.label(&job.destination_mailbox);
-                                        let (badge, color) = job_state_badge(&job.state);
+                                        let (badge, color) = job_state_badge(&job.state, colors);
                                         ui.label(RichText::new(badge).color(color));
                                         ui.end_row();
                                     }
@@ -4477,7 +4554,7 @@ impl App {
                             ));
                         });
                         row.col(|ui| {
-                            let (badge, color) = job_state_badge(&job.state);
+                            let (badge, color) = job_state_badge(&job.state, colors);
                             ui.label(RichText::new(badge).color(color));
                         });
                         row.col(|ui| {
@@ -4576,7 +4653,10 @@ impl App {
                 } else {
                     "No active run"
                 });
-                ui.label(RichText::new(&self.status).color(status_color(&self.status)));
+                ui.label(
+                    RichText::new(&self.status)
+                        .color(status_color(&self.status, self.theme_colors())),
+                );
                 if running && ui.button("Stop migration").clicked() {
                     self.stop_confirm_open = true;
                 }
@@ -5143,6 +5223,7 @@ impl App {
     }
 
     fn verification_view(&mut self, ui: &mut egui::Ui) {
+        let colors = self.theme_colors();
         ui.heading("Verification");
         ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
         ui.add_space(12.0);
@@ -5251,7 +5332,7 @@ impl App {
                                                 .as_ref()
                                                 .map(|(_, evidence, _)| evidence.evidence_level())
                                                 .unwrap_or("No evidence");
-                                            let (badge, color) = job_state_badge(&mailbox.job.state);
+                                            let (badge, color) = job_state_badge(&mailbox.job.state, colors);
                                             if ui
                                                 .selectable_label(
                                                     self.job_id.as_deref() == Some(mailbox.job.id.as_str()),
@@ -7960,6 +8041,7 @@ impl App {
             });
     }
     fn bulk_dialog(&mut self, ctx: &egui::Context) {
+        let colors = self.theme_colors();
         if !self.bulk_open {
             return;
         }
@@ -8107,7 +8189,7 @@ impl App {
                         ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user));
                         ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.source_password).password(true).desired_width(120.0));
                         if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.destination_password).password(true).desired_width(120.0)); }
-                        let (badge, color) = job_state_badge(&job.state);
+                        let (badge, color) = job_state_badge(&job.state, colors);
                         ui.label(RichText::new(badge).color(color));
                         ui.end_row();
                     }
@@ -8619,26 +8701,23 @@ fn display_state_key(state: &str) -> String {
     core::MailboxState::parse(&normalized).map_or(normalized, |state| state.as_str().to_owned())
 }
 
-fn job_state_badge(state: &str) -> (&'static str, Color32) {
+fn job_state_badge(state: &str, colors: ThemeColors) -> (&'static str, Color32) {
     match state {
-        "imported" => ("○ Imported", MUTED),
-        "verified_with_exceptions" => (
-            "✓ Verified with exceptions",
-            Color32::from_rgb(218, 148, 48),
-        ),
-        "verified" => ("✓ Verified", TEAL),
-        "completed" => ("✓ Completed", TEAL),
-        "running" => ("● Running", BLUE),
-        "queued" => ("○ Queued", MUTED),
-        "preflight" => ("◌ Preflight", BLUE),
-        "retrying" => ("↻ Retrying", Color32::from_rgb(218, 148, 48)),
-        "ready" => ("○ Ready", MUTED),
-        "delta_required" => ("↻ Delta required", Color32::from_rgb(218, 148, 48)),
-        "verification_difference" => ("≠ Verification difference", Color32::from_rgb(218, 148, 48)),
-        "attention" => ("! Attention", Color32::from_rgb(218, 148, 48)),
-        "failed" => ("× Failed", ALERT),
-        "cancelled" => ("× Cancelled", ALERT),
-        _ => ("? Unknown", ALERT),
+        "imported" => ("○ Imported", colors.text_secondary),
+        "verified_with_exceptions" => ("✓ Verified with exceptions", colors.warning),
+        "verified" => ("✓ Verified", colors.success),
+        "completed" => ("✓ Completed", colors.success),
+        "running" => ("● Running", colors.info),
+        "queued" => ("○ Queued", colors.text_secondary),
+        "preflight" => ("◌ Preflight", colors.info),
+        "retrying" => ("↻ Retrying", colors.warning),
+        "ready" => ("○ Ready", colors.text_secondary),
+        "delta_required" => ("↻ Delta required", colors.warning),
+        "verification_difference" => ("≠ Verification difference", colors.warning),
+        "attention" => ("! Attention", colors.warning),
+        "failed" => ("× Failed", colors.danger),
+        "cancelled" => ("× Cancelled", colors.danger),
+        _ => ("? Unknown", colors.danger),
     }
 }
 
@@ -8700,12 +8779,12 @@ fn status_severity(status: &str) -> StatusSeverity {
     StatusSeverity::Info
 }
 
-fn status_color(status: &str) -> Color32 {
+fn status_color(status: &str, colors: ThemeColors) -> Color32 {
     match status_severity(status) {
-        StatusSeverity::Info => BLUE,
-        StatusSeverity::Success => TEAL,
-        StatusSeverity::Warning => Color32::from_rgb(218, 148, 48),
-        StatusSeverity::Error => ALERT,
+        StatusSeverity::Info => colors.info,
+        StatusSeverity::Success => colors.success,
+        StatusSeverity::Warning => colors.warning,
+        StatusSeverity::Error => colors.danger,
     }
 }
 
@@ -8955,6 +9034,7 @@ impl eframe::App for App {
         // for a future persisted Appearance preference.
         ctx.set_zoom_factor(self.ui_scale);
         self.poll();
+        let colors = self.theme_colors();
         let plan_controls_enabled = !self.running() && !self.workspace_read_only;
         ctx.data_mut(|data| {
             data.insert_temp(
@@ -8967,54 +9047,30 @@ impl eframe::App for App {
         } else {
             egui::Visuals::light()
         };
-        v.panel_fill = if self.dark_mode {
-            Color32::from_rgb(15, 23, 36)
-        } else {
-            SKY
-        };
-        v.window_fill = if self.dark_mode {
-            Color32::from_rgb(24, 35, 51)
-        } else {
-            Color32::WHITE
-        };
-        v.widgets.active.bg_fill = BLUE;
-        v.widgets.hovered.bg_fill = if self.dark_mode {
-            Color32::from_rgb(43, 62, 88)
-        } else {
-            Color32::from_rgb(215, 230, 248)
-        };
-        v.widgets.noninteractive.bg_stroke = Stroke::new(
-            1.0,
-            if self.dark_mode {
-                Color32::from_rgb(72, 91, 116)
-            } else {
-                Color32::from_rgb(205, 219, 235)
-            },
-        );
+        v.panel_fill = colors.panel;
+        v.window_fill = colors.window;
+        v.widgets.active.bg_fill = colors.info;
+        v.widgets.hovered.bg_fill = colors.selection;
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, colors.border);
         ctx.set_visuals(v);
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::new()
-                    .fill(if self.dark_mode {
-                        Color32::from_rgb(24, 35, 51)
-                    } else {
-                        Color32::WHITE
-                    })
+                    .fill(colors.window)
                     .inner_margin(egui::Margin::symmetric(24, 15)),
             )
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("MAILSWIFTSYNC").strong().size(23.0).color(
-                        if self.dark_mode {
-                            Color32::from_rgb(232, 238, 247)
-                        } else {
-                            NAVY
-                        },
-                    ));
+                    ui.label(
+                        RichText::new("MAILSWIFTSYNC")
+                            .strong()
+                            .size(23.0)
+                            .color(colors.text_primary),
+                    );
                     ui.label(
                         RichText::new("mailbox migration control plane")
                             .italics()
-                            .color(MUTED),
+                            .color(colors.link),
                     );
                     let projects = self.ui_projects.iter().take(8).cloned().collect::<Vec<_>>();
                     if !projects.is_empty() || self.selected_project_id.is_some() {
@@ -9059,7 +9115,9 @@ impl eframe::App for App {
                                 ui.label(format!("elapsed {}", format_elapsed(started.elapsed())));
                             }
                         }
-                        ui.label(RichText::new(&self.status).color(status_color(&self.status)));
+                        ui.label(
+                            RichText::new(&self.status).color(status_color(&self.status, colors)),
+                        );
                         ui.separator();
                         ui.label(
                             RichText::new(if self.workspace_read_only {
@@ -9071,11 +9129,11 @@ impl eframe::App for App {
                             })
                             .strong()
                             .color(if self.workspace_read_only {
-                                BLUE
+                                colors.info
                             } else if self.form.dry_run {
-                                TEAL
+                                colors.success
                             } else {
-                                ALERT
+                                colors.danger
                             }),
                         );
                     });
@@ -9086,15 +9144,16 @@ impl eframe::App for App {
             .default_width(185.0)
             .frame(
                 egui::Frame::new()
-                    .fill(if self.dark_mode {
-                        Color32::from_rgb(15, 23, 36)
-                    } else {
-                        Color32::WHITE
-                    })
+                    .fill(colors.panel)
                     .inner_margin(egui::Margin::same(16)),
             )
             .show(ctx, |ui| {
-                ui.label(RichText::new("WORKSPACE").size(11.0).strong().color(MUTED));
+                ui.label(
+                    RichText::new("WORKSPACE")
+                        .size(11.0)
+                        .strong()
+                        .color(colors.text_secondary),
+                );
                 ui.add_space(6.0);
                 for (view, label) in [
                     (WorkspaceView::Overview, "Overview"),
@@ -9119,11 +9178,7 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(if self.dark_mode {
-                        Color32::from_rgb(10, 17, 28)
-                    } else {
-                        SKY
-                    })
+                    .fill(colors.background)
                     .inner_margin(egui::Margin::same(24)),
             )
             .show(ctx, |ui| {
@@ -10857,7 +10912,10 @@ mod tests {
         values.insert("destination_user".into(), "new@example".into());
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
         assert_eq!(job.state, "imported");
-        assert_eq!(job_state_badge(&job.state).0, "○ Imported");
+        assert_eq!(
+            job_state_badge(&job.state, ThemeColors::dark()).0,
+            "○ Imported"
+        );
         assert!(job.form.source_password.is_empty());
         assert!(job.form.validate().is_err());
     }
@@ -12131,6 +12189,27 @@ mod tests {
     }
 
     #[test]
+    fn semantic_theme_text_colors_meet_normal_text_contrast_target() {
+        for colors in [ThemeColors::dark(), ThemeColors::light()] {
+            for foreground in [
+                colors.text_primary,
+                colors.text_secondary,
+                colors.info,
+                colors.success,
+                colors.warning,
+                colors.danger,
+                colors.link,
+            ] {
+                assert!(
+                    contrast_ratio(foreground, colors.background) >= 4.5,
+                    "foreground {:?} does not meet contrast target",
+                    foreground
+                );
+            }
+        }
+    }
+
+    #[test]
     fn displayed_batch_states_map_to_durable_retry_keys() {
         assert_eq!(display_state_key("Failed"), "failed");
         assert_eq!(display_state_key("Delta required"), "delta_required");
@@ -12163,10 +12242,19 @@ mod tests {
 
     #[test]
     fn mailbox_state_badges_are_semantic_and_not_uniform() {
-        assert_eq!(job_state_badge("verified").0, "✓ Verified");
-        assert_eq!(job_state_badge("failed").0, "× Failed");
-        assert_ne!(job_state_badge("verified").1, job_state_badge("failed").1);
-        assert_eq!(job_state_badge("retrying").0, "↻ Retrying");
+        assert_eq!(
+            job_state_badge("verified", ThemeColors::dark()).0,
+            "✓ Verified"
+        );
+        assert_eq!(job_state_badge("failed", ThemeColors::dark()).0, "× Failed");
+        assert_ne!(
+            job_state_badge("verified", ThemeColors::dark()).1,
+            job_state_badge("failed", ThemeColors::dark()).1
+        );
+        assert_eq!(
+            job_state_badge("retrying", ThemeColors::dark()).0,
+            "↻ Retrying"
+        );
     }
 
     #[test]
