@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Completed the XOAUTH2 error handshake: IMAP error continuations are now
+  acknowledged with the required empty SASL response before the tagged result
+  is read, preventing failed OAuth probes from hanging or being misclassified.
 - Added a durable-state-driven overview workflow indicator for Connect,
   Assess, Preflight, Migrate, Verify, and Deliver, with explicit copy that
   the presentation step never bypasses execution gates.

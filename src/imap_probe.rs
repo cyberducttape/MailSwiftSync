@@ -1,4 +1,4 @@
-use crate::oauth::read_auth_continuation;
+use crate::oauth::{read_auth_continuation, read_auth_result};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use rustls_pemfile::certs;
@@ -272,7 +272,7 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
                 .and_then(|_| stream.write_all(b"\r\n"))
                 .map_err(|e| e.to_string())?;
             response.clear();
-            read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
+            read_auth_result(&mut stream, "a002", &mut response, &mut buffer)?;
         } else {
             let quoted_password = Zeroizing::new(imap_quote(credential)?);
             let login = format!(
