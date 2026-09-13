@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Clarified customer-proof semantics: exported artifacts identify their
+  durable-completion claim as ledger evidence, not an independent completion
+  certificate, and the verifier now distinguishes artifact integrity/signer
+  validation from migration-completion certification.
 - Gated customer-proof exports on durable project completion, verified mailbox
   states, present evidence, and absence of active runs. The same completion
   contract now protects both GUI and read-only CLI exports.

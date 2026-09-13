@@ -183,17 +183,21 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
-    let object = value
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?;
+    let format = value
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("Migration proof is missing format.")?
+        .to_owned();
     if !matches!(
-        object.get("format").and_then(serde_json::Value::as_str),
-        Some("mailswiftsync-project-report" | "mailswiftsync-customer-proof")
+        format.as_str(),
+        "mailswiftsync-project-report" | "mailswiftsync-customer-proof"
     ) {
         return Err("Unsupported migration proof format.".into());
     }
-    let signature = object.get("proof_signature").cloned();
-    let expected = object
+    let signature = value.get("proof_signature").cloned();
+    let expected = value
+        .as_object_mut()
+        .expect("proof object checked above")
         .remove("proof_digest")
         .and_then(|digest| digest.as_str().map(str::to_owned))
         .ok_or("Migration proof is missing proof_digest.")?;
@@ -257,10 +261,10 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
             "signer identity is not trust-pinned"
         };
         return Ok(format!(
-            "Migration proof verified: {actual}; Ed25519 signature valid for key {key_id}; {trust_message}"
+            "Migration proof integrity verified: {actual}; Ed25519 signature valid for key {key_id}; {trust_message}; this validates the {format} artifact and signer, not independent migration completion"
         ));
     }
     Ok(format!(
-        "Migration proof digest verified (unsigned integrity-only artifact): {actual}"
+        "Migration proof integrity verified (unsigned artifact): {actual}; this validates {format} artifact integrity only, not signer identity or independent migration completion"
     ))
 }

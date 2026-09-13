@@ -75,6 +75,12 @@ pub(crate) fn export_from_store(
         "format": "mailswiftsync-customer-proof",
         "format_version": 1,
         "application_version": env!("CARGO_PKG_VERSION"),
+        "artifact_role": "customer_evidence",
+        "completion_claim": {
+            "durable_project_phase": "Complete",
+            "independent_certificate": false,
+            "note": "This artifact records the completed state of the MailSwiftSync durable ledger at export time. Digest or signature validation proves artifact integrity or signer authenticity; it does not independently certify message-level completion."
+        },
         "project": {
             "name": project.name,
             "phase": format!("{:?}", project.phase),
