@@ -2939,9 +2939,6 @@ impl App {
                 WorkspaceView::Verification => self.verification_view(ui),
                 WorkspaceView::Plan => {}
             }
-            // The legacy plan renderer follows this summary in the same panel.
-            // Hide it when a dedicated workspace view is selected.
-            ui.set_invisible();
             return;
         }
         let (passed, total) = self.readiness_score();
@@ -6898,6 +6895,7 @@ impl eframe::App for App {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         self.project_summary(ui);
+                        if self.active_view == WorkspaceView::Plan {
                         ui.add_enabled_ui(plan_controls_enabled, |ui| {
                             ui.add_space(14.0);
                             ui.heading("Migration plan");
@@ -6909,10 +6907,16 @@ impl eframe::App for App {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; });
                             });
                             ui.add_space(10.0);
-                            ui.columns(2, |c| {
-                                Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE);
-                                Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL);
-                            });
+                            if ui.available_width() > 900.0 {
+                                ui.columns(2, |c| {
+                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE);
+                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL);
+                                });
+                            } else {
+                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE);
+                                ui.add_space(8.0);
+                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL);
+                            }
                             ui.horizontal(|ui| {
                                 ui.label("Source port");
                                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(70.0));
@@ -6963,15 +6967,16 @@ impl eframe::App for App {
                                 let label = if self.form.dry_run { "Run preflight  →" } else { "Start live migration  →" };
                                 if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); }
                             }
-                            if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live mode can add mail to the destination. Review readiness before continuing.").color(ALERT)); }
+                            if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live migration can add mail to the destination. Review readiness before continuing.").color(ALERT)); }
                         });
                         ui.add_space(14.0);
                         ui.group(|ui| {
                             ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); });
-                            egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(12.0)); });
+                            egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(14.0)); });
                         });
                         ui.add_space(8.0);
                         ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED));
+                        }
                     });
             });
         self.preview(ctx);
