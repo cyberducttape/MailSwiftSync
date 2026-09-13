@@ -1,15 +1,11 @@
 use crate::core;
 
 fn number_after(line: &str, marker: &str) -> Option<u64> {
-    line.split_once(marker)?
-        .1
-        .split_whitespace()
-        .find_map(|token| {
-            token
-                .trim_matches(|character: char| !character.is_ascii_digit())
-                .parse()
-                .ok()
-        })
+    let token = line.split_once(marker)?.1.split_whitespace().next()?;
+    if token.is_empty() || !token.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    token.parse().ok()
 }
 
 fn detected_error_count(line: &str) -> Option<u64> {
@@ -244,6 +240,20 @@ mod tests {
         assert!(!evidence.authoritative);
         assert_eq!(evidence.failed_messages, 2);
         assert_eq!(evidence.unmatched_messages, 1);
+    }
+
+    #[test]
+    fn imapsync_parser_rejects_non_numeric_summary_values() {
+        let lines = [
+            "Host1 Nb folders: not-a-number folders".into(),
+            "Host2 Nb folders: 1 folders".into(),
+            "Host1 Nb messages: 1 messages".into(),
+            "Host2 Nb messages: 1 messages".into(),
+            "Host1 Total size: 10 bytes".into(),
+            "Host2 Total size: 10 bytes".into(),
+            "The sync looks good".into(),
+        ];
+        assert!(parse_imapsync_evidence(&lines).is_none());
     }
 
     #[test]
