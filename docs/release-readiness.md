@@ -14,7 +14,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   checksum verification, and GitHub build-provenance attestations.
 - Windows engine children are attached to a Job Object configured with
   kill-on-close semantics, so controller exit does not leave an unowned
-  descendant tree. macOS still uses the conservative no-signal fallback.
+  descendant tree. macOS now records and validates process start time, group,
+  and session identity through `proc_pidinfo`; failures still use the
+  conservative no-signal fallback.
 - Windows private files and directories now receive protected owner/System
   DACLs rather than relying on inherited ACLs; the native Windows runtime test
   suite remains the release evidence for this implementation.
@@ -25,7 +27,8 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   Windows, and macOS targets in addition to compiling release binaries. This
   is platform runtime coverage for shared behavior; the Windows native suite
   also verifies that closing the Job Object terminates the engine process.
-  macOS retains the documented conservative no-signal fallback.
+  macOS retains a conservative no-signal fallback only when its native
+  identity query cannot validate the recorded process.
 - A compatibility-matrix release gate and verification script are checked into
   the repository.
 - Durable attention reasons now survive restart and are included in Markdown

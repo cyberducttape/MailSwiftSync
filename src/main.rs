@@ -15,7 +15,7 @@ use process::terminate_process_group_by_pid;
 use process::{
     InstanceLock, ProcessLaunchLimiter, ProcessOutcome, acquire_instance_lock,
     attach_child_supervisor, collect_redacted_lines_with_callback, configure_process_group,
-    for_each_lossy_line, linux_process_identity, recorded_process_matches, terminate_process_group,
+    for_each_lossy_line, process_identity, recorded_process_matches, terminate_process_group,
     terminate_recorded_process_group, wait_with_timeout,
 };
 
@@ -1447,7 +1447,7 @@ fn run_streaming(
             ));
         }
     };
-    let identity = linux_process_identity(child.id());
+    let identity = process_identity(child.id());
     let (start_ticks, process_group, session_id) = identity
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
         .unwrap_or((None, None, None));
@@ -11445,6 +11445,30 @@ mod tests {
         assert!(!recorded_process_matches(&process));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recorded_macos_process_identity_can_be_validated_and_terminated() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        let (start_ticks, process_group, session_id) = process_identity(pid).unwrap();
+        let process = core::ActiveProcess {
+            run_id: "run-macos-identity".into(),
+            job_id: "job-macos-identity".into(),
+            pid,
+            start_ticks: Some(start_ticks),
+            process_group: Some(process_group),
+            session_id: Some(session_id),
+            executable: "sh".into(),
+        };
+        assert!(recorded_process_matches(&process));
+        terminate_recorded_process_group(&process);
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+    }
+
     #[test]
     fn imap_preflight_requires_tagged_ok_responses() {
         assert!(imap_command_succeeded(
@@ -11622,7 +11646,7 @@ mod tests {
         configure_process_group(&mut command);
         let mut child = command.spawn().unwrap();
         let pid = child.id();
-        let (start_ticks, process_group, session_id) = linux_process_identity(pid).unwrap();
+        let (start_ticks, process_group, session_id) = process_identity(pid).unwrap();
         let process = core::ActiveProcess {
             run_id: "run-startup-recovery".into(),
             job_id: String::new(),

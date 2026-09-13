@@ -609,11 +609,11 @@ fn force_kill_process_group(child: &mut Child) {
     let _ = child.kill();
 }
 
-/// Terminate a process group when its durable Linux identity still matches.
+/// Terminate a process group when its durable platform identity still matches.
 /// Identity is checked both before SIGTERM and immediately before escalation
 /// to SIGKILL; a recycled PID or process group is never signalled.
 pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         if !recorded_process_matches(process) {
             return;
@@ -631,7 +631,7 @@ pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
             force_kill_process_group_id(process_group);
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = process;
 }
 
@@ -651,7 +651,7 @@ pub(crate) fn terminate_process_group_by_pid(pid: u32) {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn linux_process_identity(pid: u32) -> Option<(u64, u32, u32)> {
+pub(crate) fn process_identity(pid: u32) -> Option<(u64, u32, u32)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let fields = stat
         .rsplit_once(") ")?
@@ -664,16 +664,42 @@ pub(crate) fn linux_process_identity(pid: u32) -> Option<(u64, u32, u32)> {
     Some((start_ticks, process_group, session_id))
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn linux_process_identity(_pid: u32) -> Option<(u64, u32, u32)> {
+#[cfg(target_os = "macos")]
+pub(crate) fn process_identity(pid: u32) -> Option<(u64, u32, u32)> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int,
+        )
+    };
+    if size != std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    let session_id = unsafe { libc::getsid(pid as libc::pid_t) };
+    if session_id < 0 {
+        return None;
+    }
+    let start_ticks = info
+        .pbi_start_tvsec
+        .checked_mul(1_000_000)?
+        .checked_add(info.pbi_start_tvusec)?;
+    Some((start_ticks, info.pbi_pgid, session_id as u32))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn process_identity(_pid: u32) -> Option<(u64, u32, u32)> {
     None
 }
 
 pub(crate) fn recorded_process_matches(process: &core::ActiveProcess) -> bool {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let Some((start_ticks, process_group, session_id)) = linux_process_identity(process.pid)
-        else {
+        let Some((start_ticks, process_group, session_id)) = process_identity(process.pid) else {
             return false;
         };
         process.start_ticks == Some(start_ticks)
@@ -682,7 +708,7 @@ pub(crate) fn recorded_process_matches(process: &core::ActiveProcess) -> bool {
             && process_group == process.pid
             && session_id == process.pid
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = process;
         false
