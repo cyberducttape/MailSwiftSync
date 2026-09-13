@@ -380,6 +380,15 @@ fn decode_persisted_batch_profile(config: Option<&str>, job_id: &str) -> Result<
         .map_err(|error| format!("Saved batch mailbox {job_id} is corrupt: {error}"))
 }
 
+fn decode_report_run_snapshot(snapshot: &str) -> Result<Option<RunPlanSnapshot>, String> {
+    if snapshot.trim().is_empty() {
+        return Ok(None);
+    }
+    toml::from_str(snapshot)
+        .map(Some)
+        .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
+}
+
 fn default_imap_port(tls_mode: &str) -> u16 {
     match tls_mode {
         "starttls" | "plain" => 143,
@@ -3803,7 +3812,7 @@ impl App {
             .store
             .mailbox_state(job)
             .map_err(|e| e.to_string())?
-            .unwrap_or_else(|| "unknown".into());
+            .ok_or("The mailbox job has no durable state; evidence export is blocked.")?;
         let project_id = self
             .store
             .project_id_for_mailbox(job)
@@ -3831,9 +3840,12 @@ impl App {
             .run(&evidence_run_id)
             .map_err(|e| e.to_string())?
             .ok_or("The evidence refers to a run that is no longer available.")?;
-        let snapshot_profile = toml::from_str::<RunPlanSnapshot>(&run.plan_snapshot)
-            .ok()
-            .map(|snapshot| snapshot.profile);
+        // An empty snapshot is the only legacy case that can safely use the
+        // project/mailbox fallback. A non-empty but malformed snapshot must
+        // fail closed; otherwise a report could silently describe the
+        // current project instead of the plan that produced the evidence.
+        let snapshot_profile =
+            decode_report_run_snapshot(&run.plan_snapshot)?.map(|run| run.profile);
         let source_endpoint = snapshot_profile
             .as_ref()
             .map(|profile| profile.source_host.as_str())
@@ -7916,6 +7928,15 @@ mod tests {
         assert_eq!(reference, plan_snapshot_sha256(snapshot));
         assert!(!reference.contains("old.example"));
         assert_ne!(reference, plan_snapshot_sha256("dry_run = true"));
+    }
+
+    #[test]
+    fn report_snapshot_decode_only_allows_empty_legacy_snapshots() {
+        assert!(decode_report_run_snapshot("  \n").unwrap().is_none());
+        match decode_report_run_snapshot("not a run snapshot") {
+            Ok(_) => panic!("malformed report snapshot was accepted"),
+            Err(error) => assert!(error.contains("plan snapshot is corrupt")),
+        }
     }
 
     #[test]
