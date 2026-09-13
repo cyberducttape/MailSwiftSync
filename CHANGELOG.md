@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Preflight persistence now reports missing mailbox IDs as errors instead of silently succeeding with no durable update.
 - Evidence insertion is now test-only; production callers can only create durable evidence through run-owned terminal completion transactions.
 - Schema migration now clears legacy non-digest preflight plans instead of retaining potentially sensitive generated arguments; affected mailboxes must be preflighted again before live admission.
 - Recorded-orphan termination now fails closed on macOS and Windows, where the Linux PID/start-time/process-group identity proof is unavailable; only the Linux path may signal a recorded orphan.

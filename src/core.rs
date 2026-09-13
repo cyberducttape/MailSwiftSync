@@ -759,10 +759,13 @@ impl StateStore {
         if plan.len() != 64 || !plan.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        self.connection.execute(
+        let changed = self.connection.execute(
             "UPDATE mailbox_jobs SET preflight_plan=?1 WHERE id=?2",
             params![plan, job_id],
         )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
     pub fn preflight_plan(&self, job_id: &str) -> rusqlite::Result<Option<String>> {
@@ -3123,6 +3126,7 @@ mod tests {
         );
         assert!(db.preflight_plan(&job).unwrap().is_none());
         let digest = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        assert!(db.set_preflight_plan("missing-job", digest).is_err());
         db.set_preflight_plan(&job, digest).unwrap();
         assert_eq!(db.preflight_plan(&job).unwrap().as_deref(), Some(digest));
     }
