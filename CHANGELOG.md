@@ -35,6 +35,8 @@ All notable changes to MailSwiftSync are documented here.
 - Runs now retain the project phase observed at admission as provenance
   metadata, and the schema advances to version 3 with legacy rows marked
   `legacy_unknown` rather than being assigned a fabricated stage.
+- Single-mailbox verification reports now include the captured phase-at-start
+  provenance alongside the immutable run identity.
 
 - Run-scoped diagnostic and verification events are now writable only while the run is active; terminal audit records cannot be appended later.
 - Preflight persistence now reports missing mailbox IDs as errors instead of silently succeeding with no durable update.

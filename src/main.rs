@@ -3106,7 +3106,7 @@ impl App {
             .set_file_name("mailswiftsync-verification.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
-        let report = format!(
+        let mut report = format!(
             "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
             markdown_escape(&project.name),
             markdown_escape(source_endpoint),
@@ -3136,6 +3136,15 @@ impl App {
             evidence.unmatched_messages,
             evidence.failed_messages
         );
+        if let Some(index) = report.find("- Run ID:") {
+            report.insert_str(
+                index,
+                &format!(
+                    "- Project phase at run start: `{}`\n",
+                    markdown_escape(&run.phase_at_start)
+                ),
+            );
+        }
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
