@@ -8668,6 +8668,8 @@ mod tests {
         assert!(dovecot_state_candidate("debug-output").is_none());
         assert!(dovecot_state_candidate("completed").is_none());
         assert!(dovecot_state_candidate(" short ").is_none());
+        assert!(dovecot_state_candidate(" AQAAAHm4+Jk=").is_none());
+        assert!(dovecot_state_candidate("AQAAAHm4+Jk= ").is_none());
     }
 
     #[test]

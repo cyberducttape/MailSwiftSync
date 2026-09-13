@@ -258,8 +258,8 @@ fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionRe
 }
 
 pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
-    let value = value.trim();
-    if value.len() < 8
+    if value != value.trim()
+        || value.len() < 8
         || value.len() > MAX_DOVECOT_CHECKPOINT_BYTES
         || value.bytes().any(|byte| byte.is_ascii_whitespace())
         || matches!(

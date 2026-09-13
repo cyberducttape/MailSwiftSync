@@ -355,9 +355,8 @@ pub(crate) fn run_streaming(
 /// standard-base64 token. Both padded and unpadded forms are accepted; the
 /// durable store applies the same validation before persistence.
 pub(crate) fn dovecot_state_candidate(line: &str) -> Option<String> {
-    let value = line.trim();
-    if core::valid_dovecot_checkpoint(value) {
-        Some(value.to_owned())
+    if core::valid_dovecot_checkpoint(line) {
+        Some(line.to_owned())
     } else {
         None
     }
