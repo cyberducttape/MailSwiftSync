@@ -7099,18 +7099,18 @@ impl eframe::App for App {
             egui::Visuals::light()
         };
         v.panel_fill = if self.dark_mode {
-            Color32::from_rgb(25, 34, 49)
+            Color32::from_rgb(15, 23, 36)
         } else {
             SKY
         };
         v.window_fill = if self.dark_mode {
-            Color32::from_rgb(31, 42, 59)
+            Color32::from_rgb(24, 35, 51)
         } else {
             Color32::WHITE
         };
         v.widgets.active.bg_fill = BLUE;
         v.widgets.hovered.bg_fill = if self.dark_mode {
-            Color32::from_rgb(47, 64, 87)
+            Color32::from_rgb(43, 62, 88)
         } else {
             Color32::from_rgb(215, 230, 248)
         };
@@ -7127,7 +7127,7 @@ impl eframe::App for App {
             .frame(
                 egui::Frame::new()
                     .fill(if self.dark_mode {
-                        Color32::from_rgb(31, 42, 59)
+                        Color32::from_rgb(24, 35, 51)
                     } else {
                         Color32::WHITE
                     })
@@ -7214,7 +7214,7 @@ impl eframe::App for App {
             .frame(
                 egui::Frame::new()
                     .fill(if self.dark_mode {
-                        Color32::from_rgb(25, 34, 49)
+                        Color32::from_rgb(15, 23, 36)
                     } else {
                         Color32::WHITE
                     })
@@ -7247,7 +7247,7 @@ impl eframe::App for App {
             .frame(
                 egui::Frame::new()
                     .fill(if self.dark_mode {
-                        Color32::from_rgb(18, 25, 36)
+                        Color32::from_rgb(10, 17, 28)
                     } else {
                         SKY
                     })
