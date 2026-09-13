@@ -8580,13 +8580,6 @@ fn main() -> eframe::Result<()> {
             std::process::exit(2);
         }
         let state = std::path::PathBuf::from(state);
-        let _lock = match acquire_instance_lock(&state) {
-            Ok(lock) => lock,
-            Err(error) => {
-                eprintln!("Status refused: {error}");
-                std::process::exit(1);
-            }
-        };
         let project_id = match project_id.as_deref() {
             Some(value) => match value.to_str() {
                 Some(value) => Some(value),
@@ -8828,7 +8821,7 @@ fn export_support_bundle(
     state_path: &std::path::Path,
     output_path: &std::path::Path,
 ) -> Result<(), String> {
-    let store = core::StateStore::open(state_path).map_err(|error| error.to_string())?;
+    let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
     let projects = store
         .recent_projects(1_000)
         .map_err(|error| error.to_string())?;
@@ -8926,7 +8919,7 @@ fn headless_status(
     state_path: &std::path::Path,
     selected_project_id: Option<&str>,
 ) -> Result<HeadlessStatus, String> {
-    let store = core::StateStore::open(state_path).map_err(|error| error.to_string())?;
+    let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
     let projects = if let Some(project_id) = selected_project_id {
         store
             .project(project_id)
@@ -11033,6 +11026,9 @@ mod tests {
             .0;
         drop(db);
 
+        // Read-only status must remain available while a controller owns the
+        // exclusive application lock.
+        let _writer_lock = acquire_instance_lock(&state).unwrap();
         let status = headless_status(&state, Some(&project.id)).unwrap();
         assert_eq!(status.schema_version, core::CURRENT_SCHEMA_VERSION);
         assert_eq!(status.projects.len(), 1);

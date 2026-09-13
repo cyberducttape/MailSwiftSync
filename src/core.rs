@@ -3,7 +3,7 @@
 //! The GUI may be replaced, but project state and verification evidence remain
 //! portable SQLite data. No credentials or message content belong in this store.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -673,6 +673,22 @@ impl StateStore {
         restrict_database_sidecars(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(store)
+    }
+
+    /// Open an existing ledger without taking the application lock or
+    /// attempting schema migration. This is intentionally read-only so
+    /// monitoring/status consumers can observe a live controller through
+    /// SQLite's WAL snapshot semantics. Older schemas are rejected rather
+    /// than silently interpreted with missing columns.
+    pub fn open_readonly(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+        let stored_schema_version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if stored_schema_version != CURRENT_SCHEMA_VERSION {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        Ok(Self { connection })
     }
     pub fn in_memory() -> rusqlite::Result<Self> {
         let store = Self {
