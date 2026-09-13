@@ -4590,7 +4590,7 @@ impl App {
                                     let _ = tx.send(Event::JobState {
                                         job_id: job_id.clone(),
                                         child_run_id: child_run_id.clone(),
-                                        state: "Failed".into(),
+                                        state: "Retrying".into(),
                                     });
                                     let delay = Duration::from_secs(1_u64 << attempt.min(5));
                                     let started = std::time::Instant::now();
@@ -6409,6 +6409,7 @@ fn display_job_state(state: &str) -> &'static str {
         "preflight" => "Preflight",
         "ready" => "Ready",
         "running" => "Running",
+        "retrying" => "Retrying",
         "delta_required" => "Delta required",
         "verification_difference" => "Verification difference",
         "completed" => "Completed",
@@ -6427,6 +6428,7 @@ fn job_state_badge(state: &str) -> (&'static str, Color32) {
         "running" => ("● Running", BLUE),
         "queued" => ("○ Queued", MUTED),
         "preflight" => ("◌ Preflight", BLUE),
+        "retrying" => ("↻ Retrying", Color32::from_rgb(218, 148, 48)),
         "ready" => ("○ Ready", MUTED),
         "delta_required" => ("↻ Delta required", Color32::from_rgb(218, 148, 48)),
         "verification_difference" => ("≠ Verification difference", Color32::from_rgb(218, 148, 48)),
@@ -8495,5 +8497,6 @@ mod tests {
         assert_eq!(job_state_badge("verified").0, "✓ Verified");
         assert_eq!(job_state_badge("failed").0, "× Failed");
         assert_ne!(job_state_badge("verified").1, job_state_badge("failed").1);
+        assert_eq!(job_state_badge("retrying").0, "↻ Retrying");
     }
 }
