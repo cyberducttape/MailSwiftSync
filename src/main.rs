@@ -1948,7 +1948,6 @@ struct App {
     /// Process-local credential material from the last successful dry
     /// validation for each durable queue row. Restored queues start empty.
     bulk_preflight_credential_fingerprints: Vec<Option<String>>,
-    cockpit_open: bool,
     preflight: Vec<(String, String, bool)>,
     capability_receiver:
         Option<Receiver<Result<(core::ServerCapabilities, core::ServerCapabilities), String>>>,
@@ -2189,7 +2188,6 @@ impl Default for App {
             bulk_project_id: restored_bulk_project_id,
             bulk_job_ids: restored_bulk_job_ids,
             bulk_preflight_credential_fingerprints: restored_bulk_preflight_credential_fingerprints,
-            cockpit_open: false,
             preflight: Vec::new(),
             capability_receiver: None,
             live_auth_receiver: None,
@@ -2819,92 +2817,12 @@ impl App {
             Err(e) => self.status = format!("Could not create project: {e}"),
         }
     }
-    fn cockpit(&mut self, ctx: &egui::Context) {
-        if !self.cockpit_open {
-            return;
-        }
-        let mut open = self.cockpit_open;
-        egui::Window::new("Preflight & readiness").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
-            ui.heading("Operator view"); ui.label(RichText::new("A durable migration project records phases and evidence independently of the desktop session.").color(MUTED)); ui.add_space(10.0);
-            if ui.add_enabled(self.capability_receiver.is_none() && self.form.engine() != core::Engine::Dovecot, egui::Button::new("Run authenticated IMAPS readiness probe")).clicked() { self.start_capability_probe(); }
-            if self.form.engine() == core::Engine::Dovecot { ui.label(RichText::new("Dovecot dry preflight checks the remote imapc source; destination readiness still requires administrative review.").size(11.0).color(MUTED)); }
-            if self.active_project_id().is_none() && ui.button("Create project from current migration plan").clicked() { self.create_project(); }
-            if let Some(id) = self.active_project_id().map(str::to_owned) {
-                match self.store.project(&id) {
-                    Ok(Some(project)) => {
-                        ui.group(|ui| { ui.horizontal(|ui| { ui.heading(&project.name); ui.label(RichText::new(format!("ID {}", &project.id[..8])).monospace().color(MUTED)); }); ui.label(format!("{}  →  {}", project.source_endpoint, project.destination_endpoint)); });
-                        ui.add_space(10.0); ui.label(RichText::new("MIGRATION PHASE").size(11.0).color(MUTED));
-                        ui.horizontal_wrapped(|ui| for phase in [core::Phase::Discovery, core::Phase::Preflight, core::Phase::Pilot, core::Phase::Seed, core::Phase::CatchUp, core::Phase::FinalDelta, core::Phase::Verification, core::Phase::Complete] { let active = phase == project.phase; ui.label(RichText::new(format!("{} {phase:?}", if active { "●" } else { "○" })).strong().color(if active { TEAL } else { MUTED })); });
-                        ui.add_space(10.0);
-                        if project.phase == core::Phase::Discovery
-                            && ui.button("Accept preflight review").clicked()
-                        {
-                            match self.store.transition(&project.id, core::Phase::Preflight) {
-                                Ok(()) => self.status = "Phase advanced to Preflight".into(),
-                                Err(error) => {
-                                    self.status = format!(
-                                        "Could not advance project to Preflight: {error}"
-                                    );
-                                }
-                            }
-                        }
-                        if project.phase == core::Phase::Complete {
-                            ui.separator();
-                            ui.label(
-                                RichText::new("This project is complete and read-only. Reopening requires an audit reason and returns it to Attention.")
-                                    .color(ALERT),
-                            );
-                            ui.horizontal(|ui| {
-                                ui.label("Reason");
-                                ui.text_edit_singleline(&mut self.reopen_reason);
-                                if ui
-                                    .add_enabled(
-                                        !self.running() && !self.reopen_reason.trim().is_empty(),
-                                        egui::Button::new("Reopen project"),
-                                    )
-                                    .clicked()
-                                {
-                                    match self
-                                        .store
-                                        .reopen_project(&project.id, &self.reopen_reason)
-                                    {
-                                        Ok(()) => {
-                                            self.status = "Project reopened for documented review".into();
-                                            self.reopen_reason.clear();
-                                        }
-                                        Err(error) => {
-                                            self.status = format!("Could not reopen project: {error}");
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                    }
-                    Ok(None) => {
-                        if self.selected_project_id.as_deref() == Some(id.as_str()) {
-                            self.selected_project_id = None;
-                        }
-                        if self.project_id.as_deref() == Some(id.as_str()) {
-                            self.project_id = None;
-                        }
-                        if self.bulk_project_id.as_deref() == Some(id.as_str()) {
-                            self.bulk_project_id = None;
-                        }
-                    }, Err(e) => self.status = format!("Could not read project: {e}"),
-                }
-            }
-            ui.add_space(12.0); ui.separator(); ui.heading("Preflight assessment"); if ui.button("Refresh assessment").clicked() { self.assess_plan(); }
-            egui::Grid::new("preflight").striped(true).show(ui, |ui| { ui.strong("Check"); ui.strong("Result"); ui.end_row(); for (name, detail, pass) in &self.preflight { ui.label(RichText::new(if *pass { "✓" } else { "!" }).color(if *pass { TEAL } else { ALERT })); ui.label(RichText::new(name).strong()); ui.label(detail); ui.end_row(); } });
-            ui.add_space(10.0); ui.label(RichText::new("Use this assessment to resolve blockers before live migration. Verification evidence is reviewed separately in the Verification workspace.").color(MUTED));
-        });
-        self.cockpit_open = open;
-    }
-
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
         }
         let mut open = self.settings_open;
+        let mut close_requested = false;
         egui::Window::new("Settings")
             .open(&mut open)
             .collapsible(false)
@@ -2947,30 +2865,29 @@ impl App {
                     if ui.button(format!("Engine: {}", self.form.engine().label())).clicked() { self.engine_open = true; }
                     if ui.button("Advanced options").clicked() { self.advanced_open = true; }
                     if ui.button("Preflight & readiness").clicked() {
-                        self.cockpit_open = true;
+                        self.active_view = WorkspaceView::Overview;
+                        close_requested = true;
                         self.assess_plan();
                     }
                 });
             });
-        self.settings_open = open;
+        self.settings_open = open && !close_requested;
     }
 
-    fn readiness_score(&self) -> (usize, usize) {
-        let checks = 5
-            + usize::from(self.source_capabilities.is_some())
-            + usize::from(self.destination_capabilities.is_some());
+    fn plan_completeness(&self) -> (usize, usize) {
+        // This is deliberately limited to values the local form can prove.
+        // Network authentication and server capability checks belong to the
+        // explicit preflight assessment below, not to this counter.
+        let checks = 4;
         let passed = [
             !self.form.profile.source_host.trim().is_empty(),
             !self.form.profile.destination_host.trim().is_empty(),
             !self.form.profile.source_user.trim().is_empty(),
             !self.form.profile.destination_user.trim().is_empty(),
-            self.form.dry_run && !self.form.profile.delete2,
         ]
         .into_iter()
         .filter(|ok| *ok)
-        .count()
-            + usize::from(self.source_capabilities.is_some())
-            + usize::from(self.destination_capabilities.is_some());
+        .count();
         (passed, checks)
     }
 
@@ -3088,7 +3005,7 @@ impl App {
             }
             return;
         }
-        let (passed, total) = self.readiness_score();
+        let (passed, total) = self.plan_completeness();
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("Migration workspace");
@@ -3097,7 +3014,7 @@ impl App {
                     .color(if self.form.dry_run { TEAL } else { ALERT }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new(format!("{passed}/{total} plan checks complete"))
+                        RichText::new(format!("{passed}/{total} configuration items complete"))
                             .strong()
                             .color(if passed == total { TEAL } else { ALERT }),
                     );
@@ -3121,6 +3038,70 @@ impl App {
             ui.add_space(4.0);
             ui.label(RichText::new("Recommended next step: run preflight, review blockers, then select a small pilot mailbox.").color(MUTED));
         });
+    }
+
+    fn overview_readiness_controls(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.heading("Preflight & readiness");
+            ui.label(RichText::new("Plan completeness is separate from live network checks. Run the authenticated probe before live migration.").color(MUTED));
+            ui.horizontal_wrapped(|ui| {
+                let probe_enabled = self.capability_receiver.is_none()
+                    && self.form.engine() != core::Engine::Dovecot
+                    && !self.running();
+                if ui.add_enabled(probe_enabled, egui::Button::new("Run authenticated readiness probe")).clicked() {
+                    self.start_capability_probe();
+                }
+                if ui.add_enabled(!self.running(), egui::Button::new("Refresh assessment")).clicked() {
+                    self.assess_plan();
+                }
+                if self.active_project_id().is_none()
+                    && ui.add_enabled(!self.running(), egui::Button::new("Create project from plan")).clicked()
+                {
+                    self.create_project();
+                }
+            });
+            if self.form.engine() == core::Engine::Dovecot {
+                ui.label(RichText::new("Dovecot preflight checks the configured imapc source; destination readiness still requires administrative review.").color(MUTED));
+            }
+            if self.preflight.is_empty() {
+                ui.label("No preflight assessment has been recorded for the current plan.");
+            } else {
+                egui::Grid::new("overview_preflight_controls").striped(true).show(ui, |ui| {
+                    ui.strong("Check");
+                    ui.strong("Result");
+                    ui.end_row();
+                    for (name, detail, passed) in &self.preflight {
+                        ui.label(RichText::new(if *passed { "✓" } else { "!" }).color(if *passed { TEAL } else { ALERT }));
+                        ui.label(RichText::new(name).strong());
+                        ui.label(detail);
+                        ui.end_row();
+                    }
+                });
+            }
+        });
+        if let Some(project_id) = self.active_project_id().map(str::to_owned)
+            && let Ok(Some(project)) = self.store.project(&project_id)
+            && project.phase == core::Phase::Complete
+        {
+            ui.add_space(10.0);
+            ui.group(|ui| {
+                ui.heading("Project controls");
+                ui.label(RichText::new("This project is complete and read-only. Reopening requires an audit reason and returns it to Attention.").color(ALERT));
+                ui.horizontal(|ui| {
+                    ui.label("Reason");
+                    ui.text_edit_singleline(&mut self.reopen_reason);
+                    if ui.add_enabled(!self.running() && !self.reopen_reason.trim().is_empty(), egui::Button::new("Reopen project")).clicked() {
+                        self.status = match self.store.reopen_project(&project.id, &self.reopen_reason) {
+                            Ok(()) => {
+                                self.reopen_reason.clear();
+                                "Project reopened for documented review".into()
+                            }
+                            Err(error) => format!("Could not reopen project: {error}"),
+                        };
+                    }
+                });
+            });
+        }
     }
 
     fn overview_view(&mut self, ui: &mut egui::Ui) {
@@ -3151,6 +3132,8 @@ impl App {
             attention_count,
             self.running(),
         );
+        self.overview_readiness_controls(ui);
+        ui.add_space(14.0);
         ui.group(|ui| {
             ui.label(
                 RichText::new("CURRENT PHASE")
@@ -3260,8 +3243,7 @@ impl App {
                 if ui.button("Open migration plan  →").clicked() {
                     self.active_view = WorkspaceView::Plan;
                 }
-                if ui.button("Open preflight & readiness").clicked() {
-                    self.cockpit_open = true;
+                if ui.button("Refresh preflight assessment").clicked() {
                     self.assess_plan();
                 }
                 if ui.button("Import mailbox list").clicked() {
@@ -7351,7 +7333,6 @@ impl eframe::App for App {
         self.keyring_dialog(ctx);
         self.advanced_dialog(ctx);
         self.engine_dialog(ctx);
-        self.cockpit(ctx);
         self.live_confirmation(ctx);
         self.stop_confirmation(ctx);
         if self.running() || self.capability_receiver.is_some() || self.live_auth_receiver.is_some()
