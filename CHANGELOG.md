@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Engine output is now process-local presentation data only. Raw imapsync
+  lines, including message subjects and metadata, are no longer written to
+  SQLite; existing `run_output` events are purged during ledger opening while
+  classified diagnostics and verification summaries remain durable.
 - Durable ledgers now repair and refresh stored destination identities from
   their secret-free batch configuration, including already-open current-schema
   databases; empty legacy identities also use the full configured endpoint

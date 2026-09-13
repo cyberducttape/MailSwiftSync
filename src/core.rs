@@ -913,6 +913,7 @@ impl StateStore {
             if current_schema_is_clean {
                 let tx = self.connection.unchecked_transaction()?;
                 Self::refresh_destination_identities(&tx)?;
+                Self::purge_raw_output_events(&tx)?;
                 tx.commit()?;
                 return Ok(());
             }
@@ -1098,6 +1099,7 @@ impl StateStore {
         // otherwise an otherwise recoverable database would fail to open.
         Self::reconcile_duplicate_active_runs(&tx)?;
         Self::refresh_destination_identities(&tx)?;
+        Self::purge_raw_output_events(&tx)?;
         tx.execute_batch(
             "CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
              CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');",
@@ -1125,6 +1127,11 @@ impl StateStore {
                 params![identity, job_id],
             )?;
         }
+        Ok(())
+    }
+
+    fn purge_raw_output_events(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        tx.execute("DELETE FROM events WHERE kind='run_output'", [])?;
         Ok(())
     }
 
@@ -1772,6 +1779,9 @@ impl StateStore {
         Ok(())
     }
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
+        if kind == "run_output" {
+            return Ok(());
+        }
         self.event(project_id, kind, detail)
     }
     #[cfg(test)]
@@ -1784,6 +1794,9 @@ impl StateStore {
             let mut statement =
                 tx.prepare_cached("INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)")?;
             for (project_id, kind, detail) in events {
+                if *kind == "run_output" {
+                    continue;
+                }
                 let detail = bounded_event_detail(kind, detail);
                 statement.execute(params![project_id, kind, detail])?;
             }
@@ -1811,9 +1824,6 @@ impl StateStore {
         run_id: &str,
         events: &[(&str, &str)],
     ) -> rusqlite::Result<()> {
-        if events.is_empty() {
-            return Ok(());
-        }
         let tx = self.connection.unchecked_transaction()?;
         let (project_id, status): (String, String) = tx.query_row(
             "SELECT project_id,status FROM runs WHERE id=?1",
@@ -1828,6 +1838,9 @@ impl StateStore {
                 "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,?3,?4)",
             )?;
             for (kind, detail) in events {
+                if *kind == "run_output" {
+                    continue;
+                }
                 let detail = bounded_event_detail(kind, detail);
                 statement.execute(params![project_id, run_id, kind, detail])?;
             }
@@ -1848,9 +1861,6 @@ impl StateStore {
         &self,
         events: &[(&str, &str, &str)],
     ) -> rusqlite::Result<()> {
-        if events.is_empty() {
-            return Ok(());
-        }
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare_cached(
             "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))) ",
@@ -1858,6 +1868,17 @@ impl StateStore {
         let mut projects = BTreeSet::new();
         let mut project_by_run = HashMap::new();
         for (run_id, kind, detail) in events {
+            if *kind == "run_output" {
+                let valid: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))))",
+                    [run_id],
+                    |row| row.get(0),
+                )?;
+                if !valid {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+                continue;
+            }
             let changed =
                 statement.execute(params![run_id, kind, bounded_event_detail(kind, detail)])?;
             if changed != 1 {
@@ -5867,7 +5888,7 @@ destination_port = "000"
     }
 
     #[test]
-    fn output_events_are_committed_as_one_batch() {
+    fn raw_output_events_are_not_committed_to_the_ledger() {
         let db = StateStore::in_memory().unwrap();
         let project = db
             .create_project("events", "source", "destination")
@@ -5886,7 +5907,27 @@ destination_port = "000"
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 0);
+
+        db.connection
+            .execute(
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_output',?2)",
+                params![
+                    project.id,
+                    "Subject: confidential customer migration fixture"
+                ],
+            )
+            .unwrap();
+        db.migrate().unwrap();
+        let purged: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='run_output'",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(purged, 0);
     }
 
     #[test]
@@ -5921,14 +5962,11 @@ destination_port = "000"
             .collect::<rusqlite::Result<_>>()
             .unwrap();
 
-        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|(project_id, run_id, _)| {
             project_id == &project.id && run_id == "run-events-1"
         }));
-        assert!(
-            rows.iter()
-                .any(|(_, _, detail)| detail == "transfer output")
-        );
+        assert!(rows.iter().any(|(_, _, detail)| detail == "aggregate"));
         db.finish_run_for_mailbox(
             &project.id,
             &job,
@@ -5967,24 +6005,24 @@ destination_port = "000"
         ])
         .unwrap();
 
-        let first_owner: String = db
+        let first_count: i64 = db
             .connection
             .query_row(
-                "SELECT run_id FROM events WHERE detail='one output'",
+                "SELECT COUNT(*) FROM events WHERE detail='one output'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        let second_owner: String = db
+        let second_count: i64 = db
             .connection
             .query_row(
-                "SELECT run_id FROM events WHERE detail='two output'",
+                "SELECT COUNT(*) FROM events WHERE detail='two output'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(first_owner, "child-run-one");
-        assert_eq!(second_owner, "child-run-two");
+        assert_eq!(first_count, 0);
+        assert_eq!(second_count, 0);
     }
 
     #[test]
@@ -6054,15 +6092,15 @@ destination_port = "000"
 
         db.record_events_for_runs_batch(&[(&child_runs[0], "run_output", "retry detail")])
             .unwrap();
-        let owner: String = db
+        let stored: i64 = db
             .connection
             .query_row(
-                "SELECT run_id FROM events WHERE detail='retry detail'",
+                "SELECT COUNT(*) FROM events WHERE detail='retry detail'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(owner, child_runs[0]);
+        assert_eq!(stored, 0);
     }
 
     #[test]
@@ -6089,14 +6127,13 @@ destination_port = "000"
                 |row| row.get(0),
             )
             .unwrap();
-        let oldest: String = db
+        let oldest: rusqlite::Result<String> = db
             .connection
             .query_row(
                 "SELECT detail FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id ASC LIMIT 1",
                 [&project.id],
                 |row| row.get(0),
-            )
-            .unwrap();
+            );
         let audit_count: i64 = db
             .connection
             .query_row(
@@ -6106,8 +6143,8 @@ destination_port = "000"
             )
             .unwrap();
 
-        assert_eq!(count, MAX_DURABLE_RUN_OUTPUT_EVENTS);
-        assert_eq!(oldest, "line-1");
+        assert_eq!(count, 0);
+        assert!(oldest.is_err());
         assert_eq!(audit_count, 1);
     }
 
@@ -6127,16 +6164,15 @@ destination_port = "000"
         db.record_run_events_batch(run_id, &[("run_output", oversized.as_str())])
             .unwrap();
 
-        let stored: String = db
+        let stored_count: i64 = db
             .connection
             .query_row(
-                "SELECT detail FROM events WHERE run_id=?1 AND kind='run_output'",
+                "SELECT COUNT(*) FROM events WHERE run_id=?1 AND kind='run_output'",
                 [run_id],
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(stored.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
-        assert!(stored.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
+        assert_eq!(stored_count, 0);
 
         db.record_run_events_batch(run_id, &[("verification_pending", oversized.as_str())])
             .unwrap();

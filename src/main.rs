@@ -7231,16 +7231,10 @@ impl App {
                             }
                         });
                         if owns_line {
-                            let project_id = active_run
-                                .as_ref()
-                                .map(|run| run.project_id.clone())
-                                .expect("owned output requires an active run");
-                            pending_db_events.push((
-                                project_id,
-                                run_id,
-                                "run_output".into(),
-                                text.clone(),
-                            ));
+                            // Engine output is presentation-only. It may
+                            // contain subjects, folder metadata, or other
+                            // message-derived text, so retain it only in the
+                            // bounded process-local journal.
                         }
                         push_visible_output(&mut self.output, text);
                     }
@@ -7265,17 +7259,10 @@ impl App {
                         // Do not re-read mutable form fields here: the operator
                         // may have edited the next plan while this run was active.
                         let safe = s;
-                        if let Some(project) =
-                            active_run.as_ref().map(|run| run.project_id.as_str())
-                            && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
-                        {
-                            pending_db_events.push((
-                                project.to_owned(),
-                                run_id.to_owned(),
-                                "run_output".into(),
-                                safe.clone(),
-                            ));
-                        }
+                        // Do not persist raw engine output. The bounded UI
+                        // journal is intentionally the only destination for
+                        // these lines; durable events contain classifications
+                        // and evidence summaries instead.
                         push_visible_output(&mut self.output, safe);
                     }
                     Event::JobState {
