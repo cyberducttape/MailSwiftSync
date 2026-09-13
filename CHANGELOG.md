@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Corrected the packaged Dovecot integration fixture to use the Dovecot 2.3
+  configuration syntax provided by the pinned Debian Bookworm runtime, instead
+  of silently testing it with Dovecot 2.4-only configuration keys.
 - Fixed custom CA bundle encoding for imapsync. Verification and
   `SSL_ca_file` are now emitted as separate repeatable `--sslargsN` values,
   preserving paths containing spaces and matching imapsync's parser.

@@ -16,6 +16,7 @@ if [[ -z "$dovecot_version" ]]; then
   echo "FAIL: unable to determine the installed Dovecot version" >&2
   exit 1
 fi
+dovecot_semver="${dovecot_version%% *}"
 echo "Using Dovecot ${dovecot_version} and imapsync $(imapsync --version 2>/dev/null || true)"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
@@ -48,6 +49,41 @@ start_server() {
   local config="$workspace/$name.conf"
   mkdir -p "$root/mail/$user/Maildir"/{cur,new,tmp} "$root/run" "$root/log"
   printf '%s:{PLAIN}%s:%s:%s::%s::\n' "$user" "$password" "$mail_uid" "$mail_gid" "$root/mail/$user" > "$root/passwd"
+  # The distributed Bookworm image pins Dovecot 2.3.19.1, while some local
+  # validation hosts already run Dovecot 2.4. Select the matching dialect so
+  # the release fixture tests the packaged runtime rather than accidentally
+  # testing a different configuration generation.
+  local version_setting mail_settings auth_settings
+  case "$dovecot_version" in
+    2.4.*)
+      version_setting="dovecot_config_version = 2.4.0
+dovecot_storage_version = $dovecot_semver"
+      mail_settings="mail_driver = maildir
+mail_path = ~/Maildir"
+      auth_settings="passdb passwd-file {
+  passwd_file_path = $root/passwd
+}
+userdb passwd-file {
+  passwd_file_path = $root/passwd
+}"
+      ;;
+    2.3.*)
+      version_setting=""
+      mail_settings="mail_location = maildir:~/Maildir"
+      auth_settings="passdb {
+  driver = passwd-file
+  args = $root/passwd
+}
+userdb {
+  driver = passwd-file
+  args = $root/passwd
+}"
+      ;;
+    *)
+      echo "FAIL: unsupported Dovecot configuration generation: $dovecot_version" >&2
+      return 1
+      ;;
+  esac
   # Dovecot's unprivileged auth worker must traverse the temporary path to
   # read the owner-only passwd file. Mail data remains owner-only.
   chmod 0711 "$workspace" "$root"
@@ -60,6 +96,7 @@ start_server() {
     chmod 0644 "$root/passwd"
   fi
   cat > "$config" <<EOF
+$version_setting
 base_dir = $root/run/
 state_dir = $root/run/
 protocols = imap
@@ -72,14 +109,8 @@ auth_mechanisms = plain login
 auth_verbose = yes
 first_valid_uid = 1
 mail_home = $root/mail/%u
-mail_driver = maildir
-mail_path = ~/Maildir
-passdb passwd-file {
-  passwd_file_path = $root/passwd
-}
-userdb passwd-file {
-  passwd_file_path = $root/passwd
-}
+$mail_settings
+$auth_settings
 service imap-login {
   inet_listener imap {
     port = $port
