@@ -10567,22 +10567,20 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         .store
         .mailboxes(&project_id)
         .map_err(|error| error.to_string())?;
-    let unresolved = final_mailboxes
+    let final_selected = final_mailboxes
         .iter()
         .filter(|mailbox| app.bulk_selected_ids.contains(&mailbox.id))
-        .filter(|mailbox| {
-            matches!(
-                mailbox.state.as_str(),
-                "failed"
-                    | "attention"
-                    | "cancelled"
-                    | "queued"
-                    | "claimed"
-                    | "running"
-                    | "delta_required"
-                    | "verification_difference"
-            )
-        })
+        .collect::<Vec<_>>();
+    if final_selected.len() != job_ids.len() {
+        return Err(format!(
+            "headless batch live run returned {} mailbox state(s) for {} selected mailbox(es); refusing success",
+            final_selected.len(),
+            job_ids.len()
+        ));
+    }
+    let unresolved = final_selected
+        .iter()
+        .filter(|mailbox| !is_verified_batch_terminal_state(&mailbox.state))
         .map(|mailbox| format!("{}={}", mailbox.id, mailbox.state))
         .collect::<Vec<_>>();
     if !unresolved.is_empty() {
@@ -10604,6 +10602,10 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
 fn headless_batch_mode(live: bool) -> (bool, bool) {
     let dry_run = !live;
     (dry_run, dry_run)
+}
+
+fn is_verified_batch_terminal_state(state: &str) -> bool {
+    matches!(state, "verified" | "verified_with_exceptions")
 }
 
 /// Foreground supervisor for an already admitted durable batch. The loop is
@@ -12850,6 +12852,15 @@ mod tests {
     fn headless_batch_mode_binds_form_and_controller_modes() {
         assert_eq!(headless_batch_mode(false), (true, true));
         assert_eq!(headless_batch_mode(true), (false, false));
+    }
+
+    #[test]
+    fn headless_batch_success_requires_verified_terminal_states() {
+        assert!(is_verified_batch_terminal_state("verified"));
+        assert!(is_verified_batch_terminal_state("verified_with_exceptions"));
+        assert!(!is_verified_batch_terminal_state("ready"));
+        assert!(!is_verified_batch_terminal_state("completed"));
+        assert!(!is_verified_batch_terminal_state("delta_required"));
     }
 
     #[test]

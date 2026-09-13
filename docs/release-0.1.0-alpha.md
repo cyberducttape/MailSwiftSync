@@ -14,7 +14,7 @@ This is a technical preview for administrators who want to test the local-first 
 
 ## Known limitations
 
-- Native installers, code signing, provider OAuth/Modern Auth, and unattended secret brokering are not included. Optional OS-keyring password references are included for local operator-managed sessions.
+- Native installers and code signing are not included. imapsync supports operator-supplied OAuth 2.0/XOAUTH2 access tokens through the session form or OS keyring; provider consent flows, automatic token refresh, and unattended secret brokering are not included.
 - Remote Dovecot execution is disabled because the compatibility path may expose a password through destination-host process inspection.
 - Live bulk execution is available only after matching dry validation and explicit operator confirmation; scheduler/API operation, maintenance windows, and unattended operation are not supported.
 - Verification is aggregate evidence unless an engine supplies authoritative results; message-level reconciliation and UIDVALIDITY-aware evidence are not yet implemented. Dovecot live runs do persist and reuse engine-emitted `-s` state strings as a resumability optimization, atomically with each child result.

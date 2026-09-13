@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Headless batch-live now requires every selected mailbox to be in an
+  explicitly verified terminal state; an unchanged `ready` row or missing
+  durable row cannot produce a false success result.
 - Added per-endpoint OAuth 2.0 access-token authentication for imapsync via
   XOAUTH2. Tokens can be supplied for the current session or through the OS
   keyring and are delivered to imapsync through short-lived private files;
