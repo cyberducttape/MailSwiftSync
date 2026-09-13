@@ -1744,6 +1744,7 @@ struct BulkJob {
 }
 
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
+type PendingDbEvent = (String, String, String, String);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum BulkRetryScope {
@@ -2003,6 +2004,13 @@ struct App {
     pending_batch_evidence: HashMap<String, core::MailboxEvidence>,
     pending_checkpoint: Option<String>,
     pending_batch_checkpoints: HashMap<String, String>,
+    /// Execution diagnostics that could not yet be committed. These remain
+    /// in memory and are retried before later terminal events are handled.
+    pending_db_events: Vec<PendingDbEvent>,
+    /// Events deferred because their durable predecessor could not be
+    /// committed. Keeping them here prevents a child completion from being
+    /// silently lost when SQLite is temporarily unavailable.
+    deferred_events: VecDeque<Event>,
     run_started_at: Option<std::time::Instant>,
     dark_mode: bool,
     ui_scale: f32,
@@ -2302,6 +2310,8 @@ impl Default for App {
             pending_batch_evidence: HashMap::new(),
             pending_checkpoint: None,
             pending_batch_checkpoints: HashMap::new(),
+            pending_db_events: Vec::new(),
+            deferred_events: VecDeque::new(),
             run_started_at: None,
             // Migration windows are log-heavy and commonly run in dark,
             // low-glare operator environments.
@@ -5752,14 +5762,21 @@ impl App {
             self.capability_receiver = None;
         }
         let mut done = None;
-        let mut pending_db_events: Vec<(String, String, String, String)> = Vec::new();
+        let mut pending_db_events = std::mem::take(&mut self.pending_db_events);
+        let mut deferred_events = std::mem::take(&mut self.deferred_events);
         let mut durability_errors = Vec::new();
         let active_run = self.active_run.clone();
         if let Some(rx) = &self.receiver {
             let mut processed_events = 0;
-            while processed_events < MAX_EVENTS_PER_FRAME
-                && let Ok(event) = rx.try_recv()
-            {
+            while processed_events < MAX_EVENTS_PER_FRAME {
+                let event = if let Some(event) = deferred_events.pop_front() {
+                    event
+                } else {
+                    match rx.try_recv() {
+                        Ok(event) => event,
+                        Err(_) => break,
+                    }
+                };
                 processed_events += 1;
                 match event {
                     Event::ClaimBatch {
@@ -5969,10 +5986,19 @@ impl App {
                                     durability_errors.push(format!(
                                         "persist child diagnostics before completion failed: {error}"
                                     ));
-                                    // Leave the child running in the ledger;
-                                    // recovery can reconcile it after the
-                                    // operator repairs the durable store.
-                                    continue;
+                                    // Leave the child running in the ledger,
+                                    // retain both the diagnostics and the
+                                    // completion event, and stop consuming
+                                    // later events until the durable
+                                    // predecessor can be committed.
+                                    deferred_events.push_front(Event::JobFinished {
+                                        job_id,
+                                        child_run_id,
+                                        state,
+                                        detail,
+                                        credential_fingerprint,
+                                    });
+                                    break;
                                 }
                             }
                         }
@@ -6153,10 +6179,24 @@ impl App {
                 || Err(rusqlite::Error::InvalidQuery),
                 |_| self.store.record_events_for_runs_batch(&batch),
             );
-            self.report_store_error("record execution events", result);
+            if let Err(error) = result {
+                durability_errors.push(format!(
+                    "record execution events failed; diagnostics remain queued for retry: {error}"
+                ));
+                self.pending_db_events = pending_db_events.clone();
+            } else {
+                pending_db_events.clear();
+            }
         }
         for error in durability_errors {
             self.report_store_error("batch event persistence", Err(error));
+        }
+        self.deferred_events = deferred_events;
+        if !pending_db_events.is_empty() || !self.deferred_events.is_empty() {
+            // A parent Finished event must not finalize the batch while a
+            // child completion or its audit trail is waiting on durable
+            // storage. The retained events will be retried on the next poll.
+            done = None;
         }
         if let Some(r) = done {
             let Some(run_context) = active_run else {
