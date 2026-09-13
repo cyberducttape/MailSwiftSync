@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Customer and operator report exports now read project, mailbox, run, and
+  evidence data from one SQLite snapshot, preventing mixed-commit artifacts
+  during concurrent migration updates.
 - Enforced `RunLine` ownership checks so delayed or foreign worker output is
   rejected instead of being appended to the active migration journal, with
   the ownership rule centralized alongside the other run-controller checks;

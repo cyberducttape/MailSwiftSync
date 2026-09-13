@@ -2692,6 +2692,7 @@ impl StateStore {
             )
             .optional()
     }
+    #[cfg(test)]
     pub fn recent_runs(&self, project_id: &str, limit: u32) -> rusqlite::Result<Vec<RunSummary>> {
         let mut statement = self.connection.prepare(
             "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
@@ -2718,13 +2719,33 @@ impl StateStore {
         &self,
         project_id: &str,
     ) -> rusqlite::Result<Option<ProjectReportSnapshot>> {
-        let Some(project) = self.project(project_id)? else {
+        // Keep every report query on one SQLite read transaction. In WAL mode
+        // this pins one consistent database snapshot, so a concurrent
+        // completion cannot produce a report combining rows from different
+        // commits (for example, a new mailbox state with old evidence).
+        let tx = self.connection.unchecked_transaction()?;
+        let Some(project) = tx
+            .query_row(
+                "SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects WHERE id=?1",
+                [project_id],
+                |row| {
+                    Ok(Project {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        source_endpoint: row.get(2)?,
+                        destination_endpoint: row.get(3)?,
+                        phase: Phase::parse(&row.get::<_, String>(4)?)?,
+                    })
+                },
+            )
+            .optional()? else {
+            tx.commit()?;
             return Ok(None);
         };
 
         let mut jobs = Vec::new();
         let mut attention_reasons = HashMap::new();
-        let mut statement = self.connection.prepare(
+        let mut statement = tx.prepare(
             "SELECT id,source_mailbox,destination_mailbox,state,config,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
         )?;
         for row in statement.query_map([project_id], |row| {
@@ -2751,7 +2772,7 @@ impl StateStore {
         }
 
         let mut acceptances = HashMap::new();
-        let mut acceptance_statement = self.connection.prepare(
+        let mut acceptance_statement = tx.prepare(
             "SELECT va.job_id,va.run_id,va.operator,va.reason,va.accepted_at FROM verification_acceptances va JOIN mailbox_jobs j ON j.id=va.job_id WHERE j.project_id=?1 ORDER BY va.id ASC",
         )?;
         for row in acceptance_statement.query_map([project_id], |row| {
@@ -2768,7 +2789,7 @@ impl StateStore {
         }
 
         let mut evidence = HashMap::new();
-        let mut evidence_statement = self.connection.prepare(
+        let mut evidence_statement = tx.prepare(
             "SELECT eh.job_id,eh.run_id,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 ORDER BY eh.id ASC",
         )?;
         for row in evidence_statement.query_map([project_id], |row| {
@@ -2794,7 +2815,7 @@ impl StateStore {
         }
 
         let mut runs = Vec::new();
-        let mut run_statement = self.connection.prepare(
+        let mut run_statement = tx.prepare(
             "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at ASC,r.rowid ASC",
         )?;
         for row in run_statement.query_map([project_id], |row| {
@@ -2831,11 +2852,17 @@ impl StateStore {
                 }
             })
             .collect();
-        Ok(Some(ProjectReportSnapshot {
+        let snapshot = ProjectReportSnapshot {
             project,
             mailboxes,
             runs,
-        }))
+        };
+        drop(run_statement);
+        drop(evidence_statement);
+        drop(acceptance_statement);
+        drop(statement);
+        tx.commit()?;
+        Ok(Some(snapshot))
     }
 
     pub fn recent_run_list(

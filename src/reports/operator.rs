@@ -9,14 +9,23 @@ pub(crate) fn export_health(
     project_id: &str,
     path: &Path,
 ) -> Result<(), String> {
-    let project = store
-        .project(project_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("The durable migration project no longer exists.")?;
-    let jobs = store.mailboxes(project_id).map_err(|e| e.to_string())?;
-    let runs = store
-        .recent_runs(project_id, 20)
+    let snapshot = store
+        .project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?;
+    let snapshot = snapshot.ok_or("The durable migration project no longer exists.")?;
+    let project = snapshot.project;
+    let jobs = snapshot
+        .mailboxes
+        .iter()
+        .map(|mailbox| mailbox.job.clone())
+        .collect::<Vec<_>>();
+    let runs = snapshot
+        .runs
+        .into_iter()
+        .rev()
+        .take(20)
+        .map(|snapshot| snapshot.run)
+        .collect::<Vec<_>>();
     let attention = jobs
         .iter()
         .filter(|job| needs_operator_review(&job.state))
