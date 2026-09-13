@@ -1179,9 +1179,10 @@ impl StateStore {
         )?;
         tx.commit().map(|()| child_run_ids)
     }
-    /// Atomically claims one child of a running parent batch. The operation
-    /// is idempotent for a child already claimed by that same batch because
-    /// retry/status events may be observed more than once by the UI.
+    /// Atomically claims one child of a running parent batch. A child can be
+    /// claimed exactly once; callers must not treat a repeated claim as an
+    /// idempotent success because the store cannot identify the worker that
+    /// owns an already-running child.
     pub fn claim_batch_mailbox(
         &self,
         project_id: &str,
@@ -1252,10 +1253,7 @@ impl StateStore {
             |row| row.get(0),
         )?;
         if current == "running" {
-            if child_status != "running" {
-                return Err(rusqlite::Error::InvalidQuery);
-            }
-            return tx.commit();
+            return Err(rusqlite::Error::InvalidQuery);
         }
         if !valid_mailbox_transition(&current, "running") {
             return Err(rusqlite::Error::InvalidQuery);
@@ -3045,6 +3043,10 @@ mod tests {
         assert_eq!(second.plan_snapshot, "snapshot two");
         db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-parent", &child_runs[0])
             .unwrap();
+        assert!(
+            db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-parent", &child_runs[0])
+                .is_err()
+        );
         db.register_process(&ActiveProcess {
             run_id: child_runs[0].clone(),
             job_id: jobs[0].clone(),
