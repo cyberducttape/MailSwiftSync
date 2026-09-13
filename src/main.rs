@@ -768,6 +768,16 @@ impl Form {
         ) {
             return Err("Destination TLS mode must be imaps or starttls.".into());
         }
+        endpoint::parts(
+            &self.profile.source_host,
+            default_imap_port(&self.profile.source_tls),
+        )
+        .map_err(|error| format!("Source IMAP host is not a valid endpoint: {error}"))?;
+        endpoint::parts(
+            &self.profile.destination_host,
+            default_imap_port(effective_destination_tls(&self.profile.destination_tls)),
+        )
+        .map_err(|error| format!("Destination IMAP host is not a valid endpoint: {error}"))?;
         if !(1..=720).contains(&self.profile.migration_timeout_hours) {
             return Err("Migration timeout must be between 1 and 720 hours.".into());
         }
@@ -11333,6 +11343,24 @@ mod tests {
         );
         assert!(endpoint::parts("mail.example:0", 993).is_err());
         assert!(endpoint::parts("[2001:db8::1]garbage", 993).is_err());
+    }
+
+    #[test]
+    fn validation_rejects_malformed_embedded_endpoint_ports() {
+        let mut form = dovecot_form();
+        form.profile.source_host = "source.example:not-a-port".into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("Source IMAP host is not a valid endpoint")
+        );
+        form.profile.source_host = "source.example".into();
+        form.profile.destination_host = "destination.example:bad".into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("Destination IMAP host is not a valid endpoint")
+        );
     }
 
     #[test]
