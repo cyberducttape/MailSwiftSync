@@ -3,7 +3,7 @@
 //! The GUI may be replaced, but project state and verification evidence remain
 //! portable SQLite data. No credentials or message content belong in this store.
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, backup, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -786,19 +786,32 @@ impl StateStore {
     }
 
     /// Open an existing ledger without taking the application lock or
-    /// attempting schema migration. This is intentionally read-only so
-    /// monitoring/status consumers can observe a live controller through
-    /// SQLite's WAL snapshot semantics. Older schemas are rejected rather
-    /// than silently interpreted with missing columns.
+    /// mutating its file. Current-schema ledgers are observed directly through
+    /// SQLite's WAL snapshot semantics. Older ledgers are copied into a
+    /// private in-memory database and migrated there, so recovery/status tools
+    /// can inspect historical state without rewriting the source file.
     pub fn open_readonly(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         let stored_schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if stored_schema_version != CURRENT_SCHEMA_VERSION {
+        if stored_schema_version > CURRENT_SCHEMA_VERSION {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        Ok(Self { connection })
+        if stored_schema_version == CURRENT_SCHEMA_VERSION {
+            return Ok(Self { connection });
+        }
+
+        let mut migrated = Connection::open_in_memory()?;
+        {
+            let backup = backup::Backup::new(&connection, &mut migrated)?;
+            backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
+        }
+        let store = Self {
+            connection: migrated,
+        };
+        store.migrate()?;
+        Ok(store)
     }
     pub fn in_memory() -> rusqlite::Result<Self> {
         let store = Self {
@@ -4433,6 +4446,56 @@ mod tests {
             .unwrap();
         drop(connection);
         assert!(StateStore::open(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn readonly_open_migrates_legacy_copy_without_rewriting_source() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-readonly-legacy-{}", Uuid::new_v4()));
+        let path = directory.join("state.db");
+        std::fs::create_dir_all(&directory).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE mailbox_jobs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    source_mailbox TEXT NOT NULL,
+                    destination_mailbox TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    attempt INTEGER NOT NULL DEFAULT 0,
+                    checkpoint TEXT,
+                    preflight_plan TEXT,
+                    config TEXT
+                );
+                PRAGMA user_version=1;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let readonly = StateStore::open_readonly(&path).unwrap();
+        let copied_version: i64 = readonly
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(copied_version, CURRENT_SCHEMA_VERSION);
+        drop(readonly);
+
+        let source = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let source_version: i64 = source
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(source_version, 1);
+        let attention_reason_columns: i64 = source
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('mailbox_jobs') WHERE name='attention_reason'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(attention_reason_columns, 0);
+        drop(source);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

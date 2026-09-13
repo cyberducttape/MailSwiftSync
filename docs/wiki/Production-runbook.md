@@ -44,6 +44,12 @@ schema also creates a unique `state.db.pre-migrate-vN.<id>.db` backup before
 the transactional migration; preserve that artifact until the upgrade is
 validated.
 
+Read-only inspection is deliberately different: `status`, report verification,
+and support-bundle reads do not migrate the source ledger. When they encounter
+an older supported schema, MailSwiftSync copies it into a private in-memory
+database and migrates only that copy. A future schema is rejected until the
+binary is upgraded, rather than being interpreted with missing columns.
+
 ## Safe execution sequence
 
 1. Create or select the project and verify source/destination hosts, ports, users, TLS modes, engine, and destination policy.
