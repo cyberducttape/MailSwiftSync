@@ -4047,6 +4047,7 @@ impl App {
                 );
                 egui::ComboBox::from_id_salt("mailbox_state_filter")
                     .selected_text(match self.bulk_state_filter.as_str() {
+                        "imported" => "Imported",
                         "attention" => "Attention",
                         "failed" => "Failed",
                         "delta_required" => "Delta required",
@@ -4057,6 +4058,7 @@ impl App {
                     .show_ui(ui, |ui| {
                         for (value, label) in [
                             ("all", "All states"),
+                            ("imported", "Imported"),
                             ("ready", "Ready"),
                             ("attention", "Attention"),
                             ("failed", "Failed"),
@@ -5294,7 +5296,10 @@ impl App {
         Ok(BulkJob {
             label,
             form,
-            state: "Ready".into(),
+            // Import only proves that the row is structurally valid. It has
+            // not authenticated either endpoint or established a durable
+            // preflight plan, so it must not present as live-ready.
+            state: "imported".into(),
         })
     }
     fn import_bulk(&mut self, path: &std::path::Path) {
@@ -5313,7 +5318,7 @@ impl App {
         match result {
             Ok(jobs) => {
                 self.bulk_message = format!(
-                    "Imported {} ready jobs. Review the queue before running.",
+                    "Imported {} mailbox rows. Review them and run preflight before migration.",
                     jobs.len()
                 );
                 // A new file is a new durable batch scope. Never let a queue
@@ -8352,6 +8357,7 @@ fn push_visible_output(output: &mut VecDeque<String>, line: String) {
 
 fn display_job_state(state: &str) -> &'static str {
     match state {
+        "imported" => "Imported",
         "queued" => "Queued",
         "preflight" => "Preflight",
         "ready" => "Ready",
@@ -8376,6 +8382,7 @@ fn display_state_key(state: &str) -> String {
 
 fn job_state_badge(state: &str) -> (&'static str, Color32) {
     match state {
+        "imported" => ("○ Imported", MUTED),
         "verified_with_exceptions" => (
             "✓ Verified with exceptions",
             Color32::from_rgb(218, 148, 48),
@@ -10426,6 +10433,8 @@ mod tests {
         values.insert("destination_host".into(), "new.example".into());
         values.insert("destination_user".into(), "new@example".into());
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
+        assert_eq!(job.state, "imported");
+        assert_eq!(job_state_badge(&job.state).0, "○ Imported");
         assert!(job.form.source_password.is_empty());
         assert!(job.form.validate().is_err());
     }
