@@ -3259,7 +3259,7 @@ impl App {
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
-    fn verification_view(&self, ui: &mut egui::Ui) {
+    fn verification_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Verification");
         ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
         ui.add_space(12.0);
@@ -3268,13 +3268,16 @@ impl App {
             ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(MUTED));
             if self.active_project_id().is_some() {
                 if ui.button("Export project report…").clicked() {
-                    let _ = self.export_project_report();
+                    let result = self.export_project_report();
+                    self.report_export_result("Project report", result);
                 }
                 if ui.button("Export project JSON…").clicked() {
-                    let _ = self.export_project_json();
+                    let result = self.export_project_json();
+                    self.report_export_result("Project JSON", result);
                 }
                 if ui.button("Export project health…").clicked() {
-                    let _ = self.export_project_health();
+                    let result = self.export_project_health();
+                    self.report_export_result("Project health export", result);
                 }
             }
             if let Some(job) = &self.job_id {
@@ -3282,7 +3285,8 @@ impl App {
                     Ok(Some(evidence)) => {
                         ui.label("Durable mailbox reconciliation");
                         if ui.button("Export verification report…").clicked() {
-                            let _ = self.export_verification_report();
+                            let result = self.export_verification_report();
+                            self.report_export_result("Verification report", result);
                         }
                         for (label, value) in [
                             ("Folders", format!("{} source / {} destination", evidence.source_folders, evidence.destination_folders)),
@@ -4242,6 +4246,20 @@ impl App {
             self.status = format!("Durability error: {operation}");
         }
     }
+
+    fn report_export_result(&mut self, artifact: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.status = format!("{artifact} exported successfully.");
+                push_visible_output(&mut self.output, self.status.clone());
+            }
+            Err(error) => {
+                self.status = format!("{artifact} was not exported: {error}");
+                push_visible_output(&mut self.output, format!("[export] {}", self.status));
+            }
+        }
+    }
+
     fn start(&mut self) {
         if !self.form.dry_run {
             let current_plan = plan_fingerprint_digest(&self.form.plan_fingerprint());
