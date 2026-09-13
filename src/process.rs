@@ -360,9 +360,8 @@ fn force_kill_process_group(child: &mut Child) {
 /// Identity is checked both before SIGTERM and immediately before escalation
 /// to SIGKILL; a recycled PID or process group is never signalled.
 pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
-        #[cfg(target_os = "linux")]
         if !recorded_process_matches(process) {
             return;
         }
@@ -372,20 +371,18 @@ pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
         }
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
-            #[cfg(target_os = "linux")]
             if !recorded_process_matches(process) {
                 return;
             }
             thread::sleep(Duration::from_millis(100));
         }
-        #[cfg(target_os = "linux")]
         if recorded_process_matches(process) {
             unsafe {
                 let _ = libc::kill(process_group, libc::SIGKILL);
             }
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     let _ = process;
 }
 
