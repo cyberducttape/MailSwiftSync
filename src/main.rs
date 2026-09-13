@@ -58,6 +58,7 @@ const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const DOVECOT_SYNC_LOCK_WAIT_SECONDS: u64 = 300;
 const MAX_PENDING_EVENTS: usize = 4_096;
+const MAX_ACTIVITY_HISTORY_ROWS: u32 = 250;
 // Keep one unusually noisy worker from monopolising an egui frame.
 const MAX_EVENTS_PER_FRAME: usize = 250;
 const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -4337,7 +4338,7 @@ impl App {
             let history_label = if self.activity_show_all {
                 "Show recent 20"
             } else {
-                "Show all runs"
+                "Show up to 250 runs"
             };
             if ui.button(history_label).clicked() {
                 self.activity_show_all = !self.activity_show_all;
@@ -4349,7 +4350,11 @@ impl App {
             );
             return;
         };
-        let run_limit = if self.activity_show_all { u32::MAX } else { 20 };
+        let run_limit = if self.activity_show_all {
+            MAX_ACTIVITY_HISTORY_ROWS
+        } else {
+            20
+        };
         ui.horizontal_wrapped(|ui| {
             ui.label("Filter history");
             ui.add(
@@ -4419,6 +4424,12 @@ impl App {
                     ))
                     .color(MUTED),
                 );
+                if self.activity_show_all && runs.len() == MAX_ACTIVITY_HISTORY_ROWS as usize {
+                    ui.label(
+                        RichText::new("Showing the newest 250 runs. Export the audit report for complete history.")
+                            .color(MUTED),
+                    );
+                }
                 egui::Grid::new("durable_run_history")
                     .striped(true)
                     .show(ui, |ui| {
