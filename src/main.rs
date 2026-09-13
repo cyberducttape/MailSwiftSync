@@ -1472,18 +1472,30 @@ impl BulkRetryScope {
     }
 }
 
+fn canonical_destination_identity(profile: &Profile) -> String {
+    let destination_tls = effective_destination_tls(&profile.destination_tls);
+    let default_port = default_imap_port(destination_tls);
+    let (host, endpoint_port) = endpoint_parts(&profile.destination_host, default_port)
+        .unwrap_or_else(|_| (profile.destination_host.trim().to_owned(), default_port));
+    let port = profile
+        .destination_port
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .unwrap_or(endpoint_port);
+    format!(
+        "{}:{}:{}",
+        host.to_ascii_lowercase(),
+        port,
+        profile.destination_user.trim().to_ascii_lowercase()
+    )
+}
+
 fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Option<String> {
     let mut destinations = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
-        let profile = &job.form.profile;
-        let (destination_host, destination_port) = endpoint_parts(&profile.destination_host, 993)
-            .unwrap_or_else(|_| (profile.destination_host.trim().to_owned(), 993));
-        let key = format!(
-            "{}:{}:{}",
-            destination_host.to_ascii_lowercase(),
-            destination_port,
-            profile.destination_user.to_ascii_lowercase()
-        );
+        let key = canonical_destination_identity(&job.form.profile);
         if !destinations.insert(key) {
             return Some(format!(
                 "Mailbox {} targets a destination mailbox already used by another batch row; concurrent writes to one mailbox are blocked.",
@@ -6753,6 +6765,33 @@ mod tests {
             },
         ];
         assert!(duplicate_bulk_destination(&jobs).is_some());
+    }
+
+    #[test]
+    fn duplicate_destination_identity_uses_transport_and_explicit_port() {
+        let mut first = Form::default();
+        first.profile.destination_host = "mail.example".into();
+        first.profile.destination_user = "user@example".into();
+        first.profile.destination_tls = "starttls".into();
+        let mut second = first.clone();
+        second.profile.destination_port = "1993".into();
+        let jobs = vec![
+            BulkJob {
+                label: "first".into(),
+                form: first,
+                state: "Ready".into(),
+            },
+            BulkJob {
+                label: "second".into(),
+                form: second,
+                state: "Ready".into(),
+            },
+        ];
+        assert!(duplicate_bulk_destination(&jobs).is_none());
+        assert_eq!(
+            canonical_destination_identity(&jobs[0].form.profile),
+            "mail.example:143:user@example"
+        );
     }
 
     #[test]
