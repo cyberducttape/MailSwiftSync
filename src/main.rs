@@ -2328,6 +2328,8 @@ struct App {
     bulk_destination_keyring_apply: String,
     verification_exception_operator: String,
     verification_exception_reason: String,
+    verification_search: String,
+    verification_filter: String,
     reopen_reason: String,
 }
 impl Default for App {
@@ -2642,6 +2644,8 @@ impl Default for App {
             bulk_destination_keyring_apply: String::new(),
             verification_exception_operator: String::new(),
             verification_exception_reason: String::new(),
+            verification_search: String::new(),
+            verification_filter: "all".into(),
             reopen_reason: String::new(),
         }
     }
@@ -4819,61 +4823,104 @@ impl App {
             }
             let selected_project = self.active_project_id().map(str::to_owned);
             if let Some(project_id) = selected_project.as_deref() {
-                match self.store.mailboxes(project_id) {
-                    Ok(jobs) => {
-                        let verified = jobs
+                match self.store.project_report_snapshot(project_id) {
+                    Ok(Some(snapshot)) => {
+                        let verified = snapshot
+                            .mailboxes
                             .iter()
-                            .filter(|job| matches!(job.state.as_str(), "verified" | "verified_with_exceptions"))
+                            .filter(|mailbox| matches!(mailbox.job.state.as_str(), "verified" | "verified_with_exceptions"))
                             .count();
-                        let review = jobs.iter().filter(|job| needs_operator_review(&job.state)).count();
+                        let review = snapshot
+                            .mailboxes
+                            .iter()
+                            .filter(|mailbox| needs_operator_review(&mailbox.job.state))
+                            .count();
                         ui.separator();
                         ui.heading("Mailbox evidence");
                         ui.label(format!(
                             "{verified} of {} verified · {review} require review",
-                            jobs.len()
+                            snapshot.mailboxes.len()
                         ));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Search");
+                            ui.add(egui::TextEdit::singleline(&mut self.verification_search)
+                                .hint_text("mailbox or destination")
+                                .desired_width(220.0));
+                            egui::ComboBox::from_id_salt("verification_result_filter")
+                                .selected_text(match self.verification_filter.as_str() {
+                                    "review" => "Needs review",
+                                    "verified" => "Verified",
+                                    "difference" => "Differences",
+                                    _ => "All results",
+                                })
+                                .show_ui(ui, |ui| {
+                                    for (value, label) in [("all", "All results"), ("review", "Needs review"), ("verified", "Verified"), ("difference", "Differences")] {
+                                        ui.selectable_value(&mut self.verification_filter, value.into(), label);
+                                    }
+                                });
+                        });
+                        let search = self.verification_search.trim().to_ascii_lowercase();
+                        let visible = snapshot
+                            .mailboxes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, mailbox)| {
+                                let state = mailbox.job.state.as_str();
+                                let result_match = match self.verification_filter.as_str() {
+                                    "review" => needs_operator_review(state),
+                                    "verified" => matches!(state, "verified" | "verified_with_exceptions"),
+                                    "difference" => state == "verification_difference",
+                                    _ => true,
+                                };
+                                let text_match = search.is_empty()
+                                    || mailbox.job.source_mailbox.to_ascii_lowercase().contains(&search)
+                                    || mailbox.job.destination_mailbox.to_ascii_lowercase().contains(&search);
+                                result_match && text_match
+                            })
+                            .map(|(index, _)| index)
+                            .collect::<Vec<_>>();
+                        ui.label(RichText::new(format!("{} visible", visible.len())).color(MUTED));
                         egui::ScrollArea::vertical()
                             .id_salt("verification_mailbox_list")
-                            .max_height(300.0)
-                            .show(ui, |ui| {
+                            .max_height(360.0)
+                            .show_rows(ui, 32.0, visible.len(), |ui, rows| {
                                 egui::Grid::new("verification_mailboxes")
                                     .striped(true)
                                     .min_col_width(140.0)
                                     .show(ui, |ui| {
-                                        ui.strong("Mailbox");
-                                        ui.strong("Evidence");
-                                        ui.strong("Result");
-                                        ui.end_row();
-                                        for job in jobs {
-                                            let evidence = self.store.evidence(&job.id);
-                                            let evidence_label = match &evidence {
-                                                Ok(Some(value)) => value.evidence_level(),
-                                                Ok(None) => "No evidence",
-                                                Err(_) => "Unavailable",
-                                            };
-                                            let (badge, color) = job_state_badge(&job.state);
+                                        if rows.start == 0 {
+                                            ui.strong("Mailbox");
+                                            ui.strong("Evidence");
+                                            ui.strong("Result");
+                                            ui.end_row();
+                                        }
+                                        for row in rows {
+                                            let mailbox = &snapshot.mailboxes[visible[row]];
+                                            let evidence_label = mailbox
+                                                .evidence
+                                                .as_ref()
+                                                .map(|(_, evidence, _)| evidence.evidence_level())
+                                                .unwrap_or("No evidence");
+                                            let (badge, color) = job_state_badge(&mailbox.job.state);
                                             if ui
                                                 .selectable_label(
-                                                    self.job_id.as_deref() == Some(job.id.as_str()),
-                                                    &job.destination_mailbox,
+                                                    self.job_id.as_deref() == Some(mailbox.job.id.as_str()),
+                                                    &mailbox.job.destination_mailbox,
                                                 )
                                                 .clicked()
                                             {
-                                                self.job_id = Some(job.id.clone());
+                                                self.job_id = Some(mailbox.job.id.clone());
                                             }
-                                            if let Err(error) = evidence {
-                                                ui.label(
-                                                    RichText::new(evidence_label).color(ALERT),
-                                                )
-                                                .on_hover_text(format!("Could not read evidence: {error}"));
-                                            } else {
-                                                ui.label(evidence_label);
-                                            }
+                                            ui.label(evidence_label);
                                             ui.label(RichText::new(badge).color(color));
                                             ui.end_row();
                                         }
                                     });
                             });
+                    }
+                    Ok(None) => {
+                        ui.separator();
+                        ui.label(RichText::new("The selected project no longer exists.").color(ALERT));
                     }
                     Err(error) => {
                         ui.separator();
