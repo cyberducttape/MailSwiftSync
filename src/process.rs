@@ -16,6 +16,8 @@ use fs2::FileExt;
 use crate::core;
 
 const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
+const MAX_CAPTURED_OUTPUT_LINES: usize = 8 * 1024;
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
 /// Exclusive ownership of the application state workspace. Recovery must
 /// never run while another MailSwiftSync instance may still own processes.
@@ -53,13 +55,25 @@ pub(crate) fn collect_redacted_lines<R: Read>(
     secrets: &[String],
 ) -> std::io::Result<Vec<String>> {
     let mut lines = Vec::new();
+    let mut retained_bytes: usize = 0;
+    let mut truncated = false;
     for_each_lossy_line(reader, |mut line| {
         for secret in secrets {
             if !secret.is_empty() {
                 line = line.replace(secret, "[REDACTED]");
             }
         }
-        lines.push(line);
+        let within_limits = lines.len() < MAX_CAPTURED_OUTPUT_LINES
+            && retained_bytes.saturating_add(line.len()) <= MAX_CAPTURED_OUTPUT_BYTES;
+        if within_limits {
+            retained_bytes = retained_bytes.saturating_add(line.len());
+            lines.push(line);
+        } else if !truncated {
+            lines.push(format!(
+                "[diagnostics truncated after {MAX_CAPTURED_OUTPUT_LINES} lines or {MAX_CAPTURED_OUTPUT_BYTES} bytes]"
+            ));
+            truncated = true;
+        }
     })?;
     Ok(lines)
 }
@@ -162,6 +176,17 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert!(lines[0].ends_with("[line truncated by MailSwiftSync]"));
         assert!(lines[0].len() < MAX_SUBPROCESS_LINE_BYTES + 64);
+    }
+
+    #[test]
+    fn captured_output_retains_a_bounded_prefix_and_drains_the_reader() {
+        let input = (0..(MAX_CAPTURED_OUTPUT_LINES + 100))
+            .map(|index| format!("line-{index}\n"))
+            .collect::<String>();
+        let lines = collect_redacted_lines(std::io::Cursor::new(input), &[]).unwrap();
+
+        assert_eq!(lines.len(), MAX_CAPTURED_OUTPUT_LINES + 1);
+        assert!(lines.last().unwrap().contains("diagnostics truncated"));
     }
 
     #[cfg(unix)]

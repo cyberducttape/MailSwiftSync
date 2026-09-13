@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Dovecot preflight and verification capture now retains only a bounded
+  diagnostic prefix while continuing to drain the child pipe, preventing
+  unusually verbose commands from consuming unbounded memory.
 - Lifecycle phase advancement now requires a clean durability cycle in
   addition to a successful external engine result; persistence uncertainty
   leaves the project in place for recovery review.
