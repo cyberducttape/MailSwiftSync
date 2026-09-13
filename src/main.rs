@@ -8883,6 +8883,8 @@ mod tests {
         let key = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
             .unwrap();
         std::fs::write(&key_path, key.as_ref()).unwrap();
+        #[cfg(windows)]
+        credentials::restrict_file_permissions(&key_path).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

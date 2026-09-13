@@ -20,18 +20,122 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
 
 #[cfg(windows)]
 fn require_private_key_permissions(path: &Path) -> Result<(), String> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::{
+        Foundation::{HLOCAL, LocalFree},
+        Security::{
+            ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_ACE_TYPE, ACE_HEADER, CreateWellKnownSid,
+            DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetNamedSecurityInfoW,
+            GetSecurityDescriptorControl, GetSecurityDescriptorDacl, INHERITED_ACE,
+            OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+            SE_FILE_OBJECT, SECURITY_MAX_SID_SIZE, WinLocalSystemSid,
+        },
+    };
+
     let metadata = std::fs::metadata(path)
         .map_err(|error| format!("could not inspect signing key: {error}"))?;
     if !metadata.is_file() {
         return Err("signing key path must refer to a regular file".into());
     }
-    // Windows has no portable mode-bit equivalent. Apply a protected DACL
-    // immediately before reading the key: only the file owner and
-    // LocalSystem retain access, and inherited Users/Administrators access is
-    // removed. Failure is fail-closed rather than silently accepting a broad
-    // inherited ACL.
-    crate::credentials::restrict_file_permissions(path)
-        .map_err(|error| format!("could not protect signing key ACL: {error}"))
+    let path_wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut owner: PSID = ptr::null_mut();
+    let mut dacl = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            path_wide.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            &mut dacl,
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(format!(
+            "could not inspect signing key DACL (Windows error {status})"
+        ));
+    }
+    let result = (|| {
+        if owner.is_null() || dacl.is_null() {
+            return Err("signing key must have an explicit owner and DACL".into());
+        }
+        let mut control = 0_u16;
+        let mut revision = 0_u32;
+        let valid_control =
+            unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) };
+        if valid_control == 0 || control & SE_DACL_PROTECTED == 0 {
+            return Err("signing key DACL must be protected from inheritance".into());
+        }
+        let mut dacl_present = 0;
+        let mut dacl_defaulted = 0;
+        let mut checked_dacl = ptr::null_mut();
+        let valid_dacl = unsafe {
+            GetSecurityDescriptorDacl(
+                descriptor,
+                &mut dacl_present,
+                &mut checked_dacl,
+                &mut dacl_defaulted,
+            )
+        };
+        if valid_dacl == 0 || dacl_present == 0 || checked_dacl.is_null() {
+            return Err("signing key must have a present DACL".into());
+        }
+        if checked_dacl != dacl {
+            return Err("signing key DACL changed while it was being inspected".into());
+        }
+
+        let mut local_system_sid = [0_u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut local_system_sid_size = local_system_sid.len() as u32;
+        let local_system_sid = local_system_sid.as_mut_ptr() as PSID;
+        let valid_system_sid = unsafe {
+            CreateWellKnownSid(
+                WinLocalSystemSid,
+                ptr::null_mut(),
+                local_system_sid,
+                &mut local_system_sid_size,
+            )
+        };
+        if valid_system_sid == 0 {
+            return Err("could not construct the LocalSystem SID".into());
+        }
+
+        let mut owner_seen = false;
+        let mut system_seen = false;
+        for index in 0..u32::from((*dacl).AceCount) {
+            let mut ace_pointer = ptr::null_mut();
+            if unsafe { GetAce(dacl, index, &mut ace_pointer) } == 0 || ace_pointer.is_null() {
+                return Err("could not inspect a signing key DACL entry".into());
+            }
+            let header = unsafe { &*(ace_pointer as *const ACE_HEADER) };
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE || header.AceFlags != 0 {
+                return Err("signing key DACL contains an unsupported or inherited ACE".into());
+            }
+            let ace = unsafe { &*(ace_pointer as *const ACCESS_ALLOWED_ACE) };
+            let sid = (&ace.SidStart as *const u32).cast_mut().cast();
+            if unsafe { EqualSid(sid, owner) } != 0 {
+                owner_seen = true;
+            } else if unsafe { EqualSid(sid, local_system_sid) } != 0 {
+                system_seen = true;
+            } else {
+                return Err("signing key DACL grants access to an unapproved identity".into());
+            }
+        }
+        if (*dacl).AceCount != 2 || !owner_seen || !system_seen {
+            return Err("signing key DACL must contain only owner and LocalSystem entries".into());
+        }
+        Ok(())
+    })();
+    unsafe {
+        LocalFree(descriptor as HLOCAL);
+    }
+    result
 }
 
 #[cfg(all(not(unix), not(windows)))]

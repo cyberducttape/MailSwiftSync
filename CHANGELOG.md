@@ -14,8 +14,10 @@ All notable changes to MailSwiftSync are documented here.
   zeroizing ownership from acquisition through socket/process handoff.
 - Replaced the worker-facing zeroizing alias with a dedicated `SecretString`
   type whose debug output is redacted and whose string access is explicit.
-- Hardened signing-key loading on Windows by applying a protected owner/System
-  DACL before reading the key, and zeroized the in-memory PKCS#8 bytes.
+- Hardened signing-key loading on Windows and zeroized the in-memory PKCS#8
+  bytes before the key leaves the signing operation.
+- Hardened the Windows signer further by verifying the protected DACL contains
+  only the file owner and LocalSystem; broad or inherited ACLs now fail closed.
 - Plan fingerprints and immutable run snapshots now bind the SHA-256 content
   identity of the selected engine executable, configured trust bundles, and
   Dovecot configuration, so replacing a file at the same path invalidates a
