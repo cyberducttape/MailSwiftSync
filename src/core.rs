@@ -1500,11 +1500,10 @@ impl StateStore {
         tx.commit()
     }
 
-    /// Release a claimed child after a transient engine failure so the same
-    /// worker can retry it through the normal durable claim path. Keeping the
-    /// child queued and the mailbox ready makes ownership truthful between
-    /// attempts and ensures a restart cannot mistake an exhausted claim for
-    /// an active process.
+    /// Test-only legacy helper. Production retries keep the original child
+    /// claim and run ownership across internal attempts; releasing ownership
+    /// between attempts reintroduces UI timing races.
+    #[cfg(test)]
     pub fn release_batch_mailbox_for_retry(
         &self,
         project_id: &str,

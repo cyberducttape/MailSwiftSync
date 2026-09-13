@@ -1061,13 +1061,6 @@ enum Event {
         child_run_id: String,
         reply: mpsc::SyncSender<Result<(), String>>,
     },
-    ReleaseBatchRetry {
-        project_id: String,
-        job_id: String,
-        parent_run_id: String,
-        child_run_id: String,
-        reply: mpsc::SyncSender<Result<(), String>>,
-    },
     JobState {
         job_id: String,
         child_run_id: String,
@@ -4155,6 +4148,7 @@ impl App {
                         });
                         let mut completed = false;
                         let mut delta_required = false;
+                        let mut claimed = false;
                         for attempt in 0..=retry_count {
                             if !launch_limiter.acquire(&cancel) {
                                 break;
@@ -4190,58 +4184,61 @@ impl App {
                                 }
                                 break;
                             }
-                            let (claim_tx, claim_rx) = mpsc::sync_channel(1);
-                            if tx
-                                .send(Event::ClaimBatch {
-                                    project_id: batch_project_id.clone(),
-                                    job_id: job_id.clone(),
-                                    parent_run_id: batch_run_id.clone(),
-                                    child_run_id: child_run_id.clone(),
-                                    reply: claim_tx,
-                                })
-                                .is_err()
-                            {
-                                failed.store(true, Ordering::Relaxed);
-                                break;
-                            }
-                            let claim_result = loop {
-                                if cancel.load(Ordering::Relaxed) {
-                                    break Err("cancelled by operator before durable claim".to_owned());
-                                }
-                                match claim_rx.recv_timeout(Duration::from_millis(100)) {
-                                    Ok(result) => break result,
-                                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                        break Err("durable claim response was lost".to_owned())
-                                    }
-                                }
-                            };
-                            if let Err(error) = claim_result {
-                                let cancelled = error.contains("cancelled");
-                                if !cancelled {
+                            if !claimed {
+                                let (claim_tx, claim_rx) = mpsc::sync_channel(1);
+                                if tx
+                                    .send(Event::ClaimBatch {
+                                        project_id: batch_project_id.clone(),
+                                        job_id: job_id.clone(),
+                                        parent_run_id: batch_run_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        reply: claim_tx,
+                                    })
+                                    .is_err()
+                                {
                                     failed.store(true, Ordering::Relaxed);
+                                    break;
                                 }
-                                let _ = tx.send(Event::RunLine {
-                                    run_id: child_run_id.clone(),
-                                    job_id: job_id.clone(),
-                                    text: format!("[{}] {}", index + 1, error),
-                                });
-                                let _ = tx.send(Event::JobState {
-                                    job_id: job_id.clone(),
-                                    child_run_id: child_run_id.clone(),
-                                    state: if cancelled { "Cancelled" } else { "Failed" }.into(),
-                                });
-                                let _ = tx.send(Event::JobFinished {
-                                    job_id: job_id.clone(),
-                                    child_run_id: child_run_id.clone(),
-                                    state: if cancelled { "cancelled" } else { "failed" }.into(),
-                                    detail: error,
-                                    credential_fingerprint: None,
-                                });
-                                if let Ok(mut terminal) = terminal_jobs.lock() {
-                                    terminal.insert(index);
+                                let claim_result = loop {
+                                    if cancel.load(Ordering::Relaxed) {
+                                        break Err("cancelled by operator before durable claim".to_owned());
+                                    }
+                                    match claim_rx.recv_timeout(Duration::from_millis(100)) {
+                                        Ok(result) => break result,
+                                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                            break Err("durable claim response was lost".to_owned())
+                                        }
+                                    }
+                                };
+                                if let Err(error) = claim_result {
+                                    let cancelled = error.contains("cancelled");
+                                    if !cancelled {
+                                        failed.store(true, Ordering::Relaxed);
+                                    }
+                                    let _ = tx.send(Event::RunLine {
+                                        run_id: child_run_id.clone(),
+                                        job_id: job_id.clone(),
+                                        text: format!("[{}] {}", index + 1, error),
+                                    });
+                                    let _ = tx.send(Event::JobState {
+                                        job_id: job_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        state: if cancelled { "Cancelled" } else { "Failed" }.into(),
+                                    });
+                                    let _ = tx.send(Event::JobFinished {
+                                        job_id: job_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        state: if cancelled { "cancelled" } else { "failed" }.into(),
+                                        detail: error,
+                                        credential_fingerprint: None,
+                                    });
+                                    if let Ok(mut terminal) = terminal_jobs.lock() {
+                                        terminal.insert(index);
+                                    }
+                                    break;
                                 }
-                                break;
+                                claimed = true;
                             }
                             let _ = tx.send(Event::JobState {
                                 job_id: job_id.clone(),
@@ -4406,68 +4403,6 @@ impl App {
                                         child_run_id: child_run_id.clone(),
                                         state: "Failed".into(),
                                     });
-                                    // The failed child currently owns a
-                                    // running mailbox. Release that durable
-                                    // claim before retrying so the next loop
-                                    // iteration can reacquire it through the
-                                    // same ownership handshake. Without this
-                                    // step, the retry's claim is correctly
-                                    // rejected as a duplicate active run.
-                                    let (retry_tx, retry_rx) = mpsc::sync_channel(1);
-                                    if tx
-                                        .send(Event::ReleaseBatchRetry {
-                                            project_id: batch_project_id.clone(),
-                                            job_id: job_id.clone(),
-                                            parent_run_id: batch_run_id.clone(),
-                                            child_run_id: child_run_id.clone(),
-                                            reply: retry_tx,
-                                        })
-                                        .is_err()
-                                    {
-                                        failed.store(true, Ordering::Relaxed);
-                                        break;
-                                    }
-                                    let release_result = loop {
-                                        if cancel.load(Ordering::Relaxed) {
-                                            break Err("cancelled by operator before retry release".to_owned());
-                                        }
-                                        match retry_rx.recv_timeout(Duration::from_millis(100)) {
-                                            Ok(result) => break result,
-                                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                                break Err("durable retry release response was lost".to_owned())
-                                            }
-                                        }
-                                    };
-                                    if let Err(release_error) = release_result {
-                                        failed.store(true, Ordering::Relaxed);
-                                        let _ = tx.send(Event::RunLine {
-                                            run_id: child_run_id.clone(),
-                                            job_id: job_id.clone(),
-                                            text: format!(
-                                                "[{}] could not release the failed claim for retry: {release_error}",
-                                                index + 1
-                                            ),
-                                        });
-                                        let _ = tx.send(Event::JobState {
-                                            job_id: job_id.clone(),
-                                            child_run_id: child_run_id.clone(),
-                                            state: "Failed".into(),
-                                        });
-                                        let _ = tx.send(Event::JobFinished {
-                                            job_id: job_id.clone(),
-                                            child_run_id: child_run_id.clone(),
-                                            state: "failed".into(),
-                                            detail: format!(
-                                                "transient failure could not be safely retried: {release_error}"
-                                            ),
-                                            credential_fingerprint: None,
-                                        });
-                                        if let Ok(mut terminal) = terminal_jobs.lock() {
-                                            terminal.insert(index);
-                                        }
-                                        break;
-                                    }
                                     let delay = Duration::from_secs(1_u64 << attempt.min(5));
                                     let started = std::time::Instant::now();
                                     while started.elapsed() < delay {
@@ -5081,44 +5016,6 @@ impl App {
                         }
                         let _ = reply.send(result);
                     }
-                    Event::ReleaseBatchRetry {
-                        project_id,
-                        job_id,
-                        parent_run_id,
-                        child_run_id,
-                        reply,
-                    } => {
-                        let result = if active_run.as_ref().is_some_and(|run| {
-                            run.project_id == project_id
-                                && run.owns_batch_child(&parent_run_id, &child_run_id, &job_id)
-                        }) {
-                            self.store
-                                .release_batch_mailbox_for_retry(
-                                    &project_id,
-                                    &job_id,
-                                    &parent_run_id,
-                                    &child_run_id,
-                                )
-                                .map_err(|error| error.to_string())
-                        } else {
-                            Err(
-                                "batch retry release does not belong to the active run context"
-                                    .to_owned(),
-                            )
-                        };
-                        if let Err(error) = &result {
-                            durability_errors.push(format!(
-                                "durable retry release for child run {child_run_id} failed: {error}"
-                            ));
-                        } else {
-                            // A checkpoint candidate emitted by the failed
-                            // attempt must never survive into a later retry.
-                            // The retry gets a fresh candidate from its own
-                            // successful engine result, if one is emitted.
-                            self.pending_batch_checkpoints.remove(&child_run_id);
-                        }
-                        let _ = reply.send(result);
-                    }
                     Event::ProcessStarted(
                         process_run_id,
                         job_id,
@@ -5129,6 +5026,7 @@ impl App {
                         executable,
                         reply,
                     ) => {
+                        let checkpoint_run_id = process_run_id.clone();
                         let result = if active_run
                             .as_ref()
                             .is_some_and(|run| run.owns_process(&process_run_id, &job_id))
@@ -5150,6 +5048,16 @@ impl App {
                                     .to_owned(),
                             )
                         };
+                        if result.is_ok()
+                            && active_run
+                                .as_ref()
+                                .is_some_and(|run| matches!(run.kind, RunKind::Batch))
+                        {
+                            // A new attempt has a new process and therefore
+                            // must not inherit a checkpoint candidate emitted
+                            // by a failed earlier attempt of the same child.
+                            self.pending_batch_checkpoints.remove(&checkpoint_run_id);
+                        }
                         let _ = reply.send(result.clone());
                         if let Err(error) = result {
                             durability_errors.push(format!(
