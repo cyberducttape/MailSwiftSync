@@ -68,6 +68,7 @@ All notable changes to MailSwiftSync are documented here.
 - Security documentation now matches runtime-secret cleanup timing and identifies exported verification/health artifacts, rather than describing the visible journal as the audit record.
 - Project and health views now prefer the immutable active run’s project identity while execution is active, preventing a loaded single project from shadowing an active batch wave.
 - Active project precedence is covered by a focused regression test, preserving batch-versus-single report routing during future controller changes.
+- A panic in the single-run worker is now converted into a failed `Finished` event, allowing normal transactional terminal cleanup and operator review instead of leaving the UI apparently running until restart.
 - Moved application instance-lock ownership and acquisition into `src/process.rs`, while centralizing restrictive file permissions in `src/credentials.rs`; lock/recovery policy is now separated from the UI controller.
 - Subprocess line framing now reads in fixed-size chunks and caps any single unterminated line at 64 KiB with an explicit truncation marker, preventing pathological engine output from causing unbounded allocation.
 - Subprocess stdout/stderr readers are joined on every completion path, including timeout and cancellation, so reader failures or panics cannot be silently discarded or leave unmanaged reader threads.
