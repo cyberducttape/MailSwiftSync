@@ -16,7 +16,8 @@ mod verification;
 
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkRetryScope, BulkStateSet,
-    LiveAuthProof, RunKind, is_verified_terminal_state,
+    LiveAuthProof, RunKind, SingleRunWorkerSpec, is_verified_terminal_state,
+    spawn_single_run_worker,
 };
 use credentials::{
     CleanupGuard, SecretString, cleanup_paths, cleanup_stale_secret_directories,
@@ -6268,73 +6269,23 @@ impl App {
         ];
         let migration_timeout =
             Duration::from_secs(self.form.profile.migration_timeout_hours * 60 * 60);
-        let process_job_id = run_job_id.clone();
-        let cleanup_guard = CleanupGuard::new(cleanup.clone());
-        thread::spawn(move || {
-            let _cleanup_guard = cleanup_guard;
-            let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut result = run_streaming(
-                    &exe,
-                    &args,
-                    &prepared_env,
-                    &tx,
-                    &run_id,
-                    &process_job_id,
-                    "",
-                    &cancel,
-                    &output_secrets,
-                    migration_timeout,
-                    run_engine == core::Engine::Dovecot && !run_dry_run,
-                );
-                if result.is_ok() && !destination_preflight.is_empty() {
-                    result = result.and_then(|outcome| {
-                        run_dovecot_destination_preflight(
-                            &destination_preflight,
-                            &tx,
-                            &cancel,
-                            migration_timeout,
-                            "",
-                            &run_id,
-                            &process_job_id,
-                        )
-                        .map(|_| outcome)
-                    });
-                }
-                if result.is_ok() && !verification.is_empty() {
-                    result = result.and_then(|stream| {
-                        run_dovecot_verification(
-                            &verification,
-                            &verification_env,
-                            std::slice::from_ref(&verification_secret),
-                            &tx,
-                            &cancel,
-                            migration_timeout,
-                            "",
-                            &run_id,
-                            &process_job_id,
-                        )
-                        .map(|evidence| {
-                            let _ = tx.send(Event::Evidence(evidence));
-                            stream
-                        })
-                        .map_err(|error| {
-                            let _ = tx.send(Event::VerificationFailed(error.clone()));
-                            format!("migration completed; Dovecot verification failed: {error}")
-                        })
-                    });
-                }
-                if let Ok(stream) = &result
-                    && let Some(evidence) = stream.imapsync_evidence.clone()
-                {
-                    let _ = tx.send(Event::Evidence(evidence));
-                }
-                let _ = tx.send(Event::Finished(result.map(|stream| stream.outcome)));
-            }));
-            if worker_result.is_err() {
-                let _ = tx.send(Event::Finished(Err(
-                    "single-run worker panicked; migration requires operator review".into(),
-                )));
-            }
+        spawn_single_run_worker(SingleRunWorkerSpec {
+            executable: exe,
+            args,
+            env: prepared_env,
+            cleanup,
+            tx,
+            cancel,
+            run_id,
+            job_id: run_job_id,
+            engine: run_engine,
+            dry_run: run_dry_run,
+            verification,
+            destination_preflight,
+            verification_env,
+            verification_secret,
+            output_secrets,
+            timeout: migration_timeout,
         });
     }
     fn poll(&mut self) {

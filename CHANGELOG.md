@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted single-run worker orchestration into
+  `src/controller/orchestrator.rs`; GUI state now submits an owned execution
+  specification while process cleanup, verification sequencing, panic
+  containment, and result events are reusable by headless callers.
 - Extracted the source/destination account editor and password-visibility
   policy into `src/ui/account.rs`, reducing UI responsibility in `App` while
   keeping secret edits behind the dedicated `SecretString` boundary.
