@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Precomputed normalized searchable mailbox fields and cached filtered bulk
+  row indices, recalculating them only when the queue, search query, state
+  filter, or mailbox state changes instead of during every repaint.
 - Reused the bulk mailbox filter's visible-row index buffer across egui
   repaints. Large queues retain table virtualization without allocating a
   fresh filtered index vector on every frame.

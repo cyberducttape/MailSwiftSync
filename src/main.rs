@@ -1736,6 +1736,13 @@ struct App {
     /// Reused filtered-row index storage. Large batch views must not allocate
     /// a fresh index vector on every repaint.
     bulk_visible_indices: Vec<usize>,
+    /// Lowercase searchable mailbox fields, rebuilt only when queue rows are
+    /// imported or otherwise structurally changed.
+    bulk_search_values: Vec<String>,
+    bulk_filter_cache_search: String,
+    bulk_filter_cache_state: String,
+    bulk_filter_cache_generation: u64,
+    bulk_jobs_generation: u64,
     bulk_message: String,
     advanced_open: bool,
     engine_open: bool,
@@ -2141,6 +2148,11 @@ impl Default for App {
             bulk_state_filter: "all".into(),
             bulk_selected_ids: HashSet::new(),
             bulk_visible_indices: Vec::new(),
+            bulk_search_values: Vec::new(),
+            bulk_filter_cache_search: String::new(),
+            bulk_filter_cache_state: String::new(),
+            bulk_filter_cache_generation: u64::MAX,
+            bulk_jobs_generation: 0,
             bulk_message: if restored_bulk_project_id.is_some() {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
@@ -2588,6 +2600,7 @@ impl App {
         self.bulk_selected_ids.clear();
         self.bulk_preflight_credential_fingerprints.clear();
         self.bulk_jobs.clear();
+        self.mark_bulk_jobs_changed();
         self.preflight.clear();
         self.source_capabilities = None;
         self.destination_capabilities = None;
@@ -3592,18 +3605,12 @@ impl App {
                     self.bulk_selected_ids.clear();
                 }
             });
-            // Reuse the index buffer across repaints. The table still
-            // virtualizes row widgets, while filtering a large queue no
-            // longer allocates a new Vec on every frame.
-            let mut visible_indices = std::mem::take(&mut self.bulk_visible_indices);
-            visible_indices.clear();
-            visible_indices.extend(
-                self.bulk_jobs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, job)| self.mailbox_matches_filter(job))
-                    .map(|(index, _)| index),
-            );
+            // Rebuild normalized search values and filtered indices only when
+            // the queue, query, or state filter changes. The table still
+            // virtualizes row widgets without doing a full filter pass on
+            // every repaint.
+            self.refresh_bulk_filter_cache();
+            let visible_indices = std::mem::take(&mut self.bulk_visible_indices);
             ui.label(
                 RichText::new(format!(
                     "{} visible · {} selected",
@@ -3795,6 +3802,60 @@ impl App {
             ]
             .iter()
             .any(|value| contains_ascii_case_insensitive(value, search))
+    }
+
+    fn rebuild_bulk_search_values(&mut self) {
+        self.bulk_search_values = self
+            .bulk_jobs
+            .iter()
+            .map(|job| {
+                [
+                    job.label.as_str(),
+                    job.form.profile.source_host.as_str(),
+                    job.form.profile.source_user.as_str(),
+                    job.form.profile.destination_host.as_str(),
+                    job.form.profile.destination_user.as_str(),
+                ]
+                .join(" ")
+                .to_ascii_lowercase()
+            })
+            .collect();
+    }
+
+    fn refresh_bulk_filter_cache(&mut self) {
+        let raw_search = self.bulk_search.trim().to_owned();
+        let cache_is_current = self.bulk_filter_cache_search == raw_search
+            && self.bulk_filter_cache_state == self.bulk_state_filter
+            && self.bulk_filter_cache_generation == self.bulk_jobs_generation
+            && self.bulk_search_values.len() == self.bulk_jobs.len();
+        if cache_is_current {
+            return;
+        }
+        if self.bulk_search_values.len() != self.bulk_jobs.len() {
+            self.rebuild_bulk_search_values();
+        }
+        let normalized_search = raw_search.to_ascii_lowercase();
+        self.bulk_visible_indices.clear();
+        for (index, job) in self.bulk_jobs.iter().enumerate() {
+            let state = display_state_key(&job.state);
+            let state_matches = self.bulk_state_filter.is_empty()
+                || self.bulk_state_filter == "all"
+                || state == self.bulk_state_filter
+                || (self.bulk_state_filter == "delta_required" && state.contains("delta"))
+                || (self.bulk_state_filter == "verification_difference"
+                    && state.contains("verification"));
+            let search_matches = normalized_search.is_empty()
+                || self
+                    .bulk_search_values
+                    .get(index)
+                    .is_some_and(|value| value.contains(&normalized_search));
+            if state_matches && search_matches {
+                self.bulk_visible_indices.push(index);
+            }
+        }
+        self.bulk_filter_cache_search = raw_search;
+        self.bulk_filter_cache_state = self.bulk_state_filter.clone();
+        self.bulk_filter_cache_generation = self.bulk_jobs_generation;
     }
 
     fn bulk_row_is_selected(&self, index: usize) -> bool {
@@ -4737,6 +4798,7 @@ impl App {
                 self.bulk_selected_ids.clear();
                 self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
                 self.bulk_jobs = jobs;
+                self.mark_bulk_jobs_changed();
             }
             Ok(BulkImportResult::Workbook { path, sheets }) => {
                 self.bulk_sheet_index = 0;
@@ -4809,6 +4871,7 @@ impl App {
 
     fn clear_bulk_queue(&mut self) {
         self.bulk_jobs.clear();
+        self.mark_bulk_jobs_changed();
         self.bulk_selected_ids.clear();
         if self.selected_project_id == self.bulk_project_id {
             self.selected_project_id = None;
@@ -4828,6 +4891,17 @@ impl App {
             .enumerate()
             .map(|(index, job_id)| (job_id.clone(), index))
             .collect();
+    }
+
+    fn mark_bulk_jobs_changed(&mut self) {
+        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
+        self.bulk_search_values.clear();
+        self.bulk_filter_cache_generation = u64::MAX;
+    }
+
+    fn mark_bulk_state_changed(&mut self) {
+        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
+        self.bulk_filter_cache_generation = u64::MAX;
     }
 
     fn apply_bulk_keyring_id(&mut self, source: bool) {
@@ -5401,6 +5475,7 @@ impl App {
                 job.state = "Queued".into();
             }
         }
+        self.mark_bulk_state_changed();
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());
@@ -6370,6 +6445,7 @@ impl App {
         let mut deferred_events = std::mem::take(&mut self.deferred_events);
         let mut durability_errors = Vec::new();
         let mut recovered_durability = false;
+        let mut bulk_state_changed = false;
         let active_run = self.active_run.clone();
         let mut ended_processes = HashSet::new();
         if let Some(rx) = &self.receiver {
@@ -6543,6 +6619,7 @@ impl App {
                             if let Some(job) = self.bulk_jobs.get_mut(bulk_index) {
                                 job.state = state.clone();
                             }
+                            bulk_state_changed = true;
                             // JobState is deliberately presentation-only. The
                             // worker has already received an acknowledged
                             // ClaimBatch response before it can launch the
@@ -6674,6 +6751,7 @@ impl App {
                                 && let Some(job) = self.bulk_jobs.get_mut(bulk_index)
                             {
                                 job.state = display_job_state(&final_state).into();
+                                bulk_state_changed = true;
                             }
                             if let Err(error) = result {
                                 self.durability_recovery_pending = true;
@@ -6792,6 +6870,9 @@ impl App {
                     Event::Finished(r) => done = Some(r),
                 }
             }
+        }
+        if bulk_state_changed {
+            self.mark_bulk_state_changed();
         }
         if !pending_db_events.is_empty() {
             let batch = pending_db_events
