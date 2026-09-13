@@ -1580,10 +1580,14 @@ fn apply_keyring_id_to_jobs(jobs: &mut [BulkJob], id: &str, source: bool) -> usi
 
 fn preferred_project_id<'a>(
     active_run_project: Option<&'a str>,
+    selected_project: Option<&'a str>,
     single_project: Option<&'a str>,
     batch_project: Option<&'a str>,
 ) -> Option<&'a str> {
-    active_run_project.or(batch_project).or(single_project)
+    active_run_project
+        .or(selected_project)
+        .or(batch_project)
+        .or(single_project)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1652,6 +1656,10 @@ struct App {
     /// the operator confirms the host has been checked.
     process_review_required: bool,
     persistence_available: bool,
+    /// The project currently selected by the operator for views and exports.
+    /// This is deliberately separate from `active_run`, which is execution
+    /// ownership and must never be inferred from UI selection.
+    selected_project_id: Option<String>,
     project_id: Option<String>,
     job_id: Option<String>,
     /// Process-local credential material used by the last successful dry
@@ -1870,6 +1878,9 @@ impl Default for App {
             _instance_lock: instance_lock.ok(),
             process_review_required: unverified_process_count > 0,
             persistence_available: persistence_warning.is_none(),
+            selected_project_id: restored_bulk_project_id
+                .clone()
+                .or_else(|| project_id.clone()),
             project_id,
             job_id,
             preflight_credential_fingerprint: None,
@@ -2242,6 +2253,7 @@ impl App {
     fn active_project_id(&self) -> Option<&str> {
         preferred_project_id(
             self.active_run.as_ref().map(|run| run.project_id.as_str()),
+            self.selected_project_id.as_deref(),
             self.bulk_project_id.as_deref(),
             self.project_id.as_deref(),
         )
@@ -2455,6 +2467,7 @@ impl App {
             &self.form.profile.destination_user,
         ) {
             Ok((project, job)) => {
+                self.selected_project_id = Some(project.id.clone());
                 self.project_id = Some(project.id);
                 self.job_id = Some(job);
                 self.status = "Project created; ready for preflight review".into();
@@ -2493,6 +2506,9 @@ impl App {
                         }
                     }
                     Ok(None) => {
+                        if self.selected_project_id.as_deref() == Some(id.as_str()) {
+                            self.selected_project_id = None;
+                        }
                         if self.project_id.as_deref() == Some(id.as_str()) {
                             self.project_id = None;
                         }
@@ -3489,6 +3505,9 @@ impl App {
                 );
                 // A new file is a new durable batch scope. Never let a queue
                 // replacement reuse the project/job IDs from an older file.
+                if self.selected_project_id == self.bulk_project_id {
+                    self.selected_project_id = None;
+                }
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
                 self.bulk_retry_scope = BulkRetryScope::default();
@@ -3806,6 +3825,7 @@ impl App {
             (project.id, job_ids)
         };
         self.bulk_project_id = Some(project_id.clone());
+        self.selected_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
         self.bulk_live_run = live;
         let expected_plans = if live {
@@ -4435,6 +4455,7 @@ impl App {
                     // old mailbox record.
                     self.project_id = None;
                     self.job_id = None;
+                    self.selected_project_id = None;
                 } else {
                     self.status = "The current mailbox identity differs from the durable project. Run a new dry preflight for this plan before starting live migration.".into();
                     return;
@@ -4517,6 +4538,7 @@ impl App {
                 &self.form.profile.destination_user,
             ) {
                 self.project_id = Some(project.id.clone());
+                self.selected_project_id = Some(project.id.clone());
                 self.job_id = Some(job);
             } else {
                 self.status = "Could not create durable migration project".into();
@@ -5261,6 +5283,9 @@ impl App {
             // can be promoted to live execution, and failed/live jobs can be
             // deliberately retried or run through another delta pass.
             if !was_bulk_run {
+                if self.selected_project_id == self.bulk_project_id {
+                    self.selected_project_id = None;
+                }
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
             }
@@ -5382,6 +5407,9 @@ impl App {
                 if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
                     self.bulk_jobs.clear();
+                    if self.selected_project_id == self.bulk_project_id {
+                        self.selected_project_id = None;
+                    }
                     self.bulk_project_id = None;
                     self.bulk_job_ids.clear();
                     self.bulk_retry_scope = BulkRetryScope::default();
@@ -6923,15 +6951,20 @@ mod tests {
     #[test]
     fn active_run_project_takes_precedence_over_loaded_projects() {
         assert_eq!(
-            preferred_project_id(Some("active-batch"), Some("single"), Some("batch")),
+            preferred_project_id(
+                Some("active-batch"),
+                Some("selected"),
+                Some("single"),
+                Some("batch"),
+            ),
             Some("active-batch")
         );
         assert_eq!(
-            preferred_project_id(None, Some("single"), Some("batch")),
-            Some("batch")
+            preferred_project_id(None, Some("selected"), Some("single"), Some("batch")),
+            Some("selected")
         );
         assert_eq!(
-            preferred_project_id(None, None, Some("batch")),
+            preferred_project_id(None, None, Some("single"), Some("batch")),
             Some("batch")
         );
     }
