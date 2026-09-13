@@ -45,12 +45,14 @@ Each run also stores the project phase observed at admission. This is immutable
 provenance for reports and incident review, not a claim that the current engine
 has distinct implementation semantics for every lifecycle phase.
 
-Dovecot's stateful `-s` mode is intentionally not implied by the existing
-`mailbox_jobs.checkpoint` column. A safe implementation must capture the state
-string emitted by the exact supported `doveadm` version, bind it to the
-mailbox/run and plan identity, and commit it atomically with the terminal child
-result. Until then, recovery reruns the conservative non-stateful path rather
-than guessing that a checkpoint is valid.
+Dovecot live syncs use the `mailbox_jobs.checkpoint` column as a conservative
+stateful-sync resume point. Each live `sync`/`backup` passes the last committed
+state string with `-s` (or an empty state for the initial pass). The runner
+captures the state string emitted on stdout and commits it in the same terminal
+transaction as the child result and mailbox state. Dry preflight and failed or
+cancelled runs do not replace the last committed checkpoint. The checkpoint is
+an engine resume optimization, not UIDVALIDITY-aware message evidence; that
+and explainable message-level mismatch records remain future milestones.
 
 Profile replacement is flushed before rename, and SQLite uses WAL mode, foreign keys, a bounded busy timeout, and an explicit schema-version guard. Databases stamped by a newer application are refused rather than partially opened or downgraded. The persistent database directory is owner-only on Unix so WAL/SHM sidecars remain contained even when SQLite creates them after startup. Evidence history is transactionally written and must reference an existing run (except for the explicitly supported legacy import path).
 

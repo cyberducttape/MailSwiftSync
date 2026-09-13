@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Live Dovecot syncs now pass the mailbox's last committed `-s` state string
+  and atomically commit a newly emitted checkpoint with the terminal child
+  result; dry preflight remains non-stateful and failed runs preserve the
+  prior checkpoint.
 - Dovecot preflight and verification capture now retains only a bounded
   diagnostic prefix while continuing to drain the child pipe, preventing
   unusually verbose commands from consuming unbounded memory.

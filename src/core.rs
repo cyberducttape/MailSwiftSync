@@ -866,6 +866,19 @@ impl StateStore {
             )
             .optional()
     }
+    /// Return the last committed Dovecot stateful-sync checkpoint for a
+    /// mailbox. The value is intentionally read separately from credentials;
+    /// it contains engine state, not authentication material.
+    pub fn mailbox_checkpoint(&self, job_id: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT checkpoint FROM mailbox_jobs WHERE id=?1",
+                [job_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|value| value.flatten())
+    }
     /// Persist the opaque digest of a preflighted plan. Callers should pass a
     /// canonical plan hash rather than generated command arguments; the
     /// stored value is used only for exact equality during live admission.
@@ -1514,6 +1527,32 @@ impl StateStore {
         mailbox_state: &str,
         detail: &str,
     ) -> rusqlite::Result<()> {
+        self.finish_run_for_mailbox_with_checkpoint(
+            project_id,
+            job_id,
+            run_id,
+            run_status,
+            mailbox_state,
+            detail,
+            None,
+        )
+    }
+
+    /// Atomically completes a mailbox run and optionally advances its
+    /// Dovecot stateful-sync checkpoint. A checkpoint is written only as part
+    /// of the same terminal transaction, so a process result and its resume
+    /// state can never diverge in the ledger.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_run_for_mailbox_with_checkpoint(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+        checkpoint: Option<&str>,
+    ) -> rusqlite::Result<()> {
         if !matches!(
             run_status,
             "completed" | "failed" | "cancelled" | "verification_failed"
@@ -1572,8 +1611,8 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.execute(
-            "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
-            params![mailbox_state, job_id, project_id],
+            "UPDATE mailbox_jobs SET state=?1,checkpoint=COALESCE(?2,checkpoint) WHERE id=?3 AND project_id=?4",
+            params![mailbox_state, checkpoint, job_id, project_id],
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
@@ -1604,6 +1643,32 @@ impl StateStore {
         mailbox_state: &str,
         detail: &str,
         value: &MailboxEvidence,
+    ) -> rusqlite::Result<()> {
+        self.finish_run_for_mailbox_with_evidence_and_checkpoint(
+            project_id,
+            job_id,
+            run_id,
+            run_status,
+            mailbox_state,
+            detail,
+            value,
+            None,
+        )
+    }
+
+    /// Atomically records verification evidence, completes the run, updates
+    /// the mailbox state, and optionally stores the new Dovecot checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_run_for_mailbox_with_evidence_and_checkpoint(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+        value: &MailboxEvidence,
+        checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
         if run_status != "completed"
             || !matches!(
@@ -1647,8 +1712,8 @@ impl StateStore {
         tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute(
-            "UPDATE mailbox_jobs SET state=?1 WHERE id=?2 AND project_id=?3",
-            params![mailbox_state, job_id, project_id],
+            "UPDATE mailbox_jobs SET state=?1,checkpoint=COALESCE(?2,checkpoint) WHERE id=?3 AND project_id=?4",
+            params![mailbox_state, checkpoint, job_id, project_id],
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
@@ -1998,6 +2063,39 @@ mod tests {
         assert_eq!(
             db.project(&project.id).unwrap().unwrap().phase,
             Phase::Verification
+        );
+    }
+
+    #[test]
+    fn dovecot_checkpoint_commits_with_terminal_mailbox_state() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("checkpoint", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source@example", "destination@example")
+            .unwrap();
+        db.begin_run(&project.id, &job, "checkpoint-run", "dovecot")
+            .unwrap();
+
+        db.finish_run_for_mailbox_with_checkpoint(
+            &project.id,
+            &job,
+            "checkpoint-run",
+            "completed",
+            "completed",
+            "",
+            Some("AQAAAHm4+Jk="),
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.mailbox_checkpoint(&job).unwrap().as_deref(),
+            Some("AQAAAHm4+Jk=")
+        );
+        assert_eq!(
+            db.run_status("checkpoint-run").unwrap().as_deref(),
+            Some("completed")
         );
     }
 

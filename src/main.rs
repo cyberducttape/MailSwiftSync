@@ -578,18 +578,27 @@ impl Form {
     fn extra_options_valid(&self) -> Result<(), String> {
         engine::validate_extra_options(&self.profile.extra_options)
     }
+    #[cfg(test)]
     fn prepared_command(&self) -> Result<PreparedCommand, String> {
         self.prepared_command_with_throttle_divisor(1)
     }
+    #[cfg(test)]
     fn prepared_command_with_throttle_divisor(
         &self,
         throttle_divisor: usize,
+    ) -> Result<PreparedCommand, String> {
+        self.prepared_command_with_throttle_divisor_and_checkpoint(throttle_divisor, None)
+    }
+    fn prepared_command_with_throttle_divisor_and_checkpoint(
+        &self,
+        throttle_divisor: usize,
+        checkpoint: Option<&str>,
     ) -> Result<PreparedCommand, String> {
         if self.engine() == core::Engine::Dovecot {
             if !self.local_doveadm() && !self.profile.allow_remote_password_in_argv {
                 return Err("Remote Dovecot execution is disabled by default because the source password may be visible in the destination command line. Enable the explicit remote-password compatibility acknowledgement only on a trusted destination, or use a secret broker.".into());
             }
-            let (executable, args) = self.command(false);
+            let (executable, args) = self.command_with_checkpoint(false, checkpoint);
             let env = if self.local_doveadm() {
                 vec![(
                     "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
@@ -721,6 +730,13 @@ impl Form {
         }
     }
     fn command(&self, redact: bool) -> (String, Vec<String>) {
+        self.command_with_checkpoint(redact, None)
+    }
+    fn command_with_checkpoint(
+        &self,
+        redact: bool,
+        checkpoint: Option<&str>,
+    ) -> (String, Vec<String>) {
         if self.engine() != core::Engine::Dovecot {
             return (self.profile.imapsync_path.clone(), self.args(redact));
         }
@@ -779,6 +795,10 @@ impl Form {
             ]);
         } else {
             args.extend(["-l".into(), DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()]);
+            // Dovecot prints a new state string when -s is supplied. An
+            // empty state requests an initial stateful pass; a prior
+            // committed checkpoint makes later passes incremental.
+            args.extend(["-s".into(), checkpoint.unwrap_or_default().to_owned()]);
             args.extend([if self.profile.delete2 {
                 "backup"
             } else {
@@ -1044,6 +1064,11 @@ enum Event {
         child_run_id: String,
         evidence: core::MailboxEvidence,
     },
+    Checkpoint {
+        run_id: String,
+        job_id: String,
+        value: String,
+    },
     Evidence(core::MailboxEvidence),
     VerificationFailed(String),
     Finished(Result<StreamOutcome, String>),
@@ -1117,6 +1142,8 @@ fn run_streaming(
     let dropped_diagnostics = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let out_tail = Arc::clone(&tail);
     let out_evidence_lines = Arc::clone(&evidence_lines);
+    let dovecot_checkpoint = Arc::new(Mutex::new(None::<String>));
+    let out_dovecot_checkpoint = Arc::clone(&dovecot_checkpoint);
     let out_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
     let out_run_id = run_id.to_owned();
     let out_job_id = job_id.to_owned();
@@ -1130,6 +1157,12 @@ fn run_streaming(
             }
             record_process_tail(&out_tail, &safe);
             record_evidence_line(&out_evidence_lines, &safe);
+            if dovecot_exit_two_is_delta
+                && let Some(candidate) = dovecot_state_candidate(&safe)
+                && let Ok(mut checkpoint) = out_dovecot_checkpoint.lock()
+            {
+                *checkpoint = Some(candidate);
+            }
             if out_tx
                 .try_send(Event::RunLine {
                     run_id: out_run_id.clone(),
@@ -1282,6 +1315,17 @@ fn run_streaming(
                 .lock()
                 .ok()
                 .and_then(|lines| verification::parse_imapsync_evidence(&lines));
+            let checkpoint = dovecot_checkpoint
+                .lock()
+                .ok()
+                .and_then(|value| value.clone());
+            if let Some(value) = &checkpoint {
+                let _ = tx.send(Event::Checkpoint {
+                    run_id: run_id.to_owned(),
+                    job_id: job_id.to_owned(),
+                    value: value.clone(),
+                });
+            }
             Ok(StreamResult {
                 outcome,
                 imapsync_evidence,
@@ -1323,6 +1367,26 @@ fn record_evidence_line(lines: &Mutex<Vec<String>>, line: &str) {
         && lines.len() < 64
     {
         lines.push(line.to_owned());
+    }
+}
+
+/// Dovecot's stateful sync state is emitted as a compact, single-line
+/// base64-like token. Keep the parser deliberately conservative: a line is
+/// treated as a checkpoint only when it contains no whitespace, uses the
+/// base64 alphabet, and includes padding. Ordinary diagnostic lines therefore
+/// cannot silently become resume state.
+fn dovecot_state_candidate(line: &str) -> Option<String> {
+    let value = line.trim();
+    if value.len() < 8 || value.len() > 4096 || !value.contains('=') {
+        return None;
+    }
+    if value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+    {
+        Some(value.to_owned())
+    } else {
+        None
     }
 }
 
@@ -1725,6 +1789,8 @@ struct App {
     active_view: WorkspaceView,
     pending_evidence: Option<core::MailboxEvidence>,
     pending_batch_evidence: HashMap<String, core::MailboxEvidence>,
+    pending_checkpoint: Option<String>,
+    pending_batch_checkpoints: HashMap<String, String>,
     run_started_at: Option<std::time::Instant>,
     dark_mode: bool,
     bulk_live_confirm_open: bool,
@@ -1935,6 +2001,8 @@ impl Default for App {
             active_view: WorkspaceView::Overview,
             pending_evidence: None,
             pending_batch_evidence: HashMap::new(),
+            pending_checkpoint: None,
+            pending_batch_checkpoints: HashMap::new(),
             run_started_at: None,
             dark_mode: false,
             bulk_live_confirm_open: false,
@@ -3822,10 +3890,6 @@ impl App {
             self.bulk_message = error;
             return;
         }
-        let selected_job_ids = selected_indices
-            .iter()
-            .map(|&index| self.bulk_job_ids[index].clone())
-            .collect::<Vec<_>>();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         if let Err(error) = validate_batch_throttle(&self.form.profile, concurrency) {
             self.bulk_message = error;
@@ -3833,6 +3897,7 @@ impl App {
         }
         self.durability_error = false;
         self.pending_batch_evidence.clear();
+        self.pending_batch_checkpoints.clear();
         let mailboxes = all_jobs
             .iter()
             .map(|job| {
@@ -3877,6 +3942,27 @@ impl App {
         self.bulk_project_id = Some(project_id.clone());
         self.selected_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
+        // Resolve queue-row indices to the durable IDs of the project chosen
+        // above. A freshly imported dry queue has no old IDs at all, and an
+        // edited queue may have IDs from a different project; using those
+        // pre-resolution IDs would panic or bind children to stale mailboxes.
+        let selected_job_ids = selected_indices
+            .iter()
+            .map(|&index| self.bulk_job_ids[index].clone())
+            .collect::<Vec<_>>();
+        let queue_checkpoints = selected_job_ids
+            .iter()
+            .map(|job_id| self.store.mailbox_checkpoint(job_id))
+            .collect::<rusqlite::Result<Vec<_>>>();
+        let queue_checkpoints = match queue_checkpoints {
+            Ok(value) => value,
+            Err(error) => {
+                self.bulk_message = format!(
+                    "Could not read durable Dovecot checkpoints; batch was not started: {error}"
+                );
+                return;
+            }
+        };
         self.bulk_live_run = live;
         let expected_plans = if live {
             jobs.iter()
@@ -3971,6 +4057,7 @@ impl App {
                     index,
                     queue_job_ids[index].clone(),
                     child_run_ids[index].clone(),
+                    queue_checkpoints[index].clone(),
                     job,
                 ))
                 .expect("batch workers are created immediately after queue setup");
@@ -3993,7 +4080,7 @@ impl App {
                 let batch_project_id = batch_project_id.clone();
                 let batch_run_id = batch_run_id.clone();
                 workers.push(thread::spawn(move || {
-                    while let Ok((index, job_id, child_run_id, job)) = job_rx.recv() {
+                    while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
                         if cancel.load(Ordering::Relaxed) {
                             let _ = tx.send(Event::JobState {
                                 job_id: job_id.clone(),
@@ -4129,7 +4216,10 @@ impl App {
                             }
                             let prepared = job
                                 .form
-                                .prepared_command_with_throttle_divisor(concurrency);
+                                .prepared_command_with_throttle_divisor_and_checkpoint(
+                                    concurrency,
+                                    checkpoint.as_deref(),
+                                );
                             let result = match prepared {
                                 Ok(command) => {
                                     let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
@@ -4619,7 +4709,35 @@ impl App {
                 return;
             }
         }
-        let prepared = match self.form.prepared_command() {
+        let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
+        let credential_fingerprint = self.form.credential_fingerprint();
+        let plan_snapshot = self.form.plan_snapshot();
+        let run_engine = self.form.engine();
+        let run_dry_run = self.form.dry_run;
+        let (run_project_id, run_job_id) = match (self.project_id.clone(), self.job_id.clone()) {
+            (Some(project), Some(job)) => (project, job),
+            _ => {
+                self.status = "Could not start without a durable mailbox project.".into();
+                return;
+            }
+        };
+        let dovecot_checkpoint = if run_engine == core::Engine::Dovecot && !run_dry_run {
+            match self.store.mailbox_checkpoint(&run_job_id) {
+                Ok(checkpoint) => checkpoint,
+                Err(error) => {
+                    self.status = format!(
+                        "Could not read the durable Dovecot checkpoint; migration was not started: {error}"
+                    );
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let prepared = match self
+            .form
+            .prepared_command_with_throttle_divisor_and_checkpoint(1, dovecot_checkpoint.as_deref())
+        {
             Ok(command) => command,
             Err(error) => {
                 self.status = error;
@@ -4630,19 +4748,6 @@ impl App {
         let args = prepared.args;
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
-        let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
-        let credential_fingerprint = self.form.credential_fingerprint();
-        let plan_snapshot = self.form.plan_snapshot();
-        let run_engine = self.form.engine();
-        let run_dry_run = self.form.dry_run;
-        let (run_project_id, run_job_id) = match (self.project_id.clone(), self.job_id.clone()) {
-            (Some(project), Some(job)) => (project, job),
-            _ => {
-                cleanup_paths(&cleanup);
-                self.status = "Could not start without a durable mailbox project.".into();
-                return;
-            }
-        };
         let run_id = uuid::Uuid::new_v4().to_string();
         if let Err(error) = self.store.begin_run_with_snapshot(
             &run_project_id,
@@ -4660,6 +4765,7 @@ impl App {
         self.live_auth_proof = None;
         self.live_confirmed = false;
         self.live_confirmation_plan = None;
+        self.pending_checkpoint = None;
         self.run_id = Some(run_id.clone());
         self.active_run = Some(ActiveRunContext {
             run_id: run_id.clone(),
@@ -5035,6 +5141,7 @@ impl App {
                                     "verification_difference".into()
                                 }
                             });
+                            let checkpoint = self.pending_batch_checkpoints.remove(&child_run_id);
                             if run.batch_job_ids.iter().any(|id| id == &job_id)
                                 && let Some(bulk_index) =
                                     self.bulk_job_ids.iter().position(|id| id == &job_id)
@@ -5043,23 +5150,26 @@ impl App {
                                 job.state = display_job_state(&final_state).into();
                             }
                             let result = if let Some(value) = evidence.as_ref() {
-                                self.store.finish_run_for_mailbox_with_evidence(
-                                    &run.project_id,
-                                    &job_id,
-                                    &child_run_id,
-                                    run_status,
-                                    &final_state,
-                                    &detail,
-                                    value,
-                                )
+                                self.store
+                                    .finish_run_for_mailbox_with_evidence_and_checkpoint(
+                                        &run.project_id,
+                                        &job_id,
+                                        &child_run_id,
+                                        run_status,
+                                        &final_state,
+                                        &detail,
+                                        value,
+                                        checkpoint.as_deref(),
+                                    )
                             } else {
-                                self.store.finish_run_for_mailbox(
+                                self.store.finish_run_for_mailbox_with_checkpoint(
                                     &run.project_id,
                                     &job_id,
                                     &child_run_id,
                                     run_status,
                                     &final_state,
                                     &detail,
+                                    checkpoint.as_deref(),
                                 )
                             };
                             let completion_persisted = result.is_ok();
@@ -5105,6 +5215,25 @@ impl App {
                         } else {
                             durability_errors.push(format!(
                                 "ignored evidence event for unknown child run {child_run_id}"
+                            ));
+                        }
+                    }
+                    Event::Checkpoint {
+                        run_id,
+                        job_id,
+                        value,
+                    } => {
+                        if let Some(run) = active_run.as_ref()
+                            && run.owns_process(&run_id, &job_id)
+                        {
+                            if matches!(run.kind, RunKind::Batch) {
+                                self.pending_batch_checkpoints.insert(run_id, value);
+                            } else if run.run_id == run_id {
+                                self.pending_checkpoint = Some(value);
+                            }
+                        } else {
+                            durability_errors.push(format!(
+                                "ignored Dovecot checkpoint for unknown run {run_id}"
                             ));
                         }
                     }
@@ -5185,6 +5314,11 @@ impl App {
             } else {
                 self.pending_evidence.take()
             };
+            let terminal_checkpoint = if !was_bulk_run {
+                self.pending_checkpoint.take()
+            } else {
+                None
+            };
             if succeeded && !run_context.dry_run && terminal_evidence.is_none() {
                 let result = self.store.record_event(
                     &run_context.project_id,
@@ -5262,17 +5396,37 @@ impl App {
                 {
                     if run_status == "completed" {
                         if let Some(evidence) = terminal_evidence.as_ref() {
-                            self.store.finish_run_for_mailbox_with_evidence(
-                                project, job, run_id, run_status, state, &detail, evidence,
-                            )
+                            self.store
+                                .finish_run_for_mailbox_with_evidence_and_checkpoint(
+                                    project,
+                                    job,
+                                    run_id,
+                                    run_status,
+                                    state,
+                                    &detail,
+                                    evidence,
+                                    terminal_checkpoint.as_deref(),
+                                )
                         } else {
-                            self.store.finish_run_for_mailbox(
-                                project, job, run_id, run_status, state, &detail,
+                            self.store.finish_run_for_mailbox_with_checkpoint(
+                                project,
+                                job,
+                                run_id,
+                                run_status,
+                                state,
+                                &detail,
+                                terminal_checkpoint.as_deref(),
                             )
                         }
                     } else {
-                        self.store.finish_run_for_mailbox(
-                            project, job, run_id, run_status, state, &detail,
+                        self.store.finish_run_for_mailbox_with_checkpoint(
+                            project,
+                            job,
+                            run_id,
+                            run_status,
+                            state,
+                            &detail,
+                            terminal_checkpoint.as_deref(),
                         )
                     }
                 } else {
@@ -6306,7 +6460,27 @@ mod tests {
         assert!(args.windows(2).any(|pair| {
             pair[0] == "-l" && pair[1] == DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()
         }));
+        assert!(args.windows(2).any(|pair| pair == ["-s", ""]));
         assert!(!args.iter().any(|arg| arg == "secret"));
+    }
+
+    #[test]
+    fn live_dovecot_plan_uses_previous_checkpoint() {
+        let mut form = dovecot_form();
+        form.dry_run = false;
+        let (_, args) = form.command_with_checkpoint(true, Some("AQAAAHm4+Jk="));
+        assert!(args.windows(2).any(|pair| pair == ["-s", "AQAAAHm4+Jk="]));
+    }
+
+    #[test]
+    fn dovecot_state_candidate_accepts_state_and_rejects_diagnostics() {
+        assert_eq!(
+            dovecot_state_candidate("AQAAAHm4+Jk="),
+            Some("AQAAAHm4+Jk=".into())
+        );
+        assert!(dovecot_state_candidate("sync completed successfully").is_none());
+        assert!(dovecot_state_candidate("AQAAAHm4+Jk").is_none());
+        assert!(dovecot_state_candidate(" short ").is_none());
     }
 
     #[test]
