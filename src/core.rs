@@ -742,6 +742,9 @@ impl StateStore {
     /// canonical plan hash rather than generated command arguments; the
     /// stored value is used only for exact equality during live admission.
     pub fn set_preflight_plan(&self, job_id: &str, plan: &str) -> rusqlite::Result<()> {
+        if plan.len() != 64 || !plan.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         self.connection.execute(
             "UPDATE mailbox_jobs SET preflight_plan=?1 WHERE id=?2",
             params![plan, job_id],
@@ -753,9 +756,10 @@ impl StateStore {
             .query_row(
                 "SELECT preflight_plan FROM mailbox_jobs WHERE id=?1",
                 [job_id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
             .optional()
+            .map(|value| value.flatten())
     }
     /// A desktop restart cannot prove that a previous child process still
     /// exists. All runs belonging to an interrupted wave are therefore made
@@ -3059,6 +3063,26 @@ mod tests {
     }
 
     #[test]
+    fn preflight_storage_rejects_non_digest_values() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("digest", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+
+        assert!(
+            db.set_preflight_plan(&job, "raw command arguments")
+                .is_err()
+        );
+        assert!(db.preflight_plan(&job).unwrap().is_none());
+        let digest = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        db.set_preflight_plan(&job, digest).unwrap();
+        assert_eq!(db.preflight_plan(&job).unwrap().as_deref(), Some(digest));
+    }
+
+    #[test]
     fn recovery_abandons_unclaimed_batch_children_without_marking_them_running() {
         let db = StateStore::in_memory().unwrap();
         let (project, jobs) = db
@@ -3189,14 +3213,19 @@ mod tests {
                 &[("one".into(), "one".into()), ("two".into(), "two".into())],
             )
             .unwrap();
-        db.set_preflight_plan(&jobs[0], "plan-one").unwrap();
-        db.set_preflight_plan(&jobs[1], "plan-two").unwrap();
+        let plan_one = "1111111111111111111111111111111111111111111111111111111111111111";
+        let plan_two = "2222222222222222222222222222222222222222222222222222222222222222";
+        db.set_preflight_plan(&jobs[0], plan_one).unwrap();
+        db.set_preflight_plan(&jobs[1], plan_two).unwrap();
         let result = db.begin_batch_run(
             &project.id,
             &jobs,
             "run-batch-plans",
             "test",
-            &["plan-one".into(), "stale-plan".into()],
+            &[
+                plan_one.into(),
+                "3333333333333333333333333333333333333333333333333333333333333333".into(),
+            ],
         );
         assert!(result.is_err());
         assert!(

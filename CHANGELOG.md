@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Preflight plan storage now accepts only canonical 64-character hexadecimal SHA-256 digests, and unset SQL values correctly read as no preflight instead of a type error.
 - Generic mailbox terminal completion now rejects contradictory run/state pairs, preventing failed or cancelled executions from being recorded as successful mailbox outcomes.
 - Durable batch admission now rejects duplicate mailbox IDs and normalized duplicate destination mailboxes at the transactional start boundary, including legacy queues that bypassed import validation.
 - Durable batch start now rejects duplicate mailbox IDs before creating the parent or child runs, preserving one execution owner per mailbox even for non-UI callers.
