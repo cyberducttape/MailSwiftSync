@@ -22,6 +22,8 @@ All notable changes to MailSwiftSync are documented here.
 - Workspace views and exports now use an explicit selected-project identity,
   separate from active execution ownership, so a completed batch cannot shadow
   a subsequently selected single-mailbox project.
+- Lifecycle navigation now resolves its phase from the selected workspace
+  project, keeping the stepper consistent with views and exports after a batch.
 
 - Run-scoped diagnostic and verification events are now writable only while the run is active; terminal audit records cannot be appended later.
 - Preflight persistence now reports missing mailbox IDs as errors instead of silently succeeding with no durable update.
