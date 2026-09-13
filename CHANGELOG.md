@@ -6,6 +6,18 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Promoted the disposable IMAP lab into a product-level integration gate: it
+  now starts self-signed STARTTLS Dovecot fixtures, writes an isolated profile
+  and owner-only secret files, drives the packaged binary through headless
+  preflight, live, incremental live, customer-proof export, and verification,
+  and checks the resulting Maildir. The fixture selects Dovecot 2.3 or 2.4
+  configuration syntax to match the runtime, uses bounded 180-second product
+  invocations, and the Docker image now includes OpenSSL for deterministic test
+  certificates.
+- Added paired `--source-secret-file` and `--destination-secret-file` options
+  for single-mailbox headless runs. Secret files are size-limited, owner-only
+  on Unix, and handed to the zeroizing credential path without entering the
+  durable ledger; batch modes continue to require an already-admitted queue.
 - Extracted single-run worker orchestration into
   `src/controller/orchestrator.rs`; GUI state now submits an owned execution
   specification while process cleanup, verification sequencing, panic

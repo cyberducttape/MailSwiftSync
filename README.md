@@ -206,6 +206,20 @@ and leaves Attention and verification-difference rows untouched. The optional
 `idle-polls` value defaults to one quiet poll; set it to `0` for continuous
 watching of a maintenance window. It is a supervisor process, not a remote API
 or a replacement for an external service manager.
+For single-mailbox headless runs, credentials can be supplied through paired
+owner-only secret files rather than a profile or command line:
+
+```text
+mailswiftsync headless /path/to/state.db preflight \
+  --source-secret-file /run/private/source \
+  --destination-secret-file /run/private/destination
+```
+
+The files must be regular files no larger than 64 KiB and, on Unix, must be
+owner-only. They are read into the zeroizing execution path and are never
+stored in the ledger. Batch headless modes intentionally require credentials
+to be provided through the already admitted durable queue.
+
 These commands are headless control-plane operations; they do not yet replace
 the GUI with a continuously running scheduler. `headless live` is an explicit
 one-shot operation for a single-mailbox project: it runs a fresh dry preflight
@@ -217,18 +231,20 @@ ambiguous or partially restored queue.
 
 ### Real IMAP engine lab
 
-On a Linux host with Dovecot and imapsync installed, run the disposable
-engine-level integration test:
+On a Linux host with the packaged `mailswiftsync`, Dovecot, imapsync, and
+OpenSSL installed, run the disposable product integration test:
 
 ```text
 scripts/imap-integration-smoke.sh
 ```
 
-It starts two local, temporary Dovecot servers, authenticates to both with a
-fixture account, performs a real imapsync transfer, and checks the destination
-Maildir. Set `MAILSWIFTSYNC_KEEP_LAB=1` to retain the temporary logs for
-diagnosis. This validates the external engines and authentication path; it is
-not a substitute for the still-planned controller crash/restart chaos lab.
+It starts two local, temporary, self-signed STARTTLS Dovecot servers, writes an
+isolated profile and secret files, then drives MailSwiftSync headless preflight,
+live migration, incremental live migration, customer-proof export, and proof
+verification. It also checks the destination Maildir. Set
+`MAILSWIFTSYNC_KEEP_LAB=1` to retain the temporary logs for diagnosis. This is
+the product integration gate; it does not replace controller crash/restart
+chaos testing.
 
 ![Mailboxes workspace](docs/wiki/assets/batch-queue.png)
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Reproducible local engine lab for the supported generic-IMAP path. This
-# intentionally exercises real Dovecot servers and the real imapsync binary;
-# it does not replace controller crash/restart tests, which require a
-# headless supervisor and remain a release blocker.
+# Reproducible product-level lab for the supported generic-IMAP path. It
+# exercises the packaged MailSwiftSync binary, its generated plan and secret
+# delivery, the real Dovecot servers/imapsync binary, durable evidence, and
+# the customer-proof verifier. Direct engine checks remain supplemental.
 
-if ! command -v dovecot >/dev/null 2>&1 || ! command -v imapsync >/dev/null 2>&1; then
-  echo "SKIP: install dovecot and imapsync to run the IMAP integration lab" >&2
+if ! command -v dovecot >/dev/null 2>&1 || ! command -v imapsync >/dev/null 2>&1 || \
+  ! command -v mailswiftsync >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || \
+  ! command -v timeout >/dev/null 2>&1; then
+  echo "SKIP: install mailswiftsync, dovecot, imapsync, openssl, and timeout to run the IMAP integration lab" >&2
   exit 77
 fi
 
@@ -42,6 +44,15 @@ mail_uid="$(id -u dovecot 2>/dev/null || printf '%s' "$uid")"
 mail_gid="$(id -g dovecot 2>/dev/null || printf '%s' "$gid")"
 user="lab@example.test"
 password="lab-password"
+# The Dovecot auth worker must traverse every parent of its passwd-file. Give
+# the disposable lab root to the fixture service account so Dovecot cannot
+# harden it back to mode 0700 while starting its auth service.
+if id dovecot >/dev/null 2>&1; then
+  chown "$mail_uid:$mail_gid" "$workspace"
+  chmod 0750 "$workspace"
+else
+  chmod 0755 "$workspace"
+fi
 
 start_server() {
   local name="$1" port="$2"
@@ -53,7 +64,25 @@ start_server() {
   # validation hosts already run Dovecot 2.4. Select the matching dialect so
   # the release fixture tests the packaged runtime rather than accidentally
   # testing a different configuration generation.
-  local version_setting mail_settings auth_settings
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+    -keyout "$root/ca.key" -out "$root/ca.crt" \
+    -subj "/CN=MailSwiftSync integration CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    >/dev/null 2>&1
+  openssl req -newkey rsa:2048 -nodes -keyout "$root/tls.key" \
+    -out "$root/tls.csr" -subj "/CN=127.0.0.1" >/dev/null 2>&1
+  cat > "$root/tls.ext" <<'EOF'
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=IP:127.0.0.1
+EOF
+  openssl x509 -req -days 2 -in "$root/tls.csr" \
+    -CA "$root/ca.crt" -CAkey "$root/ca.key" -CAcreateserial \
+    -out "$root/tls.crt" -extfile "$root/tls.ext" >/dev/null 2>&1
+  chmod 0600 "$root/ca.key" "$root/tls.key"
+  local version_setting mail_settings auth_settings auth_cleartext_setting tls_settings
   case "$dovecot_version" in
     2.4.*)
       version_setting="dovecot_config_version = 2.4.0
@@ -65,6 +94,11 @@ mail_path = ~/Maildir"
 }
 userdb passwd-file {
   passwd_file_path = $root/passwd
+}"
+      auth_cleartext_setting="auth_allow_cleartext = yes"
+      tls_settings="ssl_server {
+  cert_file = $root/tls.crt
+  key_file = $root/tls.key
 }"
       ;;
     2.3.*)
@@ -78,6 +112,9 @@ userdb {
   driver = passwd-file
   args = $root/passwd
 }"
+      auth_cleartext_setting="disable_plaintext_auth = no"
+      tls_settings="ssl_cert = <$root/tls.crt
+ssl_key = <$root/tls.key"
       ;;
     *)
       echo "FAIL: unsupported Dovecot configuration generation: $dovecot_version" >&2
@@ -103,8 +140,9 @@ protocols = imap
 listen = 127.0.0.1
 log_path = $root/log/dovecot.log
 info_log_path = $root/log/dovecot-info.log
-ssl = no
-auth_allow_cleartext = yes
+ssl = yes
+$tls_settings
+$auth_cleartext_setting
 auth_mechanisms = plain login
 auth_verbose = yes
 first_valid_uid = 1
@@ -114,6 +152,9 @@ $auth_settings
 service imap-login {
   inet_listener imap {
     port = $port
+  }
+  inet_listener imaps {
+    port = 0
   }
 }
 EOF
@@ -154,16 +195,80 @@ Content-Type: text/plain; charset=utf-8
 This message is a disposable integration fixture.
 EOF
 
-imapsync \
-  --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "$password" --notls1 \
-  --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
-  --automap --dry --nolog
-echo "PASS: real IMAP preflight/dry transfer completed without changing the destination"
+binary="$(command -v mailswiftsync)"
+imapsync_path="$(command -v imapsync)"
+state="$workspace/state.db"
+export XDG_CONFIG_HOME="$workspace/config"
+mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
+chmod 0700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/mailswiftsync"
+cat > "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" <<EOF
+name = "Packaged integration"
+source_host = "127.0.0.1"
+source_port = "$source_port"
+source_tls = "starttls"
+source_user = "$user"
+source_auth = "password"
+source_credential_id = ""
+source_ca_bundle = "$workspace/source/ca.crt"
+source_certificate_pin_sha256 = ""
+allow_insecure_source_transport = false
+destination_host = "127.0.0.1"
+destination_user = "$user"
+destination_auth = "password"
+destination_credential_id = ""
+destination_port = "$destination_port"
+destination_tls = "starttls"
+destination_ca_bundle = "$workspace/destination/ca.crt"
+destination_certificate_pin_sha256 = ""
+imapsync_path = "$imapsync_path"
+engine = "ImapSync"
+doveadm_path = "doveadm"
+ssh_path = "ssh"
+dovecot_execution = "automatic"
+dovecot_ssh_user = ""
+dovecot_config = ""
+batch_concurrency = 1
+batch_retry_count = 0
+max_messages_per_second = 0
+max_bytes_per_second = 0
+migration_timeout_hours = 1
+allow_remote_password_in_argv = false
+automap = true
+addheader = false
+justfolders = false
+sync_internaldates = true
+useuid = true
+usecache = true
+fastio1 = false
+fastio2 = false
+allowsizemismatch = false
+delete2 = false
+extra_options = ""
+EOF
+source_secret="$workspace/source.secret"
+destination_secret="$workspace/destination.secret"
+printf '%s' "$password" > "$source_secret"
+printf '%s' "$password" > "$destination_secret"
+chmod 0600 "$source_secret" "$destination_secret"
 
-imapsync \
-  --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "$password" --notls1 \
-  --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
-  --automap --nolog
+run_product() {
+  # A broken engine, fixture, or controller must produce a bounded release
+  # failure rather than consuming an unattended CI runner indefinitely.
+  timeout --foreground 180 "$binary" "$@"
+}
+
+run_product headless "$state" preflight \
+  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
+echo "PASS: packaged MailSwiftSync preflight completed against real STARTTLS servers"
+
+run_product headless "$state" live \
+  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
+echo "PASS: packaged MailSwiftSync live migration completed"
+
+proof="$workspace/customer-proof.json"
+run_product customer-proof "$state" "$proof"
+run_product verify "$proof"
+echo "PASS: packaged customer proof exported and verified"
 
 second_message="$workspace/source/mail/$user/Maildir/new/delta-fixture.eml"
 cat > "$second_message" <<'EOF'
@@ -177,28 +282,9 @@ Content-Type: text/plain; charset=utf-8
 This message proves that a subsequent incremental pass is exercised.
 EOF
 
-if ! imapsync \
-  --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "$password" --notls1 \
-  --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
-  --automap --nolog >"$workspace/incremental-transfer.log" 2>&1; then
-  echo "FAIL: incremental imapsync pass failed" >&2
-  tail -40 "$workspace/incremental-transfer.log" >&2
-  exit 1
-fi
-echo "PASS: incremental IMAP transfer completed"
-
-set +e
-imapsync \
-  --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "incorrect-password" --notls1 \
-  --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
-  --automap --nolog > "$workspace/bad-auth.log" 2>&1
-bad_auth_status=$?
-set -e
-if [[ "$bad_auth_status" == 0 ]]; then
-  echo "FAIL: invalid source credentials unexpectedly succeeded" >&2
-  exit 1
-fi
-echo "PASS: invalid source credentials were rejected (exit $bad_auth_status)"
+run_product headless "$state" live \
+  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
+echo "PASS: packaged MailSwiftSync incremental live migration completed"
 
 destination_messages="$(find "$workspace/destination/mail/$user/Maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
 if [[ "$destination_messages" -lt 1 ]]; then
@@ -219,4 +305,4 @@ if [[ "$destination_messages" -lt 2 ]] || ! grep -R -F -l -- "Message-ID: <mails
   exit 1
 fi
 echo "PASS: destination retained both initial and incremental Message-IDs"
-echo "PASS: real Dovecot-to-Dovecot IMAP transfer copied $destination_messages message(s)"
+echo "PASS: MailSwiftSync product integration copied $destination_messages message(s) through the packaged engine"

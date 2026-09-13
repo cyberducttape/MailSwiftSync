@@ -1,3 +1,4 @@
+use crate::credentials::SecretString;
 use crate::*;
 use serde::Serialize;
 use std::{sync::atomic::Ordering, thread, time::Duration};
@@ -26,6 +27,11 @@ pub(crate) struct HeadlessMailboxStatus {
     pub(crate) destination_mailbox: String,
     pub(crate) state: String,
     pub(crate) attention_reason: Option<String>,
+}
+
+pub(crate) struct HeadlessCredentials {
+    pub(crate) source: SecretString,
+    pub(crate) destination: SecretString,
 }
 
 /// Build a support artifact from durable state without including anything
@@ -223,11 +229,19 @@ pub(crate) fn headless_recover(
 /// Run the existing durable controller without constructing an egui window.
 /// A live invocation always performs a fresh dry preflight first, so this
 /// path cannot promote credentials or a plan left over from another process.
-pub(crate) fn headless_execute(state_path: &std::path::Path, live: bool) -> Result<String, String> {
+pub(crate) fn headless_execute_with_credentials(
+    state_path: &std::path::Path,
+    live: bool,
+    credentials: Option<HeadlessCredentials>,
+) -> Result<String, String> {
     // App::default owns the lock and performs the same startup recovery as
     // the GUI. The environment override is read only during construction.
     unsafe { std::env::set_var("MAILSWIFTSYNC_STATE_PATH", state_path) };
     let mut app = App::default();
+    if let Some(credentials) = credentials {
+        app.form.source_password = credentials.source;
+        app.form.destination_password = credentials.destination;
+    }
     if !app.persistence_available {
         return Err("durable SQLite state is unavailable; execution is blocked".into());
     }

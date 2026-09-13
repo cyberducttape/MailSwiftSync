@@ -78,13 +78,15 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Run metadata records the version string returned by each engine when its
   executable supports `--version`; unavailable versions remain explicit in
   exports rather than being guessed.
-- A reproducible Linux engine lab starts two disposable Dovecot servers,
-  performs a real imapsync transfer, checks the destination message count and
-  fixture Message-ID, and rejects invalid credentials. This is engine-level
-  coverage. It also asserts that invalid source credentials fail. The lab
-  runs against the same pinned Debian Bookworm Dovecot and imapsync packages
-  used by the distributed container, and tagged release publication depends
-  on this packaged integration gate. Controller crash/restart
+- A reproducible Linux product integration lab starts two disposable,
+  self-signed STARTTLS Dovecot servers, writes an isolated profile and
+  owner-only secret files, drives the packaged MailSwiftSync binary through
+  headless preflight, live and incremental migration, exports and verifies a
+  customer proof, and checks the destination message IDs. The fixture selects
+  Dovecot 2.3 or 2.4 configuration syntax to match the installed runtime and
+  uses the same pinned Debian Bookworm Dovecot and imapsync packages used by
+  the distributed container. Tagged release publication depends on this
+  product-level gate. Controller crash/restart
   and storage-fault chaos coverage is still required before unattended
   production use.
 - Headless `status` and `recover` commands expose secret-free durable state and

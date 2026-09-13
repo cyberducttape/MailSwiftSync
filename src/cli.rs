@@ -1,6 +1,7 @@
+use crate::credentials::read_secret_file;
 use crate::headless::{
-    export_support_bundle, headless_batch_execute, headless_execute, headless_recover,
-    headless_status, headless_supervise,
+    HeadlessCredentials, export_support_bundle, headless_batch_execute,
+    headless_execute_with_credentials, headless_recover, headless_status, headless_supervise,
 };
 use crate::*;
 use eframe::egui;
@@ -353,26 +354,78 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
-                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live"
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>]"
             );
             std::process::exit(2);
         };
-        if arguments.next().is_some()
-            || !matches!(
-                mode.to_str(),
-                Some("preflight" | "live" | "batch-preflight" | "batch-live")
-            )
-        {
+        if !matches!(
+            mode.to_str(),
+            Some("preflight" | "live" | "batch-preflight" | "batch-live")
+        ) {
             eprintln!(
-                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live"
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>]"
             );
             std::process::exit(2);
         }
+        let mut source_secret_file = None;
+        let mut destination_secret_file = None;
+        while let Some(option) = arguments.next() {
+            let Some(option) = option.to_str() else {
+                eprintln!("Headless migration refused: option must be valid UTF-8");
+                std::process::exit(2);
+            };
+            let target = match option {
+                "--source-secret-file" => &mut source_secret_file,
+                "--destination-secret-file" => &mut destination_secret_file,
+                _ => {
+                    eprintln!("Unknown headless option: {option}");
+                    std::process::exit(2);
+                }
+            };
+            let Some(path) = arguments.next() else {
+                eprintln!("Headless secret-file option requires a path");
+                std::process::exit(2);
+            };
+            *target = Some(std::path::PathBuf::from(path));
+        }
+        if mode.to_str().is_some_and(|mode| mode.starts_with("batch-"))
+            && (source_secret_file.is_some() || destination_secret_file.is_some())
+        {
+            eprintln!(
+                "Secret-file options are supported for single-mailbox headless execution only."
+            );
+            std::process::exit(2);
+        }
+        let credentials = match (source_secret_file, destination_secret_file) {
+            (None, None) => None,
+            (Some(source), Some(destination)) => Some(HeadlessCredentials {
+                source: match read_secret_file(&source) {
+                    Ok(secret) => secret,
+                    Err(error) => {
+                        eprintln!("Headless migration refused: source secret file: {error}");
+                        std::process::exit(1);
+                    }
+                },
+                destination: match read_secret_file(&destination) {
+                    Ok(secret) => secret,
+                    Err(error) => {
+                        eprintln!("Headless migration refused: destination secret file: {error}");
+                        std::process::exit(1);
+                    }
+                },
+            }),
+            _ => {
+                eprintln!(
+                    "Both --source-secret-file and --destination-secret-file are required together."
+                );
+                std::process::exit(2);
+            }
+        };
         let state = std::path::PathBuf::from(state);
         let mode = mode.to_string_lossy();
         let result = match mode.as_ref() {
-            "preflight" => headless_execute(&state, false),
-            "live" => headless_execute(&state, true),
+            "preflight" => headless_execute_with_credentials(&state, false, credentials),
+            "live" => headless_execute_with_credentials(&state, true, credentials),
             "batch-preflight" => headless_batch_execute(&state, false),
             "batch-live" => headless_batch_execute(&state, true),
             _ => unreachable!("headless mode was validated above"),

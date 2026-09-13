@@ -146,6 +146,32 @@ pub fn write_secret_file(path: &Path, secret: &str) -> std::io::Result<()> {
     restrict_file_permissions(path)
 }
 
+/// Read an operator-provided headless credential without retaining it in an
+/// ordinary owned string after the file read completes.
+pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
+    const MAX_SECRET_FILE_BYTES: u64 = 64 * 1024;
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("could not inspect secret file: {error}"))?;
+    if !metadata.is_file() {
+        return Err("secret-file path must refer to a regular file".into());
+    }
+    if metadata.len() > MAX_SECRET_FILE_BYTES {
+        return Err(format!(
+            "secret file exceeds the {MAX_SECRET_FILE_BYTES}-byte limit"
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err("secret file must be owner-only (0600 or stricter)".into());
+        }
+    }
+    let contents =
+        fs::read_to_string(path).map_err(|error| format!("could not read secret file: {error}"))?;
+    Ok(SecretString::new(contents))
+}
+
 #[cfg(unix)]
 pub fn open_secret_file(path: &Path) -> std::io::Result<fs::File> {
     use std::os::unix::fs::OpenOptionsExt;

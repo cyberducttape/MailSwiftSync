@@ -31,6 +31,7 @@ ARG DOVECOT_VERSION=1:2.3.19.1+dfsg1-2.1+deb12u6
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         ca-certificates \
+        openssl \
         "dovecot-core=${DOVECOT_VERSION}" \
         "dovecot-imapd=${DOVECOT_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \
