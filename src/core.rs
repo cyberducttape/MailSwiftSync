@@ -706,6 +706,12 @@ impl StateStore {
         ) {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        // A running mailbox must always have a durable execution owner. Only
+        // begin_run() and the batch child-claim path establish that pairing;
+        // a generic state update must not create an unowned running row.
+        if state == "running" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let current: String = self.connection.query_row(
             "SELECT state FROM mailbox_jobs WHERE id=?1",
             [job_id],
@@ -940,6 +946,14 @@ impl StateStore {
         self.connection.execute(
             "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,'','running')",
             params![run_id, project_id, job_id, engine],
+        )?;
+        Ok(())
+    }
+    #[cfg(test)]
+    fn set_mailbox_state_for_test(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE mailbox_jobs SET state=?1 WHERE id=?2",
+            params![state, job_id],
         )?;
         Ok(())
     }
@@ -1835,9 +1849,10 @@ mod tests {
         let job = db
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
-        db.set_mailbox_state(&job, "running").unwrap();
+        assert!(db.set_mailbox_state(&job, "running").is_err());
+        db.set_mailbox_state_for_test(&job, "running").unwrap();
         db.set_mailbox_state(&job, "failed").unwrap();
-        db.set_mailbox_state(&job, "running").unwrap();
+        db.set_mailbox_state_for_test(&job, "running").unwrap();
         assert!(db.set_mailbox_state(&job, "queued").is_err());
     }
 
@@ -2104,7 +2119,7 @@ mod tests {
         db.transition(&project.id, Phase::Verification).unwrap();
         assert!(!db.all_mailboxes_verified(&project.id).unwrap());
         assert!(db.transition(&project.id, Phase::Complete).is_err());
-        db.set_mailbox_state(&job, "running").unwrap();
+        db.set_mailbox_state_for_test(&job, "running").unwrap();
         db.insert_run_for_test(&project.id, Some(&job), "run-project-complete", "test")
             .unwrap();
         let evidence = MailboxEvidence {
@@ -2154,7 +2169,7 @@ mod tests {
         let job = db
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
-        db.set_mailbox_state(&job, "running").unwrap();
+        db.set_mailbox_state_for_test(&job, "running").unwrap();
         db.insert_run_for_test(&project.id, Some(&job), "run-1", "test")
             .unwrap();
         assert_eq!(db.recover_abandoned_jobs().unwrap(), 1);

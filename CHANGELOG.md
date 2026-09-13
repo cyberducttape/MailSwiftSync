@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Generic mailbox state updates can no longer create an unowned `running` mailbox; execution ownership must be established through the atomic single-run or batch-child claim APIs.
 - Project-health state counts now use an ordered map, making JSON health exports deterministic for audit diffs and ticket automation.
 - Preflight plan storage now accepts only canonical 64-character hexadecimal SHA-256 digests, and unset SQL values correctly read as no preflight instead of a type error.
 - Generic mailbox terminal completion now rejects contradictory run/state pairs, preventing failed or cancelled executions from being recorded as successful mailbox outcomes.
