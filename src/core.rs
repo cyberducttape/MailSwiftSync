@@ -454,6 +454,7 @@ impl StateStore {
           CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
           CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
           CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
           CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
           CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
@@ -548,6 +549,10 @@ impl StateStore {
         }
         self.connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_run_created ON events(run_id, created_at DESC)",
+            [],
+        )?;
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC)",
             [],
         )?;
         let process_columns = self

@@ -56,6 +56,8 @@ const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const DOVECOT_SYNC_LOCK_WAIT_SECONDS: u64 = 300;
 const MAX_PENDING_EVENTS: usize = 4_096;
+// Keep one unusually noisy worker from monopolising an egui frame.
+const MAX_EVENTS_PER_FRAME: usize = 250;
 const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_UI_SCALE: f32 = 1.10;
 const MIN_UI_SCALE: f32 = 0.90;
@@ -713,13 +715,14 @@ impl Form {
     #[cfg(test)]
     fn plan_snapshot(&self) -> String {
         self.plan_snapshot_with_checkpoint(None)
+            .expect("test snapshot serialization")
     }
 
     /// Serialize the launch configuration and, when applicable, the identity
     /// of the previously committed Dovecot state supplied to this run. The
     /// state token itself stays out of durable reports; its digest is enough
     /// to prove which resume point was selected.
-    fn plan_snapshot_with_checkpoint(&self, checkpoint: Option<&str>) -> String {
+    fn plan_snapshot_with_checkpoint(&self, checkpoint: Option<&str>) -> Result<String, String> {
         let extra_options_sha256 = format!(
             "{:x}",
             Sha256::digest(self.profile.extra_options.as_bytes())
@@ -770,7 +773,8 @@ impl Form {
                     .flatten(),
             },
         };
-        toml::to_string(&snapshot).unwrap_or_default()
+        toml::to_string(&snapshot)
+            .map_err(|error| format!("could not serialize immutable run plan snapshot: {error}"))
     }
 
     fn requires_insecure_transport_ack(&self) -> bool {
@@ -3400,9 +3404,11 @@ impl App {
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
                 .max_height(420.0)
-                .show(ui, |ui| {
-                    for line in &self.output {
-                        ui.label(RichText::new(line).monospace().size(14.0));
+                .show_rows(ui, 20.0, self.output.len(), |ui, rows| {
+                    for index in rows {
+                        if let Some(line) = self.output.get(index) {
+                            ui.label(RichText::new(line).monospace().size(14.0));
+                        }
                     }
                 });
         });
@@ -4406,20 +4412,35 @@ impl App {
                 job.form
                     .plan_snapshot_with_checkpoint(checkpoint.as_deref())
             })
-            .collect::<Vec<_>>()
-            .join("\n--- batch mailbox plan ---\n");
+            .collect::<Result<Vec<_>, _>>();
+        let plan_snapshot = match plan_snapshot {
+            Ok(snapshots) => snapshots.join("\n--- batch mailbox plan ---\n"),
+            Err(error) => {
+                self.bulk_message = error;
+                return;
+            }
+        };
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
         let child_plans = jobs
             .iter()
             .zip(queue_checkpoints.iter())
-            .map(|(job, checkpoint)| core::BatchChildPlan {
-                engine: job.form.engine().label().to_owned(),
-                plan_snapshot: job
-                    .form
-                    .plan_snapshot_with_checkpoint(checkpoint.as_deref()),
+            .map(|(job, checkpoint)| {
+                job.form
+                    .plan_snapshot_with_checkpoint(checkpoint.as_deref())
+                    .map(|plan_snapshot| core::BatchChildPlan {
+                        engine: job.form.engine().label().to_owned(),
+                        plan_snapshot,
+                    })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>();
+        let child_plans = match child_plans {
+            Ok(plans) => plans,
+            Err(error) => {
+                self.bulk_message = error;
+                return;
+            }
+        };
         let child_run_ids = match self.store.begin_batch_run_with_children(
             &project_id,
             &selected_job_ids,
@@ -5174,9 +5195,16 @@ impl App {
         } else {
             None
         };
-        let plan_snapshot = self
+        let plan_snapshot = match self
             .form
-            .plan_snapshot_with_checkpoint(dovecot_checkpoint.as_deref());
+            .plan_snapshot_with_checkpoint(dovecot_checkpoint.as_deref())
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
         let prepared = match self
             .form
             .prepared_command_with_throttle_divisor_and_checkpoint(1, dovecot_checkpoint.as_deref())
@@ -5378,7 +5406,11 @@ impl App {
         let mut durability_errors = Vec::new();
         let active_run = self.active_run.clone();
         if let Some(rx) = &self.receiver {
-            while let Ok(event) = rx.try_recv() {
+            let mut processed_events = 0;
+            while processed_events < MAX_EVENTS_PER_FRAME
+                && let Ok(event) = rx.try_recv()
+            {
+                processed_events += 1;
                 match event {
                     Event::ClaimBatch {
                         project_id,
@@ -6262,10 +6294,15 @@ impl App {
             }
             ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, source_credential_id, destination_credential_id, name. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
             ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("bulk_jobs").striped(true).min_col_width(120.0).show(ui, |ui| {
+            egui::Grid::new("bulk_jobs")
+                .striped(true)
+                .min_col_width(120.0)
+                .show(ui, |ui| {
                     ui.strong("#"); ui.strong("Migration"); ui.strong("Source"); ui.strong("Destination"); ui.strong("Source password"); ui.strong("Destination password"); ui.strong("Status"); ui.end_row();
-                    for (index, job) in self.bulk_jobs.iter_mut().enumerate() {
+                    let row_count = self.bulk_jobs.len();
+                    egui::ScrollArea::vertical().show_rows(ui, 42.0, row_count, |ui, rows| {
+                    for index in rows {
+                        let job = &mut self.bulk_jobs[index];
                         ui.label((index + 1).to_string());
                         ui.label(&job.label);
                         ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user));
@@ -6276,8 +6313,8 @@ impl App {
                         ui.label(RichText::new(badge).color(color));
                         ui.end_row();
                     }
+                    });
                 });
-            });
             ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(ALERT));
         });
         self.bulk_open = open;
@@ -6286,6 +6323,27 @@ impl App {
         if !self.bulk_live_confirm_open {
             return;
         }
+        let mut durable_state_error = None;
+        let eligible_indices = self
+            .bulk_jobs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| {
+                let job_id = self.bulk_job_ids.get(index)?;
+                let state = match self.store.mailbox_state(job_id) {
+                    Ok(Some(state)) => state,
+                    Ok(None) => return None,
+                    Err(error) => {
+                        durable_state_error = Some(format!(
+                            "Could not read durable mailbox state for confirmation: {error}"
+                        ));
+                        return None;
+                    }
+                };
+                (self.bulk_row_is_selected(index) && self.bulk_retry_scope.includes(&state))
+                    .then_some(index)
+            })
+            .collect::<HashSet<_>>();
         let mut open = self.bulk_live_confirm_open;
         let mut close = false;
         egui::Window::new("Confirm live batch migration")
@@ -6294,37 +6352,18 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(RichText::new("This will change destination mailboxes").color(ALERT));
-                let selected = self
-                    .bulk_jobs
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| {
-                        self.bulk_row_is_selected(*index)
-                            && self
-                                .bulk_job_ids
-                                .get(*index)
-                                .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
-                                .is_some_and(|state| self.bulk_retry_scope.includes(&state))
-                    })
-                    .count();
+                let selected = eligible_indices.len();
                 ui.label(format!("{selected} mailboxes selected"));
+                if let Some(error) = &durable_state_error {
+                    ui.label(RichText::new(error).color(ALERT));
+                }
                 ui.label(format!(
                     "Worker concurrency: {}",
                     self.form.profile.batch_concurrency.clamp(1, 16)
                 ));
-                let deletion_enabled = self
-                    .bulk_jobs
+                let deletion_enabled = eligible_indices
                     .iter()
-                    .enumerate()
-                    .filter(|(index, _)| {
-                        self.bulk_row_is_selected(*index)
-                            && self
-                                .bulk_job_ids
-                                .get(*index)
-                                .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
-                                .is_some_and(|state| self.bulk_retry_scope.includes(&state))
-                    })
-                    .any(|(_, job)| job.form.profile.delete2);
+                    .any(|index| self.bulk_jobs[*index].form.profile.delete2);
                 ui.label(
                     RichText::new(format!(
                         "Destination deletion: {}",
@@ -6340,7 +6379,13 @@ impl App {
                         close = true;
                     }
                     if ui
-                        .add(egui::Button::new(RichText::new("I understand — start batch").color(Color32::WHITE)).fill(ALERT))
+                        .add_enabled(
+                            durable_state_error.is_none() && selected > 0,
+                            egui::Button::new(
+                                RichText::new("I understand — start batch").color(Color32::WHITE),
+                            )
+                            .fill(ALERT),
+                        )
                         .clicked()
                     {
                         close = true;
@@ -6913,14 +6958,6 @@ impl eframe::App for App {
         // for a future persisted Appearance preference.
         ctx.set_zoom_factor(self.ui_scale);
         self.poll();
-        if self.running() {
-            if let Some(profile) = &self.locked_profile {
-                self.form.profile = profile.clone();
-            }
-            if let Some(dry_run) = self.locked_dry_run {
-                self.form.dry_run = dry_run;
-            }
-        }
         let plan_controls_enabled = !self.running();
         ctx.data_mut(|data| {
             data.insert_temp(
@@ -7180,7 +7217,16 @@ impl eframe::App for App {
                         ui.add_space(14.0);
                         ui.group(|ui| {
                             ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); });
-                            egui::ScrollArea::vertical().stick_to_bottom(true).max_height(180.0).show(ui, |ui| for line in &self.output { ui.label(RichText::new(line).monospace().size(14.0)); });
+                            egui::ScrollArea::vertical()
+                                .stick_to_bottom(true)
+                                .max_height(180.0)
+                                .show_rows(ui, 20.0, self.output.len(), |ui, rows| {
+                                    for index in rows {
+                                        if let Some(line) = self.output.get(index) {
+                                            ui.label(RichText::new(line).monospace().size(14.0));
+                                        }
+                                    }
+                                });
                         });
                         ui.add_space(8.0);
                         ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED));
@@ -7197,7 +7243,10 @@ impl eframe::App for App {
         self.cockpit(ctx);
         self.live_confirmation(ctx);
         self.stop_confirmation(ctx);
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        if self.running() || self.capability_receiver.is_some() || self.live_auth_receiver.is_some()
+        {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
     }
 }
 
@@ -7411,7 +7460,9 @@ mod tests {
         let mut form = dovecot_form();
         form.dry_run = false;
         let checkpoint = "AQAAAHm4+Jk=";
-        let snapshot = form.plan_snapshot_with_checkpoint(Some(checkpoint));
+        let snapshot = form
+            .plan_snapshot_with_checkpoint(Some(checkpoint))
+            .unwrap();
         let digest = plan_snapshot_sha256(checkpoint);
         assert!(snapshot.contains("dovecot_checkpoint_sha256"));
         assert!(snapshot.contains(&digest));
@@ -7424,6 +7475,7 @@ mod tests {
         assert!(
             !dovecot
                 .plan_snapshot_with_checkpoint(Some("AQAAAHm4+Jk="))
+                .unwrap()
                 .contains("dovecot_checkpoint_sha256")
         );
 
@@ -7432,6 +7484,7 @@ mod tests {
         assert!(
             !dovecot
                 .plan_snapshot_with_checkpoint(Some("AQAAAHm4+Jk="))
+                .unwrap()
                 .contains("dovecot_checkpoint_sha256")
         );
     }
