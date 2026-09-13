@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Routed all operator-facing status, action, warning, and explanatory colors
+  through the contrast-aware semantic theme palette; removed legacy low-contrast
+  color constants and one-off status colors.
 - XLSX imports now inspect ZIP entry metadata before workbook expansion and
   reject excessive archive entry counts or uncompressed size.
 - Spreadsheet imports now show the workbook's worksheet names and require the

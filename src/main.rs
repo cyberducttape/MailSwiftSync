@@ -56,11 +56,6 @@ use ui::ThemeColors;
 use ui::contrast_ratio;
 use zeroize::Zeroizing;
 
-const BLUE: Color32 = Color32::from_rgb(45, 113, 205);
-const TEAL: Color32 = Color32::from_rgb(24, 158, 166);
-const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
-const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
-
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const MAX_VISIBLE_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROCESS_TAIL_LINES: usize = 200;
@@ -3731,7 +3726,7 @@ impl App {
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.heading("Migration projects");
-                ui.label(RichText::new("Select a durable project to make it the workspace for reports, mailboxes, activity, and verification.").color(MUTED));
+                ui.label(RichText::new("Select a durable project to make it the workspace for reports, mailboxes, activity, and verification.").color(self.theme_colors().text_secondary));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label("Search");
@@ -3749,7 +3744,7 @@ impl App {
                                 || project.source_endpoint.to_ascii_lowercase().contains(&search)
                                 || project.destination_endpoint.to_ascii_lowercase().contains(&search)
                         }).collect::<Vec<_>>();
-                        ui.label(RichText::new(format!("{} project(s)", visible.len())).color(MUTED));
+                        ui.label(RichText::new(format!("{} project(s)", visible.len())).color(self.theme_colors().text_secondary));
                         egui::ScrollArea::vertical()
                             .max_height(360.0)
                             .show(ui, |ui| {
@@ -3794,7 +3789,7 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading("Operator settings");
-                ui.label(RichText::new("Workspace tools are grouped here so the header stays focused on project and run status.").color(MUTED));
+                ui.label(RichText::new("Workspace tools are grouped here so the header stays focused on project and run status.").color(self.theme_colors().text_secondary));
                 ui.add_space(8.0);
                 ui.group(|ui| {
                     ui.heading("Appearance");
@@ -3881,7 +3876,7 @@ impl App {
                         ui.label(
                             RichText::new("DURABLE LIFECYCLE UNAVAILABLE")
                                 .strong()
-                                .color(ALERT),
+                                .color(self.theme_colors().danger),
                         );
                         ui.label(format!(
                             "Could not read the selected project from SQLite: {error}"
@@ -3900,22 +3895,22 @@ impl App {
             .unwrap_or(usize::MAX);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("MIGRATION LIFECYCLE").size(11.0).strong().color(MUTED));
+                ui.label(RichText::new("MIGRATION LIFECYCLE").size(11.0).strong().color(self.theme_colors().text_secondary));
                 if current == core::Phase::Attention {
-                    ui.label(RichText::new("ATTENTION REQUIRED").strong().color(ALERT));
+                    ui.label(RichText::new("ATTENTION REQUIRED").strong().color(self.theme_colors().danger));
                 }
             });
             ui.horizontal_wrapped(|ui| {
                 for (index, phase) in phases.iter().enumerate() {
                     if index > 0 {
-                        ui.label(RichText::new("→").color(MUTED));
+                        ui.label(RichText::new("→").color(self.theme_colors().text_secondary));
                     }
                     let color = if current_index != usize::MAX && index < current_index {
-                        TEAL
+                        self.theme_colors().success
                     } else if index == current_index {
-                        BLUE
+                        self.theme_colors().info
                     } else {
-                        MUTED
+                        self.theme_colors().text_secondary
                     };
                     ui.label(
                         RichText::new(format!(
@@ -3935,7 +3930,7 @@ impl App {
                 }
             });
             if current == core::Phase::Attention {
-                ui.label(RichText::new("A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.").size(11.0).color(ALERT));
+                ui.label(RichText::new("A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.").size(11.0).color(self.theme_colors().danger));
             }
         });
     }
@@ -3945,7 +3940,7 @@ impl App {
             return;
         }
         ui.group(|ui| {
-            ui.label(RichText::new("INSECURE SOURCE TRANSPORT").strong().color(ALERT));
+            ui.label(RichText::new("INSECURE SOURCE TRANSPORT").strong().color(self.theme_colors().danger));
             ui.label("Plain IMAP can expose the source password and mailbox data in transit.");
             let response = ui.add_enabled(
                 !self.running(),
@@ -3964,7 +3959,7 @@ impl App {
         self.lifecycle_stepper(ui);
         if self.process_review_required {
             ui.group(|ui| {
-                ui.label(RichText::new("PROCESS OWNERSHIP REVIEW REQUIRED").strong().color(ALERT));
+                ui.label(RichText::new("PROCESS OWNERSHIP REVIEW REQUIRED").strong().color(self.theme_colors().danger));
                 ui.label("MailSwiftSync could not prove that a previously recorded migration process is gone. Do not start another migration until you have checked the host process list and confirmed no MailSwiftSync engine remains.");
                 if ui.button("I confirmed no unverified migration process remains").clicked() {
                     match self.store.clear_active_processes_after_review() {
@@ -3986,7 +3981,7 @@ impl App {
         }
         if self.workspace_read_only {
             ui.group(|ui| {
-                ui.label(RichText::new("HISTORICAL PROJECT · READ ONLY").strong().color(BLUE));
+                ui.label(RichText::new("HISTORICAL PROJECT · READ ONLY").strong().color(self.theme_colors().info));
                 ui.label("You are viewing durable history for this project. The editable migration plan and execution controls are detached until you start a new migration.");
                 if ui.button("Start a new migration").clicked() {
                     self.start_new_migration();
@@ -4010,24 +4005,24 @@ impl App {
                 ui.heading("Migration workspace");
                 ui.label(RichText::new(if self.form.dry_run { "PREFLIGHT" } else { "LIVE MIGRATION" })
                     .strong()
-                    .color(if self.form.dry_run { TEAL } else { ALERT }));
+                    .color(if self.form.dry_run { self.theme_colors().success } else { self.theme_colors().danger }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(format!("{passed}/{total} configuration items complete"))
                             .strong()
-                            .color(if passed == total { TEAL } else { ALERT }),
+                            .color(if passed == total { self.theme_colors().success } else { self.theme_colors().danger }),
                     );
                 });
             });
             ui.add_space(5.0);
-            ui.label(RichText::new("Recommended next step: run preflight, review blockers, then select a small pilot mailbox.").color(MUTED));
+            ui.label(RichText::new("Recommended next step: run preflight, review blockers, then select a small pilot mailbox.").color(self.theme_colors().text_secondary));
         });
     }
 
     fn overview_readiness_controls(&mut self, ui: &mut egui::Ui) {
         ui.group(|ui| {
             ui.heading("Preflight & readiness");
-            ui.label(RichText::new("Plan completeness is separate from live network checks. Run the authenticated probe before live migration.").color(MUTED));
+            ui.label(RichText::new("Plan completeness is separate from live network checks. Run the authenticated probe before live migration.").color(self.theme_colors().text_secondary));
             ui.horizontal_wrapped(|ui| {
                 let probe_enabled = self.capability_receiver.is_none()
                     && self.form.engine() != core::Engine::Dovecot
@@ -4046,7 +4041,7 @@ impl App {
                 }
             });
             if self.form.engine() == core::Engine::Dovecot {
-                ui.label(RichText::new("Dovecot preflight checks the configured imapc source; destination readiness still requires administrative review.").color(MUTED));
+                ui.label(RichText::new("Dovecot preflight checks the configured imapc source; destination readiness still requires administrative review.").color(self.theme_colors().text_secondary));
             }
             if self.preflight.is_empty() {
                 ui.label("No preflight assessment has been recorded for the current plan.");
@@ -4056,7 +4051,7 @@ impl App {
                     ui.strong("Result");
                     ui.end_row();
                     for (name, detail, passed) in &self.preflight {
-                        ui.label(RichText::new(if *passed { "✓" } else { "!" }).color(if *passed { TEAL } else { ALERT }));
+                        ui.label(RichText::new(if *passed { "✓" } else { "!" }).color(if *passed { self.theme_colors().success } else { self.theme_colors().danger }));
                         ui.label(RichText::new(name).strong());
                         ui.label(detail);
                         ui.end_row();
@@ -4071,7 +4066,7 @@ impl App {
             ui.add_space(10.0);
             ui.group(|ui| {
                 ui.heading("Project controls");
-                ui.label(RichText::new("This project is complete and read-only. Reopening requires an audit reason and returns it to Attention.").color(ALERT));
+                ui.label(RichText::new("This project is complete and read-only. Reopening requires an audit reason and returns it to Attention.").color(self.theme_colors().danger));
                 ui.horizontal(|ui| {
                     ui.label("Reason");
                     ui.text_edit_singleline(&mut self.reopen_reason);
@@ -4093,7 +4088,7 @@ impl App {
         ui.heading("Migration overview");
         ui.label(
             RichText::new("A calm, evidence-led workspace for moving mailboxes safely.")
-                .color(MUTED),
+                .color(self.theme_colors().text_secondary),
         );
         ui.add_space(16.0);
         let project = self.ui_project.clone();
@@ -4127,14 +4122,14 @@ impl App {
                     ] {
                         ui.group(|ui| {
                             ui.label(RichText::new(format!("{number}  {title}")).strong());
-                            ui.label(RichText::new(detail).color(MUTED));
+                            ui.label(RichText::new(detail).color(self.theme_colors().text_secondary));
                         });
                     }
                 });
                 if ui.button("Configure first mailbox  →").clicked() {
                     self.active_view = WorkspaceView::Plan;
                 }
-                ui.label(RichText::new("For multiple mailboxes, use Batch after reviewing one representative pilot.").color(MUTED));
+                ui.label(RichText::new("For multiple mailboxes, use Batch after reviewing one representative pilot.").color(self.theme_colors().text_secondary));
             });
             ui.add_space(14.0);
         }
@@ -4143,7 +4138,7 @@ impl App {
                 RichText::new("CURRENT PHASE")
                     .size(11.0)
                     .strong()
-                    .color(MUTED),
+                    .color(self.theme_colors().text_secondary),
             );
             ui.heading(format_phase_name(phase));
             if attention_count > 0 {
@@ -4152,14 +4147,18 @@ impl App {
                         "{} mailbox item(s) need attention",
                         attention_count
                     ))
-                    .color(ALERT),
+                    .color(self.theme_colors().danger),
                 );
             }
         });
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.group(|ui| {
-                ui.label(RichText::new("PROJECT STATUS").size(11.0).color(MUTED));
+                ui.label(
+                    RichText::new("PROJECT STATUS")
+                        .size(11.0)
+                        .color(self.theme_colors().text_secondary),
+                );
                 ui.heading(if project.is_some() {
                     "Project created"
                 } else {
@@ -4172,7 +4171,11 @@ impl App {
                 });
             });
             ui.group(|ui| {
-                ui.label(RichText::new("MAILBOXES").size(11.0).color(MUTED));
+                ui.label(
+                    RichText::new("MAILBOXES")
+                        .size(11.0)
+                        .color(self.theme_colors().text_secondary),
+                );
                 if durable_jobs.is_empty() {
                     ui.heading("None configured");
                     ui.label("Use Mailboxes to review scope before running anything.");
@@ -4193,13 +4196,17 @@ impl App {
                                 "{} require operator attention",
                                 attention_count
                             ))
-                            .color(ALERT),
+                            .color(self.theme_colors().danger),
                         );
                     }
                 }
             });
             ui.group(|ui| {
-                ui.label(RichText::new("EVIDENCE").size(11.0).color(MUTED));
+                ui.label(
+                    RichText::new("EVIDENCE")
+                        .size(11.0)
+                        .color(self.theme_colors().text_secondary),
+                );
                 ui.heading(if phase == core::Phase::Complete {
                     "Available"
                 } else {
@@ -4251,17 +4258,17 @@ impl App {
                 "Saved profiles exclude passwords",
                 "Source mail is read-only by default",
             ] {
-                ui.label(RichText::new(format!("✓ {text}")).color(TEAL));
+                ui.label(RichText::new(format!("✓ {text}")).color(self.theme_colors().success));
             }
             if self.form.profile.source_tls == "plain" {
                 ui.label(
                     RichText::new("! Source transport is cleartext by explicit configuration")
-                        .color(ALERT),
+                        .color(self.theme_colors().danger),
                 );
             } else {
                 ui.label(
                     RichText::new("✓ Encrypted source transport with certificate verification")
-                        .color(TEAL),
+                        .color(self.theme_colors().success),
                 );
             }
         });
@@ -4270,7 +4277,7 @@ impl App {
     fn mailbox_view(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
         ui.heading("Mailboxes");
-        ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(MUTED));
+        ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         if self.workspace_read_only {
             let Some(project_id) = self.active_project_id().map(str::to_owned) else {
@@ -4315,7 +4322,7 @@ impl App {
                 Err(error) => {
                     ui.label(
                         RichText::new(format!("Historical mailbox records unavailable: {error}"))
-                            .color(ALERT),
+                            .color(self.theme_colors().danger),
                     );
                 }
             }
@@ -4399,7 +4406,7 @@ impl App {
                     visible_indices.len(),
                     self.bulk_selected_ids.len()
                 ))
-                .color(MUTED),
+                .color(self.theme_colors().text_secondary),
             );
             let has_selection = !self.bulk_selected_ids.is_empty();
             let mut run_preflight = false;
@@ -4423,7 +4430,7 @@ impl App {
                         egui::Button::new(
                             RichText::new("Run live migration").color(Color32::WHITE),
                         )
-                        .fill(ALERT),
+                        .fill(self.theme_colors().danger),
                     )
                     .clicked()
                 {
@@ -4446,7 +4453,8 @@ impl App {
                 }
                 if !has_selection {
                     ui.label(
-                        RichText::new("Select one or more rows to enable actions.").color(MUTED),
+                        RichText::new("Select one or more rows to enable actions.")
+                            .color(self.theme_colors().text_secondary),
                     );
                 }
             });
@@ -4541,19 +4549,20 @@ impl App {
                                 match self.store.mailbox_attention_reason(job_id) {
                                     Ok(Some(reason)) => {
                                         ui.label(
-                                            RichText::new(reason.recommended_action()).color(MUTED),
+                                            RichText::new(reason.recommended_action())
+                                                .color(self.theme_colors().text_secondary),
                                         );
                                     }
                                     Ok(None) => {
                                         ui.label(
                                             RichText::new("Inspect durable run detail")
-                                                .color(MUTED),
+                                                .color(self.theme_colors().text_secondary),
                                         );
                                     }
                                     Err(_) => {
                                         ui.label(
                                             RichText::new("Attention reason unavailable")
-                                                .color(ALERT),
+                                                .color(self.theme_colors().danger),
                                         );
                                     }
                                 }
@@ -4561,7 +4570,7 @@ impl App {
                         });
                     });
                 });
-            ui.label(RichText::new("When a selection is present, batch actions apply only to selected rows. With no selection, the chosen retry scope applies to all matching rows.").color(MUTED));
+            ui.label(RichText::new("When a selection is present, batch actions apply only to selected rows. With no selection, the chosen retry scope applies to all matching rows.").color(self.theme_colors().text_secondary));
         }
     }
 
@@ -4628,7 +4637,7 @@ impl App {
 
     fn activity_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Activity");
-        ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(MUTED));
+        ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         if !self.workspace_read_only
             && let Some(job) = self.job_id.as_deref()
@@ -4701,7 +4710,8 @@ impl App {
         });
         let Some(_project) = self.active_project_id().map(str::to_owned) else {
             ui.label(
-                RichText::new("Create or restore a project to see durable runs.").color(MUTED),
+                RichText::new("Create or restore a project to see durable runs.")
+                    .color(self.theme_colors().text_secondary),
             );
             return;
         };
@@ -4743,7 +4753,10 @@ impl App {
             .collect::<Vec<_>>();
         match runs {
             runs if runs.is_empty() => {
-                ui.label(RichText::new("No durable runs recorded yet.").color(MUTED));
+                ui.label(
+                    RichText::new("No durable runs recorded yet.")
+                        .color(self.theme_colors().text_secondary),
+                );
             }
             runs => {
                 let search = self.activity_search.trim().to_ascii_lowercase();
@@ -4783,12 +4796,12 @@ impl App {
                         visible.len(),
                         runs.len()
                     ))
-                    .color(MUTED),
+                    .color(self.theme_colors().text_secondary),
                 );
                 if self.activity_show_all && runs.len() == MAX_ACTIVITY_HISTORY_ROWS as usize {
                     ui.label(
                         RichText::new("Showing the newest 250 runs. Export the audit report for complete history.")
-                            .color(MUTED),
+                            .color(self.theme_colors().text_secondary),
                     );
                 }
                 egui::Grid::new("durable_run_history")
@@ -4828,11 +4841,11 @@ impl App {
                                     ui.label(&run.engine);
                                     ui.label(RichText::new(&run.status).color(
                                         if run.status == "completed" {
-                                            TEAL
+                                            self.theme_colors().success
                                         } else if run.status == "running" {
-                                            BLUE
+                                            self.theme_colors().info
                                         } else {
-                                            ALERT
+                                            self.theme_colors().danger
                                         },
                                     ));
                                     ui.label(&run.started_at);
@@ -5236,11 +5249,11 @@ impl App {
     fn verification_view(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
         ui.heading("Verification");
-        ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(MUTED));
+        ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         ui.group(|ui| {
             ui.heading("Verification and audit report");
-            ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(MUTED));
+            ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(self.theme_colors().text_secondary));
             if self.active_project_id().is_some() {
                 if ui.button("Export project report…").clicked() {
                     let result = self.export_project_report();
@@ -5321,7 +5334,7 @@ impl App {
                             })
                             .map(|(index, _)| index)
                             .collect::<Vec<_>>();
-                        ui.label(RichText::new(format!("{} visible", visible.len())).color(MUTED));
+                        ui.label(RichText::new(format!("{} visible", visible.len())).color(self.theme_colors().text_secondary));
                         egui::ScrollArea::vertical()
                             .id_salt("verification_mailbox_list")
                             .max_height(360.0)
@@ -5362,7 +5375,7 @@ impl App {
                     }
                     None => {
                         ui.separator();
-                        ui.label(RichText::new("The selected project no longer exists.").color(ALERT));
+                        ui.label(RichText::new("The selected project no longer exists.").color(self.theme_colors().danger));
                     }
                 }
             }
@@ -5393,14 +5406,14 @@ impl App {
                             ("Evidence level", evidence.evidence_level().into()),
                         ] { ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); }); }
                     }
-                    Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(ALERT)); }
-                    Err(error) => { ui.label(RichText::new(format!("Could not read evidence: {error}")).color(ALERT)); }
+                    Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(self.theme_colors().danger)); }
+                    Err(error) => { ui.label(RichText::new(format!("Could not read evidence: {error}")).color(self.theme_colors().danger)); }
                 }
                 match self.store.mailbox_state(job) {
                     Ok(Some(state)) if state == "verification_difference" => {
                         ui.separator();
                         ui.heading("Accept residual difference");
-                        ui.label(RichText::new("This records an auditable exception; it does not change the underlying evidence or claim exact equality.").color(MUTED));
+                        ui.label(RichText::new("This records an auditable exception; it does not change the underlying evidence or claim exact equality.").color(self.theme_colors().text_secondary));
                         ui.horizontal(|ui| {
                             ui.label("Operator");
                             ui.add(egui::TextEdit::singleline(&mut self.verification_exception_operator).desired_width(220.0));
@@ -5431,13 +5444,17 @@ impl App {
                     Ok(Some(state)) if state == "verified_with_exceptions" => {
                         if let Ok(Some(acceptance)) = self.store.latest_verification_acceptance(job) {
                             ui.separator();
-                            ui.label(RichText::new("Verified with exceptions").strong().color(Color32::from_rgb(218, 148, 48)));
+                            ui.label(
+                                RichText::new("Verified with exceptions")
+                                    .strong()
+                                    .color(colors.warning),
+                            );
                             ui.label(format!("Accepted by {} at {}: {}", acceptance.operator, acceptance.accepted_at, acceptance.reason));
                         }
                     }
                     Ok(Some(_)) | Ok(None) => {}
                     Err(error) => {
-                        ui.label(RichText::new(format!("Could not read durable mailbox state: {error}")).color(ALERT));
+                        ui.label(RichText::new(format!("Could not read durable mailbox state: {error}")).color(self.theme_colors().danger));
                     }
                 }
             } else if let Some(error) = selection_error {
@@ -5445,14 +5462,14 @@ impl App {
                     RichText::new(format!(
                         "The selected mailbox cannot be resolved in durable state: {error}"
                     ))
-                    .color(ALERT),
+                    .color(self.theme_colors().danger),
                 );
             } else if self.job_id.is_some() && selected_project.is_some() {
                 ui.label(
                     RichText::new(
                         "The retained single-mailbox selection belongs to another project. Select a mailbox from the current project before viewing or exporting its evidence.",
                     )
-                    .color(ALERT),
+                    .color(self.theme_colors().danger),
                 );
             } else {
                 ui.label("Run a migration to create a durable mailbox evidence record.");
@@ -7991,6 +8008,11 @@ impl App {
             data.get_temp::<bool>(egui::Id::new("plan_controls_enabled"))
                 .unwrap_or(true)
         });
+        let danger = if ui.visuals().dark_mode {
+            ThemeColors::dark().danger
+        } else {
+            ThemeColors::light().danger
+        };
         let inline_error = |ui: &mut egui::Ui, label: &str, value: &str, required: bool| {
             let message = if required && value.trim().is_empty() {
                 Some(format!("{label} is required."))
@@ -8000,12 +8022,18 @@ impl App {
                 None
             };
             if let Some(message) = message {
-                ui.label(RichText::new(message).color(ALERT).size(11.0));
+                ui.label(RichText::new(message).color(danger).size(11.0));
             }
         };
         ui.group(|ui| {
             ui.heading(RichText::new(title).color(color));
-            ui.label(RichText::new("IMAP connection").size(11.0).color(MUTED));
+            ui.label(RichText::new("IMAP connection").size(11.0).color(
+                if ui.visuals().dark_mode {
+                    ThemeColors::dark().text_secondary
+                } else {
+                    ThemeColors::light().text_secondary
+                },
+            ));
             ui.horizontal(|ui| {
                 ui.label("Server");
                 ui.add_enabled(editable, egui::TextEdit::singleline(host));
@@ -8034,7 +8062,11 @@ impl App {
             if saved_credential && password.is_empty() {
                 ui.label(
                     RichText::new("Saved credential configured; session password not required.")
-                        .color(TEAL)
+                        .color(if ui.visuals().dark_mode {
+                            ThemeColors::dark().success
+                        } else {
+                            ThemeColors::light().success
+                        })
                         .size(12.0),
                 );
             } else {
@@ -8051,6 +8083,7 @@ impl App {
         if !self.preview {
             return;
         }
+        let colors = self.theme_colors();
         egui::Window::new("Execution plan")
             .open(&mut self.preview)
             .default_width(670.0)
@@ -8059,7 +8092,7 @@ impl App {
                     RichText::new(
                         "Passwords are redacted. This is an argument list for review, not a shell command to paste.",
                     )
-                    .color(MUTED),
+                    .color(colors.text_secondary),
                 );
                 let (exe, args) = self.form.command(true);
                 ui.label(RichText::new(format!("Executable: {exe}")).monospace());
@@ -8069,7 +8102,7 @@ impl App {
                         for (index, argument) in args.iter().enumerate() {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new(format!("[{index:>3}]")).monospace().color(MUTED),
+                                    RichText::new(format!("[{index:>3}]")).monospace().color(colors.text_secondary),
                                 );
                                 ui.label(RichText::new(argument).monospace());
                             });
@@ -8085,7 +8118,7 @@ impl App {
         let mut open = self.bulk_open;
         egui::Window::new("Batch migration queue").open(&mut open).default_width(850.0).default_height(540.0).show(ctx, |ui| {
             ui.heading("Import → review → validate");
-            ui.label(RichText::new(&self.bulk_message).color(MUTED));
+            ui.label(RichText::new(&self.bulk_message).color(self.theme_colors().text_secondary));
             ui.add_space(8.0);
             let mut state_counts = HashMap::new();
             for job in &self.bulk_jobs {
@@ -8102,13 +8135,13 @@ impl App {
                     ui.label(format!("{} ready", count_state("ready")));
                     ui.label(format!("{} running", count_state("running")));
                     ui.label(format!("{} verified", count_state("verified") + count_state("verified_with_exceptions")));
-                    ui.label(RichText::new(format!("{} unresolved", unresolved_count)).color(if unresolved_count > 0 { ALERT } else { TEAL }));
+                    ui.label(RichText::new(format!("{} unresolved", unresolved_count)).color(if unresolved_count > 0 { self.theme_colors().danger } else { self.theme_colors().success }));
                     if ui.button("Select unresolved").clicked() { self.select_bulk_state_set(BulkStateSet::Unresolved); }
                     if ui.button("Select failed").clicked() { self.select_bulk_state_set(BulkStateSet::Failed); }
                     if ui.button("Select attention").clicked() { self.select_bulk_state_set(BulkStateSet::Attention); }
                     if !self.bulk_selected_ids.is_empty() && ui.button("Clear selection").clicked() { self.bulk_selected_ids.clear(); }
                 });
-                ui.label(RichText::new("Focused selections apply to preflight and live scope controls below; live execution still requires matching preflight and confirmation.").size(11.0).color(MUTED));
+                ui.label(RichText::new("Focused selections apply to preflight and live scope controls below; live execution still requires matching preflight and confirmation.").size(11.0).color(self.theme_colors().text_secondary));
             });
             ui.add_space(8.0);
             let previous_bulk_dry_run = self.bulk_dry_run;
@@ -8150,7 +8183,7 @@ impl App {
                 let can_start = !self.running()
                     && !self.bulk_jobs.is_empty()
                     && (self.bulk_dry_run || live_count > 0);
-                if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.bulk_dry_run { BLUE } else { ALERT })).clicked() { self.start_bulk(); }
+                if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.bulk_dry_run { self.theme_colors().info } else { self.theme_colors().danger })).clicked() { self.start_bulk(); }
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -8159,7 +8192,7 @@ impl App {
                     queue_editable,
                     egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16),
                 );
-                ui.label(RichText::new("Applies to both preflight and live migration; bounded to 1–16 workers").size(11.0).color(MUTED));
+                ui.label(RichText::new("Applies to both preflight and live migration; bounded to 1–16 workers").size(11.0).color(self.theme_colors().text_secondary));
             });
             ui.horizontal(|ui| {
                 ui.label("Transient retries");
@@ -8167,7 +8200,7 @@ impl App {
                     queue_editable,
                     egui::Slider::new(&mut self.form.profile.batch_retry_count, 0..=3),
                 );
-                ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(MUTED));
+                ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(self.theme_colors().text_secondary));
             });
             if !self.bulk_dry_run {
                 ui.add_enabled_ui(queue_editable, |ui| {
@@ -8195,11 +8228,11 @@ impl App {
                         self.bulk_retry_scope.label()
                     ))
                     .size(11.0)
-                    .color(MUTED),
+                    .color(self.theme_colors().text_secondary),
                 );
             }
             ui.label(RichText::new("Passwordless queue credentials").strong());
-            ui.label(RichText::new("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue.").size(11.0).color(self.theme_colors().text_secondary));
             let mut apply_source = false;
             let mut apply_destination = false;
             ui.horizontal(|ui| {
@@ -8239,7 +8272,7 @@ impl App {
             if apply_destination {
                 self.apply_bulk_keyring_id(false);
             }
-            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, source_credential_id, destination_credential_id, name. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(MUTED));
+            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, source_credential_id, destination_credential_id, name. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(self.theme_colors().text_secondary));
             ui.separator();
             egui::Grid::new("bulk_jobs")
                 .striped(true)
@@ -8262,7 +8295,7 @@ impl App {
                     }
                     });
                 });
-            ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(ALERT));
+            ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(self.theme_colors().danger));
         });
         self.bulk_open = open;
     }
@@ -8384,7 +8417,7 @@ impl App {
                         "The selected worksheet is parsed and validated in the background. Other worksheets are not imported.",
                     )
                     .size(11.0)
-                    .color(MUTED),
+                    .color(self.theme_colors().text_secondary),
                 );
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
@@ -8452,10 +8485,10 @@ impl App {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading(RichText::new("This will change destination mailboxes").color(ALERT));
+                ui.heading(RichText::new("This will change destination mailboxes").color(self.theme_colors().danger));
                 ui.label(format!("{} mailboxes selected", summary.eligible_count));
                 if let Some(error) = &summary.durable_state_error {
-                    ui.label(RichText::new(error).color(ALERT));
+                    ui.label(RichText::new(error).color(self.theme_colors().danger));
                 }
                 ui.label(format!("Worker concurrency: {}", summary.concurrency));
                 ui.label(
@@ -8467,11 +8500,11 @@ impl App {
                             "disabled"
                         }
                     ))
-                    .color(if summary.deletion_enabled { ALERT } else { MUTED }),
+                    .color(if summary.deletion_enabled { self.theme_colors().danger } else { self.theme_colors().text_secondary }),
                 );
                 ui.label(format!("Scope: {}.", summary.scope.label()));
                 ui.label("Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.");
-                ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(MUTED));
+                ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(self.theme_colors().text_secondary));
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
                         close = true;
@@ -8482,7 +8515,7 @@ impl App {
                             egui::Button::new(
                                 RichText::new("I understand — start batch").color(Color32::WHITE),
                             )
-                            .fill(ALERT),
+                            .fill(self.theme_colors().danger),
                         )
                         .clicked()
                     {
@@ -8503,7 +8536,7 @@ impl App {
         }
         let mut open = self.advanced_open;
         egui::Window::new("Advanced migration options").open(&mut open).default_width(620.0).show(ctx, |ui| {
-            ui.label(RichText::new("These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules.").color(MUTED));
+            ui.label(RichText::new("These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules.").color(self.theme_colors().text_secondary));
             ui.add_space(8.0);
             let editable = !self.running();
             ui.add_enabled_ui(editable, |ui| {
@@ -8530,13 +8563,13 @@ impl App {
                             .on_hover_text("Maximum wall-clock time for one engine process. It is a safety bound, not an estimate of completion time.");
                         ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
                     });
-                    ui.label(RichText::new("Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count.").size(11.0).color(MUTED));
+                    ui.label(RichText::new("Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count.").size(11.0).color(self.theme_colors().text_secondary));
                 });
                 ui.add_space(8.0);
-                        ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.").size(11.0).color(ALERT)); });
+                        ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(self.theme_colors().danger)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.").size(11.0).color(self.theme_colors().danger)); });
             });
             if !editable {
-                ui.label(RichText::new("Advanced plan settings are locked while a migration is running.").color(MUTED));
+                ui.label(RichText::new("Advanced plan settings are locked while a migration is running.").color(self.theme_colors().text_secondary));
             }
                 ui.add_space(8.0); ui.label("The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.");
         });
@@ -8555,7 +8588,7 @@ impl App {
                     RichText::new(
                         "Keyring IDs are non-secret references saved in the profile. Passwords stay in the operating system credential store and are loaded only into the active session.",
                     )
-                    .color(MUTED),
+                    .color(self.theme_colors().text_secondary),
                 );
                 ui.add_space(8.0);
                 let editable = !self.running();
@@ -8611,7 +8644,7 @@ impl App {
                     });
                 });
                 if !editable {
-                    ui.label(RichText::new("Credential settings are locked while a migration is running.").color(MUTED));
+                    ui.label(RichText::new("Credential settings are locked while a migration is running.").color(self.theme_colors().text_secondary));
                 }
                 ui.add_space(6.0);
                 ui.label(
@@ -8619,7 +8652,7 @@ impl App {
                         "This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering.",
                     )
                     .size(11.0)
-                    .color(ALERT),
+                    .color(self.theme_colors().danger),
                 );
             });
         self.keyring_open = open;
@@ -8632,14 +8665,14 @@ impl App {
         let mut close_requested = false;
         egui::Window::new("Choose migration engine").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
             ui.heading("How should this migration run?");
-            ui.label(RichText::new("Select the execution engine that fits the destination. MailSwiftSync owns planning, safety gates, orchestration, and verification; the selected engine owns message transfer.").color(MUTED));
+            ui.label(RichText::new("Select the execution engine that fits the destination. MailSwiftSync owns planning, safety gates, orchestration, and verification; the selected engine owns message transfer.").color(self.theme_colors().text_secondary));
             ui.add_space(8.0);
             let editable = !self.running();
             ui.add_enabled_ui(editable, |ui| {
                 for engine in [core::Engine::Auto, core::Engine::Dovecot, core::Engine::ImapSync] {
                     ui.radio_value(&mut self.form.profile.engine, engine, engine.label());
                     if self.form.profile.engine == engine {
-                        ui.label(RichText::new(engine.description()).size(11.0).color(MUTED));
+                        ui.label(RichText::new(engine.description()).size(11.0).color(self.theme_colors().text_secondary));
                     }
                 }
                 if self.form.profile.engine == core::Engine::Dovecot {
@@ -8669,12 +8702,12 @@ impl App {
                 });
                 ui.horizontal(|ui| { ui.label("doveadm"); ui.text_edit_singleline(&mut self.form.profile.doveadm_path); });
                 ui.horizontal(|ui| { ui.label("Config"); ui.text_edit_singleline(&mut self.form.profile.dovecot_config); });
-                ui.label(RichText::new("Remote Dovecot execution is unavailable until a secret-safe broker is implemented. Use local doveadm or imapsync.").size(11.0).color(ALERT));
-                ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(MUTED));
+                ui.label(RichText::new("Remote Dovecot execution is unavailable until a secret-safe broker is implemented. Use local doveadm or imapsync.").size(11.0).color(self.theme_colors().danger));
+                ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(self.theme_colors().text_secondary));
                 }
             });
             if !editable {
-                ui.label(RichText::new("Engine and execution settings are locked while a migration is running.").color(MUTED));
+                ui.label(RichText::new("Engine and execution settings are locked while a migration is running.").color(self.theme_colors().text_secondary));
             }
             ui.add_space(8.0);
             if ui.button("Continue to migration plan").clicked() { close_requested = true; }
@@ -8693,7 +8726,10 @@ impl App {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading(RichText::new("Destination changes require confirmation").color(ALERT));
+                ui.heading(
+                    RichText::new("Destination changes require confirmation")
+                        .color(self.theme_colors().danger),
+                );
                 ui.label(format!(
                     "This will invoke {} with the current credentials and rules.",
                     self.form.engine().label()
@@ -8715,7 +8751,11 @@ impl App {
                             "disabled"
                         }
                     ))
-                    .color(if deletion_enabled { ALERT } else { MUTED }),
+                    .color(if deletion_enabled {
+                        self.theme_colors().danger
+                    } else {
+                        self.theme_colors().text_secondary
+                    }),
                 );
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -8728,7 +8768,7 @@ impl App {
                                 RichText::new("I understand — start migration")
                                     .color(Color32::WHITE),
                             )
-                            .fill(ALERT),
+                            .fill(self.theme_colors().danger),
                         )
                         .clicked()
                     {
@@ -8754,7 +8794,7 @@ impl App {
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading(RichText::new("The migration will stop where it is").color(ALERT));
+                ui.heading(RichText::new("The migration will stop where it is").color(self.theme_colors().danger));
                 ui.label("The destination may be partially migrated. A later preflight, delta, or verification pass may be required before continuing.");
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -8762,7 +8802,7 @@ impl App {
                         close_requested = true;
                     }
                     if ui
-                        .add(egui::Button::new(RichText::new("Stop migration").color(Color32::WHITE)).fill(ALERT))
+                        .add(egui::Button::new(RichText::new("Stop migration").color(Color32::WHITE)).fill(self.theme_colors().danger))
                         .clicked()
                     {
                         if let Some(cancel) = &self.cancel_requested {
@@ -9319,7 +9359,7 @@ impl eframe::App for App {
                         ui.add_enabled_ui(plan_controls_enabled, |ui| {
                             ui.add_space(14.0);
                             ui.heading("Migration plan");
-                            ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(MUTED));
+                            ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(self.theme_colors().text_secondary));
                             ui.add_space(14.0);
                             ui.horizontal(|ui| {
                                 ui.label("Project name");
@@ -9331,13 +9371,13 @@ impl eframe::App for App {
                                 self.form.engine() != core::Engine::Dovecot;
                             if ui.available_width() > 900.0 {
                                 ui.columns(2, |c| {
-                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), BLUE);
-                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), TEAL);
+                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
+                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                                 });
                             } else {
-                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), BLUE);
+                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
                                 ui.add_space(8.0);
-                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), TEAL);
+                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                             }
                             ui.horizontal_wrapped(|ui| {
                                 ui.label("Source port");
@@ -9351,7 +9391,7 @@ impl eframe::App for App {
                                 egui::ComboBox::from_id_salt("destination_tls").selected_text(&self.form.profile.destination_tls).show_ui(ui, |ui| for mode in ["imaps", "starttls"] { ui.selectable_value(&mut self.form.profile.destination_tls, mode.into(), mode); });
                             });
                             ui.collapsing("Enterprise certificate trust (optional)", |ui| {
-                                ui.label(RichText::new("Use a PEM CA bundle for private PKI, or pin the leaf certificate's SHA-256 fingerprint. Public/system roots remain enabled.").color(MUTED));
+                                ui.label(RichText::new("Use a PEM CA bundle for private PKI, or pin the leaf certificate's SHA-256 fingerprint. Public/system roots remain enabled.").color(self.theme_colors().text_secondary));
                                 ui.horizontal(|ui| {
                                     ui.label("Source CA bundle");
                                     ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
@@ -9364,7 +9404,7 @@ impl eframe::App for App {
                                     ui.label("SHA-256 pin");
                                     ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_certificate_pin_sha256).desired_width(300.0).hint_text("64 hex characters"));
                                 });
-                                ui.label(RichText::new("Pins are checked in the authenticated readiness probe; a mismatch blocks execution. Do not use a pin as a substitute for an approved CA unless your security policy explicitly permits it.").color(MUTED));
+                                ui.label(RichText::new("Pins are checked in the authenticated readiness probe; a mismatch blocks execution. Do not use a pin as a substitute for an approved CA unless your security policy explicitly permits it.").color(self.theme_colors().text_secondary));
                             });
                             ui.add_space(14.0);
                             ui.group(|ui| {
@@ -9380,7 +9420,7 @@ impl eframe::App for App {
                                     "Preflight checks access and mapping without intentionally changing the destination."
                                 } else {
                                     "Live migration is enabled; review the destination and deletion warning before starting."
-                                }).color(if self.form.dry_run { MUTED } else { ALERT }));
+                                }).color(if self.form.dry_run { self.theme_colors().text_secondary } else { self.theme_colors().danger }));
                                 ui.horizontal(|ui| {
                                     ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically");
                                     ui.checkbox(&mut self.form.profile.justfolders, "Folders only");
@@ -9391,8 +9431,8 @@ impl eframe::App for App {
                             });
                             if self.form.profile.delete2 {
                                 ui.group(|ui| {
-                                    ui.label(RichText::new("⚠ DESTINATION DELETION ENABLED").strong().color(ALERT));
-                                    ui.label(RichText::new("Messages that exist only on the destination may be removed during live migration.").color(ALERT));
+                                    ui.label(RichText::new("⚠ DESTINATION DELETION ENABLED").strong().color(self.theme_colors().danger));
+                                    ui.label(RichText::new("Messages that exist only on the destination may be removed during live migration.").color(self.theme_colors().danger));
                                 });
                             }
                         });
@@ -9403,15 +9443,15 @@ impl eframe::App for App {
                                 if ui.button("Stop migration").clicked() { self.stop_confirm_open = true; }
                             } else {
                                 let label = if self.form.dry_run { "Run preflight  →" } else { "Start live migration  →" };
-                                if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); }
+                                if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { self.theme_colors().info } else { self.theme_colors().danger })).clicked() { self.start(); }
                             }
-                            if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live migration can add mail to the destination. Review readiness before continuing.").color(ALERT)); }
+                            if !self.form.dry_run && !self.running() { ui.label(RichText::new("Live migration can add mail to the destination. Review readiness before continuing.").color(self.theme_colors().danger)); }
                         });
                         ui.add_space(14.0);
                         ui.group(|ui| {
                             ui.horizontal(|ui| {
                                 ui.heading("Execution journal");
-                                ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED));
+                                ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(self.theme_colors().text_secondary));
                                 if ui.button("Copy output").clicked() {
                                     ui.ctx().copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
                                 }
@@ -9429,7 +9469,7 @@ impl eframe::App for App {
                                 });
                         });
                         ui.add_space(8.0);
-                        ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(MUTED));
+                        ui.label(RichText::new("Passwords never enter the saved profile. The selected engine receives credentials only for the active process; local process visibility still matters.").size(11.0).color(self.theme_colors().text_secondary));
                         }
                     });
             });
