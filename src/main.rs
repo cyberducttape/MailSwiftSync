@@ -1695,6 +1695,7 @@ struct ActiveRunContext {
     job_id: Option<String>,
     batch_job_ids: Vec<String>,
     batch_child_run_ids: Vec<String>,
+    batch_plan_fingerprints: Vec<String>,
     kind: RunKind,
     dry_run: bool,
     engine: core::Engine,
@@ -3998,6 +3999,10 @@ impl App {
         } else {
             Vec::new()
         };
+        let batch_plan_fingerprints = jobs
+            .iter()
+            .map(|job| plan_fingerprint_digest(&job.form.plan_fingerprint()))
+            .collect::<Vec<_>>();
         let plan_snapshot = jobs
             .iter()
             .zip(queue_checkpoints.iter())
@@ -4046,6 +4051,7 @@ impl App {
             job_id: None,
             batch_job_ids: selected_job_ids.clone(),
             batch_child_run_ids: child_run_ids,
+            batch_plan_fingerprints,
             kind: RunKind::Batch,
             dry_run: !live,
             engine: self.form.engine(),
@@ -4867,6 +4873,7 @@ impl App {
             job_id: Some(run_job_id.clone()),
             batch_job_ids: Vec::new(),
             batch_child_run_ids: Vec::new(),
+            batch_plan_fingerprints: Vec::new(),
             kind: RunKind::Single,
             dry_run: run_dry_run,
             engine: run_engine,
@@ -5247,6 +5254,11 @@ impl App {
                                 .pending_batch_checkpoints
                                 .remove(&child_run_id)
                                 .filter(|_| run_status == "completed");
+                            let preflight_plan = if run.dry_run && state == "ready" {
+                                run.batch_plan_fingerprints.get(index).cloned()
+                            } else {
+                                None
+                            };
                             if run.batch_job_ids.iter().any(|id| id == &job_id)
                                 && let Some(bulk_index) =
                                     self.bulk_job_ids.iter().position(|id| id == &job_id)
@@ -5256,7 +5268,7 @@ impl App {
                             }
                             let result = if let Some(value) = evidence.as_ref() {
                                 self.store
-                                    .finish_run_for_mailbox_with_evidence_and_checkpoint(
+                                    .finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
                                         &run.project_id,
                                         &job_id,
                                         &child_run_id,
@@ -5264,18 +5276,21 @@ impl App {
                                         &final_state,
                                         &detail,
                                         value,
+                                        preflight_plan.as_deref(),
                                         checkpoint.as_deref(),
                                     )
                             } else {
-                                self.store.finish_run_for_mailbox_with_checkpoint(
-                                    &run.project_id,
-                                    &job_id,
-                                    &child_run_id,
-                                    run_status,
-                                    &final_state,
-                                    &detail,
-                                    checkpoint.as_deref(),
-                                )
+                                self.store
+                                    .finish_run_for_mailbox_with_preflight_plan_and_checkpoint(
+                                        &run.project_id,
+                                        &job_id,
+                                        &child_run_id,
+                                        run_status,
+                                        &final_state,
+                                        &detail,
+                                        preflight_plan.as_deref(),
+                                        checkpoint.as_deref(),
+                                    )
                             };
                             let completion_persisted = result.is_ok();
                             if let Err(error) = result {
@@ -7405,6 +7420,7 @@ mod tests {
             job_id: None,
             batch_job_ids: vec!["job-a".into(), "job-b".into()],
             batch_child_run_ids: vec!["child-a".into(), "child-b".into()],
+            batch_plan_fingerprints: vec!["plan-a".into(), "plan-b".into()],
             kind: RunKind::Batch,
             dry_run: true,
             engine: core::Engine::ImapSync,

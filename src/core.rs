@@ -1611,6 +1611,39 @@ impl StateStore {
         detail: &str,
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
+        self.finish_run_for_mailbox_with_preflight_plan_and_checkpoint(
+            project_id,
+            job_id,
+            run_id,
+            run_status,
+            mailbox_state,
+            detail,
+            None,
+            checkpoint,
+        )
+    }
+
+    /// Atomically completes a mailbox run, optionally records its successful
+    /// dry-preflight digest, and optionally advances its Dovecot checkpoint.
+    /// The two digests are deliberately committed with the terminal state so
+    /// a live batch cannot observe a ready child without its preflight proof.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_run_for_mailbox_with_preflight_plan_and_checkpoint(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+        preflight_plan: Option<&str>,
+        checkpoint: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        if preflight_plan.is_some_and(|value| {
+            value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -1675,8 +1708,8 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.execute(
-            "UPDATE mailbox_jobs SET state=?1,checkpoint=COALESCE(?2,checkpoint) WHERE id=?3 AND project_id=?4",
-            params![mailbox_state, checkpoint, job_id, project_id],
+            "UPDATE mailbox_jobs SET state=?1,preflight_plan=COALESCE(?2,preflight_plan),checkpoint=COALESCE(?3,checkpoint) WHERE id=?4 AND project_id=?5",
+            params![mailbox_state, preflight_plan, checkpoint, job_id, project_id],
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
@@ -1734,6 +1767,39 @@ impl StateStore {
         value: &MailboxEvidence,
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
+        self.finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
+            project_id,
+            job_id,
+            run_id,
+            run_status,
+            mailbox_state,
+            detail,
+            value,
+            None,
+            checkpoint,
+        )
+    }
+
+    /// Atomically records evidence, completes a mailbox run, and optionally
+    /// persists both the dry-preflight digest and Dovecot checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+        value: &MailboxEvidence,
+        preflight_plan: Option<&str>,
+        checkpoint: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        if preflight_plan.is_some_and(|value| {
+            value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -1779,8 +1845,8 @@ impl StateStore {
         tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute(
-            "UPDATE mailbox_jobs SET state=?1,checkpoint=COALESCE(?2,checkpoint) WHERE id=?3 AND project_id=?4",
-            params![mailbox_state, checkpoint, job_id, project_id],
+            "UPDATE mailbox_jobs SET state=?1,preflight_plan=COALESCE(?2,preflight_plan),checkpoint=COALESCE(?3,checkpoint) WHERE id=?4 AND project_id=?5",
+            params![mailbox_state, preflight_plan, checkpoint, job_id, project_id],
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
@@ -3666,6 +3732,61 @@ destination_port = "143"
         assert_eq!(
             db.run_status(&child_runs[0]).unwrap().as_deref(),
             Some("running")
+        );
+    }
+
+    #[test]
+    fn batch_dry_completion_commits_preflight_digest_with_child_terminal_state() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-preflight-terminal",
+                "source",
+                "destination",
+                &[("one".into(), "one".into())],
+            )
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                &jobs,
+                "run-preflight-parent",
+                "batch validation",
+                &[],
+                "snapshot",
+                &[],
+            )
+            .unwrap();
+        db.claim_batch_mailbox_for_child(
+            &project.id,
+            &jobs[0],
+            "run-preflight-parent",
+            &child_runs[0],
+        )
+        .unwrap();
+        let digest = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        db.finish_run_for_mailbox_with_preflight_plan_and_checkpoint(
+            &project.id,
+            &jobs[0],
+            &child_runs[0],
+            "completed",
+            "ready",
+            "dry preflight passed",
+            Some(digest),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            db.preflight_plan(&jobs[0]).unwrap().as_deref(),
+            Some(digest)
+        );
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
+            Some("ready")
+        );
+        assert_eq!(
+            db.run_status(&child_runs[0]).unwrap().as_deref(),
+            Some("completed")
         );
     }
 
