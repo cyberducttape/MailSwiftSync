@@ -13,9 +13,7 @@ pub(crate) fn export_from_store(
         .project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
-    if snapshot.mailboxes.is_empty() {
-        return Err("The project has no mailbox jobs to report.".into());
-    }
+    ensure_exportable(&snapshot)?;
     let project = snapshot.project;
     let mailboxes = snapshot
         .mailboxes
@@ -87,4 +85,104 @@ pub(crate) fn export_from_store(
     }))?;
     let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     write_private_atomic(path, &report).map_err(|e| e.to_string())
+}
+
+/// Customer proof is a deliverable for a durably completed migration, not a
+/// progress snapshot. Keep this gate next to the report builder so both the
+/// GUI and the read-only CLI enforce the same completion contract.
+fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), String> {
+    if snapshot.project.phase != core::Phase::Complete {
+        return Err(
+            "Customer proof is available only after the project reaches durable Complete state."
+                .into(),
+        );
+    }
+    if snapshot.mailboxes.is_empty() {
+        return Err("The project has no mailbox jobs to report.".into());
+    }
+    if let Some(mailbox) = snapshot.mailboxes.iter().find(|mailbox| {
+        !matches!(
+            mailbox.job.state.as_str(),
+            "verified" | "verified_with_exceptions"
+        ) || mailbox.evidence.is_none()
+    }) {
+        return Err(format!(
+            "Customer proof is blocked: mailbox {} does not have a verified durable result.",
+            mailbox.job.id
+        ));
+    }
+    if snapshot
+        .runs
+        .iter()
+        .any(|run| matches!(run.run.status.as_str(), "queued" | "running"))
+    {
+        return Err("Customer proof is blocked while migration work is still running.".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(phase: core::Phase, state: &str, evidence: bool) -> core::ProjectReportSnapshot {
+        core::ProjectReportSnapshot {
+            project: core::Project {
+                id: "project".into(),
+                name: "Project".into(),
+                source_endpoint: "source".into(),
+                destination_endpoint: "destination".into(),
+                phase,
+            },
+            mailboxes: vec![core::ReportMailboxSnapshot {
+                job: core::MailboxJob {
+                    id: "job".into(),
+                    source_mailbox: "source@example.com".into(),
+                    destination_mailbox: "destination@example.com".into(),
+                    state: state.into(),
+                    config: None,
+                },
+                attention_reason: None,
+                acceptance: None,
+                evidence: evidence.then(|| {
+                    (
+                        "run".into(),
+                        core::MailboxEvidence {
+                            source_messages: 1,
+                            destination_messages: 1,
+                            source_bytes: 1,
+                            destination_bytes: 1,
+                            unmatched_messages: 0,
+                            failed_messages: 0,
+                            source_folders: 1,
+                            destination_folders: 1,
+                            authoritative: true,
+                        },
+                        Some("plan".into()),
+                    )
+                }),
+            }],
+            runs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn customer_proof_requires_durable_completion_and_evidence() {
+        assert!(ensure_exportable(&snapshot(core::Phase::Verification, "verified", true)).is_err());
+        assert!(ensure_exportable(&snapshot(core::Phase::Complete, "verified", false)).is_err());
+        assert!(ensure_exportable(&snapshot(core::Phase::Complete, "verified", true)).is_ok());
+    }
+
+    #[test]
+    fn customer_proof_rejects_unverified_mailboxes() {
+        assert!(ensure_exportable(&snapshot(core::Phase::Complete, "ready", true)).is_err());
+        assert!(
+            ensure_exportable(&snapshot(
+                core::Phase::Complete,
+                "verified_with_exceptions",
+                true
+            ))
+            .is_ok()
+        );
+    }
 }

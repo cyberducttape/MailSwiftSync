@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Gated customer-proof exports on durable project completion, verified mailbox
+  states, present evidence, and absence of active runs. The same completion
+  contract now protects both GUI and read-only CLI exports.
 - Represented UI/headless status updates as typed `StatusMessage` objects with
   explicit `Info`, `Success`, `Warning`, or `Error` severity, keeping display
   wording structurally independent from semantic styling.
