@@ -1,3 +1,4 @@
+use crate::imap_protocol::is_tagged_response;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use std::io::{Read, Write};
 use zeroize::Zeroizing;
@@ -77,11 +78,6 @@ fn consume_auth_error_result<S: Read>(
             return Err("IMAP OAuth authentication response exceeded 64 KiB".into());
         }
     }
-}
-
-fn is_tagged_response(line: &str, tag: &str) -> bool {
-    let mut fields = line.split_whitespace();
-    fields.next() == Some(tag) && fields.next().is_some()
 }
 
 /// Finish an AUTHENTICATE exchange, including the RFC 7628 error path.

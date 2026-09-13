@@ -6,6 +6,7 @@ mod endpoint;
 mod engine;
 mod headless;
 mod imap_probe;
+mod imap_protocol;
 mod oauth;
 mod process;
 mod reports;

@@ -613,21 +613,15 @@ impl ServerCapabilities {
     /// tagged completion response.
     pub fn parse_with_inventory(capability_response: &str, list_response: &str) -> Self {
         let mut values = BTreeSet::new();
-        for line in capability_response
-            .lines()
-            .filter(|line| line.to_ascii_uppercase().contains("CAPABILITY"))
-        {
-            let mut after_marker = false;
-            for token in line.split_whitespace() {
-                if after_marker {
-                    values.insert(
-                        token
-                            .trim_matches(|c: char| c == '\r' || c == '\n')
-                            .to_ascii_uppercase(),
-                    );
-                }
-                if token.eq_ignore_ascii_case("CAPABILITY") {
-                    after_marker = true;
+        for line in capability_response.lines() {
+            let mut fields = line.split_whitespace();
+            if fields.next() == Some("*")
+                && fields
+                    .next()
+                    .is_some_and(|keyword| crate::imap_protocol::atom_eq(keyword, "CAPABILITY"))
+            {
+                for token in fields {
+                    values.insert(token.to_ascii_uppercase());
                 }
             }
         }
@@ -663,13 +657,7 @@ impl ServerCapabilities {
     pub fn record_quota_response(&mut self, response: &str) {
         for line in response.lines() {
             let tokens = line.split_whitespace().collect::<Vec<_>>();
-            if !tokens
-                .first()
-                .is_some_and(|token| token.eq_ignore_ascii_case("*"))
-                || !tokens
-                    .get(1)
-                    .is_some_and(|token| token.eq_ignore_ascii_case("QUOTA"))
-            {
+            if !crate::imap_protocol::is_untagged_response(line, "QUOTA") {
                 continue;
             }
             let mut saw_valid_resource = false;
@@ -714,11 +702,7 @@ impl ServerCapabilities {
 }
 
 fn is_untagged_list_record(line: &str) -> bool {
-    let mut fields = line.split_whitespace();
-    fields.next() == Some("*")
-        && fields
-            .next()
-            .is_some_and(|kind| kind.eq_ignore_ascii_case("LIST"))
+    crate::imap_protocol::is_untagged_response(line, "LIST")
 }
 
 pub struct StateStore {

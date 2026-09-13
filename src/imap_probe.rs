@@ -1,3 +1,6 @@
+use crate::imap_protocol::{
+    advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
+};
 use crate::oauth::{read_auth_continuation, read_auth_result};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -91,26 +94,17 @@ fn read_imap_greeting<S: Read>(stream: &mut S, host: &str) -> Result<String, Str
             break;
         }
     }
-    let greeting = response.to_ascii_uppercase();
-    if !greeting.contains("* OK") && !greeting.contains("* PREAUTH") {
+    if !is_untagged_response(&response, "OK") && !is_untagged_response(&response, "PREAUTH") {
         return Err(format!("{host}: server greeting was missing or invalid"));
     }
-    Ok(greeting)
+    Ok(response)
 }
 
 pub(crate) fn imap_command_succeeded(response: &str, tag: &str) -> bool {
     response.lines().any(|line| {
         let mut fields = line.split_whitespace();
-        fields.next() == Some(tag)
-            && fields
-                .next()
-                .is_some_and(|status| status.eq_ignore_ascii_case("OK"))
+        fields.next() == Some(tag) && fields.next().is_some_and(|status| atom_eq(status, "OK"))
     })
-}
-
-fn is_tagged_response(line: &str, tag: &str) -> bool {
-    let mut fields = line.split_whitespace();
-    fields.next() == Some(tag) && fields.next().is_some()
 }
 
 pub(crate) fn probe_tls_capabilities_with_transport(
@@ -189,7 +183,7 @@ pub(crate) fn probe_tls_capabilities_with_transport(
             .map_err(|e| e.to_string())?;
         read_imap_tagged(&mut tcp, "s001", &mut response, &mut buffer)?;
         if !imap_command_succeeded(&response, "s001")
-            || !response.to_ascii_uppercase().contains("STARTTLS")
+            || !advertises_capability(&response, "STARTTLS")
         {
             return Err(format!("{host}: server does not advertise STARTTLS"));
         }
@@ -264,7 +258,9 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     if !imap_command_succeeded(&response, "a001") {
         return Err(format!("{host}: pre-auth CAPABILITY failed"));
     }
-    let preauth = greeting.contains("* PREAUTH");
+    let preauth = greeting
+        .lines()
+        .any(|line| is_untagged_response(line, "PREAUTH"));
     if !preauth {
         if auth_method == "oauth2" {
             let encoded = crate::oauth::xoauth2_payload(user, credential);
@@ -323,13 +319,10 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     if !imap_command_succeeded(&list_response, "a005") {
         return Err(format!("{host}: folder inventory failed"));
     }
-    if !list_response.lines().any(|line| {
-        let mut fields = line.split_whitespace();
-        fields.next() == Some("*")
-            && fields
-                .next()
-                .is_some_and(|kind| kind.eq_ignore_ascii_case("LIST"))
-    }) {
+    if !list_response
+        .lines()
+        .any(|line| is_untagged_response(line, "LIST"))
+    {
         return Err(format!(
             "{host}: folder inventory returned no untagged LIST records"
         ));
