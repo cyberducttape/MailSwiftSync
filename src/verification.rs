@@ -57,6 +57,13 @@ impl ImapsyncEvidenceAccumulator {
         }
         if let Some(value) = detected_error_count(line) {
             self.failed_messages = Some(value);
+            if value > 0 {
+                // A prior success marker must not survive a later summary
+                // that reports actual engine errors. A subsequent explicit
+                // success marker may establish success again, but silence
+                // cannot turn a failed summary back into authoritative proof.
+                self.sync_good = false;
+            }
         }
         self.sync_good |= line.contains("The sync looks good");
     }
@@ -199,6 +206,27 @@ mod tests {
         assert_eq!(evidence.source_messages, 42);
         assert_eq!(evidence.destination_messages, 42);
         assert!(evidence.authoritative);
+    }
+
+    #[test]
+    fn later_imapsync_errors_revoke_an_earlier_success_marker() {
+        let mut accumulator = ImapsyncEvidenceAccumulator::default();
+        for line in [
+            "Host1 Nb folders: 1 folders",
+            "Host2 Nb folders: 1 folders",
+            "Host1 Nb messages: 2 messages",
+            "Host2 Nb messages: 2 messages",
+            "Host1 Total size: 100 bytes",
+            "Host2 Total size: 100 bytes",
+            "The sync looks good",
+            "Detected 2 errors",
+        ] {
+            accumulator.observe(line);
+        }
+        let evidence = accumulator.evidence().unwrap();
+        assert!(!evidence.authoritative);
+        assert_eq!(evidence.failed_messages, 2);
+        assert_eq!(evidence.unmatched_messages, 1);
     }
 
     #[test]
