@@ -2740,8 +2740,29 @@ fn restore_ledger(
                 .unwrap_or("state"),
             uuid::Uuid::new_v4()
         ));
-        std::fs::rename(destination, &path)
-            .map_err(|error| format!("could not preserve existing destination: {error}"))?;
+        if let Err(error) = std::fs::rename(destination, &path) {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("could not preserve existing destination: {error}"));
+        }
+        let mut moved_sidecars = Vec::new();
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{}", destination.display(), suffix));
+            if !sidecar.exists() {
+                continue;
+            }
+            let previous_sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
+            if let Err(error) = std::fs::rename(&sidecar, &previous_sidecar) {
+                for (original, preserved) in moved_sidecars.into_iter().rev() {
+                    let _ = std::fs::rename(preserved, original);
+                }
+                let _ = std::fs::rename(&path, destination);
+                let _ = std::fs::remove_file(&temporary);
+                return Err(format!(
+                    "could not preserve SQLite sidecar {sidecar:?}: {error}"
+                ));
+            }
+            moved_sidecars.push((sidecar, previous_sidecar));
+        }
         Some(path)
     } else {
         None
@@ -2749,6 +2770,11 @@ fn restore_ledger(
     if let Err(error) = std::fs::rename(&temporary, destination) {
         if let Some(previous) = &previous {
             let _ = std::fs::rename(previous, destination);
+            for suffix in ["-wal", "-shm"] {
+                let preserved = PathBuf::from(format!("{}{}", previous.display(), suffix));
+                let original = PathBuf::from(format!("{}{}", destination.display(), suffix));
+                let _ = std::fs::rename(preserved, original);
+            }
         }
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("could not install restored ledger: {error}"));
@@ -10725,9 +10751,22 @@ mod tests {
             .unwrap()
             .backup_to(&destination.with_extension("replacement.db"))
             .unwrap();
+        for suffix in ["-wal", "-shm"] {
+            std::fs::write(
+                format!("{}{}", destination.display(), suffix),
+                b"old sqlite sidecar",
+            )
+            .unwrap();
+        }
         let previous = restore_ledger(&source, &destination).unwrap().unwrap();
         core::StateStore::open_readonly(&previous).unwrap();
         core::StateStore::open_readonly(&destination).unwrap();
+        for suffix in ["-wal", "-shm"] {
+            assert!(std::path::Path::new(&format!("{}{}", previous.display(), suffix)).exists());
+            assert!(
+                !std::path::Path::new(&format!("{}{}", destination.display(), suffix)).exists()
+            );
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
 
