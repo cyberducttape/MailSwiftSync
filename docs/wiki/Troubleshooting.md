@@ -6,7 +6,7 @@ MailSwiftSync could not find or execute the configured program. Install imapsync
 
 ## Login failure
 
-Check the server name, username, and password for the affected side. Many providers require an app password or a separate IMAP enablement setting. Keep Dry run enabled while resolving login problems.
+Check the server name, username, and password for the affected side. Many providers require an app password or a separate IMAP enablement setting. Keep Preflight selected while resolving login problems.
 
 ## Folder mapping is wrong
 

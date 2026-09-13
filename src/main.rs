@@ -1963,7 +1963,7 @@ impl Default for App {
             cleanup_stale_secret_directories(&secret_runtime_base());
         }
         let mut initial_output = persistence_warning.clone().map_or_else(
-            || vec!["Ready. Start with a dry run against a test destination mailbox.".into()],
+            || vec!["Ready. Start with Preflight against a test destination mailbox.".into()],
             |warning| {
                 vec![
                     warning.clone(),
@@ -2650,11 +2650,11 @@ impl App {
                 !self.form.profile.destination_host.is_empty(),
             ),
             (
-                "Safety mode".into(),
+                "Execution mode".into(),
                 if self.form.dry_run {
-                    "Dry run enabled — destination will not be changed".into()
+                    "Preflight enabled — destination will not be intentionally changed".into()
                 } else {
-                    "Live mode enabled — destination may be changed".into()
+                    "Live migration enabled — destination may be changed".into()
                 },
                 self.form.dry_run,
             ),
@@ -2948,7 +2948,7 @@ impl App {
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("Migration workspace");
-                ui.label(RichText::new(if self.form.dry_run { "SIMULATION" } else { "LIVE CHANGES" })
+                ui.label(RichText::new(if self.form.dry_run { "PREFLIGHT" } else { "LIVE MIGRATION" })
                     .strong()
                     .color(if self.form.dry_run { TEAL } else { ALERT }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3129,7 +3129,7 @@ impl App {
         ui.label(RichText::new("Safety contract").strong());
         ui.horizontal_wrapped(|ui| {
             for text in [
-                "Simulation is the default",
+                "Preflight is the default",
                 "Saved profiles exclude passwords",
                 "Source mail is read-only by default",
             ] {
@@ -3200,7 +3200,8 @@ impl App {
                                     job.form.profile.destination_host,
                                     job.form.profile.destination_user
                                 ));
-                                ui.label(RichText::new(&job.state).color(TEAL));
+                                let (badge, color) = job_state_badge(&job.state);
+                                ui.label(RichText::new(badge).color(color));
                                 ui.end_row();
                             }
                         });
@@ -3248,7 +3249,7 @@ impl App {
                 .max_height(420.0)
                 .show(ui, |ui| {
                     for line in &self.output {
-                        ui.label(RichText::new(line).monospace().size(12.0));
+                        ui.label(RichText::new(line).monospace().size(14.0));
                     }
                 });
         });
@@ -5023,14 +5024,14 @@ impl App {
         self.receiver = Some(rx);
         self.run_started_at = Some(std::time::Instant::now());
         self.status = if self.form.dry_run {
-            "Dry run in progress".into()
+            "Preflight in progress".into()
         } else {
             "Sync in progress".into()
         };
         self.output = VecDeque::from([format!(
             "Starting {} with {}…",
             if self.form.dry_run {
-                "safe dry run"
+                "preflight"
             } else {
                 "synchronization"
             },
@@ -5960,7 +5961,7 @@ impl App {
                     })
                     .count();
                 let label = if self.form.dry_run {
-                    format!("Run {} dry validations", self.bulk_jobs.len())
+                        format!("Run {} preflight checks", self.bulk_jobs.len())
                 } else {
                     format!("Run {} live migrations", live_count)
                 };
@@ -6064,7 +6065,8 @@ impl App {
                         ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user));
                         ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.source_password).password(true).desired_width(120.0));
                         if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.destination_password).password(true).desired_width(120.0)); }
-                        ui.label(RichText::new(&job.state).color(TEAL));
+                        let (badge, color) = job_state_badge(&job.state);
+                        ui.label(RichText::new(badge).color(color));
                         ui.end_row();
                     }
                 });
@@ -6096,9 +6098,10 @@ impl App {
                             .is_some_and(|state| self.bulk_retry_scope.includes(&state))
                     })
                     .count();
+                ui.label(format!("{selected} mailboxes selected"));
                 ui.label(format!(
-                    "{} selected mailbox processes may run concurrently.",
-                    selected
+                    "Worker concurrency: {}",
+                    self.form.profile.batch_concurrency.clamp(1, 16)
                 ));
                 let deletion_enabled = self
                     .bulk_jobs
@@ -6119,7 +6122,7 @@ impl App {
                     .color(if deletion_enabled { ALERT } else { MUTED }),
                 );
                 ui.label(format!("Scope: {}.", self.bulk_retry_scope.label()));
-                ui.label("Each mailbox must already have a matching successful dry validation. Source mail is not deleted by default.");
+                ui.label("Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.");
                 ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(MUTED));
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
@@ -6417,6 +6420,23 @@ fn display_job_state(state: &str) -> &'static str {
     }
 }
 
+fn job_state_badge(state: &str) -> (&'static str, Color32) {
+    match state {
+        "verified" => ("✓ Verified", TEAL),
+        "completed" => ("✓ Completed", TEAL),
+        "running" => ("● Running", BLUE),
+        "queued" => ("○ Queued", MUTED),
+        "preflight" => ("◌ Preflight", BLUE),
+        "ready" => ("○ Ready", MUTED),
+        "delta_required" => ("↻ Delta required", Color32::from_rgb(218, 148, 48)),
+        "verification_difference" => ("≠ Verification difference", Color32::from_rgb(218, 148, 48)),
+        "attention" => ("! Attention", Color32::from_rgb(218, 148, 48)),
+        "failed" => ("× Failed", ALERT),
+        "cancelled" => ("× Cancelled", ALERT),
+        _ => ("? Unknown", ALERT),
+    }
+}
+
 fn needs_operator_review(state: &str) -> bool {
     matches!(
         state,
@@ -6697,12 +6717,16 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin::symmetric(24, 15)),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new("MAILSWIFTSYNC")
                             .strong()
                             .size(23.0)
-                            .color(NAVY),
+                            .color(if self.dark_mode {
+                                Color32::from_rgb(232, 238, 247)
+                            } else {
+                                NAVY
+                            }),
                     );
                     ui.label(
                         RichText::new("mailbox migration control plane")
@@ -6772,9 +6796,9 @@ impl eframe::App for App {
                         ui.separator();
                         ui.label(
                             RichText::new(if self.form.dry_run {
-                                "SAFE MODE"
+                                "PREFLIGHT"
                             } else {
-                                "LIVE MODE"
+                                "LIVE MIGRATION"
                             })
                             .strong()
                             .color(if self.form.dry_run {
@@ -6875,7 +6899,18 @@ impl eframe::App for App {
                             ui.add_space(14.0);
                             ui.group(|ui| {
                                 ui.heading("03  SYNC RULES");
-                                ui.checkbox(&mut self.form.dry_run, "Preflight — validate access and mapping without changing the destination");
+                                ui.label(RichText::new("Execution mode").strong());
+                                ui.horizontal(|ui| {
+                                    ui.selectable_value(&mut self.form.dry_run, true, "Preflight")
+                                        .on_hover_text("Authenticate and validate the plan without intentionally changing the destination.");
+                                    ui.selectable_value(&mut self.form.dry_run, false, "Live migration")
+                                        .on_hover_text("Run the selected migration and allow destination changes.");
+                                });
+                                ui.label(RichText::new(if self.form.dry_run {
+                                    "Preflight checks access and mapping without intentionally changing the destination."
+                                } else {
+                                    "Live migration is enabled; review the destination and deletion warning before starting."
+                                }).color(if self.form.dry_run { MUTED } else { ALERT }));
                                 ui.horizontal(|ui| {
                                     ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically");
                                     ui.checkbox(&mut self.form.profile.justfolders, "Folders only");
@@ -6893,7 +6928,7 @@ impl eframe::App for App {
                         });
                         ui.add_space(14.0);
                         ui.horizontal(|ui| {
-                            if ui.button("Preview safe command").clicked() { self.preview = true; }
+                            if ui.button("Preview redacted command").clicked() { self.preview = true; }
                             if self.running() {
                                 if ui.button("Stop migration").clicked() { self.stop_confirm_open = true; }
                             } else {
@@ -8453,5 +8488,12 @@ mod tests {
             StatusSeverity::Success
         );
         assert_eq!(status_severity("Dry run in progress"), StatusSeverity::Info);
+    }
+
+    #[test]
+    fn mailbox_state_badges_are_semantic_and_not_uniform() {
+        assert_eq!(job_state_badge("verified").0, "✓ Verified");
+        assert_eq!(job_state_badge("failed").0, "× Failed");
+        assert_ne!(job_state_badge("verified").1, job_state_badge("failed").1);
     }
 }

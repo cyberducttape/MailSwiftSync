@@ -12,10 +12,10 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 ## Safe execution sequence
 
 1. Create or select the project and verify source/destination hosts, ports, users, TLS modes, engine, and destination policy.
-2. Leave **Dry run** enabled. If the source uses plain IMAP, acknowledge the cleartext warning before any authenticated preflight; a dry run still transmits credentials and protocol traffic.
+2. Leave **Preflight** selected. If the source uses plain IMAP, acknowledge the cleartext warning before any authenticated preflight; preflight still transmits credentials and protocol traffic.
 3. Preview the redacted command and confirm the endpoints and mailbox identities. For imapsync, MailSwiftSync owns the journal and passes `--nolog`; do not look for an unmanaged engine log as the audit record.
 4. Run one representative **dry pilot** against a test destination. Resolve authentication, TLS, quota, folder, and configuration failures before increasing scope.
-5. Run the **live pilot** only after the matching dry validation succeeds. Confirm the destination again, disable Dry run, and accept the live confirmation. If a session password changes or a referenced keyring credential is reloaded, MailSwiftSync requires a new dry preflight before live promotion.
+5. Run the **live pilot** only after the matching preflight succeeds. Confirm the destination again, select Live migration, and accept the live confirmation. If a session password changes or a referenced keyring credential is reloaded, MailSwiftSync requires a new preflight before live promotion.
 6. For a batch, run **bulk dry validation** first, review every row, then promote only the unchanged queue to live. Keep concurrency conservative (normally 1–2 until the provider pair is proven) and never ignore duplicate destinations or Attention items. On a retry, Verified rows are excluded by default; select **Include already verified mailboxes (explicit re-run)** only when you intentionally want to repeat them.
 7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
 8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof; if residual differences are accepted, record the decision and risk in the change ticket until the application provides a durable acceptance action.
@@ -23,7 +23,7 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 Once every mailbox is evidence-backed, MailSwiftSync may mark the project
 **Complete**. Complete projects are intentionally read-only: adding a mailbox,
 starting a run, or changing mailbox state is rejected by the durable core. If a
-post-cutover correction is required, open the Project Cockpit, enter the
+post-cutover correction is required, open the readiness/project action, enter the
 change reason, and use **Reopen project**. This records a `project_reopened`
 audit event and returns the project to Attention before further work is
 allowed.

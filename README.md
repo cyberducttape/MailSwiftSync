@@ -32,7 +32,7 @@ Stable today:
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
-- Running jobs show elapsed time and can be cancelled with Escape; Advanced options include contextual guidance for per-process throttles.
+- Running jobs show elapsed time and can be stopped through an explicit confirmation; Advanced options include contextual guidance for per-process throttles.
 
 Experimental or planned:
 
@@ -86,18 +86,18 @@ For contributors or users building from source:
 cargo run --release
 ```
 
-If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Dry run** enabled and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
+If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Preflight** selected and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
 
 ### 3. First migration
 
 1. Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available; otherwise choose **imapsync fallback**.
 2. Enter source details on the left and destination details on the right.
    For imapsync, destination transport is typed separately: implicit TLS defaults to port 993 and STARTTLS defaults to port 143; enter an explicit destination port when the provider uses a nonstandard endpoint.
-3. Leave **Dry run** selected and click **Preview safe command**.
+3. Leave **Preflight** selected and click **Preview redacted command**.
 4. Run validation and inspect the execution journal for successful access and folder mapping.
-5. Only then disable Dry run and launch a live migration.
+5. Only then select **Live migration** and launch it.
 
-In imapsync mode, use **Project cockpit → Run authenticated IMAP readiness probe** before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The visible capability-discovery dialog currently presents the IMAPS inventory probe; live admission also performs the same certificate-verified authentication flow for encrypted STARTTLS plans. Plain plans use the selected engine's dry preflight only after explicit cleartext acknowledgement. In Dovecot mode, dry preflight checks the remote `imapc` source and then runs destination-side `doveadm user` and mailbox-list checks; quota capacity still requires administrative review where it is not exposed by the configured Dovecot setup.
+In imapsync mode, use the readiness action in the project workspace before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The visible capability-discovery dialog currently presents the IMAPS inventory probe; live admission also performs the same certificate-verified authentication flow for encrypted STARTTLS plans. Plain plans use the selected engine's preflight only after explicit cleartext acknowledgement. In Dovecot mode, preflight checks the remote `imapc` source and then runs destination-side `doveadm user` and mailbox-list checks; quota capacity still requires administrative review where it is not exposed by the configured Dovecot setup.
 
 ## Why MailSwiftSync exists
 
@@ -152,7 +152,7 @@ See the [release-readiness criteria](docs/release-readiness.md) for the boundary
 
 Click **Advanced options** to add common imapsync flags with understandable descriptions: internal-date sync, UID matching, cache usage, fast I/O, and size-mismatch tolerance. The `--delete2` control is visually marked destructive because it can remove destination messages that do not exist on the source.
 
-The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, subscription, and debug flags). Endpoint, credential, TLS, dry-run, destructive deletion, logging, and unknown options are rejected. Test every change using Dry run first. The command preview shows the final arguments with passwords redacted. Bulk spreadsheets cannot provide this field.
+The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, subscription, and debug flags). Endpoint, credential, TLS, preflight, destructive deletion, logging, and unknown options are rejected. Test every change using Preflight first. The command preview shows the final arguments with passwords redacted. Bulk spreadsheets cannot provide this field.
 
 ## Packaging
 

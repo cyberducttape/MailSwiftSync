@@ -28,7 +28,7 @@ Optional columns are `source_password`, `destination_password`, `source_credenti
 
 ## Import and review
 
-1. Click **Batch queue** in the MailSwiftSync header.
+1. Open **Mailboxes** and choose the batch queue/review action.
 2. Click **Import CSV / XLSX…** and select the file.
 3. Review each source and destination in the queue table and enter any missing credentials in the masked fields.
 4. Correct the spreadsheet and import it again if any account is wrong.

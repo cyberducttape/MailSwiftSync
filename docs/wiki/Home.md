@@ -10,11 +10,11 @@ MailSwiftSync is a local mailbox migration control plane. It uses Dovecot's nati
 
 1. Install `doveadm` on or use an operator-managed wrapper for the Dovecot destination; install `imapsync` for the fallback path.
 2. Open MailSwiftSync and choose the migration engine.
-3. Leave **Dry run** turned on.
+3. Leave **Preflight** selected.
 4. Enter the source and destination account details.
 5. Preview the redacted command and check the servers and usernames.
 6. Run validation with a test destination mailbox.
-7. Confirm the mailbox is **Ready** and the preflight plan still matches the current fields. Only then should you disable Dry run and start a live migration; changing endpoints, users, engine, TLS, ports, or controlled options requires another preflight.
+7. Confirm the mailbox is **Ready** and the preflight plan still matches the current fields. Only then should you select Live migration; changing endpoints, users, engine, TLS, ports, or controlled options requires another preflight.
 
 ## Choose the right engine
 

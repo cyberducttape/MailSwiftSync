@@ -4,9 +4,9 @@
 
 Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available. MailSwiftSync then prepares a destination-side `doveadm` command using `imapc` for the remote source. Choose **imapsync fallback** when the destination is another arbitrary IMAP server.
 
-## 2. Keep Safe Mode enabled
+## 2. Keep Preflight selected
 
-The **Dry run** checkbox adds `--dry` to imapsync. It validates both logins and displays the proposed folder mapping without copying mail to the destination.
+**Preflight** validates both logins and displays the proposed folder mapping without intentionally changing the destination.
 
 Leave it checked for your first run. The imapsync tutorial recommends testing with a real source account and a test destination before a live run.
 
@@ -23,7 +23,7 @@ MailSwiftSync exposes the most common options:
 | Performance throttles | In Advanced options, optional message/byte-per-second targets are passed to imapsync; for batches MailSwiftSync divides them across workers and globally paces process starts. A finite batch target must be at least the worker count; `0` means unlimited. These controls do not affect Dovecot-native runs. |
 | Process timeout | Bounds one migration process from 1 to 720 hours. Increase it for very large or slow mailboxes; cancellation remains available at any time. |
 
-Click **Advanced options** for guided controls for `--syncinternaldates`, `--useuid`, `--usecache`, `--fastio1`, `--fastio2`, and `--allowsizemismatch`. The `--delete2` setting is marked destructive and should only be considered for a deliberately exact backup after a successful dry run.
+Click **Advanced options** for guided controls for `--syncinternaldates`, `--useuid`, `--usecache`, `--fastio1`, `--fastio2`, and `--allowsizemismatch`. The `--delete2` setting is marked destructive and should only be considered for a deliberately exact backup after a successful preflight.
 
 ## 4. Preview the command
 
@@ -44,7 +44,7 @@ Click **Run dry validation**. The **Execution journal** streams output from the 
 Only after validation succeeds and the durable project still matches the displayed source/destination identities:
 
 1. Confirm the destination is the intended mailbox.
-2. Uncheck **Dry run**. The header changes from **SAFE MODE** to **LIVE MODE**.
+2. Select **Live migration**. The header changes to **LIVE MIGRATION**.
 3. Click **Run synchronization**.
 4. Keep MailSwiftSync open until the journal reports completion. You can request cancellation from the activity controls; the configured 1–720 hour execution limit also bounds an abandoned child process.
 
