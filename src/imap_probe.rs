@@ -1,3 +1,4 @@
+use crate::credentials::SecretString;
 use crate::imap_protocol::{
     advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
 };
@@ -12,7 +13,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use zeroize::Zeroizing;
 
 pub(crate) fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
     let host = host.trim();
@@ -284,13 +284,13 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
             response.clear();
             read_auth_result(&mut stream, "a002", &mut response, &mut buffer)?;
         } else {
-            let quoted_password = Zeroizing::new(imap_quote(credential)?);
+            let quoted_password = SecretString::new(imap_quote(credential)?);
             let login = format!(
                 "a002 LOGIN {} {}\r\n",
                 imap_quote(user)?,
                 quoted_password.as_str()
             );
-            let login = Zeroizing::new(login);
+            let login = SecretString::new(login);
             stream
                 .write_all(login.as_bytes())
                 .map_err(|e| e.to_string())?;

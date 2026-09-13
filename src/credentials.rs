@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -7,7 +8,51 @@ use std::{
 
 use zeroize::Zeroizing;
 
-pub(crate) type SecretString = Zeroizing<String>;
+/// Owned secret material. The only string access exposed to callers is
+/// borrowed, so passing a credential through a worker does not silently turn
+/// it into an ordinary `String` allocation.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct SecretString(Zeroizing<String>);
+
+impl SecretString {
+    pub(crate) fn new(value: String) -> Self {
+        Self(Zeroizing::new(value))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub(crate) fn as_mut_string(&mut self) -> &mut String {
+        &mut self.0
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretString(REDACTED)")
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for SecretString {
+    fn from(value: &str) -> Self {
+        Self::new(value.to_owned())
+    }
+}
 
 pub struct CleanupGuard {
     paths: Vec<PathBuf>,
@@ -251,12 +296,20 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::cleanup_stale_secret_directories_at;
+    use super::{SecretString, cleanup_stale_secret_directories_at};
     use std::{
         fs,
         path::PathBuf,
         time::{Duration, SystemTime},
     };
+
+    #[test]
+    fn secret_debug_output_never_contains_material() {
+        let secret = SecretString::from("customer-password");
+        let debug = format!("{secret:?}");
+        assert_eq!(debug, "SecretString(REDACTED)");
+        assert!(!debug.contains("customer-password"));
+    }
 
     #[cfg(unix)]
     #[test]

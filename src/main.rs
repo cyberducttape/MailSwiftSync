@@ -19,9 +19,9 @@ use controller::{
     LiveAuthProof, RunKind, is_verified_terminal_state,
 };
 use credentials::{
-    CleanupGuard, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
-    restrict_directory_permissions, restrict_file_permissions, secret_runtime_base,
-    write_secret_file,
+    CleanupGuard, SecretString, cleanup_paths, cleanup_stale_secret_directories,
+    create_secret_directory, restrict_directory_permissions, restrict_file_permissions,
+    secret_runtime_base, write_secret_file,
 };
 use headless::export_support_bundle;
 #[cfg(test)]
@@ -81,7 +81,6 @@ use ui::{
     needs_operator_review, project_health_state_counts, recommended_next_action, status_color,
     workflow_step_index,
 };
-use zeroize::Zeroizing;
 
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const MAX_VISIBLE_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -586,8 +585,8 @@ fn append_dovecot_source_tls_policy(args: &mut Vec<String>, mode: &str, ca_bundl
 #[derive(Clone)]
 struct Form {
     profile: Profile,
-    source_password: Zeroizing<String>,
-    destination_password: Zeroizing<String>,
+    source_password: SecretString,
+    destination_password: SecretString,
     dry_run: bool,
 }
 impl Default for Form {
@@ -607,8 +606,8 @@ impl Default for Form {
                 automap: true,
                 ..Default::default()
             },
-            source_password: Zeroizing::new(String::new()),
-            destination_password: Zeroizing::new(String::new()),
+            source_password: SecretString::default(),
+            destination_password: SecretString::default(),
             dry_run: true,
         }
     }
@@ -691,7 +690,7 @@ impl Form {
         let entry = self
             .keyring_entry(source)?
             .ok_or("Enter a keyring ID before loading a password.")?;
-        let password = Zeroizing::new(entry.get_password().map_err(|error| {
+        let password = SecretString::new(entry.get_password().map_err(|error| {
             format!("Could not load the credential from the OS keyring: {error}")
         })?);
         if source {
@@ -2088,8 +2087,8 @@ impl Default for App {
                     label: format!("{} → {}", job.source_mailbox, job.destination_mailbox),
                     form: Form {
                         profile,
-                        source_password: Zeroizing::new(String::new()),
-                        destination_password: Zeroizing::new(String::new()),
+                        source_password: SecretString::default(),
+                        destination_password: SecretString::default(),
                         dry_run: true,
                     },
                     state: display_job_state(&job.state).into(),
@@ -4655,13 +4654,13 @@ impl App {
         }
         // Whitespace is meaningful in passwords. Trim only semantic fields;
         // otherwise a valid credential such as ` Secret ` is silently changed.
-        form.source_password = Zeroizing::new(source_password);
+        form.source_password = SecretString::new(source_password);
         form.profile.destination_host = get("destination_host");
         form.profile.destination_user = get("destination_user");
         if let Some(value) = values.get("destination_credential_id") {
             form.profile.destination_credential_id = value.trim().to_owned();
         }
-        form.destination_password = Zeroizing::new(destination_password);
+        form.destination_password = SecretString::new(destination_password);
         form.validate_for_import()
             .map_err(|e| format!("Row {row}: {e}"))?;
         let label = values
@@ -7160,7 +7159,7 @@ impl App {
         host: &mut String,
         user: &mut String,
         auth_method: &mut String,
-        password: &mut String,
+        password: &mut SecretString,
         password_required: bool,
         saved_credential: bool,
         color: Color32,
@@ -7249,7 +7248,7 @@ impl App {
                 });
                 ui.add_enabled(
                     editable,
-                    egui::TextEdit::singleline(password).password(!visible),
+                    egui::TextEdit::singleline(password.as_mut_string()).password(!visible),
                 );
                 if ui
                     .add_enabled(
@@ -7284,7 +7283,7 @@ impl App {
                     } else {
                         "Password"
                     },
-                    password,
+                    password.as_str(),
                     password_required && !saved_credential,
                 );
             }
@@ -7506,8 +7505,8 @@ impl App {
                         ui.label(&job.label);
                         ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user));
                         ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user));
-                        ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.source_password).password(true).desired_width(120.0));
-                        if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.destination_password).password(true).desired_width(120.0)); }
+                        ui.add_enabled(queue_editable, egui::TextEdit::singleline(job.form.source_password.as_mut_string()).password(true).desired_width(120.0));
+                        if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add_enabled(queue_editable, egui::TextEdit::singleline(job.form.destination_password.as_mut_string()).password(true).desired_width(120.0)); }
                         let (badge, color) = job_state_badge(&job.state, colors);
                         ui.label(RichText::new(badge).color(color));
                         ui.end_row();
@@ -9150,10 +9149,10 @@ mod tests {
     #[test]
     fn credential_fingerprint_changes_without_exposing_secret_material() {
         let mut first = dovecot_form();
-        first.source_password = Zeroizing::new("source-one".into());
-        first.destination_password = Zeroizing::new("destination-one".into());
+        first.source_password = SecretString::from("source-one");
+        first.destination_password = SecretString::from("destination-one");
         let mut second = first.clone();
-        second.destination_password = Zeroizing::new("destination-two".into());
+        second.destination_password = SecretString::from("destination-two");
 
         assert_ne!(
             first.credential_fingerprint(),

@@ -12,6 +12,8 @@ All notable changes to MailSwiftSync are documented here.
   materializes real credentials in an ordinary `Vec<String>`.
 - Kept the generated XOAUTH2 payload and keyring-loaded credential inside
   zeroizing ownership from acquisition through socket/process handoff.
+- Replaced the worker-facing zeroizing alias with a dedicated `SecretString`
+  type whose debug output is redacted and whose string access is explicit.
 - Plan fingerprints and immutable run snapshots now bind the SHA-256 content
   identity of the selected engine executable, configured trust bundles, and
   Dovecot configuration, so replacing a file at the same path invalidates a
