@@ -2426,7 +2426,19 @@ impl App {
                         ui.group(|ui| { ui.horizontal(|ui| { ui.heading(&project.name); ui.label(RichText::new(format!("ID {}", &project.id[..8])).monospace().color(MUTED)); }); ui.label(format!("{}  →  {}", project.source_endpoint, project.destination_endpoint)); });
                         ui.add_space(10.0); ui.label(RichText::new("MIGRATION PHASE").size(11.0).color(MUTED));
                         ui.horizontal_wrapped(|ui| for phase in [core::Phase::Discovery, core::Phase::Preflight, core::Phase::Pilot, core::Phase::Seed, core::Phase::CatchUp, core::Phase::FinalDelta, core::Phase::Verification, core::Phase::Complete] { let active = phase == project.phase; ui.label(RichText::new(format!("{} {phase:?}", if active { "●" } else { "○" })).strong().color(if active { TEAL } else { MUTED })); });
-                        ui.add_space(10.0); if project.phase == core::Phase::Discovery && ui.button("Accept preflight review").clicked() { let _ = self.store.transition(&project.id, core::Phase::Preflight); self.status = "Phase advanced to Preflight".into(); }
+                        ui.add_space(10.0);
+                        if project.phase == core::Phase::Discovery
+                            && ui.button("Accept preflight review").clicked()
+                        {
+                            match self.store.transition(&project.id, core::Phase::Preflight) {
+                                Ok(()) => self.status = "Phase advanced to Preflight".into(),
+                                Err(error) => {
+                                    self.status = format!(
+                                        "Could not advance project to Preflight: {error}"
+                                    );
+                                }
+                            }
+                        }
                     }
                     Ok(None) => { self.project_id = None; }, Err(e) => self.status = format!("Could not read project: {e}"),
                 }
