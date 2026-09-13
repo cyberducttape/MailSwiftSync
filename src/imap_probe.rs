@@ -69,10 +69,7 @@ fn read_imap_tagged<S: Read>(
             return Err(format!("IMAP connection closed before {tag} completed"));
         }
         response.push_str(&String::from_utf8_lossy(&buffer[..count]));
-        if response
-            .lines()
-            .any(|line| line.starts_with(&format!("{tag} ")))
-        {
+        if response.lines().any(|line| is_tagged_response(line, tag)) {
             return Ok(());
         }
         if response.len() > 1_048_576 {
@@ -102,9 +99,18 @@ fn read_imap_greeting<S: Read>(stream: &mut S, host: &str) -> Result<String, Str
 }
 
 pub(crate) fn imap_command_succeeded(response: &str, tag: &str) -> bool {
-    response
-        .lines()
-        .any(|line| line.starts_with(&format!("{tag} OK")))
+    response.lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        fields.next() == Some(tag)
+            && fields
+                .next()
+                .is_some_and(|status| status.eq_ignore_ascii_case("OK"))
+    })
+}
+
+fn is_tagged_response(line: &str, tag: &str) -> bool {
+    let mut fields = line.split_whitespace();
+    fields.next() == Some(tag) && fields.next().is_some()
 }
 
 pub(crate) fn probe_tls_capabilities_with_transport(
@@ -318,8 +324,11 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
         return Err(format!("{host}: folder inventory failed"));
     }
     if !list_response.lines().any(|line| {
-        let line = line.trim_start();
-        line.starts_with("* LIST ") || line.starts_with("* LIST\t")
+        let mut fields = line.split_whitespace();
+        fields.next() == Some("*")
+            && fields
+                .next()
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("LIST"))
     }) {
         return Err(format!(
             "{host}: folder inventory returned no untagged LIST records"

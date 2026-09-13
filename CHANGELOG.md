@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Made IMAP tagged-status and untagged `LIST` parsing case-insensitive for
+  protocol keywords, while retaining exact command-tag matching.
 - Customer and operator report exports now read project, mailbox, run, and
   evidence data from one SQLite snapshot, preventing mixed-commit artifacts
   during concurrent migration updates.

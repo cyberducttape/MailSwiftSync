@@ -10160,7 +10160,11 @@ mod tests {
     #[test]
     fn imap_preflight_requires_tagged_ok_responses() {
         assert!(imap_command_succeeded(
-            "* CAPABILITY IMAP4rev1\na001 OK done",
+            "* CAPABILITY IMAP4rev1\na001 oK done",
+            "a001"
+        ));
+        assert!(!imap_command_succeeded(
+            "* CAPABILITY IMAP4rev1\na001 okay done",
             "a001"
         ));
         assert!(!imap_command_succeeded(

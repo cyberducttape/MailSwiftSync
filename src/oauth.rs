@@ -65,10 +65,7 @@ fn consume_auth_error_result<S: Read>(
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
     loop {
-        if response
-            .lines()
-            .any(|line| line.starts_with(&format!("{tag} ")))
-        {
+        if response.lines().any(|line| is_tagged_response(line, tag)) {
             return Ok(());
         }
         let count = stream.read(buffer).map_err(|e| e.to_string())?;
@@ -80,6 +77,11 @@ fn consume_auth_error_result<S: Read>(
             return Err("IMAP OAuth authentication response exceeded 64 KiB".into());
         }
     }
+}
+
+fn is_tagged_response(line: &str, tag: &str) -> bool {
+    let mut fields = line.split_whitespace();
+    fields.next() == Some(tag) && fields.next().is_some()
 }
 
 /// Finish an AUTHENTICATE exchange, including the RFC 7628 error path.
@@ -110,10 +112,7 @@ pub(crate) fn read_auth_result<S: Read + Write>(
             stream.write_all(b"\r\n").map_err(|e| e.to_string())?;
             acknowledged_continuations += 1;
         }
-        if response
-            .lines()
-            .any(|line| line.starts_with(&format!("{tag} ")))
-        {
+        if response.lines().any(|line| is_tagged_response(line, tag)) {
             return Ok(());
         }
         if response.len() > 65_536 {

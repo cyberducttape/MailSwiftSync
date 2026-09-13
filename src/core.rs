@@ -714,8 +714,11 @@ impl ServerCapabilities {
 }
 
 fn is_untagged_list_record(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    trimmed.starts_with("* LIST ") || trimmed.starts_with("* LIST\t")
+    let mut fields = line.split_whitespace();
+    fields.next() == Some("*")
+        && fields
+            .next()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("LIST"))
 }
 
 pub struct StateStore {
