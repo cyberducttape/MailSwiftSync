@@ -3060,11 +3060,29 @@ impl App {
             core::Phase::Verification,
             core::Phase::Complete,
         ];
-        let current = self
-            .active_project_id()
-            .and_then(|id| self.store.project(id).ok().flatten())
-            .map(|project| project.phase)
-            .unwrap_or(core::Phase::Discovery);
+        let current = match self.active_project_id() {
+            None => core::Phase::Discovery,
+            Some(project_id) => match self.store.project(project_id) {
+                Ok(Some(project)) => project.phase,
+                Ok(None) => core::Phase::Discovery,
+                Err(error) => {
+                    ui.group(|ui| {
+                        ui.label(
+                            RichText::new("DURABLE LIFECYCLE UNAVAILABLE")
+                                .strong()
+                                .color(ALERT),
+                        );
+                        ui.label(format!(
+                            "Could not read the selected project from SQLite: {error}"
+                        ));
+                        ui.label(
+                            "Do not start or retry a migration until durable storage is available.",
+                        );
+                    });
+                    return;
+                }
+            },
+        };
         let current_index = phases
             .iter()
             .position(|phase| *phase == current)
