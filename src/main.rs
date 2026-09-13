@@ -1491,26 +1491,35 @@ fn run_streaming(
     // The process identity is only valid for this attempt. Clear it before
     // returning so a transient retry (or a crash during its backoff) cannot
     // leave an exited PID looking like an active orphan.
-    let _ = tx.send(Event::ProcessEnded {
-        run_id: run_id.to_owned(),
-        job_id: job_id.to_owned(),
-    });
+    let process_end_error = tx
+        .send(Event::ProcessEnded {
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+        })
+        .err()
+        .map(|_| "process event channel disconnected while clearing process identity".to_owned());
     match result {
         Ok(outcome) if reader_error.is_none() => {
-            let imapsync_evidence = evidence_lines
+            if let Some(error) = process_end_error {
+                return Err(error);
+            }
+            let imapsync_lines = evidence_lines
                 .lock()
-                .ok()
-                .and_then(|lines| verification::parse_imapsync_evidence(&lines));
+                .map_err(|_| "imapsync evidence collector was poisoned".to_owned())?;
+            let imapsync_evidence = verification::parse_imapsync_evidence(&imapsync_lines);
             let checkpoint = dovecot_checkpoint
                 .lock()
-                .ok()
-                .and_then(|value| value.clone());
+                .map_err(|_| "Dovecot checkpoint collector was poisoned".to_owned())?
+                .clone();
             if let Some(value) = &checkpoint {
-                let _ = tx.send(Event::Checkpoint {
+                tx.send(Event::Checkpoint {
                     run_id: run_id.to_owned(),
                     job_id: job_id.to_owned(),
                     value: value.clone(),
-                });
+                })
+                .map_err(|_| {
+                    "process event channel disconnected while delivering checkpoint".to_owned()
+                })?;
             }
             Ok(StreamResult {
                 outcome,
@@ -1523,11 +1532,15 @@ fn run_streaming(
                 Ok(_) => String::new(),
                 Err(error) => error,
             };
-            let error = [process_error, reader_error]
-                .into_iter()
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>()
-                .join("; ");
+            let error = [
+                process_error,
+                reader_error,
+                process_end_error.unwrap_or_default(),
+            ]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("; ");
             let recent = process_tail_text(&tail);
             if recent.is_empty() {
                 Err(error)
