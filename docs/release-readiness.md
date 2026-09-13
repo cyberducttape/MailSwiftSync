@@ -84,6 +84,10 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   drives a complete durable queue without silently narrowing its scope; a
   long-lived scheduler/supervisor is still required for overnight unattended
   operation.
+- A Linux headless `Dockerfile` provides explicit durable-state and per-user
+  runtime volumes, non-root execution, and packaged `imapsync`/`doveadm`
+  dependencies. It is a deployment template; official registry publication
+  and image signing remain release gates.
 
 ## Available in 0.1
 

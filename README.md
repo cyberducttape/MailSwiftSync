@@ -183,6 +183,10 @@ Use `mailswiftsync --help` for the complete command contract and
 live commands return nonzero when work remains unresolved; a zero exit status
 means the requested operation reached its documented terminal condition.
 
+For Linux headless deployments, see the [container deployment guide](docs/container.md).
+The image uses `/var/lib/mailswiftsync` for durable state and an isolated
+`/run/user/10001` runtime volume for short-lived secrets.
+
 `status` emits secret-free JSON containing project/mailbox states and recorded
 process identities. `recover` takes the application lock, verifies recorded
 process ownership before signalling anything, preserves identities it cannot

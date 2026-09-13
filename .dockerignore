@@ -1,0 +1,7 @@
+.git
+.github
+target
+dist
+docs/wiki/assets
+*.tar.gz
+*.log
