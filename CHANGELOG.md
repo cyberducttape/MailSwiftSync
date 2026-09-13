@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted process execution, diagnostic capture, Dovecot verification, and
+  engine-version probing into `src/runner.rs`, leaving the application layer
+  responsible for durable event handling rather than child-process mechanics.
 - Moved status, recovery, support-bundle, headless execution, batch
   supervision, and controller-wait logic into `src/headless.rs`; CLI and GUI
   now share the same headless service boundary.
