@@ -2297,6 +2297,15 @@ impl App {
         self.status = StatusMessage::new(message, severity);
     }
 
+    fn support_summary(&self) -> String {
+        format!(
+            "MailSwiftSync support summary\nRun active: {}\nStatus severity: {:?}\nRetained diagnostic lines: {}\n\nDetailed engine output was intentionally omitted; use the sanitized support-bundle command for durable diagnostics.",
+            self.running(),
+            self.status.severity,
+            self.output.len(),
+        )
+    }
+
     fn theme_colors(&self) -> ThemeColors {
         if self.dark_mode {
             ThemeColors::dark()
@@ -3817,10 +3826,20 @@ impl App {
                     RichText::new(&self.status.text)
                         .color(status_color(self.status.severity, self.theme_colors())),
                 );
-                if ui.button("Copy output").clicked() {
-                    ui.ctx()
-                        .copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
+                if ui.button("Copy support summary").clicked() {
+                    ui.ctx().copy_text(self.support_summary());
                 }
+                ui.menu_button("Raw output…", |ui| {
+                    ui.label(
+                        RichText::new("May contain mailbox metadata")
+                            .color(self.theme_colors().warning),
+                    );
+                    if ui.button("Copy redacted engine output").clicked() {
+                        ui.ctx()
+                            .copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
+                        ui.close();
+                    }
+                });
                 if running && ui.button("Stop migration").clicked() {
                     self.stop_confirm_open = true;
                 }
@@ -8375,9 +8394,21 @@ impl eframe::App for App {
                             ui.horizontal(|ui| {
                                 ui.heading("Execution journal");
                                 ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(self.theme_colors().text_secondary));
-                                if ui.button("Copy output").clicked() {
-                                    ui.ctx().copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
+                                if ui.button("Copy support summary").clicked() {
+                                    ui.ctx().copy_text(self.support_summary());
                                 }
+                                ui.menu_button("Raw output…", |ui| {
+                                    ui.label(
+                                        RichText::new("May contain mailbox metadata")
+                                            .color(self.theme_colors().warning),
+                                    );
+                                    if ui.button("Copy redacted engine output").clicked() {
+                                        ui.ctx().copy_text(
+                                            self.output.iter().cloned().collect::<Vec<_>>().join("\n"),
+                                        );
+                                        ui.close();
+                                    }
+                                });
                             });
                             egui::ScrollArea::vertical()
                                 .hscroll(true)

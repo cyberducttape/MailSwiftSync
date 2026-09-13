@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Execution journal clipboard actions now default to a metadata-free support
+  summary; copying raw redacted engine output is explicitly labeled as
+  potentially containing mailbox metadata.
 - Replaced report signing/verification and process-registration invariant
   panics with explicit error paths, keeping malformed artifacts and unusual
   controller queue states from aborting the application.
