@@ -72,8 +72,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - A reproducible Linux engine lab starts two disposable Dovecot servers,
   performs a real imapsync transfer, and checks the destination fixture. This
   is engine-level coverage. It also asserts that invalid source credentials
-  fail. The lab is wired into a scheduled/manual CI workflow; runners without
-  the pinned Dovecot 2.4.x fixture skip explicitly. Controller crash/restart
+  fail. The lab runs on pull requests as well as through the scheduled/manual
+  CI workflow; runners without the pinned Dovecot 2.4.x fixture skip
+  explicitly. Controller crash/restart
   and storage-fault chaos coverage is still required before unattended
   production use.
 - Headless `status` and `recover` commands expose secret-free durable state and

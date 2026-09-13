@@ -1,6 +1,8 @@
 name: IMAP integration lab
 
 on:
+  pull_request:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: "17 3 * * 1"
