@@ -542,6 +542,13 @@ impl StateStore {
         if mailboxes.is_empty() {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let mut destinations = BTreeSet::new();
+        if mailboxes
+            .iter()
+            .any(|(_, destination)| !destinations.insert(destination.trim().to_ascii_lowercase()))
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let project = Project {
             id: Uuid::new_v4().to_string(),
             name: name.into(),
@@ -581,6 +588,12 @@ impl StateStore {
         mailboxes: &[(String, String, String)],
     ) -> rusqlite::Result<(Project, Vec<String>)> {
         if mailboxes.is_empty() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let mut destinations = BTreeSet::new();
+        if mailboxes.iter().any(|(_, destination, _)| {
+            !destinations.insert(destination.trim().to_ascii_lowercase())
+        }) {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let project = Project {
@@ -665,6 +678,14 @@ impl StateStore {
         source: &str,
         destination: &str,
     ) -> rusqlite::Result<String> {
+        let duplicate: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE project_id=?1 AND lower(trim(destination_mailbox))=lower(trim(?2)))",
+            params![project_id, destination],
+            |row| row.get(0),
+        )?;
+        if duplicate {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let id = Uuid::new_v4().to_string();
         self.connection.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')", params![id, project_id, source, destination])?;
         Ok(id)
@@ -2728,6 +2749,33 @@ mod tests {
         assert_eq!(
             db.run_status("run-status").unwrap().as_deref(),
             Some("running")
+        );
+    }
+
+    #[test]
+    fn core_rejects_duplicate_destination_mailboxes() {
+        let db = StateStore::in_memory().unwrap();
+        assert!(
+            db.create_project_with_mailboxes(
+                "duplicate-batch",
+                "source",
+                "destination",
+                &[
+                    ("one".into(), "Target@Example.test".into()),
+                    ("two".into(), " target@example.test ".into())
+                ],
+            )
+            .is_err()
+        );
+
+        let project = db
+            .create_project("duplicate-single", "source", "destination")
+            .unwrap();
+        db.add_mailbox(&project.id, "one", "Target@Example.test")
+            .unwrap();
+        assert!(
+            db.add_mailbox(&project.id, "two", " target@example.test ")
+                .is_err()
         );
     }
 

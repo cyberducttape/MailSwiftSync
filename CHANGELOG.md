@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Core project and mailbox creation now reject normalized duplicate destination mailboxes, preserving duplicate-target protection for non-UI callers.
 - Durable process registration now has a bounded five-second acknowledgement window; an unresponsive controller causes the child to be cancelled and reaped rather than waiting indefinitely.
 - A parent batch cannot be marked `completed` when any terminal child is failed, cancelled, abandoned, or otherwise unsuccessful; successful waves now require successful completion of every child.
 - Process-registration rejection now has an integration-style runner test that proves a long-lived child is cancelled before the runner returns.
