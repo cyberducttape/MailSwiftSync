@@ -7,7 +7,8 @@ All notable changes to MailSwiftSync are documented here.
 ### Changed
 
 - Password reveal controls now disable and clear their transient visibility
-  state whenever connection fields become locked.
+  state centrally on every locked frame, including when the Plan view is not
+  currently visible.
 - Routed all operator-facing status, action, warning, and explanatory colors
   through the contrast-aware semantic theme palette; removed legacy low-contrast
   color constants and one-off status colors.

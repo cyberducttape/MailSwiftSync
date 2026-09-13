@@ -8046,7 +8046,7 @@ impl App {
             inline_error(ui, "User", user, true);
             ui.horizontal(|ui| {
                 ui.label("Password");
-                let visibility_id = ui.make_persistent_id(title).with("password_visibility");
+                let visibility_id = password_visibility_id(title);
                 let visible = ui.ctx().data_mut(|data| {
                     let requested = data.get_temp::<bool>(visibility_id).unwrap_or(false);
                     if !editable {
@@ -9178,6 +9178,10 @@ fn password_reveal_allowed(editable: bool, requested: bool) -> bool {
     editable && requested
 }
 
+fn password_visibility_id(title: &str) -> egui::Id {
+    egui::Id::new(("password_visibility", title))
+}
+
 fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
@@ -9221,6 +9225,13 @@ impl eframe::App for App {
         self.poll();
         let colors = self.theme_colors();
         let plan_controls_enabled = !self.running() && !self.workspace_read_only;
+        if !plan_controls_enabled {
+            ctx.data_mut(|data| {
+                for title in ["01  SOURCE MAILBOX", "02  DESTINATION MAILBOX"] {
+                    data.remove::<bool>(password_visibility_id(title));
+                }
+            });
+        }
         ctx.data_mut(|data| {
             data.insert_temp(
                 egui::Id::new("plan_controls_enabled"),
