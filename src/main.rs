@@ -1754,6 +1754,15 @@ enum BulkRetryScope {
     All,
 }
 
+#[derive(Debug, Clone)]
+struct BulkConfirmationSummary {
+    eligible_count: usize,
+    deletion_enabled: bool,
+    durable_state_error: Option<String>,
+    concurrency: usize,
+    scope: BulkRetryScope,
+}
+
 impl BulkRetryScope {
     fn includes(self, state: &str) -> bool {
         match self {
@@ -1999,6 +2008,7 @@ struct App {
     ui_scale: f32,
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
+    bulk_confirmation_summary: Option<BulkConfirmationSummary>,
     bulk_live_run: bool,
     /// Live retry scope defaults to unresolved rows and is process-local UI
     /// state; durable child/run IDs remain the execution identity.
@@ -2299,6 +2309,7 @@ impl Default for App {
             ui_scale: appearance.ui_scale,
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
+            bulk_confirmation_summary: None,
             bulk_live_run: false,
             bulk_retry_scope: BulkRetryScope::default(),
             bulk_source_keyring_apply: String::new(),
@@ -4447,6 +4458,7 @@ impl App {
         let live = !self.form.dry_run;
         if live && !self.bulk_live_confirmed {
             self.bulk_live_confirm_open = true;
+            self.bulk_confirmation_summary = None;
             return;
         }
         if live {
@@ -6665,27 +6677,44 @@ impl App {
         if !self.bulk_live_confirm_open {
             return;
         }
-        let mut durable_state_error = None;
-        let eligible_indices = self
-            .bulk_jobs
-            .iter()
-            .enumerate()
-            .filter_map(|(index, _)| {
-                let job_id = self.bulk_job_ids.get(index)?;
-                let state = match self.store.mailbox_state(job_id) {
-                    Ok(Some(state)) => state,
-                    Ok(None) => return None,
-                    Err(error) => {
-                        durable_state_error = Some(format!(
-                            "Could not read durable mailbox state for confirmation: {error}"
-                        ));
-                        return None;
-                    }
-                };
-                (self.bulk_row_is_selected(index) && self.bulk_retry_scope.includes(&state))
-                    .then_some(index)
-            })
-            .collect::<HashSet<_>>();
+        if self.bulk_confirmation_summary.is_none() {
+            let mut durable_state_error = None;
+            let eligible_indices = self
+                .bulk_jobs
+                .iter()
+                .enumerate()
+                .filter_map(|(index, _)| {
+                    let job_id = self.bulk_job_ids.get(index)?;
+                    let state = match self.store.mailbox_state(job_id) {
+                        Ok(Some(state)) => state,
+                        Ok(None) => return None,
+                        Err(error) => {
+                            durable_state_error = Some(format!(
+                                "Could not read durable mailbox state for confirmation: {error}"
+                            ));
+                            return None;
+                        }
+                    };
+                    (self.bulk_row_is_selected(index) && self.bulk_retry_scope.includes(&state))
+                        .then_some(index)
+                })
+                .collect::<HashSet<_>>();
+            let deletion_enabled = eligible_indices
+                .iter()
+                .any(|index| self.bulk_jobs[*index].form.profile.delete2);
+            self.bulk_confirmation_summary = Some(BulkConfirmationSummary {
+                eligible_count: eligible_indices.len(),
+                deletion_enabled,
+                durable_state_error,
+                concurrency: self.form.profile.batch_concurrency.clamp(1, 16),
+                scope: self.bulk_retry_scope,
+            });
+        }
+        let summary = self
+            .bulk_confirmation_summary
+            .as_ref()
+            .cloned()
+            .expect("confirmation summary is initialized above");
         let mut open = self.bulk_live_confirm_open;
         let mut close = false;
         egui::Window::new("Confirm live batch migration")
@@ -6694,26 +6723,23 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(RichText::new("This will change destination mailboxes").color(ALERT));
-                let selected = eligible_indices.len();
-                ui.label(format!("{selected} mailboxes selected"));
-                if let Some(error) = &durable_state_error {
+                ui.label(format!("{} mailboxes selected", summary.eligible_count));
+                if let Some(error) = &summary.durable_state_error {
                     ui.label(RichText::new(error).color(ALERT));
                 }
-                ui.label(format!(
-                    "Worker concurrency: {}",
-                    self.form.profile.batch_concurrency.clamp(1, 16)
-                ));
-                let deletion_enabled = eligible_indices
-                    .iter()
-                    .any(|index| self.bulk_jobs[*index].form.profile.delete2);
+                ui.label(format!("Worker concurrency: {}", summary.concurrency));
                 ui.label(
                     RichText::new(format!(
                         "Destination deletion: {}",
-                        if deletion_enabled { "ENABLED ⚠" } else { "disabled" }
+                        if summary.deletion_enabled {
+                            "ENABLED ⚠"
+                        } else {
+                            "disabled"
+                        }
                     ))
-                    .color(if deletion_enabled { ALERT } else { MUTED }),
+                    .color(if summary.deletion_enabled { ALERT } else { MUTED }),
                 );
-                ui.label(format!("Scope: {}.", self.bulk_retry_scope.label()));
+                ui.label(format!("Scope: {}.", summary.scope.label()));
                 ui.label("Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.");
                 ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(MUTED));
                 ui.horizontal(|ui| {
@@ -6722,7 +6748,7 @@ impl App {
                     }
                     if ui
                         .add_enabled(
-                            durable_state_error.is_none() && selected > 0,
+                            summary.durable_state_error.is_none() && summary.eligible_count > 0,
                             egui::Button::new(
                                 RichText::new("I understand — start batch").color(Color32::WHITE),
                             )
@@ -6737,6 +6763,9 @@ impl App {
                 });
             });
         self.bulk_live_confirm_open = open && !close;
+        if !self.bulk_live_confirm_open {
+            self.bulk_confirmation_summary = None;
+        }
     }
     fn advanced_dialog(&mut self, ctx: &egui::Context) {
         if !self.advanced_open {
