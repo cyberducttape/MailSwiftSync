@@ -16,6 +16,11 @@ mod runner;
 mod ui;
 mod verification;
 
+#[cfg(test)]
+use controller::batch_admission::canonical_destination_identity;
+use controller::batch_admission::{
+    apply_keyring_id, duplicate_destination, matches_queue, selection_value,
+};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkRetryScope, BulkStateSet,
     LiveAuthProof, RunKind, SingleRunWorkerSpec, is_verified_terminal_state,
@@ -1492,100 +1497,8 @@ struct PendingSheetImport {
 
 use bulk_import::{BulkImportResult, BulkJob};
 
-fn bulk_selection_value(
-    jobs: &[BulkJob],
-    selected_ids: &HashSet<String>,
-    job_ids: &[String],
-) -> serde_json::Value {
-    let rows = jobs
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| {
-            selected_ids.is_empty()
-                || job_ids
-                    .get(*index)
-                    .is_some_and(|job_id| selected_ids.contains(job_id))
-        })
-        .map(|(_, job)| {
-            serde_json::json!({
-                "label": job.label,
-                "source_host": job.form.profile.source_host,
-                "source_user": job.form.profile.source_user,
-                "destination_host": job.form.profile.destination_host,
-                "destination_user": job.form.profile.destination_user,
-                "state": display_state_key(&job.state),
-            })
-        })
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "format": "mailswiftsync-batch-selection",
-        "version": 1,
-        "selected_rows": rows,
-        "note": "This handoff intentionally excludes passwords, keyring references, extra options, and engine credentials. It is a review/retry scope, not an executable migration plan."
-    })
-}
-
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
 type PendingDbEvent = (String, String, String, String);
-
-fn canonical_destination_identity(profile: &Profile) -> Result<String, String> {
-    endpoint::canonical_destination_identity(
-        &profile.destination_user,
-        &profile.destination_host,
-        effective_destination_tls(&profile.destination_tls),
-        &profile.destination_port,
-    )
-    .map_err(|error| format!("Invalid destination endpoint: {error}"))
-}
-
-fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Result<Option<String>, String> {
-    let mut destinations = HashSet::new();
-    for (index, job) in jobs.iter().enumerate() {
-        let key = canonical_destination_identity(&job.form.profile)?;
-        if !destinations.insert(key) {
-            return Ok(Some(format!(
-                "Mailbox {} targets a destination mailbox already used by another batch row; concurrent writes to one mailbox are blocked.",
-                index + 1
-            )));
-        }
-    }
-    Ok(None)
-}
-
-fn durable_batch_matches_queue(
-    stored: &[core::MailboxJob],
-    desired: &[(String, String, String)],
-) -> bool {
-    stored.len() == desired.len()
-        && stored.iter().zip(desired.iter()).all(
-            |(stored, (source_mailbox, destination_mailbox, config))| {
-                stored.source_mailbox == *source_mailbox
-                    && stored.destination_mailbox == *destination_mailbox
-                    && stored.config.as_deref() == Some(config.as_str())
-            },
-        )
-}
-
-fn apply_keyring_id_to_jobs(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {
-    let mut applied = 0;
-    for job in jobs {
-        let password_empty = if source {
-            job.form.source_password.is_empty()
-        } else {
-            job.form.destination_password.is_empty()
-        };
-        let credential_id = if source {
-            &mut job.form.profile.source_credential_id
-        } else {
-            &mut job.form.profile.destination_credential_id
-        };
-        if password_empty && credential_id.trim().is_empty() {
-            *credential_id = id.to_owned();
-            applied += 1;
-        }
-    }
-    applied
-}
 
 fn preferred_project_id<'a>(
     active_run_project: Option<&'a str>,
@@ -3858,8 +3771,7 @@ impl App {
         if self.bulk_jobs.is_empty() {
             return Err("The batch queue has no mailbox rows to export.".into());
         }
-        let value =
-            bulk_selection_value(&self.bulk_jobs, &self.bulk_selected_ids, &self.bulk_job_ids);
+        let value = selection_value(&self.bulk_jobs, &self.bulk_selected_ids, &self.bulk_job_ids);
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-batch-selection.json")
             .save_file()
@@ -4849,7 +4761,7 @@ impl App {
             );
             return;
         }
-        let applied = apply_keyring_id_to_jobs(&mut self.bulk_jobs, &value, source);
+        let applied = apply_keyring_id(&mut self.bulk_jobs, &value, source);
         self.bulk_message = format!(
             "Applied the {} keyring ID to {applied} row(s) without a credential reference.",
             if source { "source" } else { "destination" }
@@ -5043,7 +4955,7 @@ impl App {
             return;
         }
         if live {
-            match duplicate_bulk_destination(&jobs) {
+            match duplicate_destination(&jobs) {
                 Ok(Some(error)) => {
                     self.bulk_message = error;
                     return;
@@ -5086,7 +4998,7 @@ impl App {
         };
         let reusable_project = if let Some(project_id) = self.bulk_project_id.clone() {
             match self.store.mailboxes(&project_id) {
-                Ok(stored) if durable_batch_matches_queue(&stored, &mailboxes) => Some(project_id),
+                Ok(stored) if matches_queue(&stored, &mailboxes) => Some(project_id),
                 Ok(_) => None,
                 Err(error) => {
                     self.bulk_message = format!(
@@ -9305,7 +9217,7 @@ mod tests {
             form,
             state: "failed".into(),
         }];
-        let value = bulk_selection_value(&jobs, &HashSet::new(), &[]);
+        let value = selection_value(&jobs, &HashSet::new(), &[]);
         let text = serde_json::to_string(&value).unwrap();
         assert!(text.contains("source@example"));
         assert!(text.contains("failed"));
@@ -9388,10 +9300,7 @@ mod tests {
             state: "Ready".into(),
         };
         let mut jobs = vec![with_password, with_reference, empty];
-        assert_eq!(
-            apply_keyring_id_to_jobs(&mut jobs, "shared-source", true),
-            1
-        );
+        assert_eq!(apply_keyring_id(&mut jobs, "shared-source", true), 1);
         assert!(jobs[0].form.profile.source_credential_id.is_empty());
         assert_eq!(jobs[1].form.profile.source_credential_id, "existing");
         assert_eq!(jobs[2].form.profile.source_credential_id, "shared-source");
@@ -9631,7 +9540,7 @@ mod tests {
                 state: "Ready".into(),
             },
         ];
-        assert!(duplicate_bulk_destination(&jobs).unwrap().is_some());
+        assert!(duplicate_destination(&jobs).unwrap().is_some());
     }
 
     #[test]
@@ -9653,7 +9562,7 @@ mod tests {
                 state: "Ready".into(),
             },
         ];
-        assert!(duplicate_bulk_destination(&jobs).unwrap().is_some());
+        assert!(duplicate_destination(&jobs).unwrap().is_some());
     }
 
     #[test]
@@ -9676,7 +9585,7 @@ mod tests {
                 state: "Ready".into(),
             },
         ];
-        assert!(duplicate_bulk_destination(&jobs).unwrap().is_none());
+        assert!(duplicate_destination(&jobs).unwrap().is_none());
         assert_eq!(
             canonical_destination_identity(&jobs[0].form.profile).unwrap(),
             "endpoint:mail.example:143:user@example"
@@ -9693,7 +9602,7 @@ mod tests {
             form,
             state: "Ready".into(),
         }];
-        assert!(duplicate_bulk_destination(&jobs).is_err());
+        assert!(duplicate_destination(&jobs).is_err());
     }
 
     #[test]
@@ -9734,8 +9643,8 @@ mod tests {
             "engine = 'imapsync'".into(),
         )];
 
-        assert!(durable_batch_matches_queue(&stored, &same));
-        assert!(!durable_batch_matches_queue(&stored, &edited));
+        assert!(matches_queue(&stored, &same));
+        assert!(!matches_queue(&stored, &edited));
     }
 
     #[test]

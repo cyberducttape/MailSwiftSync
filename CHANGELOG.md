@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved batch admission policy—destination identity checks, queue matching,
+  keyring application, and sanitized selection export—into
+  `controller::batch_admission` for reuse outside the egui shell.
 - Moved CSV/XLS/XLSX validation, worksheet selection, credential-safe row
   conversion, and import limits into the dedicated `bulk_import` module;
   `App` now owns only import scheduling and queue presentation.

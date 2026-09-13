@@ -1,6 +1,7 @@
 //! Execution-controller domain types.
 
 mod batch;
+pub(crate) mod batch_admission;
 mod orchestrator;
 mod run;
 
