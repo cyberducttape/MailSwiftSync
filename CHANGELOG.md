@@ -19,6 +19,9 @@ All notable changes to MailSwiftSync are documented here.
 - Release archives now include installation guidance, the first-launch guide,
   README, and license alongside the binary so operators know to install the
   selected migration engine before starting MailSwiftSync.
+- Moved execution ownership and live-authentication proof types into
+  `src/controller/`, reducing the controller domain embedded directly in the
+  egui application without changing admission or recovery behavior.
 
 - Added separate dark and light semantic UI palettes with high-contrast
   primary, secondary, informational, success, warning, danger, link, border,

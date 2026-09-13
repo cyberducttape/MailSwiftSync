@@ -1,3 +1,4 @@
+mod controller;
 mod core;
 mod credentials;
 mod endpoint;
@@ -7,6 +8,7 @@ mod reports;
 mod ui;
 mod verification;
 
+use controller::{ActiveRunContext, LiveAuthProof, RunKind};
 use credentials::{
     CleanupGuard, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
     restrict_directory_permissions, restrict_file_permissions, secret_runtime_base,
@@ -2166,67 +2168,6 @@ enum WorkspaceView {
     Activity,
     Verification,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RunKind {
-    Single,
-    Batch,
-}
-#[derive(Clone)]
-struct ActiveRunContext {
-    run_id: String,
-    project_id: String,
-    job_id: Option<String>,
-    batch_job_ids: Vec<String>,
-    batch_child_run_ids: Vec<String>,
-    batch_child_indices: HashMap<String, usize>,
-    batch_plan_fingerprints: Vec<String>,
-    kind: RunKind,
-    dry_run: bool,
-    engine: core::Engine,
-    plan_fingerprint: String,
-    credential_fingerprint: String,
-}
-
-impl ActiveRunContext {
-    fn batch_child_index(&self, job_id: &str, child_run_id: &str) -> Option<usize> {
-        let index = self.batch_child_indices.get(child_run_id).copied()?;
-        (self.batch_job_ids.get(index).map(String::as_str) == Some(job_id)
-            && self.batch_child_run_ids.get(index).map(String::as_str) == Some(child_run_id))
-        .then_some(index)
-    }
-
-    fn owns_batch_child(&self, parent_run_id: &str, child_run_id: &str, job_id: &str) -> bool {
-        matches!(self.kind, RunKind::Batch)
-            && self.run_id == parent_run_id
-            && self.batch_child_index(job_id, child_run_id).is_some()
-    }
-
-    fn owns_process(&self, process_run_id: &str, job_id: &str) -> bool {
-        if self.run_id == process_run_id {
-            return matches!(self.kind, RunKind::Single) && self.job_id.as_deref() == Some(job_id);
-        }
-        matches!(self.kind, RunKind::Batch)
-            && self.batch_child_index(job_id, process_run_id).is_some()
-    }
-}
-
-/// Proof that the credentials were freshly authenticated for the exact plan
-/// that is about to be executed.  Keeping this named (rather than as a tuple)
-/// makes it harder to accidentally compare the two digests in the wrong
-/// order when the live-admission path evolves.
-#[derive(Clone, PartialEq, Eq)]
-struct LiveAuthProof {
-    plan_fingerprint: String,
-    credential_fingerprint: String,
-}
-
-impl LiveAuthProof {
-    fn matches(&self, plan_fingerprint: &str, credential_fingerprint: &str) -> bool {
-        self.plan_fingerprint == plan_fingerprint
-            && self.credential_fingerprint == credential_fingerprint
-    }
-}
-
 struct App {
     form: Form,
     output: VecDeque<String>,
