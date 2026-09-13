@@ -3867,6 +3867,52 @@ impl App {
                 }
             }
             let selected_project = self.active_project_id().map(str::to_owned);
+            if let Some(project_id) = selected_project.as_deref()
+                && let Ok(jobs) = self.store.mailboxes(project_id)
+            {
+                let verified = jobs.iter().filter(|job| job.state == "verified").count();
+                let review = jobs.iter().filter(|job| needs_operator_review(&job.state)).count();
+                ui.separator();
+                ui.heading("Mailbox evidence");
+                ui.label(format!(
+                    "{verified} of {} verified · {review} require review",
+                    jobs.len()
+                ));
+                egui::ScrollArea::vertical()
+                    .id_salt("verification_mailbox_list")
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("verification_mailboxes")
+                            .striped(true)
+                            .min_col_width(140.0)
+                            .show(ui, |ui| {
+                                ui.strong("Mailbox");
+                                ui.strong("Evidence");
+                                ui.strong("Result");
+                                ui.end_row();
+                                for job in jobs {
+                                    let evidence = self.store.evidence(&job.id).ok().flatten();
+                                    let evidence_label = evidence
+                                        .as_ref()
+                                        .map(|value| value.evidence_level())
+                                        .unwrap_or("No evidence");
+                                    let (badge, color) = job_state_badge(&job.state);
+                                    if ui
+                                        .selectable_label(
+                                            self.job_id.as_deref() == Some(job.id.as_str()),
+                                            &job.destination_mailbox,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.job_id = Some(job.id.clone());
+                                    }
+                                    ui.label(evidence_label);
+                                    ui.label(RichText::new(badge).color(color));
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            }
             let selected_job = self.job_id.clone().filter(|job| {
                 self.store
                     .project_id_for_mailbox(job)
