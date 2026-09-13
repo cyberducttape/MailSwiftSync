@@ -608,15 +608,24 @@ impl Form {
         self.extra_options_valid()?;
         Ok(())
     }
+    #[cfg(test)]
     fn args(&self, redact: bool) -> Vec<String> {
         self.args_with_throttle_divisor(redact, 1)
     }
     fn args_with_throttle_divisor(&self, redact: bool, throttle_divisor: usize) -> Vec<String> {
+        self.args_with_throttle_divisor_and_mode(redact, throttle_divisor, self.dry_run)
+    }
+    fn args_with_throttle_divisor_and_mode(
+        &self,
+        redact: bool,
+        throttle_divisor: usize,
+        dry_run: bool,
+    ) -> Vec<String> {
         engine::imapsync_args(
             &self.profile,
             self.source_password.as_str(),
             self.destination_password.as_str(),
-            self.dry_run,
+            dry_run,
             redact,
             throttle_divisor,
         )
@@ -692,10 +701,8 @@ impl Form {
     /// option, endpoint, engine, mapping, or credential reference invalidates
     /// an earlier preflight. Password bytes are intentionally excluded.
     fn plan_fingerprint(&self) -> String {
-        let mut planned = self.clone();
-        planned.dry_run = false;
-        let (executable, mut args) = planned.command(true);
-        if planned.engine() == core::Engine::ImapSync {
+        let (executable, mut args) = self.command_with_checkpoint_and_mode(true, None, false);
+        if self.engine() == core::Engine::ImapSync {
             remove_option(&mut args, "--password1");
             remove_option(&mut args, "--password2");
         }
@@ -703,9 +710,9 @@ impl Form {
             "{}\n{}\ncredential-source1={}\ncredential-source2={}\ninsecure-source-transport-ack={}",
             executable,
             args.join("\u{1f}"),
-            planned.profile.source_credential_id.trim(),
-            planned.profile.destination_credential_id.trim(),
-            planned.profile.allow_insecure_source_transport,
+            self.profile.source_credential_id.trim(),
+            self.profile.destination_credential_id.trim(),
+            self.profile.allow_insecure_source_transport,
         )
     }
 
@@ -798,8 +805,19 @@ impl Form {
         redact: bool,
         checkpoint: Option<&str>,
     ) -> (String, Vec<String>) {
+        self.command_with_checkpoint_and_mode(redact, checkpoint, self.dry_run)
+    }
+    fn command_with_checkpoint_and_mode(
+        &self,
+        redact: bool,
+        checkpoint: Option<&str>,
+        dry_run: bool,
+    ) -> (String, Vec<String>) {
         if self.engine() != core::Engine::Dovecot {
-            return (self.profile.imapsync_path.clone(), self.args(redact));
+            return (
+                self.profile.imapsync_path.clone(),
+                self.args_with_throttle_divisor_and_mode(redact, 1, dry_run),
+            );
         }
         let password = if self.local_doveadm() {
             "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD"
@@ -843,7 +861,7 @@ impl Form {
         } else {
             args.extend(["-o".into(), format!("imapc_port={source_port}")]);
         }
-        if self.dry_run {
+        if dry_run {
             args.extend([
                 "-o".into(),
                 "mail_driver=imapc".into(),
