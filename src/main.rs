@@ -8689,6 +8689,21 @@ impl FailureClass {
             Self::Unknown => core::AttentionReason::Unknown,
         }
     }
+
+    fn parse_label(label: &str) -> Option<Self> {
+        Some(match label {
+            "cancelled" => Self::Cancellation,
+            "authentication" => Self::Authentication,
+            "quota" => Self::Quota,
+            "capacity" => Self::Capacity,
+            "transport" => Self::Transport,
+            "configuration" => Self::Configuration,
+            "message" => Self::Message,
+            "verification" => Self::Verification,
+            "unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
 }
 
 fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap<String, usize> {
@@ -8700,6 +8715,17 @@ fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap<String, us
 }
 
 fn classify_failure(error: &str) -> FailureClass {
+    // Controller-generated failures carry a stable machine-readable class.
+    // Prefer it over the diagnostic prose: retry and terminal-state policy
+    // must not change because an engine happened to mention another keyword.
+    if let Some(class) = error
+        .strip_prefix("[attention_reason=")
+        .and_then(|value| value.split_once("] [class="))
+        .and_then(|(_, value)| value.split_once(']'))
+        .and_then(|(label, _)| FailureClass::parse_label(label))
+    {
+        return class;
+    }
     let error = error.to_ascii_lowercase();
     if ["cancelled", "canceled", "operator cancellation"]
         .iter()
@@ -11029,6 +11055,16 @@ mod tests {
         assert_eq!(
             classified_failure_detail("OVERQUOTA"),
             "[attention_reason=capacity_limited] [class=quota] OVERQUOTA"
+        );
+        assert_eq!(
+            classify_failure(
+                "[attention_reason=transport_failed] [class=transport] authentication failed"
+            ),
+            FailureClass::Transport
+        );
+        assert_eq!(
+            classify_failure("[attention_reason=unknown] [class=not-a-class] quota exceeded"),
+            FailureClass::Quota
         );
     }
 
