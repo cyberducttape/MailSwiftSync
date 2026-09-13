@@ -391,6 +391,31 @@ pub struct VerificationAcceptance {
     pub accepted_at: String,
 }
 
+/// Read model used by forensic and customer proof exports. It deliberately
+/// gathers the related mailbox, acceptance, evidence, run, and engine-version
+/// rows in a small fixed number of queries so large projects do not turn
+/// report generation into a per-mailbox/per-run N+1 workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportMailboxSnapshot {
+    pub job: MailboxJob,
+    pub attention_reason: Option<AttentionReason>,
+    pub acceptance: Option<VerificationAcceptance>,
+    pub evidence: Option<(String, MailboxEvidence, Option<String>)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportRunSnapshot {
+    pub run: RunSummary,
+    pub engine_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectReportSnapshot {
+    pub project: Project,
+    pub mailboxes: Vec<ReportMailboxSnapshot>,
+    pub runs: Vec<ReportRunSnapshot>,
+}
+
 /// The strongest claim supported by the current verifier adapter. This is a
 /// typed interpretation of the legacy durable `authoritative` bit; keeping
 /// the interpretation here prevents reports and UI code from inventing
@@ -2519,16 +2544,92 @@ impl StateStore {
             .collect()
     }
 
-    /// Return the complete project run manifest for audit exports. UI activity
-    /// views should continue using `recent_runs`; proof artifacts must not
-    /// silently omit older mailbox children from a large batch.
-    pub fn all_runs(&self, project_id: &str) -> rusqlite::Result<Vec<RunSummary>> {
+    pub fn project_report_snapshot(
+        &self,
+        project_id: &str,
+    ) -> rusqlite::Result<Option<ProjectReportSnapshot>> {
+        let Some(project) = self.project(project_id)? else {
+            return Ok(None);
+        };
+
+        let mut jobs = Vec::new();
+        let mut attention_reasons = HashMap::new();
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at ASC, rowid ASC",
+            "SELECT id,source_mailbox,destination_mailbox,state,config,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
         )?;
-        statement
-            .query_map([project_id], |row| {
-                Ok(RunSummary {
+        for row in statement.query_map([project_id], |row| {
+            let raw_reason: Option<String> = row.get(5)?;
+            Ok((
+                MailboxJob {
+                    id: row.get(0)?,
+                    source_mailbox: row.get(1)?,
+                    destination_mailbox: row.get(2)?,
+                    state: row.get(3)?,
+                    config: row.get(4)?,
+                },
+                raw_reason,
+            ))
+        })? {
+            let (job, raw_reason) = row?;
+            attention_reasons.insert(
+                job.id.clone(),
+                raw_reason.map(|reason| {
+                    AttentionReason::parse(&reason).unwrap_or(AttentionReason::Unknown)
+                }),
+            );
+            jobs.push(job);
+        }
+
+        let mut acceptances = HashMap::new();
+        let mut acceptance_statement = self.connection.prepare(
+            "SELECT va.job_id,va.run_id,va.operator,va.reason,va.accepted_at FROM verification_acceptances va JOIN mailbox_jobs j ON j.id=va.job_id WHERE j.project_id=?1 ORDER BY va.id ASC",
+        )?;
+        for row in acceptance_statement.query_map([project_id], |row| {
+            Ok(VerificationAcceptance {
+                job_id: row.get(0)?,
+                run_id: row.get(1)?,
+                operator: row.get(2)?,
+                reason: row.get(3)?,
+                accepted_at: row.get(4)?,
+            })
+        })? {
+            let acceptance = row?;
+            acceptances.insert(acceptance.job_id.clone(), acceptance);
+        }
+
+        let mut evidence = HashMap::new();
+        let mut evidence_statement = self.connection.prepare(
+            "SELECT eh.job_id,eh.run_id,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 ORDER BY eh.id ASC",
+        )?;
+        for row in evidence_statement.query_map([project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                MailboxEvidence {
+                    source_messages: row.get(2)?,
+                    destination_messages: row.get(3)?,
+                    source_bytes: row.get(4)?,
+                    destination_bytes: row.get(5)?,
+                    unmatched_messages: row.get(6)?,
+                    failed_messages: row.get(7)?,
+                    source_folders: row.get(8)?,
+                    destination_folders: row.get(9)?,
+                    authoritative: row.get::<_, i64>(10)? != 0,
+                },
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(11)?,
+            ))
+        })? {
+            let (job_id, value, run_id, plan_snapshot) = row?;
+            evidence.insert(job_id, (run_id, value, plan_snapshot));
+        }
+
+        let mut runs = Vec::new();
+        let mut run_statement = self.connection.prepare(
+            "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at ASC,r.rowid ASC",
+        )?;
+        for row in run_statement.query_map([project_id], |row| {
+            Ok(ReportRunSnapshot {
+                run: RunSummary {
                     id: row.get(0)?,
                     job_id: row.get(1)?,
                     parent_run_id: row.get(2)?,
@@ -2539,9 +2640,32 @@ impl StateStore {
                     started_at: row.get(7)?,
                     finished_at: row.get(8)?,
                     detail: row.get(9)?,
-                })
-            })?
-            .collect()
+                },
+                engine_version: row.get(10)?,
+            })
+        })? {
+            runs.push(row?);
+        }
+
+        let mailboxes = jobs
+            .into_iter()
+            .map(|job| {
+                let attention_reason = attention_reasons.remove(&job.id).flatten();
+                let acceptance = acceptances.remove(&job.id);
+                let evidence = evidence.remove(&job.id);
+                ReportMailboxSnapshot {
+                    job,
+                    attention_reason,
+                    acceptance,
+                    evidence,
+                }
+            })
+            .collect();
+        Ok(Some(ProjectReportSnapshot {
+            project,
+            mailboxes,
+            runs,
+        }))
     }
 
     pub fn recent_run_list(
@@ -4374,6 +4498,31 @@ mod tests {
         assert_eq!(run.id, "run-audit");
         assert_eq!(run.status, "completed");
         assert!(run.finished_at.is_some());
+    }
+
+    #[test]
+    fn project_report_snapshot_loads_related_rows_as_one_read_model() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("report-snapshot", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.insert_run_for_test(&project.id, Some(&job), "run-report", "imapsync")
+            .unwrap();
+        db.record_engine_version("run-report", "imapsync 2.300")
+            .unwrap();
+        db.finish_run("run-report", "completed", "ok").unwrap();
+
+        let snapshot = db.project_report_snapshot(&project.id).unwrap().unwrap();
+        assert_eq!(snapshot.mailboxes.len(), 1);
+        assert_eq!(snapshot.runs.len(), 1);
+        assert_eq!(
+            snapshot.runs[0].engine_version.as_deref(),
+            Some("imapsync 2.300")
+        );
+        assert_eq!(snapshot.mailboxes[0].job.id, job);
     }
 
     #[test]

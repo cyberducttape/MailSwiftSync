@@ -4296,33 +4296,33 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        let project = self
+        let snapshot = self
             .store
-            .project(project_id)
+            .project_report_snapshot(project_id)
             .map_err(|e| e.to_string())?
             .ok_or("The durable migration project no longer exists.")?;
-        let jobs = self
-            .store
-            .mailboxes(project_id)
-            .map_err(|e| e.to_string())?;
-        if jobs.is_empty() {
+        if snapshot.mailboxes.is_empty() {
             return Err("The project has no mailbox jobs to report.".into());
         }
-        let runs = self
-            .store
-            .recent_runs(project_id, 20)
-            .map_err(|e| e.to_string())?;
+        let project = snapshot.project.clone();
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-project-report.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
-        let verified = jobs
+        let verified = snapshot
+            .mailboxes
             .iter()
-            .filter(|job| matches!(job.state.as_str(), "verified" | "verified_with_exceptions"))
+            .filter(|mailbox| {
+                matches!(
+                    mailbox.job.state.as_str(),
+                    "verified" | "verified_with_exceptions"
+                )
+            })
             .count();
-        let attention = jobs
+        let attention = snapshot
+            .mailboxes
             .iter()
-            .filter(|job| needs_operator_review(&job.state))
+            .filter(|mailbox| needs_operator_review(&mailbox.job.state))
             .count();
         let mut report = format!(
             "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Attention reason | Recommended action | Exception acceptance | Evidence run | Evidence | Evidence digest | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|\n",
@@ -4331,19 +4331,14 @@ impl App {
             markdown_escape(&project.source_endpoint),
             markdown_escape(&project.destination_endpoint),
             project.phase,
-            jobs.len(),
+            snapshot.mailboxes.len(),
             verified,
             attention,
         );
-        for job in jobs {
-            let attention_reason = self
-                .store
-                .mailbox_attention_reason(&job.id)
-                .map_err(|e| e.to_string())?;
-            let acceptance = self
-                .store
-                .latest_verification_acceptance(&job.id)
-                .map_err(|e| e.to_string())?;
+        for mailbox in snapshot.mailboxes {
+            let job = mailbox.job;
+            let attention_reason = mailbox.attention_reason;
+            let acceptance = mailbox.acceptance;
             let acceptance_summary = acceptance
                 .as_ref()
                 .map(|value| format!("{}: {}", value.operator, value.reason))
@@ -4352,11 +4347,8 @@ impl App {
             let recommended_action = attention_reason
                 .map(|reason| reason.recommended_action())
                 .unwrap_or("—");
-            if let Some((evidence_run_id, evidence)) = self
-                .store
-                .latest_evidence_for_run(&job.id)
-                .map_err(|e| e.to_string())?
-            {
+            if let Some((evidence_run_id, evidence, plan_snapshot)) = mailbox.evidence {
+                let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
                 report.push_str(&format!(
                     "| {} | {} | `{}` | {} | {} | {} | `{}` | {} | `{}` | {} | {} | {} | {} |\n",
                     markdown_escape(&job.source_mailbox),
@@ -4367,16 +4359,7 @@ impl App {
                     markdown_escape(&acceptance_summary),
                     evidence_run_id,
                     evidence.evidence_level(),
-                    evidence_digest(
-                        &evidence_run_id,
-                        &self
-                            .store
-                            .run(&evidence_run_id)
-                            .map_err(|e| e.to_string())?
-                            .ok_or("The evidence run no longer exists.")?
-                            .plan_snapshot,
-                        &evidence,
-                    ),
+                    evidence_digest(&evidence_run_id, &plan_snapshot, &evidence,),
                     evidence.source_messages,
                     evidence.destination_messages,
                     evidence.unmatched_messages,
@@ -4395,11 +4378,11 @@ impl App {
             }
         }
         report.push_str("\n## Recent runs\n\n| Run | Engine | Engine version | Phase at start | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|---|---|\n");
-        for run in runs {
-            let engine_version = self
-                .store
-                .engine_version(&run.id)
-                .map_err(|e| e.to_string())?
+        for report_run in snapshot.runs.iter().rev().take(20) {
+            let run = &report_run.run;
+            let engine_version = report_run
+                .engine_version
+                .clone()
                 .unwrap_or_else(|| "unavailable".into());
             report.push_str(&format!(
                 "| `{}` | {} | {} | `{}` | `{}` | `{}` | {} | {} | {} |\n",
@@ -4410,7 +4393,9 @@ impl App {
                 run.status,
                 plan_snapshot_sha256(&run.plan_snapshot),
                 run.started_at,
-                run.finished_at.unwrap_or_else(|| "in progress".into()),
+                run.finished_at
+                    .clone()
+                    .unwrap_or_else(|| "in progress".into()),
                 markdown_escape(if run.detail.is_empty() {
                     "—"
                 } else {
@@ -4426,44 +4411,27 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        let project = self
+        let snapshot = self
             .store
-            .project(project_id)
+            .project_report_snapshot(project_id)
             .map_err(|e| e.to_string())?
             .ok_or("The durable migration project no longer exists.")?;
-        let jobs = self
-            .store
-            .mailboxes(project_id)
-            .map_err(|e| e.to_string())?;
-        if jobs.is_empty() {
+        if snapshot.mailboxes.is_empty() {
             return Err("The project has no mailbox jobs to report.".into());
         }
-        let runs = self.store.all_runs(project_id).map_err(|e| e.to_string())?;
-        let mailboxes = jobs
+        let project = snapshot.project;
+        let mailboxes = snapshot
+            .mailboxes
             .into_iter()
-            .map(|job| {
-                let attention_reason = self
-                    .store
-                    .mailbox_attention_reason(&job.id)
-                    .map_err(|e| e.to_string())?;
-                let acceptance = self
-                    .store
-                    .latest_verification_acceptance(&job.id)
-                    .map_err(|e| e.to_string())?;
-                let evidence = self
-                    .store
-                    .latest_evidence_for_run(&job.id)
-                    .map_err(|e| e.to_string())?;
-                match evidence {
-                    Some((evidence_run_id, evidence)) => {
-                        let evidence_run = self
-                            .store
-                            .run(&evidence_run_id)
-                            .map_err(|e| e.to_string())?
-                            .ok_or("The evidence run no longer exists.")?;
+            .map(|mailbox| {
+                let job = mailbox.job;
+                let attention_reason = mailbox.attention_reason;
+                match mailbox.evidence {
+                    Some((evidence_run_id, evidence, plan_snapshot)) => {
+                        let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
                         let digest = evidence_digest(
                             &evidence_run_id,
-                            &evidence_run.plan_snapshot,
+                            &plan_snapshot,
                             &evidence,
                         );
                         Ok(serde_json::json!({
@@ -4473,7 +4441,7 @@ impl App {
                             "state": job.state,
                             "attention_reason": attention_reason.map(|reason| reason.as_str()),
                             "recommended_action": attention_reason.map(|reason| reason.recommended_action()),
-                            "verification_acceptance": acceptance,
+                            "verification_acceptance": mailbox.acceptance,
                             "evidence": {
                                 "run_id": evidence_run_id,
                                 "scope": evidence.evidence_scope().label(),
@@ -4498,31 +4466,29 @@ impl App {
                         "state": job.state,
                         "attention_reason": attention_reason.map(|reason| reason.as_str()),
                         "recommended_action": attention_reason.map(|reason| reason.recommended_action()),
-                        "verification_acceptance": acceptance,
+                        "verification_acceptance": mailbox.acceptance,
                         "evidence": null
                     })),
                 }
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let run_values = runs
+        let run_values = snapshot
+            .runs
             .into_iter()
             .map(|run| {
-                let engine_version = self
-                    .store
-                    .engine_version(&run.id)
-                    .map_err(|e| e.to_string())?;
+                let value = run.run;
                 Ok(serde_json::json!({
-                    "id": run.id,
-                    "job_id": run.job_id,
-                    "parent_run_id": run.parent_run_id,
-                    "engine": run.engine,
-                    "engine_version": engine_version,
-                    "phase_at_start": run.phase_at_start,
-                    "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
-                    "status": run.status,
-                    "started_at": run.started_at,
-                    "finished_at": run.finished_at,
-                    "detail": run.detail,
+                    "id": value.id,
+                    "job_id": value.job_id,
+                    "parent_run_id": value.parent_run_id,
+                    "engine": value.engine,
+                    "engine_version": run.engine_version,
+                    "phase_at_start": value.phase_at_start,
+                    "plan_snapshot_sha256": plan_snapshot_sha256(&value.plan_snapshot),
+                    "status": value.status,
+                    "started_at": value.started_at,
+                    "finished_at": value.finished_at,
+                    "detail": value.detail,
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -4570,42 +4536,29 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        let project = self
+        let snapshot = self
             .store
-            .project(project_id)
+            .project_report_snapshot(project_id)
             .map_err(|e| e.to_string())?
             .ok_or("The durable migration project no longer exists.")?;
-        let jobs = self
-            .store
-            .mailboxes(project_id)
-            .map_err(|e| e.to_string())?;
-        if jobs.is_empty() {
+        if snapshot.mailboxes.is_empty() {
             return Err("The project has no mailbox jobs to report.".into());
         }
-        let runs = self.store.all_runs(project_id).map_err(|e| e.to_string())?;
-        let mailboxes = jobs
+        let project = snapshot.project;
+        let mailboxes = snapshot
+            .mailboxes
             .into_iter()
-            .map(|job| {
-                let acceptance = self
-                    .store
-                    .latest_verification_acceptance(&job.id)
-                    .map_err(|e| e.to_string())?;
-                let evidence = self
-                    .store
-                    .latest_evidence_for_run(&job.id)
-                    .map_err(|e| e.to_string())?;
-                let evidence = match evidence {
-                    Some((run_id, value)) => {
-                        let run = self
-                            .store
-                            .run(&run_id)
-                            .map_err(|e| e.to_string())?
+            .map(|mailbox| {
+                let job = mailbox.job;
+                let evidence = match mailbox.evidence {
+                    Some((run_id, value, plan_snapshot)) => {
+                        let plan_snapshot = plan_snapshot
                             .ok_or("The customer proof refers to a missing evidence run.")?;
                         Some(serde_json::json!({
                             "run_id": run_id,
                             "scope": value.evidence_scope().label(),
                             "evidence_level": value.evidence_level(),
-                            "evidence_digest": evidence_digest(&run.id, &run.plan_snapshot, &value),
+                            "evidence_digest": evidence_digest(&run_id, &plan_snapshot, &value),
                             "source_folders": value.source_folders,
                             "destination_folders": value.destination_folders,
                             "source_messages": value.source_messages,
@@ -4622,7 +4575,7 @@ impl App {
                     "source_mailbox": job.source_mailbox,
                     "destination_mailbox": job.destination_mailbox,
                     "state": job.state,
-                    "verification_acceptance": acceptance.map(|value| serde_json::json!({
+                    "verification_acceptance": mailbox.acceptance.map(|value| serde_json::json!({
                         "run_id": value.run_id,
                         "operator": value.operator,
                         "reason": value.reason,
@@ -4632,21 +4585,19 @@ impl App {
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let run_manifest = runs
+        let run_manifest = snapshot
+            .runs
             .into_iter()
             .map(|run| {
-                let engine_version = self
-                    .store
-                    .engine_version(&run.id)
-                    .map_err(|e| e.to_string())?;
+                let value = run.run;
                 Ok(serde_json::json!({
-                    "run_id": run.id,
-                    "engine": run.engine,
-                    "engine_version": engine_version,
-                    "phase_at_start": run.phase_at_start,
-                    "status": run.status,
-                    "started_at": run.started_at,
-                    "finished_at": run.finished_at,
+                    "run_id": value.id,
+                    "engine": value.engine,
+                    "engine_version": run.engine_version,
+                    "phase_at_start": value.phase_at_start,
+                    "status": value.status,
+                    "started_at": value.started_at,
+                    "finished_at": value.finished_at,
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
