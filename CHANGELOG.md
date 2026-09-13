@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Unified GUI and durable SQLite destination-account identity canonicalization
+  through the shared endpoint module, including DNS trailing-dot handling,
+  canonical IP literals, transport-derived ports, and mailbox case rules.
 - Corrected the packaged Dovecot integration fixture to use the Dovecot 2.3
   configuration syntax provided by the pinned Debian Bookworm runtime, instead
   of silently testing it with Dovecot 2.4-only configuration keys.

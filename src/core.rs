@@ -12,12 +12,6 @@ use std::{
 use uuid::Uuid;
 
 fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
-    let mailbox_identity = || {
-        format!(
-            "mailbox:{}",
-            destination_mailbox.trim().to_ascii_lowercase()
-        )
-    };
     if let Some(config) = config
         && let Ok(value) = toml::from_str::<toml::Value>(config)
     {
@@ -36,31 +30,19 @@ fn normalized_destination_identity(destination_mailbox: &str, config: Option<&st
                 .get("destination_tls")
                 .and_then(toml::Value::as_str)
                 .unwrap_or("imaps");
-            let default_port = if tls == "starttls" { 143 } else { 993 };
-            let Ok((host, embedded_port)) = crate::endpoint::parts(host, default_port) else {
-                return mailbox_identity();
-            };
-            let port = match value
+            let port = value
                 .get("destination_port")
                 .and_then(toml::Value::as_str)
                 .map(str::trim)
-                .filter(|port| !port.is_empty())
+                .unwrap_or_default();
+            if let Ok(identity) =
+                crate::endpoint::canonical_destination_identity(user, host, tls, port)
             {
-                Some(port) => match port.parse::<u16>() {
-                    Ok(port) if port != 0 => port,
-                    _ => return mailbox_identity(),
-                },
-                None => embedded_port,
-            };
-            return format!(
-                "endpoint:{}:{}:{}",
-                host.to_ascii_lowercase(),
-                port,
-                user.to_ascii_lowercase()
-            );
+                return identity;
+            }
         }
     }
-    mailbox_identity()
+    crate::endpoint::mailbox_identity(destination_mailbox)
 }
 
 const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;

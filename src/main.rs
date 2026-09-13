@@ -2111,32 +2111,13 @@ impl BulkRetryScope {
 }
 
 fn canonical_destination_identity(profile: &Profile) -> Result<String, String> {
-    let destination_tls = effective_destination_tls(&profile.destination_tls);
-    let default_port = default_imap_port(destination_tls);
-    let (host, endpoint_port) = endpoint::parts(&profile.destination_host, default_port)
-        .map_err(|error| format!("Invalid destination endpoint: {error}"))?;
-    let port = if profile.destination_port.trim().is_empty() {
-        endpoint_port
-    } else {
-        profile
-            .destination_port
-            .trim()
-            .parse::<u16>()
-            .map_err(|_| "Destination IMAP port must be a number between 1 and 65535.")?
-    };
-    if port == 0 {
-        return Err("Destination IMAP port must be a number between 1 and 65535.".into());
-    }
-    let canonical_host = match host.parse::<std::net::IpAddr>() {
-        Ok(address) => address.to_string(),
-        Err(_) => host.trim_end_matches('.').to_ascii_lowercase(),
-    };
-    Ok(format!(
-        "{}:{}:{}",
-        canonical_host,
-        port,
-        profile.destination_user.trim()
-    ))
+    endpoint::canonical_destination_identity(
+        &profile.destination_user,
+        &profile.destination_host,
+        effective_destination_tls(&profile.destination_tls),
+        &profile.destination_port,
+    )
+    .map_err(|error| format!("Invalid destination endpoint: {error}"))
 }
 
 fn validate_bulk_import_file(path: &std::path::Path) -> Result<(), String> {
@@ -11362,7 +11343,7 @@ mod tests {
         assert!(duplicate_bulk_destination(&jobs).unwrap().is_none());
         assert_eq!(
             canonical_destination_identity(&jobs[0].form.profile).unwrap(),
-            "mail.example:143:user@example"
+            "endpoint:mail.example:143:user@example"
         );
     }
 
@@ -11393,7 +11374,7 @@ mod tests {
         );
         assert_eq!(
             canonical_destination_identity(&first.profile).unwrap(),
-            "mail.example:993:User@example"
+            "endpoint:mail.example:993:User@example"
         );
     }
 
