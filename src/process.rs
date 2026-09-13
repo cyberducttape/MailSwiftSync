@@ -19,6 +19,12 @@ const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
 const MAX_CAPTURED_OUTPUT_LINES: usize = 8 * 1024;
 const MAX_CAPTURED_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 
+#[derive(Debug)]
+pub(crate) struct CapturedOutput {
+    pub(crate) lines: Vec<String>,
+    pub(crate) truncated: bool,
+}
+
 /// Exclusive ownership of the application state workspace. Recovery must
 /// never run while another MailSwiftSync instance may still own processes.
 #[derive(Debug)]
@@ -53,7 +59,7 @@ pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, S
 pub(crate) fn collect_redacted_lines<R: Read>(
     reader: R,
     secrets: &[String],
-) -> std::io::Result<Vec<String>> {
+) -> std::io::Result<CapturedOutput> {
     let mut lines = Vec::new();
     let mut retained_bytes: usize = 0;
     let mut truncated = false;
@@ -75,7 +81,7 @@ pub(crate) fn collect_redacted_lines<R: Read>(
             truncated = true;
         }
     })?;
-    Ok(lines)
+    Ok(CapturedOutput { lines, truncated })
 }
 
 #[cfg(test)]
@@ -183,10 +189,17 @@ mod tests {
         let input = (0..(MAX_CAPTURED_OUTPUT_LINES + 100))
             .map(|index| format!("line-{index}\n"))
             .collect::<String>();
-        let lines = collect_redacted_lines(std::io::Cursor::new(input), &[]).unwrap();
+        let output = collect_redacted_lines(std::io::Cursor::new(input), &[]).unwrap();
 
-        assert_eq!(lines.len(), MAX_CAPTURED_OUTPUT_LINES + 1);
-        assert!(lines.last().unwrap().contains("diagnostics truncated"));
+        assert_eq!(output.lines.len(), MAX_CAPTURED_OUTPUT_LINES + 1);
+        assert!(
+            output
+                .lines
+                .last()
+                .unwrap()
+                .contains("diagnostics truncated")
+        );
+        assert!(output.truncated);
     }
 
     #[cfg(unix)]

@@ -1433,7 +1433,7 @@ fn run_capture_lines(
     cancel: &AtomicBool,
     secrets: &[String],
     timeout: Duration,
-) -> Result<(ProcessOutcome, Vec<String>), String> {
+) -> Result<(ProcessOutcome, Vec<String>, bool), String> {
     let mut command = Command::new(executable);
     command
         .args(args)
@@ -1474,14 +1474,21 @@ fn run_capture_lines(
         .join()
         .map_err(|_| "stderr reader thread panicked".to_owned())?
         .map_err(|error| format!("stderr reader failed: {error}"));
-    let mut lines = stdout_lines?;
+    let stdout_output = stdout_lines?;
+    let stderr_output = stderr_lines?;
+    let capture_truncated = stdout_output.truncated || stderr_output.truncated;
+    let mut lines = stdout_output.lines;
     lines.extend(
-        stderr_lines?
+        stderr_output
+            .lines
             .into_iter()
             .map(|line| format!("[stderr] {line}")),
     );
     let status = status?;
-    Ok((status, lines))
+    if capture_truncated {
+        lines.push("[diagnostics truncated; semantic evidence is incomplete]".into());
+    }
+    Ok((status, lines, capture_truncated))
 }
 
 fn run_dovecot_destination_preflight(
@@ -1494,7 +1501,7 @@ fn run_dovecot_destination_preflight(
     job_id: &str,
 ) -> Result<(), String> {
     for (index, (executable, args)) in commands.iter().enumerate() {
-        let (status, lines) = run_capture_lines(executable, args, &[], cancel, &[], timeout)?;
+        let (status, lines, _) = run_capture_lines(executable, args, &[], cancel, &[], timeout)?;
         for line in lines {
             let _ = tx.send(Event::RunLine {
                 run_id: run_id.to_owned(),
@@ -1527,7 +1534,7 @@ fn run_dovecot_verification(
 ) -> Result<core::MailboxEvidence, String> {
     let mut reports = Vec::with_capacity(commands.len());
     for (index, (verify_exe, verify_args)) in commands.iter().enumerate() {
-        let (status, report) = run_capture_lines(
+        let (status, report, truncated) = run_capture_lines(
             verify_exe,
             verify_args,
             if index == 0 { verification_env } else { &[] },
@@ -1547,6 +1554,12 @@ fn run_dovecot_verification(
                 "Dovecot verification command {} exited with code {:?}",
                 index + 1,
                 status.exit_code
+            ));
+        }
+        if truncated {
+            return Err(format!(
+                "Dovecot verification command {} exceeded diagnostic capture limits; evidence is incomplete",
+                index + 1
             ));
         }
         reports.push(report);
@@ -5157,13 +5170,21 @@ impl App {
                         job_id,
                         text,
                     } => {
-                        if let Some(run) = active_run.as_ref()
-                            && run.run_id == run_id
-                            && (run.job_id.as_deref() == Some(job_id.as_str())
-                                || run.batch_job_ids.iter().any(|id| id == &job_id))
-                        {
+                        let owns_line = active_run.as_ref().is_some_and(|run| {
+                            if matches!(run.kind, RunKind::Batch) {
+                                run.owns_batch_child(&run.run_id, &run_id, &job_id)
+                            } else {
+                                run.run_id == run_id
+                                    && run.job_id.as_deref() == Some(job_id.as_str())
+                            }
+                        });
+                        if owns_line {
+                            let project_id = active_run
+                                .as_ref()
+                                .map(|run| run.project_id.clone())
+                                .expect("owned output requires an active run");
                             pending_db_events.push((
-                                run.project_id.clone(),
+                                project_id,
                                 run_id,
                                 "run_output".into(),
                                 text.clone(),
@@ -5230,6 +5251,31 @@ impl App {
                         detail,
                         credential_fingerprint,
                     } => {
+                        // Diagnostics are accepted only while a child is
+                        // active/queued. Flush them before the terminal
+                        // transaction so a fast worker cannot deliver
+                        // RunLine(s) and JobFinished in one poll cycle and
+                        // lose the child log to the terminal-state guard.
+                        if !pending_db_events.is_empty() {
+                            let batch = pending_db_events
+                                .iter()
+                                .map(|(_, run_id, kind, detail)| {
+                                    (run_id.as_str(), kind.as_str(), detail.as_str())
+                                })
+                                .collect::<Vec<_>>();
+                            match self.store.record_events_for_runs_batch(&batch) {
+                                Ok(()) => pending_db_events.clear(),
+                                Err(error) => {
+                                    durability_errors.push(format!(
+                                        "persist child diagnostics before completion failed: {error}"
+                                    ));
+                                    // Leave the child running in the ledger;
+                                    // recovery can reconcile it after the
+                                    // operator repairs the durable store.
+                                    continue;
+                                }
+                            }
+                        }
                         if let Some(run) = active_run.as_ref()
                             && matches!(run.kind, RunKind::Batch)
                             && let Some(index) =

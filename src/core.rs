@@ -807,6 +807,14 @@ impl StateStore {
         source: &str,
         destination: &str,
     ) -> rusqlite::Result<String> {
+        let phase: String = self.connection.query_row(
+            "SELECT phase FROM projects WHERE id=?1",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        if phase == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let identity = normalized_destination_identity(destination, None);
         let duplicate: bool = self.connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE project_id=?1 AND (destination_identity=?2 OR (destination_identity='' AND lower(trim(destination_mailbox))=lower(trim(?3)))) )",
@@ -842,11 +850,14 @@ impl StateStore {
         if state == "running" {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let current: String = self.connection.query_row(
-            "SELECT state FROM mailbox_jobs WHERE id=?1",
+        let (current, phase): (String, String) = self.connection.query_row(
+            "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1",
             [job_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        if phase == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         // Verification is owned by the evidence terminal methods below. A
         // generic state setter must not reuse evidence from an older run to
         // manufacture a verified result for a newer one.
@@ -1213,6 +1224,9 @@ impl StateStore {
             params![job_id, project_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        if phase_at_start == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         // A mailbox may never have two active runs. Recovery must first move
         // the previous run to an operator-review state before retrying it.
         if current == "running" || !valid_mailbox_transition(&current, "running") {
@@ -1305,6 +1319,9 @@ impl StateStore {
             [project_id],
             |row| row.get(0),
         )?;
+        if phase_at_start == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let mut destinations = BTreeSet::new();
         for (index, job_id) in job_ids.iter().enumerate() {
             let (current, destination, destination_identity): (String, String, String) = tx.query_row(
@@ -2657,6 +2674,19 @@ mod tests {
         .unwrap();
         assert!(db.all_mailboxes_verified(&project.id).unwrap());
         db.transition(&project.id, Phase::Complete).unwrap();
+
+        // Complete is a durable terminal project state. Reopening must be an
+        // explicit, separately audited operation rather than an incidental
+        // consequence of editing the queue or starting another run.
+        assert!(
+            db.add_mailbox(&project.id, "new-source", "new-destination")
+                .is_err()
+        );
+        assert!(
+            db.begin_run(&project.id, &job, "run-after-complete", "test")
+                .is_err()
+        );
+        assert!(db.set_mailbox_state(&job, "attention").is_err());
     }
 
     #[test]
