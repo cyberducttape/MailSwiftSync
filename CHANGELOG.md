@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved remaining rendered project, mailbox, evidence, and batch-confirmation
+  reads onto the cached workspace snapshot; durable reads now occur during
+  refresh or explicit controller actions rather than egui rendering.
 - Password reveal controls now disable and clear their transient visibility
   state centrally on every locked frame, including when the Plan view is not
   currently visible.

@@ -3341,6 +3341,14 @@ impl App {
         }
     }
 
+    fn cached_report_mailbox(&self, job_id: &str) -> Option<&core::ReportMailboxSnapshot> {
+        self.ui_report
+            .as_ref()?
+            .mailboxes
+            .iter()
+            .find(|mailbox| mailbox.job.id == job_id)
+    }
+
     /// Refresh the database-backed UI read model at a low frequency. egui may
     /// repaint many times per second while a process is producing output;
     /// those repaints must not turn into repeated SQLite reads.
@@ -3380,6 +3388,11 @@ impl App {
                 self.ui_runs = runs;
             }
         }
+    }
+
+    fn refresh_ui_snapshot_now(&mut self) {
+        self.ui_snapshot_refreshed_at = None;
+        self.refresh_ui_snapshot();
     }
 
     fn current_editable_project_id(&self) -> Option<&str> {
@@ -3868,26 +3881,11 @@ impl App {
         ];
         let current = match self.active_project_id() {
             None => core::Phase::Discovery,
-            Some(project_id) => match self.store.project(project_id) {
-                Ok(Some(project)) => project.phase,
-                Ok(None) => core::Phase::Discovery,
-                Err(error) => {
-                    ui.group(|ui| {
-                        ui.label(
-                            RichText::new("DURABLE LIFECYCLE UNAVAILABLE")
-                                .strong()
-                                .color(self.theme_colors().danger),
-                        );
-                        ui.label(format!(
-                            "Could not read the selected project from SQLite: {error}"
-                        ));
-                        ui.label(
-                            "Do not start or retry a migration until durable storage is available.",
-                        );
-                    });
-                    return;
-                }
-            },
+            Some(_) => self
+                .ui_project
+                .as_ref()
+                .map(|project| project.phase)
+                .unwrap_or(core::Phase::Discovery),
         };
         let current_index = phases
             .iter()
@@ -4059,10 +4057,12 @@ impl App {
                 });
             }
         });
-        if let Some(project_id) = self.active_project_id().map(str::to_owned)
-            && let Ok(Some(project)) = self.store.project(&project_id)
-            && project.phase == core::Phase::Complete
+        if let Some(project) = self
+            .ui_project
+            .as_ref()
+            .filter(|project| project.phase == core::Phase::Complete)
         {
+            let project_id = project.id.clone();
             ui.add_space(10.0);
             ui.group(|ui| {
                 ui.heading("Project controls");
@@ -4071,7 +4071,7 @@ impl App {
                     ui.label("Reason");
                     ui.text_edit_singleline(&mut self.reopen_reason);
                     if ui.add_enabled(!self.running() && !self.reopen_reason.trim().is_empty(), egui::Button::new("Reopen project")).clicked() {
-                        self.status = match self.store.reopen_project(&project.id, &self.reopen_reason) {
+                        self.status = match self.store.reopen_project(&project_id, &self.reopen_reason) {
                             Ok(()) => {
                                 self.reopen_reason.clear();
                                 "Project reopened for documented review".into()
@@ -4280,52 +4280,43 @@ impl App {
         ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         if self.workspace_read_only {
-            let Some(project_id) = self.active_project_id().map(str::to_owned) else {
+            if self.active_project_id().is_none() || self.ui_project.is_none() {
                 ui.label("No historical project is selected.");
                 return;
-            };
-            match self.store.mailboxes(&project_id) {
-                Ok(jobs) => {
-                    ui.label(
-                        RichText::new(format!(
-                            "{} durable mailbox record(s) · read-only",
-                            jobs.len()
-                        ))
-                        .strong(),
-                    );
-                    egui::ScrollArea::vertical().max_height(520.0).show_rows(
-                        ui,
-                        32.0,
-                        jobs.len(),
-                        |ui, rows| {
-                            egui::Grid::new("historical_mailboxes")
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    if rows.start == 0 {
-                                        ui.strong("Source");
-                                        ui.strong("Destination");
-                                        ui.strong("State");
-                                        ui.end_row();
-                                    }
-                                    for index in rows {
-                                        let job = &jobs[index];
-                                        ui.label(&job.source_mailbox);
-                                        ui.label(&job.destination_mailbox);
-                                        let (badge, color) = job_state_badge(&job.state, colors);
-                                        ui.label(RichText::new(badge).color(color));
-                                        ui.end_row();
-                                    }
-                                });
-                        },
-                    );
-                }
-                Err(error) => {
-                    ui.label(
-                        RichText::new(format!("Historical mailbox records unavailable: {error}"))
-                            .color(self.theme_colors().danger),
-                    );
-                }
             }
+            let jobs = self.ui_jobs.clone();
+            ui.label(
+                RichText::new(format!(
+                    "{} durable mailbox record(s) · read-only",
+                    jobs.len()
+                ))
+                .strong(),
+            );
+            egui::ScrollArea::vertical().max_height(520.0).show_rows(
+                ui,
+                32.0,
+                jobs.len(),
+                |ui, rows| {
+                    egui::Grid::new("historical_mailboxes")
+                        .striped(true)
+                        .show(ui, |ui| {
+                            if rows.start == 0 {
+                                ui.strong("Source");
+                                ui.strong("Destination");
+                                ui.strong("State");
+                                ui.end_row();
+                            }
+                            for index in rows {
+                                let job = &jobs[index];
+                                ui.label(&job.source_mailbox);
+                                ui.label(&job.destination_mailbox);
+                                let (badge, color) = job_state_badge(&job.state, colors);
+                                ui.label(RichText::new(badge).color(color));
+                                ui.end_row();
+                            }
+                        });
+                },
+            );
             return;
         }
         if self.bulk_jobs.is_empty() {
@@ -4546,25 +4537,19 @@ impl App {
                         });
                         row.col(|ui| {
                             if job.state == "attention" {
-                                match self.store.mailbox_attention_reason(job_id) {
-                                    Ok(Some(reason)) => {
-                                        ui.label(
-                                            RichText::new(reason.recommended_action())
-                                                .color(self.theme_colors().text_secondary),
-                                        );
-                                    }
-                                    Ok(None) => {
-                                        ui.label(
-                                            RichText::new("Inspect durable run detail")
-                                                .color(self.theme_colors().text_secondary),
-                                        );
-                                    }
-                                    Err(_) => {
-                                        ui.label(
-                                            RichText::new("Attention reason unavailable")
-                                                .color(self.theme_colors().danger),
-                                        );
-                                    }
+                                if let Some(reason) = self
+                                    .cached_report_mailbox(job_id)
+                                    .and_then(|mailbox| mailbox.attention_reason.as_ref())
+                                {
+                                    ui.label(
+                                        RichText::new(reason.recommended_action())
+                                            .color(self.theme_colors().text_secondary),
+                                    );
+                                } else {
+                                    ui.label(
+                                        RichText::new("Inspect durable run detail")
+                                            .color(self.theme_colors().text_secondary),
+                                    );
                                 }
                             }
                         });
@@ -5379,19 +5364,19 @@ impl App {
                     }
                 }
             }
-            let mut selection_error = None;
-            let selected_job = self.job_id.clone().filter(|job| {
-                match self.store.project_id_for_mailbox(job) {
-                    Ok(project_id) => project_id == selected_project,
-                    Err(error) => {
-                        selection_error = Some(error.to_string());
-                        false
-                    }
-                }
-            });
-            if let Some(job) = selected_job.as_deref() {
-                match self.store.evidence(job) {
-                    Ok(Some(evidence)) => {
+            let selected_mailbox = self
+                .job_id
+                .as_deref()
+                .and_then(|job_id| self.cached_report_mailbox(job_id))
+                .filter(|_| {
+                    self.ui_report.as_ref().is_some_and(|report| {
+                        selected_project.as_deref() == Some(report.project.id.as_str())
+                    })
+                })
+                .cloned();
+            if let Some(mailbox) = selected_mailbox {
+                match mailbox.evidence.as_ref() {
+                    Some((_, evidence, _)) => {
                         ui.label("Durable mailbox reconciliation");
                         if ui.button("Export verification report…").clicked() {
                             let result = self.export_verification_report();
@@ -5406,11 +5391,10 @@ impl App {
                             ("Evidence level", evidence.evidence_level().into()),
                         ] { ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); }); }
                     }
-                    Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(self.theme_colors().danger)); }
-                    Err(error) => { ui.label(RichText::new(format!("Could not read evidence: {error}")).color(self.theme_colors().danger)); }
+                    None => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(self.theme_colors().danger)); }
                 }
-                match self.store.mailbox_state(job) {
-                    Ok(Some(state)) if state == "verification_difference" => {
+                match mailbox.job.state.as_str() {
+                    "verification_difference" => {
                         ui.separator();
                         ui.heading("Accept residual difference");
                         ui.label(RichText::new("This records an auditable exception; it does not change the underlying evidence or claim exact equality.").color(self.theme_colors().text_secondary));
@@ -5427,7 +5411,7 @@ impl App {
                             match selected_project.as_deref() {
                                 Some(project_id) => match self.store.accept_verification_difference(
                                     project_id,
-                                    job,
+                                    &mailbox.job.id,
                                     &self.verification_exception_operator,
                                     &self.verification_exception_reason,
                                 ) {
@@ -5441,8 +5425,8 @@ impl App {
                             }
                         }
                     }
-                    Ok(Some(state)) if state == "verified_with_exceptions" => {
-                        if let Ok(Some(acceptance)) = self.store.latest_verification_acceptance(job) {
+                    "verified_with_exceptions" => {
+                        if let Some(acceptance) = mailbox.acceptance.as_ref() {
                             ui.separator();
                             ui.label(
                                 RichText::new("Verified with exceptions")
@@ -5452,22 +5436,12 @@ impl App {
                             ui.label(format!("Accepted by {} at {}: {}", acceptance.operator, acceptance.accepted_at, acceptance.reason));
                         }
                     }
-                    Ok(Some(_)) | Ok(None) => {}
-                    Err(error) => {
-                        ui.label(RichText::new(format!("Could not read durable mailbox state: {error}")).color(self.theme_colors().danger));
-                    }
+                    _ => {}
                 }
-            } else if let Some(error) = selection_error {
-                ui.label(
-                    RichText::new(format!(
-                        "The selected mailbox cannot be resolved in durable state: {error}"
-                    ))
-                    .color(self.theme_colors().danger),
-                );
             } else if self.job_id.is_some() && selected_project.is_some() {
                 ui.label(
                     RichText::new(
-                        "The retained single-mailbox selection belongs to another project. Select a mailbox from the current project before viewing or exporting its evidence.",
+                        "The selected mailbox is not present in the cached project snapshot. Refresh the workspace before viewing or exporting its evidence.",
                     )
                     .color(self.theme_colors().danger),
                 );
@@ -5847,6 +5821,10 @@ impl App {
         }
         let live = !self.bulk_dry_run;
         if live && !self.bulk_live_confirmed {
+            // Capture the durable admission facts before opening the dialog;
+            // the dialog itself is presentation-only and must not query
+            // SQLite on every repaint.
+            self.refresh_ui_snapshot_now();
             self.bulk_live_confirm_open = true;
             self.bulk_confirmation_summary = None;
             return;
@@ -8460,17 +8438,17 @@ impl App {
                 .enumerate()
                 .filter_map(|(index, _)| {
                     let job_id = self.bulk_job_ids.get(index)?;
-                    let state = match self.store.mailbox_state(job_id) {
-                        Ok(Some(state)) => state,
-                        Ok(None) => return None,
-                        Err(error) => {
-                            durable_state_error = Some(format!(
-                                "Could not read durable mailbox state for confirmation: {error}"
-                            ));
+                    let state = match self.cached_report_mailbox(job_id) {
+                        Some(mailbox) => mailbox.job.state.as_str(),
+                        None => {
+                            durable_state_error = Some(
+                                "Could not read durable mailbox state for confirmation; refresh the workspace and try again."
+                                    .into(),
+                            );
                             return None;
                         }
                     };
-                    (self.bulk_row_is_selected(index) && self.bulk_retry_scope.includes(&state))
+                    (self.bulk_row_is_selected(index) && self.bulk_retry_scope.includes(state))
                         .then_some(index)
                 })
                 .collect::<HashSet<_>>();
