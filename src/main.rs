@@ -1997,6 +1997,7 @@ struct App {
     live_confirmed: bool,
     live_confirmation_plan: Option<String>,
     durability_error: bool,
+    terminal_commit_retry_pending: bool,
     stop_confirm_open: bool,
     keyring_open: bool,
     active_view: WorkspaceView,
@@ -2303,6 +2304,7 @@ impl Default for App {
             live_confirmed: false,
             live_confirmation_plan: None,
             durability_error: false,
+            terminal_commit_retry_pending: false,
             stop_confirm_open: false,
             keyring_open: false,
             active_view: WorkspaceView::Overview,
@@ -4635,6 +4637,7 @@ impl App {
             return;
         }
         self.durability_error = false;
+        self.terminal_commit_retry_pending = false;
         self.pending_batch_evidence.clear();
         self.pending_batch_checkpoints.clear();
         let mailboxes = jobs
@@ -5462,6 +5465,7 @@ impl App {
             }
         }
         self.durability_error = false;
+        self.terminal_commit_retry_pending = false;
         if !self.form.dry_run {
             if !self.persistence_available {
                 self.status =
@@ -6204,6 +6208,7 @@ impl App {
                 pending_db_events.clear();
             }
         }
+        let cycle_had_durability_errors = !durability_errors.is_empty();
         for error in durability_errors {
             self.report_store_error("batch event persistence", Err(error));
         }
@@ -6361,6 +6366,7 @@ impl App {
                     Ok(()) => true,
                     Err(error) => {
                         self.durability_error = true;
+                        self.terminal_commit_retry_pending = true;
                         push_visible_output(
                             &mut self.output,
                             format!("[durability] Could not persist terminal state: {error}"),
@@ -6373,6 +6379,17 @@ impl App {
                     self.preflight_credential_fingerprint =
                         Some(run_context.credential_fingerprint.clone());
                 }
+                if terminal_write_ok
+                    && self.terminal_commit_retry_pending
+                    && !cycle_had_durability_errors
+                {
+                    // These inputs belong to this terminal commit. Do not
+                    // consume them before SQLite acknowledges the commit, or
+                    // a retry would be unable to reproduce the same durable
+                    // result.
+                    self.durability_error = false;
+                    self.terminal_commit_retry_pending = false;
+                }
                 if terminal_write_ok {
                     // These inputs belong to this terminal commit. Do not
                     // consume them before SQLite acknowledges the commit, or
@@ -6380,7 +6397,6 @@ impl App {
                     // result.
                     self.pending_evidence = None;
                     self.pending_checkpoint = None;
-                    self.durability_error = false;
                 }
                 // A terminal run commit is the boundary between an external
                 // process result and durable control-plane state.  If that
