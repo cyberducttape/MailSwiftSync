@@ -2092,38 +2092,43 @@ impl BulkRetryScope {
     }
 }
 
-fn canonical_destination_identity(profile: &Profile) -> String {
+fn canonical_destination_identity(profile: &Profile) -> Result<String, String> {
     let destination_tls = effective_destination_tls(&profile.destination_tls);
     let default_port = default_imap_port(destination_tls);
     let (host, endpoint_port) = endpoint::parts(&profile.destination_host, default_port)
-        .unwrap_or_else(|_| (profile.destination_host.trim().to_owned(), default_port));
-    let port = profile
-        .destination_port
-        .trim()
-        .parse::<u16>()
-        .ok()
-        .filter(|port| *port != 0)
-        .unwrap_or(endpoint_port);
-    format!(
+        .map_err(|error| format!("Invalid destination endpoint: {error}"))?;
+    let port = if profile.destination_port.trim().is_empty() {
+        endpoint_port
+    } else {
+        profile
+            .destination_port
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| "Destination IMAP port must be a number between 1 and 65535.")?
+    };
+    if port == 0 {
+        return Err("Destination IMAP port must be a number between 1 and 65535.".into());
+    }
+    Ok(format!(
         "{}:{}:{}",
         host.to_ascii_lowercase(),
         port,
         profile.destination_user.trim().to_ascii_lowercase()
-    )
+    ))
 }
 
-fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Option<String> {
+fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Result<Option<String>, String> {
     let mut destinations = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
-        let key = canonical_destination_identity(&job.form.profile);
+        let key = canonical_destination_identity(&job.form.profile)?;
         if !destinations.insert(key) {
-            return Some(format!(
+            return Ok(Some(format!(
                 "Mailbox {} targets a destination mailbox already used by another batch row; concurrent writes to one mailbox are blocked.",
                 index + 1
-            ));
+            )));
         }
     }
-    None
+    Ok(None)
 }
 
 fn durable_batch_matches_queue(
@@ -5662,9 +5667,20 @@ impl App {
             self.bulk_message = "Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into();
             return;
         }
-        if live && let Some(error) = duplicate_bulk_destination(&jobs) {
-            self.bulk_message = error;
-            return;
+        if live {
+            match duplicate_bulk_destination(&jobs) {
+                Ok(Some(error)) => {
+                    self.bulk_message = error;
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.bulk_message = format!(
+                        "Live batch blocked because a destination endpoint is invalid: {error}"
+                    );
+                    return;
+                }
+            }
         }
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         if let Err(error) = validate_batch_throttle(&self.form.profile, concurrency) {
@@ -10714,7 +10730,7 @@ mod tests {
                 state: "Ready".into(),
             },
         ];
-        assert!(duplicate_bulk_destination(&jobs).is_some());
+        assert!(duplicate_bulk_destination(&jobs).unwrap().is_some());
     }
 
     #[test]
@@ -10736,7 +10752,7 @@ mod tests {
                 state: "Ready".into(),
             },
         ];
-        assert!(duplicate_bulk_destination(&jobs).is_some());
+        assert!(duplicate_bulk_destination(&jobs).unwrap().is_some());
     }
 
     #[test]
@@ -10759,11 +10775,24 @@ mod tests {
                 state: "Ready".into(),
             },
         ];
-        assert!(duplicate_bulk_destination(&jobs).is_none());
+        assert!(duplicate_bulk_destination(&jobs).unwrap().is_none());
         assert_eq!(
-            canonical_destination_identity(&jobs[0].form.profile),
+            canonical_destination_identity(&jobs[0].form.profile).unwrap(),
             "mail.example:143:user@example"
         );
+    }
+
+    #[test]
+    fn duplicate_destination_identity_fails_closed_on_malformed_endpoint() {
+        let mut form = Form::default();
+        form.profile.destination_host = "mail.example:not-a-port".into();
+        form.profile.destination_user = "user@example".into();
+        let jobs = vec![BulkJob {
+            label: "invalid".into(),
+            form,
+            state: "Ready".into(),
+        }];
+        assert!(duplicate_bulk_destination(&jobs).is_err());
     }
 
     #[test]
