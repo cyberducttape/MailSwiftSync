@@ -8383,13 +8383,13 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label("doveadm execution").on_hover_text(
-                        "Choose where doveadm runs. Automatic preserves legacy localhost/SSH inference; explicit modes avoid hostname ambiguity.",
+                        "Local doveadm is supported. Remote execution remains disabled until a secret-safe broker is available.",
                     );
                     egui::ComboBox::from_id_salt("dovecot_execution")
                         .selected_text(match self.form.profile.dovecot_execution.as_str() {
                             "local" => "Local machine",
-                            "ssh" => "Destination over SSH",
-                            _ => "Automatic (legacy inference)",
+                            "ssh" => "Unavailable (secret broker required)",
+                            _ => "Automatic (local-only inference)",
                         })
                         .show_ui(ui, |ui| {
                             ui.selectable_value(
@@ -8399,21 +8399,14 @@ impl App {
                             );
                             ui.selectable_value(
                                 &mut self.form.profile.dovecot_execution,
-                                "ssh".into(),
-                                "Destination over SSH",
-                            );
-                            ui.selectable_value(
-                                &mut self.form.profile.dovecot_execution,
                                 "automatic".into(),
-                                "Automatic (legacy inference)",
+                                "Automatic (local-only inference)",
                             );
                         });
                 });
                 ui.horizontal(|ui| { ui.label("doveadm"); ui.text_edit_singleline(&mut self.form.profile.doveadm_path); });
-                ui.horizontal(|ui| { ui.label("SSH executable"); ui.text_edit_singleline(&mut self.form.profile.ssh_path); });
-                ui.horizontal(|ui| { ui.label("SSH user (optional)"); ui.text_edit_singleline(&mut self.form.profile.dovecot_ssh_user); });
                 ui.horizontal(|ui| { ui.label("Config"); ui.text_edit_singleline(&mut self.form.profile.dovecot_config); });
-                ui.label(RichText::new("Remote Dovecot execution is currently unavailable because the compatibility path would expose the source password in destination-host process inspection. Use local doveadm or imapsync.").size(11.0).color(ALERT));
+                ui.label(RichText::new("Remote Dovecot execution is unavailable until a secret-safe broker is implemented. Use local doveadm or imapsync.").size(11.0).color(ALERT));
                 ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(MUTED));
                 }
             });
