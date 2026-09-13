@@ -10945,6 +10945,16 @@ mod tests {
         );
         form.profile.extra_options = "--timeout".into();
         assert!(form.validate().unwrap_err().contains("requires a value"));
+        form.profile.extra_options = "--timeout=fast".into();
+        assert!(form.validate().unwrap_err().contains("requires an integer"));
+        form.profile.extra_options = "--timeout=0".into();
+        assert!(form.validate().unwrap_err().contains("between 1 and 86400"));
+        form.profile.extra_options = "--errorsmax=100001".into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("between 0 and 100000")
+        );
     }
 
     #[test]

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extra imapsync options now use typed boolean/integer specifications with
+  explicit numeric bounds, so malformed timeout and retry values are rejected
+  before command construction.
 - Extracted the IMAP readiness probe into `src/imap_probe.rs`, including
   endpoint handling, TLS/CA trust, certificate pins, capability discovery,
   and authenticated readiness checks.

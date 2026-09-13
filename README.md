@@ -257,7 +257,7 @@ See the [release-readiness criteria](docs/release-readiness.md) for the boundary
 
 Click **Advanced options** to add common imapsync flags with understandable descriptions: internal-date sync, UID matching, cache usage, fast I/O, and size-mismatch tolerance. The `--delete2` control is visually marked destructive because it can remove destination messages that do not exist on the source.
 
-The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, subscription, and debug flags). Endpoint, credential, TLS, preflight, destructive deletion, logging, and unknown options are rejected. Test every change using Preflight first. The command preview shows the final arguments with passwords redacted. Bulk spreadsheets cannot provide this field.
+The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, subscription, and debug flags). Numeric options are parsed and bounded before launch; endpoint, credential, TLS, preflight, destructive deletion, logging, execution, and unknown options are rejected. Test every change using Preflight first. The command preview shows the final arguments with passwords and OAuth tokens redacted. Bulk spreadsheets cannot provide this field.
 
 ## Packaging
 
