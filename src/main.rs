@@ -97,7 +97,7 @@ impl ThemeColors {
             text_primary: Color32::from_rgb(17, 26, 43),
             text_secondary: Color32::from_rgb(66, 84, 106),
             info: Color32::from_rgb(7, 89, 166),
-            success: Color32::from_rgb(8, 127, 112),
+            success: Color32::from_rgb(0, 105, 92),
             warning: Color32::from_rgb(128, 91, 0),
             danger: Color32::from_rgb(161, 38, 26),
             link: Color32::from_rgb(7, 94, 175),
@@ -4625,8 +4625,15 @@ impl App {
         if !self.workspace_read_only
             && let Some(job) = self.job_id.as_deref()
         {
-            match self.store.mailbox_state(job) {
-                Ok(Some(state)) if needs_operator_review(&state) => {
+            let state = self.ui_report.as_ref().and_then(|report| {
+                report
+                    .mailboxes
+                    .iter()
+                    .find(|mailbox| mailbox.job.id == job)
+                    .map(|mailbox| mailbox.job.state.clone())
+            });
+            match state.as_deref() {
+                Some(state) if needs_operator_review(state) => {
                     if ui.button("Prepare safe retry  →").clicked() {
                         self.form.dry_run = true;
                         self.live_confirmed = false;
@@ -4634,15 +4641,7 @@ impl App {
                         self.status = "Retry prepared as a dry preflight. Review the exact plan before any live run.".into();
                     }
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    ui.label(
-                        RichText::new(format!(
-                            "Durable mailbox state is unavailable; retry actions are disabled: {error}"
-                        ))
-                        .color(ALERT),
-                    );
-                }
+                Some(_) | None => {}
             }
         }
         ui.group(|ui| {
@@ -4657,6 +4656,10 @@ impl App {
                     RichText::new(&self.status)
                         .color(status_color(&self.status, self.theme_colors())),
                 );
+                if ui.button("Copy output").clicked() {
+                    ui.ctx()
+                        .copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
+                }
                 if running && ui.button("Stop migration").clicked() {
                     self.stop_confirm_open = true;
                 }
@@ -9280,7 +9283,13 @@ impl eframe::App for App {
                         });
                         ui.add_space(14.0);
                         ui.group(|ui| {
-                            ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); });
+                            ui.horizontal(|ui| {
+                                ui.heading("Execution journal");
+                                ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED));
+                                if ui.button("Copy output").clicked() {
+                                    ui.ctx().copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
+                                }
+                            });
                             egui::ScrollArea::vertical()
                                 .hscroll(true)
                                 .stick_to_bottom(true)

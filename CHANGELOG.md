@@ -4,6 +4,19 @@ All notable changes to MailSwiftSync are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- Added separate dark and light semantic UI palettes with high-contrast
+  primary, secondary, informational, success, warning, danger, link, border,
+  and selection colors. Contrast regression tests enforce a 4.5:1 target for
+  normal operator-facing text.
+- Execution journals now provide an explicit Copy output action and use
+  non-wrapping monospace rows with horizontal scrolling, keeping terminal
+  output predictable during long migrations.
+- Projects, activity history, and verification views now render from a
+  throttled cached workspace snapshot rather than querying SQLite during every
+  egui repaint. Selected-mailbox retry guidance also consumes that snapshot.
+
 ### Added
 
 - Failed or cancelled mailbox runs can no longer commit a newly captured
