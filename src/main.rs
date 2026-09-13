@@ -175,6 +175,7 @@ struct RunProfileSnapshot {
     allowsizemismatch: bool,
     delete2: bool,
     extra_options_sha256: String,
+    dovecot_checkpoint_sha256: Option<String>,
 }
 
 fn default_doveadm_path() -> String {
@@ -666,7 +667,16 @@ impl Form {
     /// Serialize the launch configuration without session passwords or raw
     /// expert-option values. This is persisted with the run so historical
     /// reports do not depend on the currently edited form.
+    #[cfg(test)]
     fn plan_snapshot(&self) -> String {
+        self.plan_snapshot_with_checkpoint(None)
+    }
+
+    /// Serialize the launch configuration and, when applicable, the identity
+    /// of the previously committed Dovecot state supplied to this run. The
+    /// state token itself stays out of durable reports; its digest is enough
+    /// to prove which resume point was selected.
+    fn plan_snapshot_with_checkpoint(&self, checkpoint: Option<&str>) -> String {
         let extra_options_sha256 = format!(
             "{:x}",
             Sha256::digest(self.profile.extra_options.as_bytes())
@@ -711,6 +721,7 @@ impl Form {
                 allowsizemismatch: profile.allowsizemismatch,
                 delete2: profile.delete2,
                 extra_options_sha256,
+                dovecot_checkpoint_sha256: checkpoint.map(plan_snapshot_sha256),
             },
         };
         toml::to_string(&snapshot).unwrap_or_default()
@@ -3973,16 +3984,23 @@ impl App {
         };
         let plan_snapshot = jobs
             .iter()
-            .map(|job| job.form.plan_snapshot())
+            .zip(queue_checkpoints.iter())
+            .map(|(job, checkpoint)| {
+                job.form
+                    .plan_snapshot_with_checkpoint(checkpoint.as_deref())
+            })
             .collect::<Vec<_>>()
             .join("\n--- batch mailbox plan ---\n");
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
         let child_plans = jobs
             .iter()
-            .map(|job| core::BatchChildPlan {
+            .zip(queue_checkpoints.iter())
+            .map(|(job, checkpoint)| core::BatchChildPlan {
                 engine: job.form.engine().label().to_owned(),
-                plan_snapshot: job.form.plan_snapshot(),
+                plan_snapshot: job
+                    .form
+                    .plan_snapshot_with_checkpoint(checkpoint.as_deref()),
             })
             .collect::<Vec<_>>();
         let child_run_ids = match self.store.begin_batch_run_with_children(
@@ -4711,7 +4729,6 @@ impl App {
         }
         let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
         let credential_fingerprint = self.form.credential_fingerprint();
-        let plan_snapshot = self.form.plan_snapshot();
         let run_engine = self.form.engine();
         let run_dry_run = self.form.dry_run;
         let (run_project_id, run_job_id) = match (self.project_id.clone(), self.job_id.clone()) {
@@ -4734,6 +4751,9 @@ impl App {
         } else {
             None
         };
+        let plan_snapshot = self
+            .form
+            .plan_snapshot_with_checkpoint(dovecot_checkpoint.as_deref());
         let prepared = match self
             .form
             .prepared_command_with_throttle_divisor_and_checkpoint(1, dovecot_checkpoint.as_deref())
@@ -6619,6 +6639,17 @@ mod tests {
             Sha256::digest(form.profile.extra_options.as_bytes())
         );
         assert!(snapshot.contains(&expected));
+    }
+
+    #[test]
+    fn plan_snapshot_records_checkpoint_identity_without_checkpoint_value() {
+        let form = dovecot_form();
+        let checkpoint = "AQAAAHm4+Jk=";
+        let snapshot = form.plan_snapshot_with_checkpoint(Some(checkpoint));
+        let digest = plan_snapshot_sha256(checkpoint);
+        assert!(snapshot.contains("dovecot_checkpoint_sha256"));
+        assert!(snapshot.contains(&digest));
+        assert!(!snapshot.contains(checkpoint));
     }
 
     #[test]
