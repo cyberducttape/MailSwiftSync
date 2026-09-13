@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Reused the bulk mailbox filter's visible-row index buffer across egui
+  repaints. Large queues retain table virtualization without allocating a
+  fresh filtered index vector on every frame.
 - Made project, mailbox, activity, and verification search matching
   allocation-free per row by using ASCII case-insensitive window matching
   instead of lowercasing every candidate during each egui frame.

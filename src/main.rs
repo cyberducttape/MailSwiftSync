@@ -1733,6 +1733,9 @@ struct App {
     bulk_search: String,
     bulk_state_filter: String,
     bulk_selected_ids: HashSet<String>,
+    /// Reused filtered-row index storage. Large batch views must not allocate
+    /// a fresh index vector on every repaint.
+    bulk_visible_indices: Vec<usize>,
     bulk_message: String,
     advanced_open: bool,
     engine_open: bool,
@@ -2137,6 +2140,7 @@ impl Default for App {
             bulk_search: String::new(),
             bulk_state_filter: "all".into(),
             bulk_selected_ids: HashSet::new(),
+            bulk_visible_indices: Vec::new(),
             bulk_message: if restored_bulk_project_id.is_some() {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
@@ -3588,13 +3592,18 @@ impl App {
                     self.bulk_selected_ids.clear();
                 }
             });
-            let visible_indices = self
-                .bulk_jobs
-                .iter()
-                .enumerate()
-                .filter(|(_, job)| self.mailbox_matches_filter(job))
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
+            // Reuse the index buffer across repaints. The table still
+            // virtualizes row widgets, while filtering a large queue no
+            // longer allocates a new Vec on every frame.
+            let mut visible_indices = std::mem::take(&mut self.bulk_visible_indices);
+            visible_indices.clear();
+            visible_indices.extend(
+                self.bulk_jobs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, job)| self.mailbox_matches_filter(job))
+                    .map(|(index, _)| index),
+            );
             ui.label(
                 RichText::new(format!(
                     "{} visible · {} selected",
@@ -3759,6 +3768,7 @@ impl App {
                         });
                     });
                 });
+            self.bulk_visible_indices = visible_indices;
             ui.label(RichText::new("When a selection is present, batch actions apply only to selected rows. With no selection, the chosen retry scope applies to all matching rows.").color(self.theme_colors().text_secondary));
         }
     }
