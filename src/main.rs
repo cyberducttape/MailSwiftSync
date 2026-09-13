@@ -5097,6 +5097,12 @@ impl App {
                             durability_errors.push(format!(
                                 "durable retry release for child run {child_run_id} failed: {error}"
                             ));
+                        } else {
+                            // A checkpoint candidate emitted by the failed
+                            // attempt must never survive into a later retry.
+                            // The retry gets a fresh candidate from its own
+                            // successful engine result, if one is emitted.
+                            self.pending_batch_checkpoints.remove(&child_run_id);
                         }
                         let _ = reply.send(result);
                     }
