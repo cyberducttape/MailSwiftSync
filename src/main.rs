@@ -2106,6 +2106,36 @@ fn probe_tls_capabilities(
     Ok(caps)
 }
 
+/// Re-authenticate both endpoints immediately before a live imapsync child is
+/// launched.  This is deliberately limited to dual-IMAPS plans: the existing
+/// engine preflight remains the authority for STARTTLS/plain and Dovecot
+/// execution paths until equivalent transport-specific probes exist.
+fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
+    if form.dry_run
+        || form.engine() != core::Engine::ImapSync
+        || form.profile.source_tls != "imaps"
+        || form.profile.destination_tls != "imaps"
+    {
+        return Ok(());
+    }
+    let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)?;
+    let destination = endpoint_for_probe(
+        &form.profile.destination_host,
+        &form.profile.destination_port,
+    )?;
+    probe_tls_capabilities(
+        &source,
+        &form.profile.source_user,
+        form.source_password.as_str(),
+    )?;
+    probe_tls_capabilities(
+        &destination,
+        &form.profile.destination_user,
+        form.destination_password.as_str(),
+    )?;
+    Ok(())
+}
+
 impl App {
     fn active_project_id(&self) -> Option<&str> {
         self.project_id
@@ -3765,6 +3795,33 @@ impl App {
                         let mut delta_required = false;
                         for attempt in 0..=retry_count {
                             if !launch_limiter.acquire(&cancel) {
+                                break;
+                            }
+                            if live
+                                && let Err(error) = fresh_dual_imaps_authentication(&job.form)
+                            {
+                                failed.store(true, Ordering::Relaxed);
+                                let _ = tx.send(Event::Line(format!(
+                                    "[{}] fresh live authentication failed before launch: {error}",
+                                    index + 1
+                                )));
+                                let _ = tx.send(Event::JobState {
+                                    job_id: job_id.clone(),
+                                    child_run_id: child_run_id.clone(),
+                                    state: "Failed".into(),
+                                });
+                                let _ = tx.send(Event::JobFinished {
+                                    job_id: job_id.clone(),
+                                    child_run_id: child_run_id.clone(),
+                                    state: "failed".into(),
+                                    detail: format!(
+                                        "fresh live authentication failed before launch: {error}"
+                                    ),
+                                    credential_fingerprint: None,
+                                });
+                                if let Ok(mut terminal) = terminal_jobs.lock() {
+                                    terminal.insert(index);
+                                }
                                 break;
                             }
                             let (claim_tx, claim_rx) = mpsc::sync_channel(1);
@@ -7052,5 +7109,17 @@ mod tests {
         assert!(proof.matches("plan-a", "credentials-a"));
         assert!(!proof.matches("plan-b", "credentials-a"));
         assert!(!proof.matches("plan-a", "credentials-b"));
+    }
+
+    #[test]
+    fn fresh_dual_imaps_authentication_skips_non_imaps_paths() {
+        let form = dovecot_form();
+        assert!(fresh_dual_imaps_authentication(&form).is_ok());
+
+        let mut form = Form::default();
+        form.profile.source_tls = "starttls".into();
+        form.profile.destination_tls = "imaps".into();
+        form.dry_run = false;
+        assert!(fresh_dual_imaps_authentication(&form).is_ok());
     }
 }
