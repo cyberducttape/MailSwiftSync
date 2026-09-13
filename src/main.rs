@@ -1841,6 +1841,9 @@ struct App {
     bulk_jobs: Vec<BulkJob>,
     bulk_open: bool,
     settings_open: bool,
+    bulk_search: String,
+    bulk_state_filter: String,
+    bulk_selected_ids: HashSet<String>,
     bulk_message: String,
     advanced_open: bool,
     engine_open: bool,
@@ -2071,6 +2074,9 @@ impl Default for App {
             bulk_jobs: restored_bulk_jobs,
             bulk_open: false,
             settings_open: false,
+            bulk_search: String::new(),
+            bulk_state_filter: "all".into(),
+            bulk_selected_ids: HashSet::new(),
             bulk_message: if restored_bulk_project_id.is_some() {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
@@ -3206,7 +3212,7 @@ impl App {
 
     fn mailbox_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Mailboxes");
-        ui.label(RichText::new("Review the migration scope before execution. Import CSV/XLSX for bulk work or configure a single mailbox in the plan.").color(MUTED));
+        ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(MUTED));
         ui.add_space(12.0);
         if self.bulk_jobs.is_empty() {
             ui.group(|ui| {
@@ -3225,26 +3231,94 @@ impl App {
                     RichText::new(format!("{} mailbox jobs in scope", self.bulk_jobs.len()))
                         .strong(),
                 );
-                if ui.button("Review batch queue").clicked() {
+                if ui.button("Import / edit queue").clicked() {
                     self.bulk_open = true;
                 }
             });
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Search");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.bulk_search)
+                        .hint_text("mailbox, host, or user")
+                        .desired_width(220.0),
+                );
+                egui::ComboBox::from_id_salt("mailbox_state_filter")
+                    .selected_text(match self.bulk_state_filter.as_str() {
+                        "attention" => "Attention",
+                        "failed" => "Failed",
+                        "delta_required" => "Delta required",
+                        "verified" => "Verified",
+                        "ready" => "Ready",
+                        _ => "All states",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            ("all", "All states"),
+                            ("ready", "Ready"),
+                            ("attention", "Attention"),
+                            ("failed", "Failed"),
+                            ("delta_required", "Delta required"),
+                            ("verified", "Verified"),
+                        ] {
+                            ui.selectable_value(&mut self.bulk_state_filter, value.into(), label);
+                        }
+                    });
+                if ui.button("Select visible").clicked() {
+                    for (index, job) in self.bulk_jobs.iter().enumerate() {
+                        if self.mailbox_matches_filter(job)
+                            && let Some(id) = self.bulk_job_ids.get(index)
+                        {
+                            self.bulk_selected_ids.insert(id.clone());
+                        }
+                    }
+                }
+                if ui.button("Clear selection").clicked() {
+                    self.bulk_selected_ids.clear();
+                }
+            });
+            let visible_count = self
+                .bulk_jobs
+                .iter()
+                .enumerate()
+                .filter(|(_, job)| self.mailbox_matches_filter(job))
+                .count();
+            ui.label(
+                RichText::new(format!(
+                    "{visible_count} visible · {} selected",
+                    self.bulk_selected_ids.len()
+                ))
+                .color(MUTED),
+            );
             ui.add_space(8.0);
-            let visible_count = self.bulk_jobs.len().min(100);
             egui::ScrollArea::vertical()
                 .id_salt("mailbox_overview_scroll")
-                .max_height(420.0)
+                .max_height(520.0)
                 .show(ui, |ui| {
                     egui::Grid::new("mailbox_overview")
                         .striped(true)
                         .min_col_width(150.0)
                         .show(ui, |ui| {
+                            ui.strong("");
                             ui.strong("Mailbox");
                             ui.strong("Source");
                             ui.strong("Destination");
-                            ui.strong("Readiness");
+                            ui.strong("State");
                             ui.end_row();
-                            for job in self.bulk_jobs.iter().take(100) {
+                            for (index, job) in self.bulk_jobs.iter().enumerate() {
+                                if !self.mailbox_matches_filter(job) {
+                                    continue;
+                                }
+                                let Some(job_id) = self.bulk_job_ids.get(index) else {
+                                    continue;
+                                };
+                                let mut selected = self.bulk_selected_ids.contains(job_id);
+                                if ui.checkbox(&mut selected, "").changed() {
+                                    if selected {
+                                        self.bulk_selected_ids.insert(job_id.clone());
+                                    } else {
+                                        self.bulk_selected_ids.remove(job_id);
+                                    }
+                                }
                                 ui.label(&job.label);
                                 ui.label(format!(
                                     "{}\n{}",
@@ -3261,16 +3335,32 @@ impl App {
                             }
                         });
                 });
-            if visible_count < self.bulk_jobs.len() {
-                ui.label(
-                    RichText::new(format!(
-                        "Showing {visible_count} of {} mailboxes; open Review batch queue for the full list.",
-                        self.bulk_jobs.len()
-                    ))
-                    .color(MUTED),
-                );
-            }
+            ui.label(RichText::new("When a selection is present, batch actions apply only to selected rows. With no selection, the chosen retry scope applies to all matching rows.").color(MUTED));
         }
+    }
+
+    fn mailbox_matches_filter(&self, job: &BulkJob) -> bool {
+        let state = job.state.to_ascii_lowercase().replace(' ', "_");
+        if !self.bulk_state_filter.is_empty()
+            && self.bulk_state_filter != "all"
+            && state != self.bulk_state_filter
+            && !(self.bulk_state_filter == "delta_required" && state.contains("delta"))
+            && !(self.bulk_state_filter == "verification_difference"
+                && state.contains("verification"))
+        {
+            return false;
+        }
+        let search = self.bulk_search.trim().to_ascii_lowercase();
+        search.is_empty()
+            || [
+                job.label.as_str(),
+                job.form.profile.source_host.as_str(),
+                job.form.profile.source_user.as_str(),
+                job.form.profile.destination_host.as_str(),
+                job.form.profile.destination_user.as_str(),
+            ]
+            .iter()
+            .any(|value| value.to_ascii_lowercase().contains(&search))
     }
 
     fn activity_view(&mut self, ui: &mut egui::Ui) {
@@ -4050,15 +4140,21 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(index, _)| {
-                !live
-                    || self.bulk_retry_scope.includes(
-                        self.store
-                            .mailbox_state(&self.bulk_job_ids[*index])
-                            .ok()
-                            .flatten()
-                            .as_deref()
-                            .unwrap_or("unknown"),
-                    )
+                let selected = self.bulk_selected_ids.is_empty()
+                    || self
+                        .bulk_job_ids
+                        .get(*index)
+                        .is_some_and(|id| self.bulk_selected_ids.contains(id));
+                selected
+                    && (!live
+                        || self.bulk_retry_scope.includes(
+                            self.store
+                                .mailbox_state(&self.bulk_job_ids[*index])
+                                .ok()
+                                .flatten()
+                                .as_deref()
+                                .unwrap_or("unknown"),
+                        ))
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
