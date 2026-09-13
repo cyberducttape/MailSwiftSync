@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- XLSX imports now inspect ZIP entry metadata before workbook expansion and
+  reject excessive archive entry counts or uncompressed size.
 - Spreadsheet imports now show the workbook's worksheet names and require the
   operator to select which worksheet contains migration rows; they no longer
   silently import worksheet 1.

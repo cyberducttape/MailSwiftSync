@@ -67,6 +67,8 @@ const MAX_PROCESS_TAIL_LINES: usize = 200;
 const MAX_PROCESS_TAIL_BYTES: usize = 1024 * 1024;
 const MAX_DIAGNOSTIC_LINE_BYTES: usize = 16 * 1024;
 const MAX_BULK_IMPORT_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_BULK_IMPORT_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BULK_IMPORT_ARCHIVE_ENTRIES: usize = 4_096;
 const MAX_BULK_IMPORT_ROWS: usize = 100_000;
 const MAX_BULK_IMPORT_COLUMNS: usize = 64;
 const MAX_BULK_IMPORT_CELL_BYTES: usize = 64 * 1024;
@@ -2144,6 +2146,47 @@ fn validate_bulk_import_file(path: &std::path::Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn validate_workbook_container_limits(
+    entry_count: usize,
+    uncompressed_bytes: u64,
+) -> Result<(), String> {
+    if entry_count > MAX_BULK_IMPORT_ARCHIVE_ENTRIES {
+        return Err(format!(
+            "The XLSX archive contains {entry_count} entries; the limit is {MAX_BULK_IMPORT_ARCHIVE_ENTRIES}."
+        ));
+    }
+    if uncompressed_bytes > MAX_BULK_IMPORT_UNCOMPRESSED_BYTES {
+        return Err(format!(
+            "The XLSX archive expands to {uncompressed_bytes} bytes; the limit is {MAX_BULK_IMPORT_UNCOMPRESSED_BYTES} bytes."
+        ));
+    }
+    Ok(())
+}
+
+/// Inspect XLSX ZIP metadata before calamine decompresses workbook members.
+/// The ordinary file-size limit alone is insufficient because a small ZIP can
+/// contain a very large expanded XML payload.
+fn validate_xlsx_container(path: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("Could not open XLSX import file: {error}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| format!("The XLSX archive is invalid: {error}"))?;
+    let entry_count = archive.len();
+    validate_workbook_container_limits(entry_count, 0)?;
+    let mut uncompressed_bytes = 0_u64;
+    for index in 0..entry_count {
+        let entry_size = {
+            let entry = archive
+                .by_index(index)
+                .map_err(|error| format!("Could not inspect XLSX archive entry: {error}"))?;
+            entry.size()
+        };
+        uncompressed_bytes = uncompressed_bytes.saturating_add(entry_size);
+        validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
+    }
+    validate_workbook_container_limits(entry_count, uncompressed_bytes)
 }
 
 fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Result<Option<String>, String> {
@@ -5656,6 +5699,7 @@ impl App {
     }
     fn workbook_sheets(path: &std::path::Path) -> Result<Vec<String>, String> {
         validate_bulk_import_file(path)?;
+        validate_xlsx_container(path)?;
         let book = open_workbook_auto(path).map_err(|e| e.to_string())?;
         let sheets = book.sheet_names().to_vec();
         if sheets.is_empty() {
@@ -5671,6 +5715,7 @@ impl App {
         sheet_index: usize,
     ) -> Result<Vec<BulkJob>, String> {
         validate_bulk_import_file(path)?;
+        validate_xlsx_container(path)?;
         let mut book = open_workbook_auto(path).map_err(|e| e.to_string())?;
         let range = book
             .worksheet_range_at(sheet_index)
@@ -11064,6 +11109,29 @@ mod tests {
         assert!(error.contains("import file"));
         assert!(error.contains("limit"));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_container_limits_reject_expansion_before_parsing() {
+        assert!(
+            validate_workbook_container_limits(
+                MAX_BULK_IMPORT_ARCHIVE_ENTRIES,
+                MAX_BULK_IMPORT_UNCOMPRESSED_BYTES
+            )
+            .is_ok()
+        );
+        let error = validate_workbook_container_limits(
+            MAX_BULK_IMPORT_ARCHIVE_ENTRIES + 1,
+            MAX_BULK_IMPORT_UNCOMPRESSED_BYTES,
+        )
+        .unwrap_err();
+        assert!(error.contains("entries"));
+        let error = validate_workbook_container_limits(
+            MAX_BULK_IMPORT_ARCHIVE_ENTRIES,
+            MAX_BULK_IMPORT_UNCOMPRESSED_BYTES + 1,
+        )
+        .unwrap_err();
+        assert!(error.contains("expands"));
     }
 
     #[test]
