@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Plan fingerprints and immutable run snapshots now bind the SHA-256 content
+  identity of the selected engine executable, configured trust bundles, and
+  Dovecot configuration, so replacing a file at the same path invalidates a
+  prior preflight.
 - Made IMAP tagged-status and untagged `LIST` parsing case-insensitive for
   protocol keywords, while retaining exact command-tag matching.
 - Centralized IMAP atom tokenization and case-insensitive protocol matching for

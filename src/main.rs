@@ -296,6 +296,14 @@ struct RunProfileSnapshot {
     delete2: bool,
     extra_options_sha256: String,
     dovecot_checkpoint_sha256: Option<String>,
+    #[serde(default)]
+    execution_executable_sha256: String,
+    #[serde(default)]
+    source_ca_bundle_sha256: String,
+    #[serde(default)]
+    destination_ca_bundle_sha256: String,
+    #[serde(default)]
+    dovecot_config_sha256: String,
 }
 
 fn default_doveadm_path() -> String {
@@ -352,6 +360,55 @@ fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
 
 fn plan_snapshot_sha256(snapshot: &str) -> String {
     format!("{:x}", Sha256::digest(snapshot.as_bytes()))
+}
+
+/// Resolve a command the same way the operating system's process launcher
+/// does for a bare executable name. The resolved content identity is part of
+/// plan admission so replacing an executable at the same path cannot silently
+/// bypass a successful preflight.
+fn resolve_executable_for_identity(executable: &str) -> Option<std::path::PathBuf> {
+    let executable = std::path::Path::new(executable.trim());
+    if executable.is_absolute() || executable.components().count() > 1 {
+        return executable.is_file().then(|| executable.to_path_buf());
+    }
+    let path = std::env::var_os("PATH")?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(executable);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        if executable.extension().is_none() {
+            let candidate = directory.join(format!("{executable}.exe"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn file_content_identity(path: &std::path::Path) -> String {
+    match std::fs::read(path) {
+        Ok(contents) => format!("sha256:{:x}", Sha256::digest(contents)),
+        Err(error) => format!("unavailable:{:?}", error.kind()),
+    }
+}
+
+fn configured_file_content_identity(path: &str) -> String {
+    let path = path.trim();
+    if path.is_empty() {
+        "none".into()
+    } else {
+        file_content_identity(std::path::Path::new(path))
+    }
+}
+
+fn executable_content_identity(executable: &str) -> String {
+    resolve_executable_for_identity(executable)
+        .as_deref()
+        .map(file_content_identity)
+        .unwrap_or_else(|| "unresolved".into())
 }
 
 /// Produce a stable identity for one evidence result and the exact run plan
@@ -984,7 +1041,7 @@ impl Form {
             remove_option(&mut args, "--oauthaccesstoken2");
         }
         format!(
-            "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-certificate-pin={}\ndestination-ca-bundle={}\ndestination-certificate-pin={}",
+            "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-ca-bundle-sha256={}\ndestination-ca-bundle={}\ndestination-ca-bundle-sha256={}\nsource-certificate-pin={}\ndestination-certificate-pin={}\nexecution-executable-sha256={}\ndovecot-config-sha256={}",
             executable,
             args.join("\u{1f}"),
             self.profile.source_credential_id.trim(),
@@ -993,15 +1050,19 @@ impl Form {
             self.profile.destination_auth,
             self.profile.allow_insecure_source_transport,
             self.profile.source_ca_bundle.trim(),
+            configured_file_content_identity(&self.profile.source_ca_bundle),
+            self.profile.destination_ca_bundle.trim(),
+            configured_file_content_identity(&self.profile.destination_ca_bundle),
             self.profile
                 .source_certificate_pin_sha256
                 .trim()
                 .to_ascii_lowercase(),
-            self.profile.destination_ca_bundle.trim(),
             self.profile
                 .destination_certificate_pin_sha256
                 .trim()
                 .to_ascii_lowercase(),
+            executable_content_identity(&executable),
+            configured_file_content_identity(&self.profile.dovecot_config),
         )
     }
 
@@ -1024,6 +1085,11 @@ impl Form {
             Sha256::digest(self.profile.extra_options.as_bytes())
         );
         let profile = &self.profile;
+        let execution_executable = match self.engine() {
+            core::Engine::Dovecot if self.local_doveadm() => &profile.doveadm_path,
+            core::Engine::Dovecot => &profile.ssh_path,
+            core::Engine::ImapSync | core::Engine::Auto => &profile.imapsync_path,
+        };
         let snapshot = RunPlanSnapshot {
             dry_run: self.dry_run,
             profile: RunProfileSnapshot {
@@ -1075,6 +1141,14 @@ impl Form {
                     && !self.dry_run)
                     .then(|| checkpoint.map(plan_snapshot_sha256))
                     .flatten(),
+                execution_executable_sha256: executable_content_identity(execution_executable),
+                source_ca_bundle_sha256: configured_file_content_identity(
+                    &profile.source_ca_bundle,
+                ),
+                destination_ca_bundle_sha256: configured_file_content_identity(
+                    &profile.destination_ca_bundle,
+                ),
+                dovecot_config_sha256: configured_file_content_identity(&profile.dovecot_config),
             },
         };
         toml::to_string(&snapshot)
@@ -10508,6 +10582,34 @@ mod tests {
         changed.profile.source_ca_bundle.clear();
         changed.profile.destination_certificate_pin_sha256 = "ab".repeat(32);
         assert_ne!(original, changed.plan_fingerprint());
+    }
+
+    #[test]
+    fn plan_identity_binds_executable_and_trust_bundle_contents() {
+        let executable =
+            std::env::temp_dir().join(format!("mailswiftsync-plan-executable-{}", Uuid::new_v4()));
+        let ca_bundle =
+            std::env::temp_dir().join(format!("mailswiftsync-plan-ca-{}", Uuid::new_v4()));
+        std::fs::write(&executable, b"engine version one").unwrap();
+        std::fs::write(&ca_bundle, b"-----BEGIN CERTIFICATE-----\none").unwrap();
+
+        let mut form = Form::default();
+        form.profile.imapsync_path = executable.to_string_lossy().into_owned();
+        form.profile.source_ca_bundle = ca_bundle.to_string_lossy().into_owned();
+        let original = form.plan_fingerprint();
+        let snapshot = form.plan_snapshot();
+        assert!(snapshot.contains("execution_executable_sha256 = \"sha256:"));
+        assert!(snapshot.contains("source_ca_bundle_sha256 = \"sha256:"));
+
+        std::fs::write(&executable, b"engine version two").unwrap();
+        assert_ne!(original, form.plan_fingerprint());
+        let executable_changed = form.plan_fingerprint();
+
+        std::fs::write(&ca_bundle, b"-----BEGIN CERTIFICATE-----\ntwo").unwrap();
+        assert_ne!(executable_changed, form.plan_fingerprint());
+
+        let _ = std::fs::remove_file(executable);
+        let _ = std::fs::remove_file(ca_bundle);
     }
 
     #[test]
