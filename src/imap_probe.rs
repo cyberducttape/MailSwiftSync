@@ -277,7 +277,6 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
                 .map_err(|e| e.to_string())?;
             response.clear();
             read_auth_continuation(&mut stream, "a002", &mut response, &mut buffer)?;
-            let encoded = Zeroizing::new(encoded);
             stream
                 .write_all(encoded.as_bytes())
                 .and_then(|_| stream.write_all(b"\r\n"))

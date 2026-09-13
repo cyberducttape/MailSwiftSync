@@ -1,17 +1,17 @@
-use crate::imap_protocol::is_tagged_response;
+use crate::{credentials::SecretString, imap_protocol::is_tagged_response};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use std::io::{Read, Write};
 use zeroize::Zeroizing;
 
 /// Build the RFC 7628 XOAUTH2 client response. The bearer token is kept in a
-/// zeroizing intermediate and the returned encoded value is zeroized by the
-/// caller before it is written to the socket.
-pub(crate) fn xoauth2_payload(user: &str, access_token: &str) -> String {
+/// zeroizing intermediate and the returned encoded value remains zeroizing
+/// until it is written to the socket.
+pub(crate) fn xoauth2_payload(user: &str, access_token: &str) -> SecretString {
     let auth = Zeroizing::new(format!(
         "user={}\x01auth=Bearer {}\x01\x01",
         user, access_token
     ));
-    BASE64_STANDARD.encode(auth.as_bytes())
+    SecretString::new(BASE64_STANDARD.encode(auth.as_bytes()))
 }
 
 /// Wait for the server's SASL continuation response before sending the

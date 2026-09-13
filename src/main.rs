@@ -691,13 +691,13 @@ impl Form {
         let entry = self
             .keyring_entry(source)?
             .ok_or("Enter a keyring ID before loading a password.")?;
-        let password = entry.get_password().map_err(|error| {
+        let password = Zeroizing::new(entry.get_password().map_err(|error| {
             format!("Could not load the credential from the OS keyring: {error}")
-        })?;
+        })?);
         if source {
-            self.source_password = Zeroizing::new(password);
+            self.source_password = password;
         } else {
-            self.destination_password = Zeroizing::new(password);
+            self.destination_password = password;
         }
         Ok(())
     }
@@ -10759,7 +10759,8 @@ mod tests {
 
     #[test]
     fn xoauth2_payload_uses_rfc_7628_shape() {
-        let payload = BASE64_STANDARD.decode(xoauth2_payload("user@example.test", "token"));
+        let payload =
+            BASE64_STANDARD.decode(xoauth2_payload("user@example.test", "token").as_bytes());
         assert_eq!(
             payload.unwrap(),
             b"user=user@example.test\x01auth=Bearer token\x01\x01"
