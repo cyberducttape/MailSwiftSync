@@ -15,6 +15,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Windows engine children are attached to a Job Object configured with
   kill-on-close semantics, so controller exit does not leave an unowned
   descendant tree. macOS still uses the conservative no-signal fallback.
+- Windows private files and directories now receive protected owner/System
+  DACLs rather than relying on inherited ACLs; the native Windows runtime test
+  suite remains the release evidence for this implementation.
 - CI and tagged releases generate a CycloneDX 1.5 SBOM from the locked Cargo
   dependency graph and publish it with its own checksum. The SBOM serial and
   timestamp are reproducible from `Cargo.lock` and `SOURCE_DATE_EPOCH`.

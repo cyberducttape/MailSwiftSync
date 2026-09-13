@@ -3088,39 +3088,35 @@ fn prepare_database_file(path: &Path) -> std::io::Result<()> {
     if path.exists() {
         return Ok(());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-            .map(drop)
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .map(drop)
-    }
-    .or_else(|error| {
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            Ok(())
-        } else {
-            Err(error)
+    let result = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+                .map(drop)
         }
-    })
+        #[cfg(not(unix))]
+        {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map(drop)
+        }
+    };
+    match result {
+        Ok(()) => crate::credentials::restrict_file_permissions(path),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
-#[cfg(unix)]
 fn restrict_database_permissions(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = std::fs::metadata(path)?.permissions();
-    permissions.set_mode(0o600);
-    std::fs::set_permissions(path, permissions)
+    crate::credentials::restrict_file_permissions(path)
 }
 
 fn restrict_database_sidecars(path: &Path) -> std::io::Result<()> {
@@ -3130,11 +3126,6 @@ fn restrict_database_sidecars(path: &Path) -> std::io::Result<()> {
             restrict_database_permissions(&sidecar)?;
         }
     }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn restrict_database_permissions(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
 

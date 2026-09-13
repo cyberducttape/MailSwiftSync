@@ -93,7 +93,8 @@ fn cleanup_stale_secret_directories_at(base: &Path, now: SystemTime, max_age: Du
 pub fn write_secret_file(path: &Path, secret: &str) -> std::io::Result<()> {
     let mut file = open_secret_file(path)?;
     file.write_all(secret.as_bytes())?;
-    file.sync_all()
+    file.sync_all()?;
+    restrict_file_permissions(path)
 }
 
 #[cfg(unix)]
@@ -108,7 +109,10 @@ pub fn open_secret_file(path: &Path) -> std::io::Result<fs::File> {
 
 #[cfg(not(unix))]
 pub fn open_secret_file(path: &Path) -> std::io::Result<fs::File> {
-    OpenOptions::new().write(true).create_new(true).open(path)
+    let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    #[cfg(windows)]
+    restrict_file_permissions(path)?;
+    Ok(file)
 }
 
 pub fn cleanup_paths(paths: &[PathBuf]) {
@@ -129,7 +133,12 @@ pub fn restrict_file_permissions(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, permissions)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn restrict_file_permissions(path: &Path) -> std::io::Result<()> {
+    restrict_windows_acl(path, false)
+}
+
+#[cfg(all(not(unix), not(windows)))]
 pub fn restrict_file_permissions(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
@@ -142,9 +151,98 @@ pub fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, permissions)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
+    restrict_windows_acl(path, true)
+}
+
+#[cfg(all(not(unix), not(windows)))]
 pub fn restrict_directory_permissions(_: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::{
+        Foundation::{BOOL, ERROR_SUCCESS, HLOCAL, LocalFree},
+        Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
+            SetNamedSecurityInfoW,
+        },
+        Security::{
+            ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl,
+            PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        },
+    };
+
+    // Owner and LocalSystem are the only principals that need access to
+    // short-lived secrets, signing keys, locks, and the durable ledger. The
+    // protected DACL prevents inherited Users/Administrators access from
+    // silently widening the boundary on a permissive parent directory.
+    let sddl = if directory {
+        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)"
+    } else {
+        "D:P(A;;FA;;;OW)(A;;FA;;;SY)"
+    };
+    let path_wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let sddl_wide = sddl
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    let mut descriptor_size = 0_u32;
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl_wide.as_ptr(),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            &mut descriptor_size,
+        )
+    };
+    if converted == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let result = (|| {
+        let mut dacl_present: BOOL = 0;
+        let mut dacl_defaulted: BOOL = 0;
+        let mut dacl: *mut ACL = ptr::null_mut();
+        let valid_dacl = unsafe {
+            GetSecurityDescriptorDacl(
+                descriptor,
+                &mut dacl_present,
+                &mut dacl,
+                &mut dacl_defaulted,
+            )
+        };
+        if valid_dacl == 0 || dacl_present == 0 || dacl.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let error = unsafe {
+            SetNamedSecurityInfoW(
+                path_wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                dacl,
+                ptr::null_mut(),
+            )
+        };
+        if error != ERROR_SUCCESS {
+            return Err(std::io::Error::from_raw_os_error(error as i32));
+        }
+        Ok(())
+    })();
+    unsafe {
+        LocalFree(descriptor as HLOCAL);
+    }
+    result
 }
 
 #[cfg(test)]
