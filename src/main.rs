@@ -1005,6 +1005,11 @@ fn parse_shell_words(input: &str) -> Result<Vec<String>, String> {
 
 enum Event {
     Line(String),
+    RunLine {
+        run_id: String,
+        job_id: String,
+        text: String,
+    },
     ProcessStarted(
         String,
         String,
@@ -1113,6 +1118,8 @@ fn run_streaming(
     let out_tail = Arc::clone(&tail);
     let out_evidence_lines = Arc::clone(&evidence_lines);
     let out_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
+    let out_run_id = run_id.to_owned();
+    let out_job_id = job_id.to_owned();
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
             let mut safe = line;
@@ -1124,7 +1131,11 @@ fn run_streaming(
             record_process_tail(&out_tail, &safe);
             record_evidence_line(&out_evidence_lines, &safe);
             if out_tx
-                .try_send(Event::Line(format!("{out_prefix}{safe}")))
+                .try_send(Event::RunLine {
+                    run_id: out_run_id.clone(),
+                    job_id: out_job_id.clone(),
+                    text: format!("{out_prefix}{safe}"),
+                })
                 .is_err()
             {
                 out_dropped_diagnostics.fetch_add(1, Ordering::Relaxed);
@@ -1137,6 +1148,8 @@ fn run_streaming(
     let err_tail = Arc::clone(&tail);
     let err_evidence_lines = Arc::clone(&evidence_lines);
     let err_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
+    let err_run_id = run_id.to_owned();
+    let err_job_id = job_id.to_owned();
     let err_thread = thread::spawn(move || {
         for_each_lossy_line(stderr, |line| {
             let mut safe = line;
@@ -1148,7 +1161,11 @@ fn run_streaming(
             record_process_tail(&err_tail, &safe);
             record_evidence_line(&err_evidence_lines, &safe);
             if err_tx
-                .try_send(Event::Line(format!("{err_prefix}[stderr] {safe}")))
+                .try_send(Event::RunLine {
+                    run_id: err_run_id.clone(),
+                    job_id: err_job_id.clone(),
+                    text: format!("{err_prefix}[stderr] {safe}"),
+                })
                 .is_err()
             {
                 err_dropped_diagnostics.fetch_add(1, Ordering::Relaxed);
@@ -1251,9 +1268,13 @@ fn run_streaming(
         });
     let dropped = dropped_diagnostics.load(Ordering::Relaxed);
     if dropped > 0 {
-        let _ = tx.try_send(Event::Line(format!(
-            "{prefix}[diagnostics] {dropped} output line(s) omitted because the operator event queue was full"
-        )));
+        let _ = tx.try_send(Event::RunLine {
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+            text: format!(
+                "{prefix}[diagnostics] {dropped} output line(s) omitted because the operator event queue was full"
+            ),
+        });
     }
     match result {
         Ok(outcome) if reader_error.is_none() => {
@@ -4760,6 +4781,25 @@ impl App {
                                 cancel.store(true, Ordering::Relaxed);
                             }
                         }
+                    }
+                    Event::RunLine {
+                        run_id,
+                        job_id,
+                        text,
+                    } => {
+                        if let Some(run) = active_run.as_ref()
+                            && run.run_id == run_id
+                            && (run.job_id.as_deref() == Some(job_id.as_str())
+                                || run.batch_job_ids.iter().any(|id| id == &job_id))
+                        {
+                            pending_db_events.push((
+                                run.project_id.clone(),
+                                run_id,
+                                "run_output".into(),
+                                text.clone(),
+                            ));
+                        }
+                        push_visible_output(&mut self.output, text);
                     }
                     Event::Line(s) => {
                         // Runner threads redact secrets before publishing events.
