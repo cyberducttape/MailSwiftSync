@@ -337,6 +337,8 @@ pub struct RunListItem {
     pub id: String,
     pub job_id: Option<String>,
     pub parent_run_id: Option<String>,
+    pub source_mailbox: Option<String>,
+    pub destination_mailbox: Option<String>,
     pub engine: String,
     pub phase_at_start: String,
     pub status: String,
@@ -2676,7 +2678,7 @@ impl StateStore {
         limit: u32,
     ) -> rusqlite::Result<Vec<RunListItem>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,parent_run_id,engine,phase_at_start,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+            "SELECT r.id,r.job_id,r.parent_run_id,j.source_mailbox,j.destination_mailbox,r.engine,r.phase_at_start,r.status,r.started_at,r.finished_at,r.detail FROM runs r LEFT JOIN mailbox_jobs j ON j.id=r.job_id AND j.project_id=r.project_id WHERE r.project_id=?1 ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?2",
         )?;
         statement
             .query_map(params![project_id, limit], |row| {
@@ -2684,12 +2686,14 @@ impl StateStore {
                     id: row.get(0)?,
                     job_id: row.get(1)?,
                     parent_run_id: row.get(2)?,
-                    engine: row.get(3)?,
-                    phase_at_start: row.get(4)?,
-                    status: row.get(5)?,
-                    started_at: row.get(6)?,
-                    finished_at: row.get(7)?,
-                    detail: row.get(8)?,
+                    source_mailbox: row.get(3)?,
+                    destination_mailbox: row.get(4)?,
+                    engine: row.get(5)?,
+                    phase_at_start: row.get(6)?,
+                    status: row.get(7)?,
+                    started_at: row.get(8)?,
+                    finished_at: row.get(9)?,
+                    detail: row.get(10)?,
                 })
             })?
             .collect()
@@ -4604,6 +4608,8 @@ mod tests {
 
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, "run-list");
+        assert_eq!(list[0].source_mailbox.as_deref(), Some("source"));
+        assert_eq!(list[0].destination_mailbox.as_deref(), Some("destination"));
         assert_eq!(list[0].status, "running");
     }
 

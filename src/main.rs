@@ -4326,6 +4326,8 @@ impl App {
                     .striped(true)
                     .show(ui, |ui| {
                         ui.strong("Run");
+                        ui.strong("Mailbox");
+                        ui.strong("Stage");
                         ui.strong("Engine");
                         ui.strong("Status");
                         ui.strong("Started");
@@ -4334,6 +4336,14 @@ impl App {
                         ui.end_row();
                         for run in runs {
                             ui.label(RichText::new(&run.id[..8.min(run.id.len())]).monospace());
+                            ui.label(
+                                run.destination_mailbox
+                                    .as_deref()
+                                    .or(run.source_mailbox.as_deref())
+                                    .unwrap_or("Batch")
+                                    .to_owned(),
+                            );
+                            ui.label(&run.phase_at_start);
                             ui.label(run.engine);
                             ui.label(RichText::new(&run.status).color(
                                 if run.status == "completed" {
