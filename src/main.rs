@@ -3363,6 +3363,14 @@ impl App {
             .any(|value| value.to_ascii_lowercase().contains(&search))
     }
 
+    fn bulk_row_is_selected(&self, index: usize) -> bool {
+        self.bulk_selected_ids.is_empty()
+            || self
+                .bulk_job_ids
+                .get(index)
+                .is_some_and(|job_id| self.bulk_selected_ids.contains(job_id))
+    }
+
     fn activity_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Activity");
         ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(MUTED));
@@ -4031,6 +4039,7 @@ impl App {
                 self.bulk_project_id = None;
                 self.bulk_job_ids.clear();
                 self.bulk_retry_scope = BulkRetryScope::default();
+                self.bulk_selected_ids.clear();
                 self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
                 self.bulk_jobs = jobs;
             }
@@ -6137,6 +6146,7 @@ impl App {
                 if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
                     self.bulk_jobs.clear();
+                    self.bulk_selected_ids.clear();
                     if self.selected_project_id == self.bulk_project_id {
                         self.selected_project_id = None;
                     }
@@ -6289,10 +6299,12 @@ impl App {
                     .iter()
                     .enumerate()
                     .filter(|(index, _)| {
-                        self.bulk_job_ids
-                            .get(*index)
-                            .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
-                            .is_some_and(|state| self.bulk_retry_scope.includes(&state))
+                        self.bulk_row_is_selected(*index)
+                            && self
+                                .bulk_job_ids
+                                .get(*index)
+                                .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
+                                .is_some_and(|state| self.bulk_retry_scope.includes(&state))
                     })
                     .count();
                 ui.label(format!("{selected} mailboxes selected"));
@@ -6305,10 +6317,12 @@ impl App {
                     .iter()
                     .enumerate()
                     .filter(|(index, _)| {
-                        self.bulk_job_ids
-                            .get(*index)
-                            .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
-                            .is_some_and(|state| self.bulk_retry_scope.includes(&state))
+                        self.bulk_row_is_selected(*index)
+                            && self
+                                .bulk_job_ids
+                                .get(*index)
+                                .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
+                                .is_some_and(|state| self.bulk_retry_scope.includes(&state))
                     })
                     .any(|(_, job)| job.form.profile.delete2);
                 ui.label(
