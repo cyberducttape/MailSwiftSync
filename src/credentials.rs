@@ -41,8 +41,22 @@ pub fn secret_runtime_base() -> PathBuf {
 pub fn secret_runtime_base_from(runtime_dir: Option<PathBuf>) -> PathBuf {
     match runtime_dir.filter(|path| !path.as_os_str().is_empty()) {
         Some(path) => path.join("mailswiftsync"),
-        None => std::env::temp_dir().join("mailswiftsync-runtime"),
+        None => fallback_secret_runtime_base(),
     }
+}
+
+#[cfg(unix)]
+fn fallback_secret_runtime_base() -> PathBuf {
+    // XDG_RUNTIME_DIR is normally per-user. When it is unavailable, retain
+    // that isolation property in the system temporary directory instead of
+    // converging all Unix users on one predictable shared pathname.
+    let uid = unsafe { libc::geteuid() };
+    std::env::temp_dir().join(format!("mailswiftsync-runtime-{uid}"))
+}
+
+#[cfg(not(unix))]
+fn fallback_secret_runtime_base() -> PathBuf {
+    std::env::temp_dir().join("mailswiftsync-runtime")
 }
 
 pub fn cleanup_stale_secret_directories(base: &Path) {

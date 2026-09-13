@@ -11329,10 +11329,15 @@ mod tests {
             credentials::secret_runtime_base_from(Some(PathBuf::from("/run/user/1000"))),
             PathBuf::from("/run/user/1000/mailswiftsync")
         );
-        assert!(
-            credentials::secret_runtime_base_from(Some(PathBuf::from("")))
-                .ends_with("mailswiftsync-runtime")
-        );
+        let fallback = credentials::secret_runtime_base_from(Some(PathBuf::from("")));
+        #[cfg(unix)]
+        assert!(fallback.to_string_lossy().starts_with(&format!(
+            "{}{}",
+            std::env::temp_dir().display(),
+            "/mailswiftsync-runtime-"
+        )));
+        #[cfg(not(unix))]
+        assert!(fallback.ends_with("mailswiftsync-runtime"));
     }
 
     #[test]
