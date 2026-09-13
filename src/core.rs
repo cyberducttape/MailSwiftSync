@@ -667,12 +667,16 @@ impl StateStore {
             destination_endpoint: destination.into(),
             phase: Phase::Discovery,
         };
-        self.connection.execute("INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES(?1,?2,?3,?4,?5)", params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()])?;
-        self.event(
-            &project.id,
-            "project_created",
-            "Project created without credentials",
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES(?1,?2,?3,?4,?5)",
+            params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
         )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created','Project created without credentials')",
+            [&project.id],
+        )?;
+        tx.commit()?;
         Ok(project)
     }
     pub fn create_project_with_mailbox(
@@ -897,7 +901,16 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let id = Uuid::new_v4().to_string();
-        self.connection.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')", params![id, project_id, source, destination, identity])?;
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')",
+            params![id, project_id, source, destination, identity],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'mailbox_added',?2)",
+            params![project_id, format!("Mailbox {destination} added")],
+        )?;
+        tx.commit()?;
         Ok(id)
     }
     pub fn set_mailbox_state(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
@@ -2303,6 +2316,33 @@ mod tests {
             db.project(&project.id).unwrap().unwrap().phase,
             Phase::Verification
         );
+    }
+
+    #[test]
+    fn project_and_mailbox_creation_are_recorded_in_the_audit_ledger() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("audit", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source@example", "destination@example")
+            .unwrap();
+
+        let events = db
+            .connection
+            .prepare("SELECT kind, detail FROM events WHERE project_id=?1 ORDER BY id")
+            .unwrap()
+            .query_map([&project.id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].0, "project_created");
+        assert_eq!(events[1].0, "mailbox_added");
+        assert!(events[1].1.contains("destination@example"));
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("queued"));
     }
 
     #[test]
