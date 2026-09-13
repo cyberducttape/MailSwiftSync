@@ -1,0 +1,401 @@
+use crate::*;
+use eframe::egui;
+use std::time::Duration;
+
+pub(crate) fn run() -> eframe::Result<()> {
+    let mut arguments = std::env::args_os();
+    let _program = arguments.next();
+    let Some(command) = arguments.next() else {
+        return eframe::run_native(
+            "MailSwiftSync",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size([1200.0, 820.0])
+                    .with_min_inner_size([900.0, 640.0]),
+                ..Default::default()
+            },
+            Box::new(|_| Ok(Box::<App>::default())),
+        );
+    };
+    if matches!(command.to_str(), Some("help" | "--help" | "-h")) {
+        print_cli_help();
+        return Ok(());
+    }
+    if matches!(command.to_str(), Some("--version" | "-V" | "version")) {
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync --version");
+            std::process::exit(2);
+        }
+        println!("MailSwiftSync {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    if command == std::ffi::OsStr::new("verify") {
+        let Some(path) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync verify <project-report.json> [trusted-public-key-hex]");
+            std::process::exit(2);
+        };
+        let trusted_public_key = arguments.next();
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync verify <project-report.json> [trusted-public-key-hex]");
+            std::process::exit(2);
+        }
+        let trusted_public_key = trusted_public_key
+            .as_deref()
+            .and_then(|value| value.to_str());
+        match verify_proof_file_with_trust(std::path::Path::new(&path), trusted_public_key) {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration proof verification failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("sign") {
+        let (Some(report), Some(signing_key), key_id) = (
+            arguments.next(),
+            arguments.next(),
+            arguments.next().unwrap_or_else(|| "operator".into()),
+        ) else {
+            eprintln!(
+                "Usage: mailswiftsync sign <project-report.json> <ed25519-pkcs8-key> [key-id]"
+            );
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!(
+                "Usage: mailswiftsync sign <project-report.json> <ed25519-pkcs8-key> [key-id]"
+            );
+            std::process::exit(2);
+        }
+        let report = std::path::PathBuf::from(report);
+        let signing_key = std::path::PathBuf::from(signing_key);
+        let key_id = key_id.to_string_lossy();
+        match sign_proof_file(&report, &signing_key, &key_id) {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration proof signing failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("backup") {
+        let (Some(source), Some(destination)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync backup <state.db> <backup.db>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync backup <state.db> <backup.db>");
+            std::process::exit(2);
+        }
+        let source = std::path::PathBuf::from(source);
+        let destination = std::path::PathBuf::from(destination);
+        let _lock = match acquire_instance_lock(&source) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Ledger backup refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match core::StateStore::open(&source).and_then(|store| store.backup_to(&destination)) {
+            Ok(()) => {
+                println!("Created verified ledger backup: {}", destination.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Ledger backup failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("restore") {
+        let (Some(backup), Some(destination)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync restore <backup.db> <state.db>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync restore <backup.db> <state.db>");
+            std::process::exit(2);
+        }
+        let backup = std::path::PathBuf::from(backup);
+        let destination = std::path::PathBuf::from(destination);
+        let _lock = match acquire_instance_lock(&destination) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Ledger restore refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match restore_ledger(&backup, &destination) {
+            Ok(Some(previous)) => {
+                println!(
+                    "Restored verified ledger to {}; previous ledger preserved at {}.",
+                    destination.display(),
+                    previous.display()
+                );
+                return Ok(());
+            }
+            Ok(None) => {
+                println!("Restored verified ledger to {}.", destination.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Ledger restore failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("status") {
+        let Some(state) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync status <state.db> [project-id]");
+            std::process::exit(2);
+        };
+        let project_id = arguments.next();
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync status <state.db> [project-id]");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let project_id = match project_id.as_deref() {
+            Some(value) => match value.to_str() {
+                Some(value) => Some(value),
+                None => {
+                    eprintln!("Status refused: project ID must be valid UTF-8");
+                    std::process::exit(2);
+                }
+            },
+            None => None,
+        };
+        match headless_status(&state, project_id) {
+            Ok(status) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&status)
+                        .expect("headless status is always serializable")
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Could not read migration status: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("recover") {
+        let Some(state) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync recover <state.db>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync recover <state.db>");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let _lock = match acquire_instance_lock(&state) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Recovery refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match headless_recover(&state) {
+            Ok(result) => {
+                println!(
+                    "Recovered {} job(s); preserved {} unverified process identity(ies).",
+                    result.recovered_jobs, result.preserved_processes
+                );
+                if result.preserved_processes > 0 {
+                    eprintln!(
+                        "WARNING: process ownership could not be proven for every recorded engine; no unverified process was signalled."
+                    );
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration recovery failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("support-bundle") {
+        let (Some(state), Some(output)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync support-bundle <state.db> <output.json>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync support-bundle <state.db> <output.json>");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let output = std::path::PathBuf::from(output);
+        let _lock = match acquire_instance_lock(&state) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Support-bundle export refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match export_support_bundle(&state, &output) {
+            Ok(()) => {
+                println!("Created sanitized support bundle: {}", output.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Support-bundle export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("customer-proof") {
+        let (Some(state), Some(output)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json>");
+            std::process::exit(2);
+        };
+        let project_id = arguments.next();
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id]");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let output = std::path::PathBuf::from(output);
+        let store = match core::StateStore::open_readonly(&state) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!(
+                    "Customer-proof export refused: durable SQLite state is unavailable: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let project_id = match project_id {
+            Some(project_id) => match project_id.to_str() {
+                Some(project_id) => Some(project_id.to_owned()),
+                None => {
+                    eprintln!("Customer-proof export refused: project ID must be valid UTF-8");
+                    std::process::exit(2);
+                }
+            },
+            None => match store.latest_project() {
+                Ok(project) => project.map(|project| project.id),
+                Err(error) => {
+                    eprintln!(
+                        "Customer-proof export refused: could not select latest project: {error}"
+                    );
+                    std::process::exit(1);
+                }
+            },
+        };
+        let Some(project_id) = project_id else {
+            eprintln!("Customer-proof export refused: no durable migration project is available");
+            std::process::exit(1);
+        };
+        match reports::customer::export_from_store(&store, &project_id, &output) {
+            Ok(()) => {
+                println!("Created customer migration proof: {}", output.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Customer-proof export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("supervise") {
+        let Some(state) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync supervise <state.db> [poll-seconds] [idle-polls]");
+            std::process::exit(2);
+        };
+        let poll_seconds = match arguments.next() {
+            Some(value) => value
+                .to_str()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
+            None => 30,
+        };
+        let idle_polls = match arguments.next() {
+            Some(value) => value.to_str().and_then(|value| value.parse::<usize>().ok()),
+            None => Some(1),
+        };
+        if arguments.next().is_some()
+            || !(1..=3_600).contains(&poll_seconds)
+            || idle_polls.is_none()
+        {
+            eprintln!(
+                "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous]"
+            );
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        match headless_supervise(
+            &state,
+            Duration::from_secs(poll_seconds),
+            idle_polls.expect("idle-poll count was validated above"),
+        ) {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration supervisor stopped: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("headless") {
+        let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
+            eprintln!(
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live"
+            );
+            std::process::exit(2);
+        };
+        if arguments.next().is_some()
+            || !matches!(
+                mode.to_str(),
+                Some("preflight" | "live" | "batch-preflight" | "batch-live")
+            )
+        {
+            eprintln!(
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live"
+            );
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let mode = mode.to_string_lossy();
+        let result = match mode.as_ref() {
+            "preflight" => headless_execute(&state, false),
+            "live" => headless_execute(&state, true),
+            "batch-preflight" => headless_batch_execute(&state, false),
+            "batch-live" => headless_batch_execute(&state, true),
+            _ => unreachable!("headless mode was validated above"),
+        };
+        match result {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Headless migration failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    eprintln!(
+        "Unknown command. Run `mailswiftsync --help` for available commands; run without a command for the GUI."
+    );
+    std::process::exit(2);
+}
+
+fn print_cli_help() {
+    println!(
+        "MailSwiftSync — durable, evidence-first mailbox migration control plane\n\n\
+Usage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation\n\n\
+Commands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit secret-free JSON status\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export customer-safe migration evidence\n  supervise <state> [poll] [n]   Run automation-safe supervision\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n\n\
+Options:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\n\
+Headless live operations fail nonzero for unresolved verification, delta,\noperator-attention, or durability states."
+    );
+}

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved CLI command parsing, help text, and headless command dispatch into
+  `src/cli.rs`, leaving the desktop entrypoint as a thin wrapper shared with
+  the automation surface.
 - Extra imapsync options now use typed boolean/integer specifications with
   explicit numeric bounds, so malformed timeout and retry values are rejected
   before command construction.
