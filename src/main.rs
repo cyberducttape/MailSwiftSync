@@ -5510,12 +5510,9 @@ impl App {
                         .into();
                 return;
             }
-            let preflight_ready = self
-                .project_id
-                .as_deref()
-                .and_then(|id| self.store.project(id).ok().flatten())
-                .is_some_and(|project| {
-                    matches!(
+            let preflight_ready = match self.project_id.as_deref() {
+                Some(project_id) => match self.store.project(project_id) {
+                    Ok(Some(project)) => matches!(
                         project.phase,
                         core::Phase::Preflight
                             | core::Phase::Pilot
@@ -5523,27 +5520,47 @@ impl App {
                             | core::Phase::CatchUp
                             | core::Phase::FinalDelta
                             | core::Phase::Verification
-                    )
-                });
-            let plan_matches = self.job_id.as_deref().is_some_and(|job| {
-                self.store
-                    .preflight_plan(job)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|plan| {
-                        plan == plan_fingerprint_digest(&self.form.plan_fingerprint())
-                    })
-            });
+                    ),
+                    Ok(None) => false,
+                    Err(error) => {
+                        self.status = format!(
+                            "Could not read durable project readiness; migration was not started: {error}"
+                        );
+                        return;
+                    }
+                },
+                None => false,
+            };
+            let expected_plan = plan_fingerprint_digest(&self.form.plan_fingerprint());
+            let plan_matches = match self.job_id.as_deref() {
+                Some(job) => match self.store.preflight_plan(job) {
+                    Ok(Some(plan)) => plan == expected_plan,
+                    Ok(None) => false,
+                    Err(error) => {
+                        self.status = format!(
+                            "Could not read the durable preflight plan; migration was not started: {error}"
+                        );
+                        return;
+                    }
+                },
+                None => false,
+            };
             let current_credential_fingerprint = self.form.credential_fingerprint();
             let credentials_match = self.preflight_credential_fingerprint.as_deref()
                 == Some(current_credential_fingerprint.as_str());
-            let mailbox_ready = self.job_id.as_deref().is_some_and(|job| {
-                self.store
-                    .mailbox_state(job)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|state| state == "ready" || state == "delta_required")
-            });
+            let mailbox_ready = match self.job_id.as_deref() {
+                Some(job) => match self.store.mailbox_state(job) {
+                    Ok(Some(state)) => state == "ready" || state == "delta_required",
+                    Ok(None) => false,
+                    Err(error) => {
+                        self.status = format!(
+                            "Could not read durable mailbox readiness; migration was not started: {error}"
+                        );
+                        return;
+                    }
+                },
+                None => false,
+            };
             if !preflight_ready || !mailbox_ready || !plan_matches || !credentials_match {
                 self.status = if credentials_match {
                     "Run a successful dry preflight for this exact mailbox plan before starting live migration.".into()
