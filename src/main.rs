@@ -4274,7 +4274,16 @@ impl App {
                 let job_id = &self.bulk_job_ids[index];
                 let job = &self.bulk_jobs[index];
                 let state = durable_states[index].as_deref();
-                let preflight = self.store.preflight_plan(job_id).ok().flatten();
+                let preflight = match self.store.preflight_plan(job_id) {
+                    Ok(preflight) => preflight,
+                    Err(error) => {
+                        self.bulk_message = format!(
+                            "Could not read the durable preflight for mailbox {}; batch was not started: {error}",
+                            index + 1
+                        );
+                        return;
+                    }
+                };
                 if !matches!(
                     state,
                     Some(
@@ -4386,12 +4395,20 @@ impl App {
                 return;
             }
         };
-        let reusable_project = self.bulk_project_id.clone().filter(|project_id| {
-            self.store
-                .mailboxes(project_id)
-                .ok()
-                .is_some_and(|stored| durable_batch_matches_queue(&stored, &mailboxes))
-        });
+        let reusable_project = if let Some(project_id) = self.bulk_project_id.clone() {
+            match self.store.mailboxes(&project_id) {
+                Ok(stored) if durable_batch_matches_queue(&stored, &mailboxes) => Some(project_id),
+                Ok(_) => None,
+                Err(error) => {
+                    self.bulk_message = format!(
+                        "Could not inspect the existing durable batch; no new batch was created: {error}"
+                    );
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let (project_id, job_ids) = if let Some(project_id) = reusable_project {
             (project_id, self.bulk_job_ids.clone())
         } else {
