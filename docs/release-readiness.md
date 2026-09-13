@@ -86,8 +86,8 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   operation.
 - A Linux headless `Dockerfile` provides explicit durable-state and per-user
   runtime volumes, non-root execution, and packaged `imapsync`/`doveadm`
-  dependencies. It is a deployment template; official registry publication
-  and image signing remain release gates.
+  dependencies. CI builds the image and smoke-tests its version command;
+  official registry publication and image signing remain release gates.
 
 ## Available in 0.1
 
