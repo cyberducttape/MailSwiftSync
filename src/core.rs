@@ -911,6 +911,9 @@ impl StateStore {
             })()
             .unwrap_or(false);
             if current_schema_is_clean {
+                let tx = self.connection.unchecked_transaction()?;
+                Self::refresh_destination_identities(&tx)?;
+                tx.commit()?;
                 return Ok(());
             }
         }
@@ -1094,12 +1097,34 @@ impl StateStore {
         // Reconcile those ledgers before creating the partial unique indexes;
         // otherwise an otherwise recoverable database would fail to open.
         Self::reconcile_duplicate_active_runs(&tx)?;
+        Self::refresh_destination_identities(&tx)?;
         tx.execute_batch(
             "CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
              CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');",
         )?;
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         tx.commit()?;
+        Ok(())
+    }
+
+    fn refresh_destination_identities(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        let rows = tx
+            .prepare("SELECT id,destination_mailbox,config FROM mailbox_jobs")?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (job_id, destination, config) in rows {
+            let identity = normalized_destination_identity(&destination, config.as_deref());
+            tx.execute(
+                "UPDATE mailbox_jobs SET destination_identity=?1 WHERE id=?2",
+                params![identity, job_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -2011,14 +2036,22 @@ impl StateStore {
         }
         let mut destinations = BTreeSet::new();
         for (index, job_id) in job_ids.iter().enumerate() {
-            let (current, destination, destination_identity, actual_plan, active_run_exists): (
+            let (
+                current,
+                destination,
+                destination_identity,
+                actual_plan,
+                config,
+                active_run_exists,
+            ): (
                 String,
                 String,
                 String,
                 Option<String>,
+                Option<String>,
                 bool,
             ) = tx.query_row(
-                "SELECT j.state,j.destination_mailbox,j.destination_identity,j.preflight_plan,
+                "SELECT j.state,j.destination_mailbox,j.destination_identity,j.preflight_plan,j.config,
                         EXISTS(SELECT 1 FROM runs r WHERE r.project_id=j.project_id AND r.job_id=j.id AND r.status IN ('queued','running'))
                  FROM mailbox_jobs j WHERE j.id=?1 AND j.project_id=?2",
                 params![job_id, project_id],
@@ -2029,11 +2062,12 @@ impl StateStore {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
                     ))
                 },
             )?;
             let identity = if destination_identity.is_empty() {
-                normalized_destination_identity(&destination, None)
+                normalized_destination_identity(&destination, config.as_deref())
             } else {
                 destination_identity
             };
@@ -5027,6 +5061,41 @@ destination_port = "143"
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn destination_identity_repair_recomputes_existing_rows_from_config() {
+        let db = StateStore::in_memory().unwrap();
+        let config = r#"
+destination_host = "MAIL.example.test."
+destination_user = "User@example.test"
+destination_tls = "imaps"
+destination_port = ""
+"#;
+        let (project, jobs) = db
+            .create_project_with_mailbox_configs(
+                "identity-repair",
+                "source",
+                "batch",
+                &[("one".into(), "ignored-row-mailbox".into(), config.into())],
+            )
+            .unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET destination_identity='stale-identity' WHERE id=?1",
+                [&jobs[0]],
+            )
+            .unwrap();
+        db.migrate().unwrap();
+        let identity: String = db
+            .connection
+            .query_row(
+                "SELECT destination_identity FROM mailbox_jobs WHERE project_id=?1",
+                [&project.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(identity, "endpoint:mail.example.test:993:User@example.test");
     }
 
     #[test]

@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Durable ledgers now repair and refresh stored destination identities from
+  their secret-free batch configuration, including already-open current-schema
+  databases; empty legacy identities also use the full configured endpoint
+  during live admission.
 - Unified GUI and durable SQLite destination-account identity canonicalization
   through the shared endpoint module, including DNS trailing-dot handling,
   canonical IP literals, transport-derived ports, and mailbox case rules.
