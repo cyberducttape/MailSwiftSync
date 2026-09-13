@@ -3552,6 +3552,34 @@ mod tests {
     }
 
     #[test]
+    fn multi_run_event_batch_rolls_back_when_one_run_is_not_active() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("atomic-run-events", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "active-run", "test")
+            .unwrap();
+
+        let result = db.record_events_for_runs_batch(&[
+            ("active-run", "run_output", "must roll back"),
+            ("missing-run", "run_output", "must never persist"),
+        ]);
+        assert!(result.is_err());
+        let count: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE run_id='active-run' AND kind='run_output'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
     fn verbose_output_is_retained_as_a_bounded_project_tail() {
         let db = StateStore::in_memory().unwrap();
         let project = db
