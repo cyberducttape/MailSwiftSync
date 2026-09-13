@@ -75,13 +75,14 @@ use std::{
     thread,
     time::Duration,
 };
-#[cfg(test)]
-use ui::{StatusSeverity, contrast_ratio, password_reveal_allowed, status_severity};
+use ui::StatusSeverity;
 use ui::{
     ThemeColors, display_job_state, display_state_key, format_phase_name, job_state_badge,
     needs_operator_review, password_visibility_id, project_health_state_counts,
     recommended_next_action, render_account, status_color, workflow_step_index,
 };
+#[cfg(test)]
+use ui::{contrast_ratio, password_reveal_allowed};
 
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const MAX_VISIBLE_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -1726,6 +1727,7 @@ struct App {
     output: BoundedLineBuffer,
     receiver: Option<Receiver<Event>>,
     status: String,
+    status_severity: StatusSeverity,
     preview: bool,
     bulk_jobs: Vec<BulkJob>,
     bulk_open: bool,
@@ -2140,6 +2142,13 @@ impl Default for App {
                 .clone()
                 .or_else(|| profile_warning.clone())
                 .unwrap_or_else(|| "Idle".into()),
+            status_severity: if persistence_warning.is_some() {
+                StatusSeverity::Error
+            } else if profile_warning.is_some() {
+                StatusSeverity::Warning
+            } else {
+                StatusSeverity::Info
+            },
             preview: false,
             bulk_jobs: restored_bulk_jobs,
             bulk_open: false,
@@ -2477,6 +2486,11 @@ fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
 }
 
 impl App {
+    fn set_status(&mut self, message: impl Into<String>, severity: StatusSeverity) {
+        self.status = message.into();
+        self.status_severity = severity;
+    }
+
     fn theme_colors(&self) -> ThemeColors {
         if self.dark_mode {
             ThemeColors::dark()
@@ -2565,7 +2579,10 @@ impl App {
 
     fn select_workspace_project(&mut self, project_id: String) {
         if self.running() {
-            self.status = "Project switching is disabled while a migration is running.".into();
+            self.set_status(
+                "Project switching is disabled while a migration is running.",
+                StatusSeverity::Warning,
+            );
             return;
         }
         let editable_id = self.current_editable_project_id().map(str::to_owned);
@@ -2580,14 +2597,19 @@ impl App {
             self.preflight.clear();
             self.source_capabilities = None;
             self.destination_capabilities = None;
-            self.status = "Viewing a historical project read-only. Start a new migration to edit or execute a plan.".into();
+            self.set_status(
+                "Viewing a historical project read-only. Start a new migration to edit or execute a plan.",
+                StatusSeverity::Info,
+            );
         }
     }
 
     fn start_new_migration(&mut self) {
         if self.running() {
-            self.status =
-                "A migration is running; finish or stop it before starting a new workspace.".into();
+            self.set_status(
+                "A migration is running; finish or stop it before starting a new workspace.",
+                StatusSeverity::Warning,
+            );
             return;
         }
         self.selected_project_id = None;
@@ -2609,8 +2631,10 @@ impl App {
         self.live_confirmation_plan = None;
         self.form = Form::default();
         self.active_view = WorkspaceView::Plan;
-        self.status =
-            "New migration workspace ready; configure the endpoints before preflight.".into();
+        self.set_status(
+            "New migration workspace ready; configure the endpoints before preflight.",
+            StatusSeverity::Info,
+        );
     }
 
     fn active_project_id(&self) -> Option<&str> {
@@ -2629,19 +2653,28 @@ impl App {
             self.form.reload_configured_keyring_credentials()
         };
         if let Err(error) = credential_load {
-            self.status = error;
+            self.set_status(error, StatusSeverity::Error);
             return;
         }
         if let Err(error) = self.form.validate() {
-            self.status = format!("Preflight input is invalid: {error}");
+            self.set_status(
+                format!("Preflight input is invalid: {error}"),
+                StatusSeverity::Error,
+            );
             return;
         }
         if self.form.engine() == core::Engine::Dovecot {
-            self.status = "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight.".into();
+            self.set_status(
+                "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight.",
+                StatusSeverity::Info,
+            );
             return;
         }
         if self.form.profile.source_tls == "plain" || self.form.profile.destination_tls == "plain" {
-            self.status = "Authenticated capability discovery requires encrypted IMAP; plain transport remains blocked by the explicit cleartext acknowledgement gate.".into();
+            self.set_status(
+                "Authenticated capability discovery requires encrypted IMAP; plain transport remains blocked by the explicit cleartext acknowledgement gate.",
+                StatusSeverity::Warning,
+            );
             return;
         }
         let source = match endpoint_for_probe(
@@ -2650,7 +2683,10 @@ impl App {
         ) {
             Ok(endpoint) => endpoint,
             Err(error) => {
-                self.status = format!("Source readiness probe blocked: {error}");
+                self.set_status(
+                    format!("Source readiness probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
                 return;
             }
         };
@@ -2660,13 +2696,19 @@ impl App {
         ) {
             Ok(endpoint) => endpoint,
             Err(error) => {
-                self.status = format!("Destination readiness probe blocked: {error}");
+                self.set_status(
+                    format!("Destination readiness probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
                 return;
             }
         };
         let (tx, rx) = mpsc::channel();
         self.capability_receiver = Some(rx);
-        self.status = "Authenticating and inspecting IMAPS readiness…".into();
+        self.set_status(
+            "Authenticating and inspecting IMAPS readiness…",
+            StatusSeverity::Info,
+        );
         let source_user = self.form.profile.source_user.clone();
         let source_password = self.form.source_password.clone();
         let destination_user = self.form.profile.destination_user.clone();
@@ -2724,7 +2766,10 @@ impl App {
         ) {
             Ok(endpoint) => endpoint,
             Err(error) => {
-                self.status = format!("Live authentication probe blocked: {error}");
+                self.set_status(
+                    format!("Live authentication probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
                 return;
             }
         };
@@ -2734,7 +2779,10 @@ impl App {
         ) {
             Ok(endpoint) => endpoint,
             Err(error) => {
-                self.status = format!("Live authentication probe blocked: {error}");
+                self.set_status(
+                    format!("Live authentication probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
                 return;
             }
         };
@@ -2753,7 +2801,10 @@ impl App {
             self.form.profile.destination_certificate_pin_sha256.clone();
         let (tx, rx) = mpsc::channel();
         self.live_auth_receiver = Some(rx);
-        self.status = "Re-authenticating encrypted IMAP endpoints before live execution…".into();
+        self.set_status(
+            "Re-authenticating encrypted IMAP endpoints before live execution…",
+            StatusSeverity::Info,
+        );
         thread::spawn(move || {
             let result = probe_tls_capabilities_with_transport(
                 &source,
@@ -2881,7 +2932,10 @@ impl App {
         if self.form.profile.source_host.trim().is_empty()
             || self.form.profile.destination_host.trim().is_empty()
         {
-            self.status = "Enter source and destination hosts before creating a project.".into();
+            self.set_status(
+                "Enter source and destination hosts before creating a project.",
+                StatusSeverity::Warning,
+            );
             return;
         }
         match self.store.create_project_with_mailbox(
@@ -2895,9 +2949,15 @@ impl App {
                 self.selected_project_id = Some(project.id.clone());
                 self.project_id = Some(project.id);
                 self.job_id = Some(job);
-                self.status = "Project created; ready for preflight review".into();
+                self.set_status(
+                    "Project created; ready for preflight review",
+                    StatusSeverity::Success,
+                );
             }
-            Err(e) => self.status = format!("Could not create project: {e}"),
+            Err(e) => self.set_status(
+                format!("Could not create project: {e}"),
+                StatusSeverity::Error,
+            ),
         }
     }
     fn projects_dialog(&mut self, ctx: &egui::Context) {
@@ -2985,7 +3045,10 @@ impl App {
                         if ui.button(label).clicked() {
                             self.dark_mode = !self.dark_mode;
                             if let Err(error) = (AppearancePreferences { dark_mode: self.dark_mode, ui_scale: self.ui_scale }).save() {
-                                self.status = format!("Could not save appearance preference: {error}");
+                                self.set_status(
+                                    format!("Could not save appearance preference: {error}"),
+                                    StatusSeverity::Error,
+                                );
                             }
                         }
                     });
@@ -3001,7 +3064,10 @@ impl App {
                     if ui.button("Save appearance preferences").clicked()
                         && let Err(error) = (AppearancePreferences { dark_mode: self.dark_mode, ui_scale: self.ui_scale }).save()
                     {
-                        self.status = format!("Could not save appearance preference: {error}");
+                        self.set_status(
+                            format!("Could not save appearance preference: {error}"),
+                            StatusSeverity::Error,
+                        );
                     }
                 });
                 ui.add_space(8.0);
@@ -3136,11 +3202,15 @@ impl App {
                     match self.store.clear_active_processes_after_review() {
                         Ok(()) => {
                             self.process_review_required = false;
-                            self.status = "Process review acknowledged; execution gates are available again.".into();
+                            self.set_status(
+                                "Process review acknowledged; execution gates are available again.",
+                                StatusSeverity::Success,
+                            );
                         }
                         Err(error) => {
-                            self.status = format!(
-                                "Could not clear reviewed process identities: {error}"
+                            self.set_status(
+                                format!("Could not clear reviewed process identities: {error}"),
+                                StatusSeverity::Error,
                             );
                         }
                     }
@@ -3244,13 +3314,19 @@ impl App {
                     ui.label("Reason");
                     ui.text_edit_singleline(&mut self.reopen_reason);
                     if ui.add_enabled(!self.running() && !self.reopen_reason.trim().is_empty(), egui::Button::new("Reopen project")).clicked() {
-                        self.status = match self.store.reopen_project(&project_id, &self.reopen_reason) {
+                        match self.store.reopen_project(&project_id, &self.reopen_reason) {
                             Ok(()) => {
                                 self.reopen_reason.clear();
-                                "Project reopened for documented review".into()
+                                self.set_status(
+                                    "Project reopened for documented review",
+                                    StatusSeverity::Warning,
+                                );
                             }
-                            Err(error) => format!("Could not reopen project: {error}"),
-                        };
+                            Err(error) => self.set_status(
+                                format!("Could not reopen project: {error}"),
+                                StatusSeverity::Error,
+                            ),
+                        }
                     }
                 });
             });
@@ -3915,7 +3991,10 @@ impl App {
                         self.form.dry_run = true;
                         self.live_confirmed = false;
                         self.active_view = WorkspaceView::Plan;
-                        self.status = "Retry prepared as a dry preflight. Review the exact plan before any live run.".into();
+                        self.set_status(
+                            "Retry prepared as a dry preflight. Review the exact plan before any live run.",
+                            StatusSeverity::Info,
+                        );
                     }
                 }
                 Some(_) | None => {}
@@ -3931,7 +4010,7 @@ impl App {
                 });
                 ui.label(
                     RichText::new(&self.status)
-                        .color(status_color(&self.status, self.theme_colors())),
+                        .color(status_color(self.status_severity, self.theme_colors())),
                 );
                 if ui.button("Copy output").clicked() {
                     ui.ctx()
@@ -4691,12 +4770,21 @@ impl App {
                                     &self.verification_exception_reason,
                                 ) {
                                     Ok(()) => {
-                                        self.status = "Verification exception recorded durably".into();
+                                        self.set_status(
+                                            "Verification exception recorded durably",
+                                            StatusSeverity::Success,
+                                        );
                                         self.verification_exception_reason.clear();
                                     }
-                                    Err(error) => self.status = format!("Could not accept verification exception: {error}"),
+                                    Err(error) => self.set_status(
+                                        format!("Could not accept verification exception: {error}"),
+                                        StatusSeverity::Error,
+                                    ),
                                 },
-                                None => self.status = "No active project selected".into(),
+                                None => self.set_status(
+                                    "No active project selected",
+                                    StatusSeverity::Warning,
+                                ),
                             }
                         }
                     }
@@ -5481,14 +5569,17 @@ impl App {
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
         self.run_started_at = Some(std::time::Instant::now());
-        self.status = format!(
-            "{}: {} jobs",
-            if live {
-                "Batch migration"
-            } else {
-                "Batch validation"
-            },
-            jobs.len()
+        self.set_status(
+            format!(
+                "{}: {} jobs",
+                if live {
+                    "Batch migration"
+                } else {
+                    "Batch validation"
+                },
+                jobs.len()
+            ),
+            StatusSeverity::Info,
         );
         self.output.clear();
         let retry_count = self.form.profile.batch_retry_count.min(3);
@@ -6036,18 +6127,27 @@ impl App {
                 &mut self.output,
                 format!("[durability] {operation} failed: {error}"),
             );
-            self.status = format!("Durability error: {operation}");
+            self.set_status(
+                format!("Durability error: {operation}"),
+                StatusSeverity::Error,
+            );
         }
     }
 
     fn report_export_result(&mut self, artifact: &str, result: Result<(), String>) {
         match result {
             Ok(()) => {
-                self.status = format!("{artifact} exported successfully.");
+                self.set_status(
+                    format!("{artifact} exported successfully."),
+                    StatusSeverity::Success,
+                );
                 push_visible_output(&mut self.output, self.status.clone());
             }
             Err(error) => {
-                self.status = format!("{artifact} was not exported: {error}");
+                self.set_status(
+                    format!("{artifact} was not exported: {error}"),
+                    StatusSeverity::Error,
+                );
                 push_visible_output(&mut self.output, format!("[export] {}", self.status));
             }
         }
@@ -6055,19 +6155,24 @@ impl App {
 
     fn start(&mut self) {
         if !self.profile_available {
-            self.status =
-                "Execution is blocked because the saved migration profile is unavailable; repair it before starting a migration."
-                    .into();
+            self.set_status(
+                "Execution is blocked because the saved migration profile is unavailable; repair it before starting a migration.",
+                StatusSeverity::Error,
+            );
             return;
         }
         if self.workspace_read_only {
-            self.status =
-                "This project is being viewed read-only. Start a new migration to execute a plan."
-                    .into();
+            self.set_status(
+                "This project is being viewed read-only. Start a new migration to execute a plan.",
+                StatusSeverity::Warning,
+            );
             return;
         }
         if self.process_review_required {
-            self.status = "Execution is blocked until you confirm that no unverified migration process remains on this host.".into();
+            self.set_status(
+                "Execution is blocked until you confirm that no unverified migration process remains on this host.",
+                StatusSeverity::Warning,
+            );
             return;
         }
         if !self.form.dry_run {
@@ -6087,11 +6192,11 @@ impl App {
             self.form.reload_configured_keyring_credentials()
         };
         if let Err(error) = credential_load {
-            self.status = error;
+            self.set_status(error, StatusSeverity::Error);
             return;
         }
         if let Err(e) = self.form.validate() {
-            self.status = e;
+            self.set_status(e, StatusSeverity::Error);
             return;
         }
         if let (Some(project_id), Some(job_id)) = (self.project_id.clone(), self.job_id.clone()) {
@@ -6110,8 +6215,9 @@ impl App {
                     durable_single_identity_matches(&project, &mailbox, &self.form.profile)
                 }
                 (Err(error), _) | (_, Err(error)) => {
-                    self.status = format!(
-                        "Could not read the durable mailbox identity; migration was not started: {error}"
+                    self.set_status(
+                        format!("Could not read the durable mailbox identity; migration was not started: {error}"),
+                        StatusSeverity::Error,
                     );
                     return;
                 }
@@ -6127,13 +6233,19 @@ impl App {
                     self.job_id = None;
                     self.selected_project_id = None;
                 } else {
-                    self.status = "The current mailbox identity differs from the durable project. Run a new dry preflight for this plan before starting live migration.".into();
+                    self.set_status(
+                        "The current mailbox identity differs from the durable project. Run a new dry preflight for this plan before starting live migration.",
+                        StatusSeverity::Error,
+                    );
                     return;
                 }
             }
         }
         if !self.form.dry_run && self.form.requires_insecure_transport_ack() {
-            self.status = "Live migration blocked: acknowledge the cleartext source-transport risk before continuing.".into();
+            self.set_status(
+                "Live migration blocked: acknowledge the cleartext source-transport risk before continuing.",
+                StatusSeverity::Warning,
+            );
             return;
         }
         if self.requires_live_imaps_auth_probe() {
@@ -6152,9 +6264,10 @@ impl App {
         self.durability_recovery_pending = false;
         if !self.form.dry_run {
             if !self.persistence_available {
-                self.status =
-                    "Live migration is disabled because durable SQLite storage is unavailable."
-                        .into();
+                self.set_status(
+                    "Live migration is disabled because durable SQLite storage is unavailable.",
+                    StatusSeverity::Error,
+                );
                 return;
             }
             let preflight_ready = match self.project_id.as_deref() {
@@ -6170,8 +6283,9 @@ impl App {
                     ),
                     Ok(None) => false,
                     Err(error) => {
-                        self.status = format!(
-                            "Could not read durable project readiness; migration was not started: {error}"
+                        self.set_status(
+                            format!("Could not read durable project readiness; migration was not started: {error}"),
+                            StatusSeverity::Error,
                         );
                         return;
                     }
@@ -6184,8 +6298,9 @@ impl App {
                     Ok(Some(plan)) => plan == expected_plan,
                     Ok(None) => false,
                     Err(error) => {
-                        self.status = format!(
-                            "Could not read the durable preflight plan; migration was not started: {error}"
+                        self.set_status(
+                            format!("Could not read the durable preflight plan; migration was not started: {error}"),
+                            StatusSeverity::Error,
                         );
                         return;
                     }
@@ -6200,8 +6315,9 @@ impl App {
                     Ok(Some(state)) => state == "ready" || state == "delta_required",
                     Ok(None) => false,
                     Err(error) => {
-                        self.status = format!(
-                            "Could not read durable mailbox readiness; migration was not started: {error}"
+                        self.set_status(
+                            format!("Could not read durable mailbox readiness; migration was not started: {error}"),
+                            StatusSeverity::Error,
                         );
                         return;
                     }
@@ -6209,11 +6325,11 @@ impl App {
                 None => false,
             };
             if !preflight_ready || !mailbox_ready || !plan_matches || !credentials_match {
-                self.status = if credentials_match {
-                    "Run a successful dry preflight for this exact mailbox plan before starting live migration.".into()
+                self.set_status(if credentials_match {
+                    "Run a successful dry preflight for this exact mailbox plan before starting live migration."
                 } else {
-                    "Credentials changed or were reloaded since preflight. Run a new dry preflight before starting live migration.".into()
-                };
+                    "Credentials changed or were reloaded since preflight. Run a new dry preflight before starting live migration."
+                }, StatusSeverity::Warning);
                 return;
             }
         }
@@ -6231,7 +6347,10 @@ impl App {
                     self.job_id = Some(job);
                 }
                 Err(error) => {
-                    self.status = format!("Could not create durable migration project: {error}");
+                    self.set_status(
+                        format!("Could not create durable migration project: {error}"),
+                        StatusSeverity::Error,
+                    );
                     return;
                 }
             }
@@ -6243,7 +6362,10 @@ impl App {
         let (run_project_id, run_job_id) = match (self.project_id.clone(), self.job_id.clone()) {
             (Some(project), Some(job)) => (project, job),
             _ => {
-                self.status = "Could not start without a durable mailbox project.".into();
+                self.set_status(
+                    "Could not start without a durable mailbox project.",
+                    StatusSeverity::Error,
+                );
                 return;
             }
         };
@@ -6251,8 +6373,9 @@ impl App {
             match self.store.mailbox_checkpoint(&run_job_id) {
                 Ok(checkpoint) => checkpoint,
                 Err(error) => {
-                    self.status = format!(
-                        "Could not read the durable Dovecot checkpoint; migration was not started: {error}"
+                    self.set_status(
+                        format!("Could not read the durable Dovecot checkpoint; migration was not started: {error}"),
+                        StatusSeverity::Error,
                     );
                     return;
                 }
@@ -6266,7 +6389,7 @@ impl App {
         {
             Ok(snapshot) => snapshot,
             Err(error) => {
-                self.status = error;
+                self.set_status(error, StatusSeverity::Error);
                 return;
             }
         };
@@ -6276,7 +6399,7 @@ impl App {
         {
             Ok(command) => command,
             Err(error) => {
-                self.status = error;
+                self.set_status(error, StatusSeverity::Error);
                 return;
             }
         };
@@ -6294,7 +6417,10 @@ impl App {
             &plan_snapshot,
         ) {
             cleanup_paths(&cleanup);
-            self.status = format!("Could not record durable run; nothing was started: {error}");
+            self.set_status(
+                format!("Could not record durable run; nothing was started: {error}"),
+                StatusSeverity::Error,
+            );
             return;
         }
         if let Some(version) = observed_engine_version
@@ -6310,7 +6436,10 @@ impl App {
                 &format!("could not persist engine version metadata: {error}"),
                 None,
             );
-            self.status = format!("Could not persist engine version metadata: {error}");
+            self.set_status(
+                format!("Could not persist engine version metadata: {error}"),
+                StatusSeverity::Error,
+            );
             return;
         }
         self.locked_profile = Some(self.form.profile.clone());
@@ -6339,11 +6468,14 @@ impl App {
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
         self.run_started_at = Some(std::time::Instant::now());
-        self.status = if self.form.dry_run {
-            "Preflight in progress".into()
-        } else {
-            "Sync in progress".into()
-        };
+        self.set_status(
+            if self.form.dry_run {
+                "Preflight in progress"
+            } else {
+                "Sync in progress"
+            },
+            StatusSeverity::Info,
+        );
         self.output = BoundedLineBuffer::from_one(format!(
             "Starting {} with {}…",
             if self.form.dry_run {
@@ -6415,14 +6547,18 @@ impl App {
             match result {
                 Ok(proof) => {
                     self.live_auth_proof = Some(proof);
-                    self.status =
-                        "Fresh IMAPS authentication passed; continuing live admission…".into();
+                    self.set_status(
+                        "Fresh IMAPS authentication passed; continuing live admission…",
+                        StatusSeverity::Success,
+                    );
                     self.start();
                 }
                 Err(error) => {
                     self.live_auth_proof = None;
-                    self.status =
-                        format!("Live authentication failed; migration was not started: {error}");
+                    self.set_status(
+                        format!("Live authentication failed; migration was not started: {error}"),
+                        StatusSeverity::Error,
+                    );
                 }
             }
         }
@@ -6433,10 +6569,13 @@ impl App {
                 Ok((source, destination)) => {
                     self.source_capabilities = Some(source);
                     self.destination_capabilities = Some(destination);
-                    self.status = "Capability discovery complete".into();
+                    self.set_status("Capability discovery complete", StatusSeverity::Success);
                     self.assess_plan();
                 }
-                Err(error) => self.status = format!("Preflight discovery failed: {error}"),
+                Err(error) => self.set_status(
+                    format!("Preflight discovery failed: {error}"),
+                    StatusSeverity::Error,
+                ),
             }
             self.capability_receiver = None;
         }
@@ -6918,7 +7057,10 @@ impl App {
         }
         if let Some(r) = done {
             let Some(run_context) = active_run else {
-                self.status = "Execution completed without a durable run context".into();
+                self.set_status(
+                    "Execution completed without a durable run context",
+                    StatusSeverity::Error,
+                );
                 self.receiver = None;
                 return;
             };
@@ -7155,23 +7297,36 @@ impl App {
                 // terminal event on the next poll instead of forcing startup
                 // recovery for a transient SQLite failure.
                 self.deferred_events.push_front(Event::Finished(r));
-                self.status =
-                    "Migration result requires durable storage; retrying terminal commit".into();
+                self.set_status(
+                    "Migration result requires durable storage; retrying terminal commit",
+                    StatusSeverity::Error,
+                );
                 return;
             }
-            self.status = if self.durability_error {
-                "Migration result requires durability review".into()
+            let (completion_status, completion_severity) = if self.durability_error {
+                (
+                    "Migration result requires durability review".to_owned(),
+                    StatusSeverity::Error,
+                )
             } else {
                 match r {
-                    Ok(_) => Self::successful_run_status(
-                        run_context.dry_run,
-                        was_bulk_run,
-                        direct_final_state,
-                    )
-                    .into(),
-                    Err(e) => format!("Failed: {e}"),
+                    Ok(_) => (
+                        Self::successful_run_status(
+                            run_context.dry_run,
+                            was_bulk_run,
+                            direct_final_state,
+                        )
+                        .to_owned(),
+                        Self::successful_run_severity(
+                            run_context.dry_run,
+                            was_bulk_run,
+                            direct_final_state,
+                        ),
+                    ),
+                    Err(e) => (format!("Failed: {e}"), StatusSeverity::Error),
                 }
             };
+            self.set_status(completion_status, completion_severity);
             self.receiver = None;
             self.cancel_requested = None;
             self.run_started_at = None;
@@ -7216,6 +7371,22 @@ impl App {
                 }
                 _ => "Migration completed; verification requires operator review",
             }
+        }
+    }
+
+    fn successful_run_severity(
+        dry_run: bool,
+        was_bulk_run: bool,
+        final_state: Option<&str>,
+    ) -> StatusSeverity {
+        if dry_run {
+            StatusSeverity::Success
+        } else if was_bulk_run {
+            StatusSeverity::Warning
+        } else if matches!(final_state, Some("verified")) {
+            StatusSeverity::Success
+        } else {
+            StatusSeverity::Warning
         }
     }
 
@@ -7757,22 +7928,31 @@ impl App {
                             "Store source password"
                         };
                         if ui.button(source_label).clicked() {
-                            self.status = match self.form.store_keyring_password(true) {
-                                Ok(()) => "Source credential stored in OS keyring".into(),
-                                Err(error) => error,
-                            };
+                            match self.form.store_keyring_password(true) {
+                                Ok(()) => self.set_status(
+                                    "Source credential stored in OS keyring",
+                                    StatusSeverity::Success,
+                                ),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
                         }
                         if ui.button("Load source").clicked() {
-                            self.status = match self.form.load_keyring_password(true) {
-                                Ok(()) => "Source credential loaded".into(),
-                                Err(error) => error,
-                            };
+                            match self.form.load_keyring_password(true) {
+                                Ok(()) => self.set_status(
+                                    "Source credential loaded",
+                                    StatusSeverity::Success,
+                                ),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
                         }
                         if ui.button("Delete source").clicked() {
-                            self.status = match self.form.delete_keyring_password(true) {
-                                Ok(()) => "Source credential deleted from OS keyring".into(),
-                                Err(error) => error,
-                            };
+                            match self.form.delete_keyring_password(true) {
+                                Ok(()) => self.set_status(
+                                    "Source credential deleted from OS keyring",
+                                    StatusSeverity::Success,
+                                ),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
                         }
                     });
                     ui.horizontal(|ui| {
@@ -7781,24 +7961,33 @@ impl App {
                                 "Store destination token"
                             } else {
                                 "Store destination password"
-                            };
+                        };
                         if ui.button(destination_label).clicked() {
-                            self.status = match self.form.store_keyring_password(false) {
-                                Ok(()) => "Destination credential stored in OS keyring".into(),
-                                Err(error) => error,
-                            };
+                            match self.form.store_keyring_password(false) {
+                                Ok(()) => self.set_status(
+                                    "Destination credential stored in OS keyring",
+                                    StatusSeverity::Success,
+                                ),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
                         }
                         if ui.button("Load destination").clicked() {
-                            self.status = match self.form.load_keyring_password(false) {
-                                Ok(()) => "Destination credential loaded".into(),
-                                Err(error) => error,
-                            };
+                            match self.form.load_keyring_password(false) {
+                                Ok(()) => self.set_status(
+                                    "Destination credential loaded",
+                                    StatusSeverity::Success,
+                                ),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
                         }
                         if ui.button("Delete destination").clicked() {
-                            self.status = match self.form.delete_keyring_password(false) {
-                                Ok(()) => "Destination credential deleted from OS keyring".into(),
-                                Err(error) => error,
-                            };
+                            match self.form.delete_keyring_password(false) {
+                                Ok(()) => self.set_status(
+                                    "Destination credential deleted from OS keyring",
+                                    StatusSeverity::Success,
+                                ),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
                         }
                     });
                 });
@@ -7967,7 +8156,7 @@ impl App {
                         if let Some(cancel) = &self.cancel_requested {
                             cancel.store(true, Ordering::Relaxed);
                         }
-                        self.status = "Cancellation requested…".into();
+                        self.set_status("Cancellation requested…", StatusSeverity::Warning);
                         close_requested = true;
                     }
                 });
@@ -8417,7 +8606,8 @@ impl eframe::App for App {
                             }
                         }
                         ui.label(
-                            RichText::new(&self.status).color(status_color(&self.status, colors)),
+                            RichText::new(&self.status)
+                                .color(status_color(self.status_severity, colors)),
                         );
                         ui.separator();
                         ui.label(
@@ -8496,7 +8686,18 @@ impl eframe::App for App {
                             ui.horizontal(|ui| {
                                 ui.label("Project name");
                                 ui.text_edit_singleline(&mut self.form.profile.name);
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; });
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() {
+                                    match self.form.save() {
+                                        Ok(()) => self.set_status(
+                                            "Profile saved; passwords were not saved",
+                                            StatusSeverity::Success,
+                                        ),
+                                        Err(e) => self.set_status(
+                                            format!("Could not save profile: {e}"),
+                                            StatusSeverity::Error,
+                                        ),
+                                    }
+                                });
                             });
                             ui.add_space(10.0);
                             let destination_password_required =
@@ -10925,24 +11126,23 @@ mod tests {
     }
 
     #[test]
-    fn status_severity_uses_operational_meaning_not_only_failed_prefixes() {
+    fn run_status_severity_is_typed_and_independent_of_display_text() {
         assert_eq!(
-            status_severity("Migration completed and verified"),
+            App::successful_run_severity(false, false, Some("verified")),
             StatusSeverity::Success
         );
         assert_eq!(
-            status_severity("Migration result requires durability review"),
-            StatusSeverity::Error
-        );
-        assert_eq!(
-            status_severity("Cancellation requested…"),
+            App::successful_run_severity(false, false, Some("delta_required")),
             StatusSeverity::Warning
         );
         assert_eq!(
-            status_severity("Fresh authentication passed; continuing"),
+            App::successful_run_severity(false, true, None),
+            StatusSeverity::Warning
+        );
+        assert_eq!(
+            App::successful_run_severity(true, false, None),
             StatusSeverity::Success
         );
-        assert_eq!(status_severity("Dry run in progress"), StatusSeverity::Info);
     }
 
     #[test]

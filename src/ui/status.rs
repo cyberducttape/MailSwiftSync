@@ -137,54 +137,8 @@ pub(crate) enum StatusSeverity {
     Error,
 }
 
-pub(crate) fn status_severity(status: &str) -> StatusSeverity {
-    let normalized = status.to_ascii_lowercase();
-    if [
-        "failed",
-        "could not",
-        "error",
-        "unavailable",
-        "rejected",
-        "requires durability",
-        "not started",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
-    {
-        return StatusSeverity::Error;
-    }
-    if [
-        "attention",
-        "review",
-        "cancellation",
-        "cancelled",
-        "warning",
-        "blocked",
-        "omitted",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
-    {
-        return StatusSeverity::Warning;
-    }
-    if [
-        "completed",
-        "passed",
-        "saved",
-        "acknowledged",
-        "ready",
-        "available",
-    ]
-    .iter()
-    .any(|marker| normalized.contains(marker))
-    {
-        return StatusSeverity::Success;
-    }
-    StatusSeverity::Info
-}
-
-pub(crate) fn status_color(status: &str, colors: ThemeColors) -> Color32 {
-    match status_severity(status) {
+pub(crate) fn status_color(severity: StatusSeverity, colors: ThemeColors) -> Color32 {
+    match severity {
         StatusSeverity::Info => colors.info,
         StatusSeverity::Success => colors.success,
         StatusSeverity::Warning => colors.warning,

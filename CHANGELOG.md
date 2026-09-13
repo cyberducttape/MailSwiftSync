@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Replaced English substring matching for UI status severity with an explicit
+  typed severity carried alongside each status message, so wording changes
+  cannot silently alter error, warning, success, or informational styling.
 - Precomputed normalized searchable mailbox fields and cached filtered bulk
   row indices, recalculating them only when the queue, search query, state
   filter, or mailbox state changes instead of during every repaint.
