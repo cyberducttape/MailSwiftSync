@@ -8,9 +8,9 @@ mod theme;
 pub(crate) use account::password_reveal_allowed;
 pub(crate) use account::{password_visibility_id, render_account};
 pub(crate) use status::{
-    StatusSeverity, display_job_state, display_state_key, format_phase_name, job_state_badge,
-    needs_operator_review, project_health_state_counts, recommended_next_action, status_color,
-    workflow_step_index,
+    StatusMessage, StatusSeverity, display_job_state, display_state_key, format_phase_name,
+    job_state_badge, needs_operator_review, project_health_state_counts, recommended_next_action,
+    status_color, workflow_step_index,
 };
 pub(crate) use theme::ThemeColors;
 #[cfg(test)]

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Represented UI/headless status updates as typed `StatusMessage` objects with
+  explicit `Info`, `Success`, `Warning`, or `Error` severity, keeping display
+  wording structurally independent from semantic styling.
 - Replaced English substring matching for UI status severity with an explicit
   typed severity carried alongside each status message, so wording changes
   cannot silently alter error, warning, success, or informational styling.

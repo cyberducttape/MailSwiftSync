@@ -267,12 +267,22 @@ pub(crate) fn headless_execute_with_credentials(
     let project_id = app
         .project_id
         .as_deref()
-        .ok_or_else(|| format!("preflight did not create a durable mailbox: {}", app.status))?
+        .ok_or_else(|| {
+            format!(
+                "preflight did not create a durable mailbox: {}",
+                app.status.text
+            )
+        })?
         .to_owned();
     let job_id = app
         .job_id
         .as_deref()
-        .ok_or_else(|| format!("preflight did not create a durable mailbox: {}", app.status))?
+        .ok_or_else(|| {
+            format!(
+                "preflight did not create a durable mailbox: {}",
+                app.status.text
+            )
+        })?
         .to_owned();
     let mailbox_count = app
         .store
@@ -291,7 +301,7 @@ pub(crate) fn headless_execute_with_credentials(
     if preflight_state.as_deref() != Some("ready") {
         return Err(format!(
             "preflight did not produce a runnable mailbox (state={:?}, status={})",
-            preflight_state, app.status
+            preflight_state, app.status.text
         ));
     }
     if !live {
@@ -324,7 +334,7 @@ pub(crate) fn headless_execute_with_credentials(
         };
         return Err(format!(
             "live migration did not reach a verified terminal state: {exit_hint}; state={:?}, status={}",
-            final_state, app.status
+            final_state, app.status.text
         ));
     }
     Ok(format!(
@@ -532,7 +542,7 @@ pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> 
     if app.durability_error || app.durability_recovery_pending {
         return Err(format!(
             "durable terminal state was not confirmed: {}",
-            app.status
+            app.status.text
         ));
     }
     Ok(())

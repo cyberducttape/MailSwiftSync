@@ -75,7 +75,7 @@ use std::{
     thread,
     time::Duration,
 };
-use ui::StatusSeverity;
+use ui::{StatusMessage, StatusSeverity};
 use ui::{
     ThemeColors, display_job_state, display_state_key, format_phase_name, job_state_badge,
     needs_operator_review, password_visibility_id, project_health_state_counts,
@@ -1726,8 +1726,7 @@ struct App {
     form: Form,
     output: BoundedLineBuffer,
     receiver: Option<Receiver<Event>>,
-    status: String,
-    status_severity: StatusSeverity,
+    status: StatusMessage,
     preview: bool,
     bulk_jobs: Vec<BulkJob>,
     bulk_open: bool,
@@ -2138,17 +2137,19 @@ impl Default for App {
             form,
             output: initial_output,
             receiver: None,
-            status: persistence_warning
-                .clone()
-                .or_else(|| profile_warning.clone())
-                .unwrap_or_else(|| "Idle".into()),
-            status_severity: if persistence_warning.is_some() {
-                StatusSeverity::Error
-            } else if profile_warning.is_some() {
-                StatusSeverity::Warning
-            } else {
-                StatusSeverity::Info
-            },
+            status: StatusMessage::new(
+                persistence_warning
+                    .clone()
+                    .or_else(|| profile_warning.clone())
+                    .unwrap_or_else(|| "Idle".into()),
+                if persistence_warning.is_some() {
+                    StatusSeverity::Error
+                } else if profile_warning.is_some() {
+                    StatusSeverity::Warning
+                } else {
+                    StatusSeverity::Info
+                },
+            ),
             preview: false,
             bulk_jobs: restored_bulk_jobs,
             bulk_open: false,
@@ -2487,8 +2488,7 @@ fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
 
 impl App {
     fn set_status(&mut self, message: impl Into<String>, severity: StatusSeverity) {
-        self.status = message.into();
-        self.status_severity = severity;
+        self.status = StatusMessage::new(message, severity);
     }
 
     fn theme_colors(&self) -> ThemeColors {
@@ -4009,8 +4009,8 @@ impl App {
                     "No active run"
                 });
                 ui.label(
-                    RichText::new(&self.status)
-                        .color(status_color(self.status_severity, self.theme_colors())),
+                    RichText::new(&self.status.text)
+                        .color(status_color(self.status.severity, self.theme_colors())),
                 );
                 if ui.button("Copy output").clicked() {
                     ui.ctx()
@@ -6141,14 +6141,14 @@ impl App {
                     format!("{artifact} exported successfully."),
                     StatusSeverity::Success,
                 );
-                push_visible_output(&mut self.output, self.status.clone());
+                push_visible_output(&mut self.output, self.status.text.clone());
             }
             Err(error) => {
                 self.set_status(
                     format!("{artifact} was not exported: {error}"),
                     StatusSeverity::Error,
                 );
-                push_visible_output(&mut self.output, format!("[export] {}", self.status));
+                push_visible_output(&mut self.output, format!("[export] {}", self.status.text));
             }
         }
     }
@@ -8606,8 +8606,8 @@ impl eframe::App for App {
                             }
                         }
                         ui.label(
-                            RichText::new(&self.status)
-                                .color(status_color(self.status_severity, colors)),
+                            RichText::new(&self.status.text)
+                                .color(status_color(self.status.severity, colors)),
                         );
                         ui.separator();
                         ui.label(

@@ -137,6 +137,21 @@ pub(crate) enum StatusSeverity {
     Error,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct StatusMessage {
+    pub(crate) text: String,
+    pub(crate) severity: StatusSeverity,
+}
+
+impl StatusMessage {
+    pub(crate) fn new(text: impl Into<String>, severity: StatusSeverity) -> Self {
+        Self {
+            text: text.into(),
+            severity,
+        }
+    }
+}
+
 pub(crate) fn status_color(severity: StatusSeverity, colors: ThemeColors) -> Color32 {
     match severity {
         StatusSeverity::Info => colors.info,
@@ -157,6 +172,16 @@ pub(crate) fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_message_keeps_severity_independent_of_wording() {
+        let original = StatusMessage::new("Connection completed", StatusSeverity::Success);
+        let revised = StatusMessage::new("Connection finished", original.severity);
+
+        assert_eq!(original.severity, StatusSeverity::Success);
+        assert_eq!(revised.severity, StatusSeverity::Success);
+        assert_ne!(original.text, revised.text);
+    }
 
     #[test]
     fn workflow_progress_follows_durable_phase() {
