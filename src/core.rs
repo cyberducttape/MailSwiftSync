@@ -483,12 +483,25 @@ impl MailboxEvidence {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerCapabilities {
     pub values: BTreeSet<String>,
+    /// Whether the authenticated LIST response contained at least one
+    /// untagged mailbox record. A tagged OK alone does not prove discovery.
+    pub inventory_complete: bool,
+    pub mailbox_count: usize,
+    pub special_use_mailboxes: usize,
 }
 
 impl ServerCapabilities {
+    #[cfg(test)]
     pub fn parse(response: &str) -> Self {
+        Self::parse_with_inventory(response, "")
+    }
+
+    /// Parse post-auth capabilities together with the authenticated LIST
+    /// response. Inventory is counted from untagged LIST records, not the
+    /// tagged completion response.
+    pub fn parse_with_inventory(capability_response: &str, list_response: &str) -> Self {
         let mut values = BTreeSet::new();
-        for line in response
+        for line in capability_response
             .lines()
             .filter(|line| line.to_ascii_uppercase().contains("CAPABILITY"))
         {
@@ -506,7 +519,27 @@ impl ServerCapabilities {
                 }
             }
         }
-        Self { values }
+        let inventory_lines = list_response
+            .lines()
+            .filter(|line| is_untagged_list_record(line))
+            .collect::<Vec<_>>();
+        let special_use_mailboxes = inventory_lines
+            .iter()
+            .filter(|line| {
+                let upper = line.to_ascii_uppercase();
+                [
+                    "\\INBOX", "\\SENT", "\\DRAFTS", "\\TRASH", "\\JUNK", "\\ALL",
+                ]
+                .iter()
+                .any(|marker| upper.contains(marker))
+            })
+            .count();
+        Self {
+            values,
+            inventory_complete: !inventory_lines.is_empty(),
+            mailbox_count: inventory_lines.len(),
+            special_use_mailboxes,
+        }
     }
     pub fn supports(&self, capability: &str) -> bool {
         self.values.contains(&capability.to_ascii_uppercase())
@@ -526,6 +559,11 @@ impl ServerCapabilities {
         }
         plan
     }
+}
+
+fn is_untagged_list_record(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("* LIST ") || trimmed.starts_with("* LIST\t")
 }
 
 pub struct StateStore {
@@ -2810,6 +2848,28 @@ mod tests {
         );
         assert!(caps.supports("qresync"));
         assert!(caps.strategy().contains(&"QRESYNC delta synchronization"));
+        assert!(!caps.inventory_complete);
+    }
+
+    #[test]
+    fn capability_parser_requires_and_counts_authenticated_inventory() {
+        let caps = ServerCapabilities::parse_with_inventory(
+            "* CAPABILITY IMAP4rev1 SPECIAL-USE\r\na1 OK",
+            "* LIST (\\HasNoChildren \\Inbox) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \"/\" \"Archive\"\r\na2 OK LIST completed",
+        );
+        assert!(caps.inventory_complete);
+        assert_eq!(caps.mailbox_count, 2);
+        assert_eq!(caps.special_use_mailboxes, 1);
+    }
+
+    #[test]
+    fn capability_parser_does_not_treat_tagged_list_ok_as_inventory() {
+        let caps = ServerCapabilities::parse_with_inventory(
+            "* CAPABILITY IMAP4rev1\r\na1 OK",
+            "a2 OK LIST completed",
+        );
+        assert!(!caps.inventory_complete);
+        assert_eq!(caps.mailbox_count, 0);
     }
     #[test]
     fn evidence_is_durable_and_explainable() {

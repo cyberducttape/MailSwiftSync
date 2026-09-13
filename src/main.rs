@@ -2928,8 +2928,16 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     if !imap_command_succeeded(&list_response, "a005") {
         return Err(format!("{host}: folder inventory failed"));
     }
+    if !list_response.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("* LIST ") || line.starts_with("* LIST\t")
+    }) {
+        return Err(format!(
+            "{host}: folder inventory returned no untagged LIST records"
+        ));
+    }
     let _ = stream.write_all(b"a006 LOGOUT\r\n");
-    let caps = core::ServerCapabilities::parse(&post_auth_response);
+    let caps = core::ServerCapabilities::parse_with_inventory(&post_auth_response, &list_response);
     if caps.values.is_empty() {
         return Err(format!(
             "{host}: server did not return a CAPABILITY response"
@@ -3153,15 +3161,33 @@ impl App {
         if let Some(caps) = &self.source_capabilities {
             self.preflight.push((
                 "Source capabilities".into(),
-                caps.strategy().join(" · "),
-                true,
+                format!(
+                    "{} · {} folder(s) discovered{}",
+                    caps.strategy().join(" · "),
+                    caps.mailbox_count,
+                    if caps.special_use_mailboxes > 0 {
+                        format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)
+                    } else {
+                        String::new()
+                    }
+                ),
+                caps.inventory_complete,
             ));
         }
         if let Some(caps) = &self.destination_capabilities {
             self.preflight.push((
                 "Destination capabilities".into(),
-                caps.strategy().join(" · "),
-                true,
+                format!(
+                    "{} · {} folder(s) discovered{}",
+                    caps.strategy().join(" · "),
+                    caps.mailbox_count,
+                    if caps.special_use_mailboxes > 0 {
+                        format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)
+                    } else {
+                        String::new()
+                    }
+                ),
+                caps.inventory_complete,
             ));
         }
         if self.form.engine() == core::Engine::ImapSync {
