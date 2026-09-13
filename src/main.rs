@@ -2320,6 +2320,7 @@ struct App {
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_confirmation_summary: Option<BulkConfirmationSummary>,
+    bulk_clear_confirm_open: bool,
     bulk_live_run: bool,
     /// Live retry scope defaults to unresolved rows and is process-local UI
     /// state; durable child/run IDs remain the execution identity.
@@ -2638,6 +2639,7 @@ impl Default for App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
+            bulk_clear_confirm_open: false,
             bulk_live_run: false,
             bulk_retry_scope: BulkRetryScope::default(),
             bulk_source_keyring_apply: String::new(),
@@ -5188,6 +5190,20 @@ impl App {
         }
     }
 
+    fn clear_bulk_queue(&mut self) {
+        self.bulk_jobs.clear();
+        self.bulk_selected_ids.clear();
+        if self.selected_project_id == self.bulk_project_id {
+            self.selected_project_id = None;
+        }
+        self.bulk_project_id = None;
+        self.bulk_job_ids.clear();
+        self.bulk_job_index_by_id.clear();
+        self.bulk_retry_scope = BulkRetryScope::default();
+        self.bulk_preflight_credential_fingerprints.clear();
+        self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
+    }
+
     fn rebuild_bulk_job_index(&mut self) {
         self.bulk_job_index_by_id = self
             .bulk_job_ids
@@ -7578,17 +7594,11 @@ impl App {
             ui.horizontal(|ui| {
                 if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
-                    self.bulk_jobs.clear();
-                    self.bulk_selected_ids.clear();
-                    if self.selected_project_id == self.bulk_project_id {
-                        self.selected_project_id = None;
+                    if self.bulk_jobs.is_empty() {
+                        self.clear_bulk_queue();
+                    } else {
+                        self.bulk_clear_confirm_open = true;
                     }
-                    self.bulk_project_id = None;
-                    self.bulk_job_ids.clear();
-                    self.bulk_job_index_by_id.clear();
-                    self.bulk_retry_scope = BulkRetryScope::default();
-                    self.bulk_preflight_credential_fingerprints.clear();
-                    self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
                 }
                 let live_count = self
                     .bulk_jobs
@@ -7718,6 +7728,39 @@ impl App {
             ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(ALERT));
         });
         self.bulk_open = open;
+    }
+    fn bulk_clear_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.bulk_clear_confirm_open || self.running() {
+            return;
+        }
+        let mut open = self.bulk_clear_confirm_open;
+        let mut clear = false;
+        let mut close_requested = false;
+        egui::Window::new("Clear mailbox queue?")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading("Discard the current queue?");
+                ui.label(format!(
+                    "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.",
+                    self.bulk_jobs.len()
+                ));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Keep queue").clicked() {
+                        close_requested = true;
+                    }
+                    if ui.button("Clear queue").clicked() {
+                        clear = true;
+                        close_requested = true;
+                    }
+                });
+            });
+        self.bulk_clear_confirm_open = open && !close_requested;
+        if clear {
+            self.clear_bulk_queue();
+        }
     }
     fn bulk_live_confirmation(&mut self, ctx: &egui::Context) {
         if !self.bulk_live_confirm_open {
@@ -8669,6 +8712,7 @@ impl eframe::App for App {
             });
         self.preview(ctx);
         self.bulk_dialog(ctx);
+        self.bulk_clear_confirmation(ctx);
         self.bulk_live_confirmation(ctx);
         self.settings_dialog(ctx);
         self.projects_dialog(ctx);
