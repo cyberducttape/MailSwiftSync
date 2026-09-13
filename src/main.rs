@@ -4411,14 +4411,17 @@ impl App {
             });
             if run_preflight {
                 self.form.dry_run = true;
+                self.bulk_dry_run = true;
                 self.bulk_retry_scope = BulkRetryScope::All;
                 self.start_bulk();
             } else if run_live {
                 self.form.dry_run = false;
+                self.bulk_dry_run = false;
                 self.bulk_retry_scope = BulkRetryScope::All;
                 self.start_bulk();
             } else if run_delta {
                 self.form.dry_run = false;
+                self.bulk_dry_run = false;
                 self.bulk_retry_scope = BulkRetryScope::DeltaRequired;
                 self.start_bulk();
             } else if review_selected
