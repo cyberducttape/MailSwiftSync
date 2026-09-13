@@ -425,19 +425,29 @@ impl Form {
             .unwrap_or_else(std::env::temp_dir)
             .join("mailswiftsync/profile.toml")
     }
-    fn load() -> Self {
+    fn load() -> Result<Self, String> {
         let mut form = Self::default();
         let path = Self::path();
         let legacy = dirs_next::config_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("sourcecraft-imapsync/profile.toml");
-        if let Ok(text) =
-            std::fs::read_to_string(&path).or_else(|_| std::fs::read_to_string(legacy))
-            && let Ok(profile) = toml::from_str(&text)
-        {
-            form.profile = profile;
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => Some((path, text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::read_to_string(&legacy) {
+                    Ok(text) => Some((legacy, text)),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(error) => return Err(format!("could not read legacy profile: {error}")),
+                }
+            }
+            Err(error) => return Err(format!("could not read profile: {error}")),
+        };
+        if let Some((path, text)) = text {
+            form.profile = toml::from_str(&text).map_err(|error| {
+                format!("could not decode saved profile {}: {error}", path.display())
+            })?;
         }
-        form
+        Ok(form)
     }
     fn save(&self) -> Result<(), String> {
         let path = Self::path();
@@ -2077,8 +2087,24 @@ impl Default for App {
                 "Recovered {recovered} interrupted job(s) into Attention for review."
             ));
         }
-        let initial_output: VecDeque<String> = initial_output.into_iter().collect();
-        let mut form = Form::load();
+        let mut initial_output: VecDeque<String> = initial_output.into_iter().collect();
+        let mut form = match Form::load() {
+            Ok(form) => form,
+            Err(error) => {
+                persistence_warning.get_or_insert_with(|| {
+                    format!("Saved migration profile is unavailable; execution is blocked: {error}")
+                });
+                Form::default()
+            }
+        };
+        if let Some(warning) = persistence_warning.as_ref()
+            && !initial_output.iter().any(|line| line == warning)
+        {
+            initial_output.push_front(warning.clone());
+            initial_output.push_back(
+                "WARNING: saved configuration must be repaired before execution.".into(),
+            );
+        }
         if form.profile.destination_tls.is_empty() {
             form.profile.destination_tls = default_destination_tls();
         }
