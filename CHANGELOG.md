@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed execution-capable imapsync `pipemess` from the extra-option
+  allowlist; it is now rejected as unsafe rather than presented as a tuning
+  option.
 - Engine output is now process-local presentation data only. Raw imapsync
   lines, including message subjects and metadata, are no longer written to
   SQLite; existing `run_output` events are purged during ledger opening while

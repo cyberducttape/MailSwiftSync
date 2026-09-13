@@ -156,7 +156,6 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
         "reconnectretry1",
         "reconnectretry2",
         "errorsmax",
-        "pipemess",
         "maxsleep",
         "sleep",
         "subscribe",

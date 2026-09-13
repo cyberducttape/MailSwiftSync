@@ -10827,6 +10827,12 @@ mod tests {
         form.profile.extra_options = "--custom-helper /tmp/helper".into();
         let error = form.validate().unwrap_err();
         assert!(error.contains("safe imapsync option allowlist"));
+        form.profile.extra_options = "--pipemess".into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("safe imapsync option allowlist")
+        );
         form.profile.extra_options = "--timeout".into();
         assert!(form.validate().unwrap_err().contains("requires a value"));
     }
