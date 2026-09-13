@@ -744,7 +744,7 @@ impl Form {
             required.push(("Destination password", self.destination_password.as_str()));
         }
         let source_port = self.profile.source_port.trim();
-        if (!source_port.is_empty() && source_port.parse::<u16>().is_err()) || source_port == "0" {
+        if !source_port.is_empty() && source_port.parse::<u16>().map_or(true, |port| port == 0) {
             return Err("Source IMAP port must be a number between 1 and 65535.".into());
         }
         if !matches!(
@@ -754,8 +754,10 @@ impl Form {
             return Err("Source TLS mode must be imaps, starttls, or plain.".into());
         }
         let destination_port = self.profile.destination_port.trim();
-        if (!destination_port.is_empty() && destination_port.parse::<u16>().is_err())
-            || destination_port == "0"
+        if !destination_port.is_empty()
+            && destination_port
+                .parse::<u16>()
+                .map_or(true, |port| port == 0)
         {
             return Err("Destination IMAP port must be a number between 1 and 65535.".into());
         }
@@ -10320,6 +10322,23 @@ mod tests {
     fn remote_arguments_are_shell_quoted() {
         assert_eq!(shell_quote("plain-value"), "plain-value");
         assert_eq!(shell_quote("pa ss'word"), "'pa ss'\\''word'");
+    }
+
+    #[test]
+    fn validation_rejects_zero_ports_with_leading_zeroes() {
+        let mut form = dovecot_form();
+        for value in ["0", "00", "000"] {
+            form.profile.source_port = value.into();
+            assert!(form.validate().unwrap_err().contains("Source IMAP port"));
+            form.profile.source_port.clear();
+            form.profile.destination_port = value.into();
+            assert!(
+                form.validate()
+                    .unwrap_err()
+                    .contains("Destination IMAP port")
+            );
+            form.profile.destination_port.clear();
+        }
     }
 
     #[test]
