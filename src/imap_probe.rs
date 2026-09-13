@@ -81,6 +81,14 @@ fn read_imap_tagged<S: Read>(
     }
 }
 
+fn authenticated_list_command(request_special_use: bool) -> &'static [u8] {
+    if request_special_use {
+        b"a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
+    } else {
+        b"a005 LIST \"\" \"*\"\r\n"
+    }
+}
+
 fn read_imap_greeting<S: Read>(stream: &mut S, host: &str) -> Result<String, String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
@@ -312,7 +320,10 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     // usable migration endpoint. LIST remains the authoritative inventory
     // gate; callers may surface this response as a compatibility warning.
     stream
-        .write_all(b"a005 LIST \"\" \"*\"\r\n")
+        .write_all(authenticated_list_command(advertises_capability(
+            &post_auth_response,
+            "SPECIAL-USE",
+        )))
         .map_err(|e| e.to_string())?;
     let mut list_response = String::new();
     read_imap_tagged(&mut stream, "a005", &mut list_response, &mut buffer)?;
@@ -349,4 +360,21 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     }
     let _ = stream.write_all(b"a007 LOGOUT\r\n");
     Ok(caps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::authenticated_list_command;
+
+    #[test]
+    fn list_request_asks_for_rfc6154_attributes_when_supported() {
+        assert_eq!(
+            authenticated_list_command(true),
+            b"a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
+        );
+        assert_eq!(
+            authenticated_list_command(false),
+            b"a005 LIST \"\" \"*\"\r\n"
+        );
+    }
 }

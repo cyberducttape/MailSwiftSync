@@ -14,6 +14,8 @@ All notable changes to MailSwiftSync are documented here.
 - Corrected SPECIAL-USE inventory detection to parse only LIST attributes,
   recognize the complete standard attribute set, exclude non-standard `\Inbox`,
   and avoid mailbox-name false positives.
+- IMAP readiness now requests RFC 6154 `RETURN (SPECIAL-USE)` LIST attributes
+  when the authenticated server advertises the `SPECIAL-USE` capability.
 - Customer and operator report exports now read project, mailbox, run, and
   evidence data from one SQLite snapshot, preventing mixed-commit artifacts
   during concurrent migration updates.
