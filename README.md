@@ -161,6 +161,7 @@ mailswiftsync status /path/to/state.db
 mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
+mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls]
 mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
 mailswiftsync headless /path/to/state.db batch-preflight
@@ -175,6 +176,12 @@ prove, and applies the same conservative recovery transition as GUI startup.
 it excludes endpoints, credentials, plan snapshots, command paths, mailbox
 content, and diagnostic text while retaining schema, platform, health, and
 bounded run metadata.
+`supervise` is a foreground, GUI-independent batch controller. It processes
+only automation-safe queued/retryable work, waits through GUI lock ownership,
+and leaves Attention and verification-difference rows untouched. The optional
+`idle-polls` value defaults to one quiet poll; set it to `0` for continuous
+watching of a maintenance window. It is a supervisor process, not a remote API
+or a replacement for an external service manager.
 These commands are headless control-plane operations; they do not yet replace
 the GUI with a continuously running scheduler. `headless live` is an explicit
 one-shot operation for a single-mailbox project: it runs a fresh dry preflight

@@ -51,6 +51,10 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   sanitized incident artifact containing platform/schema/health facts without
   credentials, endpoints, plans, command paths, mailbox content, or diagnostic
   text.
+- A foreground `supervise <state.db>` controller can continuously watch and
+  process automation-safe durable batch work while leaving operator-review
+  rows untouched; external service-manager integration and scheduling policy
+  are still deployment responsibilities.
 - Run metadata records the version string returned by each engine when its
   executable supports `--version`; unavailable versions remain explicit in
   exports rather than being guessed.

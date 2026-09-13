@@ -2007,6 +2007,7 @@ enum BulkRetryScope {
     FailedAttention,
     DeltaRequired,
     VerificationDifference,
+    Automation,
     All,
 }
 
@@ -2032,6 +2033,10 @@ impl BulkRetryScope {
             Self::FailedAttention => matches!(state, "failed" | "attention"),
             Self::DeltaRequired => state == "delta_required",
             Self::VerificationDifference => state == "verification_difference",
+            Self::Automation => matches!(
+                state,
+                "queued" | "ready" | "completed" | "delta_required" | "cancelled" | "failed"
+            ),
             Self::All => true,
         }
     }
@@ -2042,7 +2047,23 @@ impl BulkRetryScope {
             Self::FailedAttention => "Failed or Attention only",
             Self::DeltaRequired => "Delta required only",
             Self::VerificationDifference => "Verification differences only",
+            Self::Automation => "Automation-safe retryable work",
             Self::All => "All rows (explicit re-run)",
+        }
+    }
+
+    fn includes_automation(self, state: &str, reason: Option<core::AttentionReason>) -> bool {
+        if self != Self::Automation {
+            return self.includes(state);
+        }
+        match state {
+            "queued" | "ready" | "completed" | "delta_required" | "cancelled" => true,
+            "failed" => matches!(
+                reason,
+                Some(core::AttentionReason::TransportFailed)
+                    | Some(core::AttentionReason::CapacityLimited)
+            ),
+            _ => false,
         }
     }
 }
@@ -8637,6 +8658,47 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("supervise") {
+        let Some(state) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync supervise <state.db> [poll-seconds] [idle-polls]");
+            std::process::exit(2);
+        };
+        let poll_seconds = match arguments.next() {
+            Some(value) => value
+                .to_str()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
+            None => 30,
+        };
+        let idle_polls = match arguments.next() {
+            Some(value) => value.to_str().and_then(|value| value.parse::<usize>().ok()),
+            None => Some(1),
+        };
+        if arguments.next().is_some()
+            || !(1..=3_600).contains(&poll_seconds)
+            || idle_polls.is_none()
+        {
+            eprintln!(
+                "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous]"
+            );
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        match headless_supervise(
+            &state,
+            Duration::from_secs(poll_seconds),
+            idle_polls.expect("idle-poll count was validated above"),
+        ) {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration supervisor stopped: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
@@ -8676,7 +8738,7 @@ fn main() -> eframe::Result<()> {
         }
     }
     eprintln!(
-        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, `support-bundle`, or `headless`; run without a command for the GUI."
+        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, `support-bundle`, `supervise`, or `headless`; run without a command for the GUI."
     );
     std::process::exit(2);
 }
@@ -9014,8 +9076,24 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
                 .into(),
         );
     }
-    app.bulk_selected_ids.clear();
-    app.bulk_retry_scope = BulkRetryScope::Unresolved;
+    app.bulk_retry_scope = BulkRetryScope::Automation;
+    app.bulk_selected_ids = app
+        .bulk_job_ids
+        .iter()
+        .filter_map(|job_id| {
+            let state = app.store.mailbox_state(job_id).ok().flatten()?;
+            let reason = app.store.mailbox_attention_reason(job_id).ok().flatten();
+            app.bulk_retry_scope
+                .includes_automation(&state, reason)
+                .then_some(job_id.clone())
+        })
+        .collect();
+    if app.bulk_selected_ids.is_empty() {
+        return Err(
+            "no automation-safe batch work is queued; operator-review and verification-difference rows were not retried"
+                .into(),
+        );
+    }
     app.form.dry_run = true;
     app.start_bulk();
     wait_for_headless_controller(&mut app)?;
@@ -9029,7 +9107,12 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
             )
         })?
         .to_owned();
-    let job_ids = app.bulk_job_ids.clone();
+    let job_ids = app
+        .bulk_job_ids
+        .iter()
+        .filter(|job_id| app.bulk_selected_ids.contains(*job_id))
+        .cloned()
+        .collect::<Vec<_>>();
     let states = app
         .store
         .batch_admission_states(&project_id, &job_ids)
@@ -9061,6 +9144,7 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         .map_err(|error| error.to_string())?;
     let unresolved = final_mailboxes
         .iter()
+        .filter(|mailbox| app.bulk_selected_ids.contains(&mailbox.id))
         .filter(|mailbox| {
             matches!(
                 mailbox.state.as_str(),
@@ -9079,6 +9163,64 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         "Headless batch live migration completed for project {project_id}; {} mailbox(es) reached evidence-bearing terminal states.",
         final_mailboxes.len()
     ))
+}
+
+/// Foreground supervisor for an already admitted durable batch. The loop is
+/// intentionally conservative: it only selects automation-safe rows and
+/// leaves Attention/verification-difference rows for an operator. A zero
+/// idle-poll limit keeps watching for work; a non-zero limit makes a one-shot
+/// maintenance-window invocation terminate after the requested quiet period.
+fn headless_supervise(
+    state_path: &std::path::Path,
+    poll_interval: Duration,
+    max_idle_polls: usize,
+) -> Result<String, String> {
+    let mut idle_polls = 0_usize;
+    let mut completed_passes = 0_usize;
+    loop {
+        let status = headless_status(state_path, None)?;
+        let actionable = status
+            .projects
+            .iter()
+            .filter(|project| {
+                project.source_endpoint == "batch" && project.destination_endpoint == "batch"
+            })
+            .flat_map(|project| project.mailboxes.iter())
+            .any(|mailbox| {
+                BulkRetryScope::Automation.includes_automation(
+                    &mailbox.state,
+                    mailbox
+                        .attention_reason
+                        .as_deref()
+                        .and_then(core::AttentionReason::parse),
+                )
+            });
+        if !actionable {
+            idle_polls = idle_polls.saturating_add(1);
+            if max_idle_polls != 0 && idle_polls >= max_idle_polls {
+                return Ok(format!(
+                    "Migration supervisor stopped after {idle_polls} idle poll(s); completed {completed_passes} batch pass(es). Operator-review rows were left untouched."
+                ));
+            }
+            thread::sleep(poll_interval);
+            continue;
+        }
+        idle_polls = 0;
+        match headless_batch_execute(state_path, true) {
+            Ok(message) => {
+                completed_passes = completed_passes.saturating_add(1);
+                eprintln!("{message}");
+            }
+            Err(error)
+                if error.contains("Another MailSwiftSync instance holds the project database")
+                    || error.contains("durable SQLite state is unavailable") =>
+            {
+                eprintln!("Migration supervisor waiting for durable controller ownership: {error}");
+                thread::sleep(poll_interval);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {

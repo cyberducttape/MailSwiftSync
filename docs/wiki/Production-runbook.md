@@ -52,6 +52,7 @@ validated.
 7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
 8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof. Use **Accept residual difference** in Verification only when the exception is approved; this creates `Verified with exceptions` with the operator, timestamp, related evidence run, and acceptance reason in the ledger.
 9. Export **Customer proof JSON** for the change record and retain the separate project JSON/Markdown report for operator forensics. Customer proof omits internal endpoints, credential references, plan snapshots, executable paths, and diagnostic detail. Sign the customer proof with the approved Ed25519 key before distributing it.
+10. For a GUI-independent maintenance window, run `mailswiftsync supervise <state.db> 30 0` under the host service manager. It retries only automation-safe work and leaves Attention/verification-difference rows for review; configure restart limits and logs in the service manager.
 
 Once every mailbox is evidence-backed, MailSwiftSync may mark the project
 **Complete**. Complete projects are intentionally read-only: adding a mailbox,
