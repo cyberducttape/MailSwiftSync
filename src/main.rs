@@ -5706,12 +5706,12 @@ impl App {
             .iter()
             .map(|x| x.to_string().trim().to_ascii_lowercase())
             .collect::<Vec<_>>();
-        Self::validate_headers(&headers, base)?;
         if headers.len() > MAX_BULK_IMPORT_COLUMNS {
             return Err(format!(
                 "The worksheet has too many columns; the limit is {MAX_BULK_IMPORT_COLUMNS}."
             ));
         }
+        Self::validate_headers(&headers, base)?;
         let mut jobs = Vec::new();
         for (index, row) in rows.enumerate() {
             if index >= MAX_BULK_IMPORT_ROWS {
@@ -5721,6 +5721,14 @@ impl App {
             }
             if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
                 continue;
+            }
+            if row.len() != headers.len() {
+                return Err(format!(
+                    "Row {} has {} values but the header has {} columns.",
+                    index + 2,
+                    row.len(),
+                    headers.len()
+                ));
             }
             let values = headers
                 .iter()
