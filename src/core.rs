@@ -1139,7 +1139,7 @@ impl StateStore {
         }
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare_cached(
-            "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND status IN ('queued','running')",
+            "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))) ",
         )?;
         let mut projects = BTreeSet::new();
         for (run_id, kind, detail) in events {
