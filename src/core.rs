@@ -1249,10 +1249,12 @@ impl StateStore {
         )?;
         tx.commit().map(|()| child_run_ids)
     }
-    /// Atomically claims one child of a running parent batch. A child can be
-    /// claimed exactly once; callers must not treat a repeated claim as an
-    /// idempotent success because the store cannot identify the worker that
-    /// owns an already-running child.
+    /// Legacy test fixture for the pre-child batch model. Production callers
+    /// must use `claim_batch_mailbox_for_child`, which binds the mailbox,
+    /// parent wave, and child run in one transaction. Keeping this helper
+    /// test-only prevents an external caller from accidentally bypassing the
+    /// mailbox-specific child ownership invariant.
+    #[cfg(test)]
     pub fn claim_batch_mailbox(
         &self,
         project_id: &str,
