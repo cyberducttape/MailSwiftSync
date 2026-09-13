@@ -1654,7 +1654,11 @@ fn run_streaming(
         });
     let dropped = dropped_diagnostics.load(Ordering::Relaxed);
     if dropped > 0 {
-        let _ = tx.try_send(Event::RunLine {
+        // This is the durable accounting marker for lossy UI streaming. The
+        // reader threads have already joined, so waiting here cannot block a
+        // child pipe; it ensures a saturated event queue cannot silently
+        // erase the fact that diagnostics were omitted.
+        let _ = tx.send(Event::RunLine {
             run_id: run_id.to_owned(),
             job_id: job_id.to_owned(),
             text: format!(
