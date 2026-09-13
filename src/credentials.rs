@@ -47,13 +47,21 @@ pub fn secret_runtime_base_from(runtime_dir: Option<PathBuf>) -> PathBuf {
 
 pub fn cleanup_stale_secret_directories(base: &Path) {
     const MAX_SECRET_DIRECTORY_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+    cleanup_stale_secret_directories_at(base, SystemTime::now(), MAX_SECRET_DIRECTORY_AGE);
+}
+
+fn cleanup_stale_secret_directories_at(base: &Path, now: SystemTime, max_age: Duration) {
     let Ok(entries) = fs::read_dir(base) else {
         return;
     };
-    let now = SystemTime::now();
     for entry in entries.flatten() {
         let path = entry.path();
-        if !entry.file_name().to_string_lossy().starts_with("run-") || !path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // Do not follow symlinks while deciding what the cleanup routine owns.
+        // A link named run-* is not a MailSwiftSync secret directory.
+        if !entry.file_name().to_string_lossy().starts_with("run-") || !file_type.is_dir() {
             continue;
         }
         let stale = entry
@@ -61,7 +69,7 @@ pub fn cleanup_stale_secret_directories(base: &Path) {
             .and_then(|metadata| metadata.modified())
             .ok()
             .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age > MAX_SECRET_DIRECTORY_AGE);
+            .is_some_and(|age| age > max_age);
         if stale {
             let _ = fs::remove_dir_all(path);
         }
@@ -123,4 +131,40 @@ pub fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
 #[cfg(not(unix))]
 pub fn restrict_directory_permissions(_: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cleanup_stale_secret_directories_at;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{Duration, SystemTime},
+    };
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_cleanup_does_not_follow_run_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let suffix = uuid::Uuid::new_v4();
+        let base = std::env::temp_dir().join(format!("mailswiftsync-cleanup-{suffix}"));
+        let target = std::env::temp_dir().join(format!("mailswiftsync-target-{suffix}"));
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&target).unwrap();
+        let link: PathBuf = base.join("run-linked");
+        symlink(&target, &link).unwrap();
+
+        cleanup_stale_secret_directories_at(
+            &base,
+            SystemTime::now() + Duration::from_secs(8 * 24 * 60 * 60),
+            Duration::from_secs(7 * 24 * 60 * 60),
+        );
+
+        assert!(link.exists());
+        assert!(target.exists());
+        fs::remove_file(link).unwrap();
+        fs::remove_dir(target).unwrap();
+        fs::remove_dir(base).unwrap();
+    }
 }
