@@ -8,6 +8,70 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, path::Path};
 use uuid::Uuid;
 
+fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
+    if let Some(config) = config
+        && let Ok(value) = toml::from_str::<toml::Value>(config)
+    {
+        let host = value
+            .get("destination_host")
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|host| !host.is_empty());
+        let user = value
+            .get("destination_user")
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|user| !user.is_empty());
+        if let (Some(host), Some(user)) = (host, user) {
+            let tls = value
+                .get("destination_tls")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("imaps");
+            let default_port = if tls == "starttls" { 143 } else { 993 };
+            let (host, embedded_port) = destination_host_port(host, default_port);
+            let port = value
+                .get("destination_port")
+                .and_then(toml::Value::as_str)
+                .and_then(|port| port.trim().parse::<u16>().ok())
+                .filter(|port| *port != 0)
+                .unwrap_or(embedded_port);
+            return format!(
+                "endpoint:{}:{}:{}",
+                host.to_ascii_lowercase(),
+                port,
+                user.to_ascii_lowercase()
+            );
+        }
+    }
+    format!(
+        "mailbox:{}",
+        destination_mailbox.trim().to_ascii_lowercase()
+    )
+}
+
+fn destination_host_port(value: &str, default_port: u16) -> (String, u16) {
+    let value = value.trim();
+    if let Some(rest) = value.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        let host = rest[..end].trim();
+        let port = rest[end + 1..]
+            .strip_prefix(':')
+            .and_then(|port| port.parse::<u16>().ok())
+            .filter(|port| *port != 0)
+            .unwrap_or(default_port);
+        return (host.to_owned(), port);
+    }
+    if value.matches(':').count() == 1
+        && let Some((host, port)) = value.rsplit_once(':')
+        && let Ok(port) = port.parse::<u16>()
+        && port != 0
+    {
+        return (host.trim().to_owned(), port);
+    }
+    (value.to_owned(), default_port)
+}
+
 /// The transfer engine is a policy decision, not an implementation detail.
 /// Dovecot destinations should use the destination server's own dsync engine;
 /// imapsync remains available for arbitrary IMAP destinations.
@@ -371,7 +435,7 @@ impl StateStore {
         }
         self.connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
           CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
+          CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
@@ -423,6 +487,15 @@ impl StateStore {
         if !job_columns.iter().any(|column| column == "config") {
             self.connection
                 .execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
+        }
+        if !job_columns
+            .iter()
+            .any(|column| column == "destination_identity")
+        {
+            self.connection.execute(
+                "ALTER TABLE mailbox_jobs ADD COLUMN destination_identity TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
         }
         // Older releases stored the generated preflight plan itself. Do not
         // carry that potentially sensitive configuration into the hardened
@@ -553,7 +626,7 @@ impl StateStore {
         let job_id = Uuid::new_v4().to_string();
         let tx = self.connection.unchecked_transaction()?;
         tx.execute("INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES(?1,?2,?3,?4,?5)", params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()])?;
-        tx.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')", params![job_id, project.id, source_mailbox, destination_mailbox])?;
+        tx.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')", params![job_id, project.id, source_mailbox, destination_mailbox, normalized_destination_identity(destination_mailbox, None)])?;
         tx.execute("INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created','Project created without credentials')", [&project.id])?;
         tx.commit()?;
         Ok((project, job_id))
@@ -591,8 +664,8 @@ impl StateStore {
         for (source_mailbox, destination_mailbox) in mailboxes {
             let id = Uuid::new_v4().to_string();
             tx.execute(
-                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')",
-                params![id, project.id, source_mailbox, destination_mailbox],
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')",
+                params![id, project.id, source_mailbox, destination_mailbox, normalized_destination_identity(destination_mailbox, None)],
             )?;
             ids.push(id);
         }
@@ -617,8 +690,8 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let mut destinations = BTreeSet::new();
-        if mailboxes.iter().any(|(_, destination, _)| {
-            !destinations.insert(destination.trim().to_ascii_lowercase())
+        if mailboxes.iter().any(|(_, destination, config)| {
+            !destinations.insert(normalized_destination_identity(destination, Some(config)))
         }) {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -638,8 +711,15 @@ impl StateStore {
         for (source_mailbox, destination_mailbox, config) in mailboxes {
             let id = Uuid::new_v4().to_string();
             tx.execute(
-                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state,config) VALUES(?1,?2,?3,?4,'queued',?5)",
-                params![id, project.id, source_mailbox, destination_mailbox, config],
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state,config) VALUES(?1,?2,?3,?4,?5,'queued',?6)",
+                params![
+                    id,
+                    project.id,
+                    source_mailbox,
+                    destination_mailbox,
+                    normalized_destination_identity(destination_mailbox, Some(config)),
+                    config
+                ],
             )?;
             ids.push(id);
         }
@@ -704,16 +784,17 @@ impl StateStore {
         source: &str,
         destination: &str,
     ) -> rusqlite::Result<String> {
+        let identity = normalized_destination_identity(destination, None);
         let duplicate: bool = self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE project_id=?1 AND lower(trim(destination_mailbox))=lower(trim(?2)))",
-            params![project_id, destination],
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE project_id=?1 AND (destination_identity=?2 OR (destination_identity='' AND lower(trim(destination_mailbox))=lower(trim(?3)))) )",
+            params![project_id, identity, destination],
             |row| row.get(0),
         )?;
         if duplicate {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let id = Uuid::new_v4().to_string();
-        self.connection.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')", params![id, project_id, source, destination])?;
+        self.connection.execute("INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')", params![id, project_id, source, destination, identity])?;
         Ok(id)
     }
     pub fn set_mailbox_state(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
@@ -1179,12 +1260,17 @@ impl StateStore {
         let tx = self.connection.unchecked_transaction()?;
         let mut destinations = BTreeSet::new();
         for (index, job_id) in job_ids.iter().enumerate() {
-            let (current, destination): (String, String) = tx.query_row(
-                "SELECT state,destination_mailbox FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            let (current, destination, destination_identity): (String, String, String) = tx.query_row(
+                "SELECT state,destination_mailbox,destination_identity FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
                 params![job_id, project_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
-            if !destinations.insert(destination.trim().to_ascii_lowercase()) {
+            let identity = if destination_identity.is_empty() {
+                normalized_destination_identity(&destination, None)
+            } else {
+                destination_identity
+            };
+            if !destinations.insert(identity) {
                 return Err(rusqlite::Error::InvalidQuery);
             }
             // Reject an already-running child rather than treating it as a
@@ -2974,6 +3060,73 @@ mod tests {
         assert!(
             db.add_mailbox(&project.id, "two", " target@example.test ")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn configured_batch_destination_identity_includes_endpoint() {
+        let db = StateStore::in_memory().unwrap();
+        let config_a = r#"
+destination_host = "mail-a.example.test"
+destination_user = "target@example.test"
+destination_tls = "imaps"
+destination_port = "993"
+"#;
+        let config_b = r#"
+destination_host = "mail-b.example.test"
+destination_user = "target@example.test"
+destination_tls = "imaps"
+destination_port = "993"
+"#;
+        let (project, jobs) = db
+            .create_project_with_mailbox_configs(
+                "heterogeneous-destinations",
+                "source",
+                "batch",
+                &[
+                    ("one".into(), "target@example.test".into(), config_a.into()),
+                    ("two".into(), "target@example.test".into(), config_b.into()),
+                ],
+            )
+            .unwrap();
+
+        // The same mailbox name on two distinct destination endpoints is safe
+        // to schedule concurrently; the endpoint-qualified identity prevents
+        // the core from applying the UI's more precise check inconsistently.
+        db.begin_batch_run_with_children(
+            &project.id,
+            &jobs,
+            "heterogeneous-destination-run",
+            "imapsync",
+            &[],
+            "batch snapshot",
+            &[],
+        )
+        .unwrap();
+
+        let embedded_port_config = r#"
+destination_host = "mail-c.example.test:143"
+destination_user = "target@example.test"
+destination_tls = "starttls"
+destination_port = ""
+"#;
+        let explicit_port_config = r#"
+destination_host = "mail-c.example.test"
+destination_user = "target@example.test"
+destination_tls = "starttls"
+destination_port = "143"
+"#;
+        assert!(
+            db.create_project_with_mailbox_configs(
+                "equivalent-endpoint-forms",
+                "source",
+                "batch",
+                &[
+                    ("three".into(), "one".into(), embedded_port_config.into()),
+                    ("four".into(), "two".into(), explicit_port_config.into()),
+                ],
+            )
+            .is_err()
         );
     }
 

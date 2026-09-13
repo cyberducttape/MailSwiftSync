@@ -27,6 +27,9 @@ All notable changes to MailSwiftSync are documented here.
 - Plan readiness now reports explicit passed-check counts instead of a
   pseudo-precise percentage that could be confused with verification
   confidence.
+- Durable batch destination checks now use the secret-free destination
+  endpoint, port, and mailbox identity when imported configuration provides
+  it, while legacy rows retain conservative mailbox-only fallback behavior.
 
 - Run-scoped diagnostic and verification events are now writable only while the run is active; terminal audit records cannot be appended later.
 - Preflight persistence now reports missing mailbox IDs as errors instead of silently succeeding with no durable update.
