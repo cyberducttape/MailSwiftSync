@@ -4981,17 +4981,19 @@ impl App {
                 self.pending_evidence.take()
             };
             if succeeded && !run_context.dry_run && terminal_evidence.is_none() {
-                let _ = self.store.record_event(
+                let result = self.store.record_event(
                     &run_context.project_id,
                     "verification_pending",
                     "completed transfer did not provide complete verification evidence",
                 );
+                self.report_store_error("record incomplete verification", result);
             }
             if !was_bulk_run && let Some(job) = &run_context.job_id {
                 if succeeded && run_context.dry_run {
-                    let _ = self
+                    let result = self
                         .store
                         .set_preflight_plan(job, &run_context.plan_fingerprint);
+                    self.report_store_error("record preflight plan", result);
                 }
                 let final_state = if succeeded && run_context.dry_run {
                     "ready"
@@ -5074,6 +5076,7 @@ impl App {
                 let terminal_write_ok = match terminal_write {
                     Ok(()) => true,
                     Err(error) => {
+                        self.durability_error = true;
                         push_visible_output(
                             &mut self.output,
                             format!("[durability] Could not persist terminal state: {error}"),
@@ -5093,7 +5096,7 @@ impl App {
                     );
                     self.report_store_error("record batch run completion", result);
                 }
-                if succeeded {
+                if succeeded && terminal_write_ok {
                     if run_context.dry_run {
                         let result = self.store.transition(project, core::Phase::Preflight);
                         self.report_store_error("advance project phase", result);
