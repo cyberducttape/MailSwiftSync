@@ -8,6 +8,7 @@ mod headless;
 mod imap_probe;
 mod imap_protocol;
 mod oauth;
+mod plan_identity;
 mod process;
 mod reports;
 mod runner;
@@ -58,6 +59,10 @@ use imap_probe::{imap_command_succeeded, imap_quote};
 use keyring::Entry;
 #[cfg(test)]
 use oauth::xoauth2_payload;
+use plan_identity::{
+    configured_file_content_identity, executable_content_identity,
+    snapshot_sha256 as plan_snapshot_sha256,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Display;
@@ -357,59 +362,6 @@ fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-fn plan_snapshot_sha256(snapshot: &str) -> String {
-    format!("{:x}", Sha256::digest(snapshot.as_bytes()))
-}
-
-/// Resolve a command the same way the operating system's process launcher
-/// does for a bare executable name. The resolved content identity is part of
-/// plan admission so replacing an executable at the same path cannot silently
-/// bypass a successful preflight.
-fn resolve_executable_for_identity(executable: &str) -> Option<std::path::PathBuf> {
-    let executable = std::path::Path::new(executable.trim());
-    if executable.is_absolute() || executable.components().count() > 1 {
-        return executable.is_file().then(|| executable.to_path_buf());
-    }
-    let path = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&path) {
-        let candidate = directory.join(executable);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        #[cfg(windows)]
-        if executable.extension().is_none() {
-            let candidate = directory.join(format!("{executable}.exe"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-fn file_content_identity(path: &std::path::Path) -> String {
-    match std::fs::read(path) {
-        Ok(contents) => format!("sha256:{:x}", Sha256::digest(contents)),
-        Err(error) => format!("unavailable:{:?}", error.kind()),
-    }
-}
-
-fn configured_file_content_identity(path: &str) -> String {
-    let path = path.trim();
-    if path.is_empty() {
-        "none".into()
-    } else {
-        file_content_identity(std::path::Path::new(path))
-    }
-}
-
-fn executable_content_identity(executable: &str) -> String {
-    resolve_executable_for_identity(executable)
-        .as_deref()
-        .map(file_content_identity)
-        .unwrap_or_else(|| "unresolved".into())
 }
 
 /// Produce a stable identity for one evidence result and the exact run plan

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted executable, trust-file, and snapshot identity hashing into the
+  dedicated `plan_identity` module, reducing plan-admission policy's coupling
+  to the GUI monolith without changing the fingerprint format.
 - Capability summaries now describe server capabilities as observed
   possibilities rather than implying that the selected transfer engine will
   execute each advertised strategy. Security documentation now matches the
