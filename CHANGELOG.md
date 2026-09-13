@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Capability summaries now describe server capabilities as observed
+  possibilities rather than implying that the selected transfer engine will
+  execute each advertised strategy. Security documentation now matches the
+  enforced remote-Dovecot policy.
 - Headless single and batch execution now pass their explicit ledger path
   directly into application construction instead of mutating the process-wide
   `MAILSWIFTSYNC_STATE_PATH` environment variable.

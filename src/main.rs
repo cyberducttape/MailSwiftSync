@@ -2894,7 +2894,7 @@ impl App {
                 "Source capabilities".into(),
                 format!(
                     "{} · {} folder(s) discovered{} · {}",
-                    caps.strategy().join(" · "),
+                    caps.detected_capabilities().join(" · "),
                     caps.mailbox_count,
                     if caps.special_use_mailboxes > 0 {
                         format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)
@@ -2911,7 +2911,7 @@ impl App {
                 "Destination capabilities".into(),
                 format!(
                     "{} · {} folder(s) discovered{} · {}",
-                    caps.strategy().join(" · "),
+                    caps.detected_capabilities().join(" · "),
                     caps.mailbox_count,
                     if caps.special_use_mailboxes > 0 {
                         format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)

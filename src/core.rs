@@ -747,20 +747,23 @@ impl ServerCapabilities {
     pub fn supports(&self, capability: &str) -> bool {
         self.values.contains(&capability.to_ascii_uppercase())
     }
-    pub fn strategy(&self) -> Vec<&'static str> {
-        let mut plan = vec!["UID-based initial scan"];
+    /// Describe capabilities observed during readiness probing. These are
+    /// possibilities exposed by the server, not promises about which
+    /// algorithms the selected transfer engine will invoke.
+    pub fn detected_capabilities(&self) -> Vec<&'static str> {
+        let mut capabilities = vec!["UID support advertised"];
         if self.supports("QRESYNC") {
-            plan.push("QRESYNC delta synchronization");
+            capabilities.push("QRESYNC advertised");
         } else if self.supports("CONDSTORE") {
-            plan.push("CONDSTORE flag-change tracking");
+            capabilities.push("CONDSTORE advertised");
         }
         if self.supports("SPECIAL-USE") {
-            plan.push("SPECIAL-USE folder mapping");
+            capabilities.push("SPECIAL-USE advertised");
         }
         if self.supports("UIDPLUS") {
-            plan.push("UIDPLUS destination acknowledgement");
+            capabilities.push("UIDPLUS advertised");
         }
-        plan
+        capabilities
     }
 }
 
@@ -3370,7 +3373,7 @@ mod tests {
             "* CAPABILITY IMAP4rev1 UIDPLUS CONDSTORE QRESYNC SPECIAL-USE\r\na1 OK",
         );
         assert!(caps.supports("qresync"));
-        assert!(caps.strategy().contains(&"QRESYNC delta synchronization"));
+        assert!(caps.detected_capabilities().contains(&"QRESYNC advertised"));
         assert!(!caps.inventory_complete);
     }
 
