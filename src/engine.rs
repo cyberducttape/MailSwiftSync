@@ -23,20 +23,23 @@ pub(crate) fn imapsync_args(
     };
     let source_default_port = super::default_imap_port(&profile.source_tls);
     let (source_host, source_endpoint_port) =
-        crate::endpoint::parts(&profile.source_host, source_default_port)
-            .unwrap_or_else(|_| (profile.source_host.clone(), source_default_port));
+        command_endpoint_parts(&profile.source_host, source_default_port);
     let destination_tls = super::effective_destination_tls(&profile.destination_tls);
     let destination_default_port = super::default_imap_port(destination_tls);
     let (destination_host, endpoint_port) =
-        crate::endpoint::parts(&profile.destination_host, destination_default_port)
-            .unwrap_or_else(|_| (profile.destination_host.clone(), destination_default_port));
+        command_endpoint_parts(&profile.destination_host, destination_default_port);
     let destination_port = profile.destination_port.trim();
-    let destination_port = if destination_port.is_empty() {
-        endpoint_port.to_string()
-    } else {
-        destination_port.to_owned()
+    let destination_port = match destination_port.parse::<u16>() {
+        Ok(port) if port != 0 => destination_port.to_owned(),
+        _ if destination_port.is_empty() => endpoint_port.to_string(),
+        _ => "0".to_owned(),
     };
     let source_port = profile.source_port.trim();
+    let source_port = match source_port.parse::<u16>() {
+        Ok(port) if port != 0 => source_port.to_owned(),
+        _ if source_port.is_empty() => source_endpoint_port.to_string(),
+        _ => "0".to_owned(),
+    };
     let mut args = vec![
         "--host1".into(),
         source_host,
@@ -51,11 +54,7 @@ pub(crate) fn imapsync_args(
         "--password2".into(),
         p2.into(),
         "--port1".into(),
-        if source_port.is_empty() {
-            source_endpoint_port.to_string()
-        } else {
-            source_port.into()
-        },
+        source_port,
     ];
     if profile.source_tls == "plain" {
         args.push("--nossl1".into());
@@ -128,6 +127,16 @@ pub(crate) fn imapsync_args(
         args.extend(extra);
     }
     args
+}
+
+/// Command generation is also used by the UI preview and plan fingerprint
+/// paths, whose historical tuple-based API cannot return validation errors.
+/// Never turn an invalid endpoint back into executable-looking input here:
+/// use an unmistakable sentinel and port zero. The normal validation gate
+/// rejects it before any child process can be launched.
+fn command_endpoint_parts(host: &str, default_port: u16) -> (String, u16) {
+    crate::endpoint::parts(host, default_port)
+        .unwrap_or_else(|_| ("<invalid-endpoint>".to_owned(), 0))
 }
 
 pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> {

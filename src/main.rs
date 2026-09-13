@@ -1078,13 +1078,8 @@ impl Form {
         };
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
-            endpoint::parts(&self.profile.source_host, source_default_port)
-                .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
-        let source_port = self
-            .profile
-            .source_port
-            .parse::<u16>()
-            .unwrap_or(endpoint_port);
+            command_endpoint_parts(&self.profile.source_host, source_default_port);
+        let source_port = command_port(&self.profile.source_port, endpoint_port);
         let mut args = Vec::new();
         if self.local_doveadm() {
             args.push("-k".into());
@@ -1196,13 +1191,8 @@ impl Form {
         };
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
-            endpoint::parts(&self.profile.source_host, source_default_port)
-                .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
-        let source_port = self
-            .profile
-            .source_port
-            .parse::<u16>()
-            .unwrap_or(endpoint_port);
+            command_endpoint_parts(&self.profile.source_host, source_default_port);
+        let source_port = command_port(&self.profile.source_port, endpoint_port);
         let mut source = Vec::new();
         if self.local_doveadm() {
             source.push("-k".into());
@@ -2956,6 +2946,21 @@ fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, Strin
         Ok(format!("[{host}]:{port}"))
     } else {
         Ok(format!("{host}:{port}"))
+    }
+}
+
+/// Command previews and fingerprints must not silently turn malformed input
+/// into a different endpoint. Validation rejects the sentinel before launch;
+/// this helper keeps tuple-based command-generation APIs fail-closed too.
+fn command_endpoint_parts(host: &str, default_port: u16) -> (String, u16) {
+    endpoint::parts(host, default_port).unwrap_or_else(|_| ("<invalid-endpoint>".to_owned(), 0))
+}
+
+fn command_port(configured_port: &str, endpoint_port: u16) -> u16 {
+    match configured_port.trim().parse::<u16>() {
+        Ok(port) if port != 0 => port,
+        _ if configured_port.trim().is_empty() => endpoint_port,
+        _ => 0,
     }
 }
 
@@ -11480,6 +11485,16 @@ mod tests {
         );
         assert!(endpoint::parts("mail.example:0", 993).is_err());
         assert!(endpoint::parts("[2001:db8::1]garbage", 993).is_err());
+    }
+
+    #[test]
+    fn command_endpoint_helpers_never_reuse_invalid_input() {
+        assert_eq!(
+            command_endpoint_parts("mail.example:0", 993),
+            ("<invalid-endpoint>".into(), 0)
+        );
+        assert_eq!(command_port("000", 993), 0);
+        assert_eq!(command_port("", 993), 993);
     }
 
     #[test]
