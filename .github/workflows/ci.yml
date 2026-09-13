@@ -84,5 +84,7 @@ jobs:
         run: docker run --rm mailswiftsync:ci --version
       - name: Smoke-test bundled imapsync
         run: docker run --rm --entrypoint imapsync mailswiftsync:ci --version
-      - name: Smoke-test bundled Dovecot
-        run: docker run --rm --entrypoint doveadm mailswiftsync:ci --version
+      - name: Smoke-test bundled Dovecot engine
+        run: docker run --rm --entrypoint dovecot mailswiftsync:ci --version
+      - name: Smoke-test bundled doveadm
+        run: docker run --rm --entrypoint doveadm mailswiftsync:ci help
