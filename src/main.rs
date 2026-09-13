@@ -5902,7 +5902,8 @@ impl App {
                                     }
                                 };
                                 if let Err(error) = claim_result {
-                                    let cancelled = error.contains("cancelled");
+                                    let cancelled =
+                                        classify_failure(&error) == FailureClass::Cancellation;
                                     if !cancelled {
                                         failed.store(true, Ordering::Relaxed);
                                     }
@@ -6075,7 +6076,7 @@ impl App {
                                     break;
                                 }
                                 Err(error)
-                                    if !error.contains("cancelled")
+                                    if classify_failure(&error) != FailureClass::Cancellation
                                         && attempt < retry_count
                                         && is_transient_batch_error(&error) =>
                                 {
@@ -6106,7 +6107,8 @@ impl App {
                                     }
                                 }
                                 Err(error) => {
-                                    let cancelled = error.contains("cancelled");
+                                    let cancelled =
+                                        classify_failure(&error) == FailureClass::Cancellation;
                                     if !cancelled {
                                         failed.store(true, Ordering::Relaxed);
                                     }
@@ -7284,36 +7286,34 @@ impl App {
                         .set_preflight_plan(job, &run_context.plan_fingerprint);
                     self.report_store_error("record preflight plan", result);
                 }
-                let final_state = if succeeded && run_context.dry_run {
-                    "ready"
-                } else if !succeeded {
-                    if r.as_ref()
-                        .err()
-                        .is_some_and(|error| error.contains("verification"))
-                    {
+                let final_state =
+                    if succeeded && run_context.dry_run {
+                        "ready"
+                    } else if !succeeded {
+                        if r.as_ref().err().is_some_and(|error| {
+                            classify_failure(error) == FailureClass::Verification
+                        }) {
+                            "attention"
+                        } else if r.as_ref().err().is_some_and(|error| {
+                            classify_failure(error) == FailureClass::Cancellation
+                        }) {
+                            "cancelled"
+                        } else {
+                            "failed"
+                        }
+                    } else if let Some(evidence) = terminal_evidence.as_ref() {
+                        if evidence.is_exact_match() && !delta_required {
+                            "verified"
+                        } else if delta_required {
+                            "delta_required"
+                        } else {
+                            "verification_difference"
+                        }
+                    } else if !run_context.dry_run {
                         "attention"
-                    } else if r
-                        .as_ref()
-                        .err()
-                        .is_some_and(|error| error.contains("cancelled"))
-                    {
-                        "cancelled"
                     } else {
-                        "failed"
-                    }
-                } else if let Some(evidence) = terminal_evidence.as_ref() {
-                    if evidence.is_exact_match() && !delta_required {
-                        "verified"
-                    } else if delta_required {
-                        "delta_required"
-                    } else {
-                        "verification_difference"
-                    }
-                } else if !run_context.dry_run {
-                    "attention"
-                } else {
-                    "completed"
-                };
+                        "completed"
+                    };
                 direct_final_state = Some(final_state);
             }
             let mut retry_terminal_commit = false;
@@ -7325,13 +7325,13 @@ impl App {
                 } else if r
                     .as_ref()
                     .err()
-                    .is_some_and(|error| error.contains("verification"))
+                    .is_some_and(|error| classify_failure(error) == FailureClass::Verification)
                 {
                     "verification_failed"
                 } else if r
                     .as_ref()
                     .err()
-                    .is_some_and(|error| error.contains("cancelled"))
+                    .is_some_and(|error| classify_failure(error) == FailureClass::Cancellation)
                 {
                     "cancelled"
                 } else {
@@ -8379,22 +8379,26 @@ fn status_color(status: &str) -> Color32 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureClass {
+    Cancellation,
     Authentication,
     Quota,
     Transport,
     Configuration,
     Message,
+    Verification,
     Unknown,
 }
 
 impl FailureClass {
     fn label(self) -> &'static str {
         match self {
+            Self::Cancellation => "cancelled",
             Self::Authentication => "authentication",
             Self::Quota => "quota",
             Self::Transport => "transport",
             Self::Configuration => "configuration",
             Self::Message => "message",
+            Self::Verification => "verification",
             Self::Unknown => "unknown",
         }
     }
@@ -8410,7 +8414,12 @@ fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap<String, us
 
 fn classify_failure(error: &str) -> FailureClass {
     let error = error.to_ascii_lowercase();
-    if [
+    if ["cancelled", "canceled", "operator cancellation"]
+        .iter()
+        .any(|marker| error.contains(marker))
+    {
+        FailureClass::Cancellation
+    } else if [
         "authentication",
         "auth failed",
         "authentification",
@@ -8447,6 +8456,15 @@ fn classify_failure(error: &str) -> FailureClass {
     .any(|marker| error.contains(marker))
     {
         FailureClass::Message
+    } else if [
+        "verification",
+        "evidence incomplete",
+        "evidence unavailable",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Verification
     } else if [
         "timed out",
         "timeout",
@@ -10509,6 +10527,14 @@ mod tests {
 
     #[test]
     fn failure_taxonomy_keeps_operator_actions_distinct() {
+        assert_eq!(
+            classify_failure("cancelled by operator before launch"),
+            FailureClass::Cancellation
+        );
+        assert_eq!(
+            classify_failure("verification evidence is incomplete"),
+            FailureClass::Verification
+        );
         assert_eq!(
             classify_failure("AUTHENTICATIONFAILED"),
             FailureClass::Authentication
