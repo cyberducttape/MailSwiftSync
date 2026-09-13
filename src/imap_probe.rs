@@ -265,7 +265,8 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
             stream
                 .write_all(b"a002 AUTHENTICATE XOAUTH2\r\n")
                 .map_err(|e| e.to_string())?;
-            read_auth_continuation(&mut stream, &mut response, &mut buffer)?;
+            response.clear();
+            read_auth_continuation(&mut stream, "a002", &mut response, &mut buffer)?;
             let encoded = Zeroizing::new(encoded);
             stream
                 .write_all(encoded.as_bytes())
