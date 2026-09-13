@@ -2353,6 +2353,8 @@ struct App {
     verification_search: String,
     verification_filter: String,
     activity_show_all: bool,
+    activity_search: String,
+    activity_status_filter: String,
     reopen_reason: String,
 }
 impl Default for App {
@@ -2672,6 +2674,8 @@ impl Default for App {
             verification_search: String::new(),
             verification_filter: "all".into(),
             activity_show_all: false,
+            activity_search: String::new(),
+            activity_status_filter: "all".into(),
             reopen_reason: String::new(),
         }
     }
@@ -4330,18 +4334,82 @@ impl App {
                 self.activity_show_all = !self.activity_show_all;
             }
         });
-        let Some(project) = self.active_project_id() else {
+        let Some(project) = self.active_project_id().map(str::to_owned) else {
             ui.label(
                 RichText::new("Create or restore a project to see durable runs.").color(MUTED),
             );
             return;
         };
         let run_limit = if self.activity_show_all { u32::MAX } else { 20 };
-        match self.store.recent_run_list(project, run_limit) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Filter history");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.activity_search)
+                    .hint_text("mailbox, phase, engine, run ID, or detail")
+                    .desired_width(280.0),
+            );
+            egui::ComboBox::from_id_salt("activity_status_filter")
+                .selected_text(match self.activity_status_filter.as_str() {
+                    "errors" => "Errors and attention",
+                    "running" => "Running",
+                    "completed" => "Completed",
+                    _ => "All statuses",
+                })
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        ("all", "All statuses"),
+                        ("errors", "Errors and attention"),
+                        ("running", "Running"),
+                        ("completed", "Completed"),
+                    ] {
+                        ui.selectable_value(&mut self.activity_status_filter, value.into(), label);
+                    }
+                });
+        });
+        match self.store.recent_run_list(&project, run_limit) {
             Ok(runs) if runs.is_empty() => {
                 ui.label(RichText::new("No durable runs recorded yet.").color(MUTED));
             }
             Ok(runs) => {
+                let search = self.activity_search.trim().to_ascii_lowercase();
+                let visible = runs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, run)| {
+                        let status_match = match self.activity_status_filter.as_str() {
+                            "errors" => run.status != "completed" && run.status != "running",
+                            "running" => run.status == "running",
+                            "completed" => run.status == "completed",
+                            _ => true,
+                        };
+                        let mailbox = run
+                            .destination_mailbox
+                            .as_deref()
+                            .or(run.source_mailbox.as_deref())
+                            .unwrap_or("batch");
+                        let text_match = search.is_empty()
+                            || [
+                                run.id.as_str(),
+                                mailbox,
+                                run.phase_at_start.as_str(),
+                                run.engine.as_str(),
+                                run.status.as_str(),
+                                run.detail.as_str(),
+                            ]
+                            .iter()
+                            .any(|value| value.to_ascii_lowercase().contains(&search));
+                        status_match && text_match
+                    })
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                ui.label(
+                    RichText::new(format!(
+                        "{} visible of {} loaded",
+                        visible.len(),
+                        runs.len()
+                    ))
+                    .color(MUTED),
+                );
                 egui::Grid::new("durable_run_history")
                     .striped(true)
                     .show(ui, |ui| {
@@ -4358,11 +4426,12 @@ impl App {
                 egui::ScrollArea::vertical()
                     .id_salt("durable_run_history_rows")
                     .max_height(420.0)
-                    .show_rows(ui, 32.0, runs.len(), |ui, rows| {
+                    .show_rows(ui, 32.0, visible.len(), |ui, rows| {
                         egui::Grid::new("durable_run_history_rows_grid")
                             .striped(true)
                             .show(ui, |ui| {
-                                for index in rows {
+                                for row in rows {
+                                    let index = visible[row];
                                     let run = &runs[index];
                                     ui.label(
                                         RichText::new(&run.id[..8.min(run.id.len())]).monospace(),
