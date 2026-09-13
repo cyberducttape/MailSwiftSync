@@ -12,6 +12,12 @@ use std::{
 use uuid::Uuid;
 
 fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
+    let mailbox_identity = || {
+        format!(
+            "mailbox:{}",
+            destination_mailbox.trim().to_ascii_lowercase()
+        )
+    };
     if let Some(config) = config
         && let Ok(value) = toml::from_str::<toml::Value>(config)
     {
@@ -31,14 +37,21 @@ fn normalized_destination_identity(destination_mailbox: &str, config: Option<&st
                 .and_then(toml::Value::as_str)
                 .unwrap_or("imaps");
             let default_port = if tls == "starttls" { 143 } else { 993 };
-            let (host, embedded_port) = crate::endpoint::parts(host, default_port)
-                .unwrap_or_else(|_| (host.to_owned(), default_port));
-            let port = value
+            let Ok((host, embedded_port)) = crate::endpoint::parts(host, default_port) else {
+                return mailbox_identity();
+            };
+            let port = match value
                 .get("destination_port")
                 .and_then(toml::Value::as_str)
-                .and_then(|port| port.trim().parse::<u16>().ok())
-                .filter(|port| *port != 0)
-                .unwrap_or(embedded_port);
+                .map(str::trim)
+                .filter(|port| !port.is_empty())
+            {
+                Some(port) => match port.parse::<u16>() {
+                    Ok(port) if port != 0 => port,
+                    _ => return mailbox_identity(),
+                },
+                None => embedded_port,
+            };
             return format!(
                 "endpoint:{}:{}:{}",
                 host.to_ascii_lowercase(),
@@ -47,10 +60,7 @@ fn normalized_destination_identity(destination_mailbox: &str, config: Option<&st
             );
         }
     }
-    format!(
-        "mailbox:{}",
-        destination_mailbox.trim().to_ascii_lowercase()
-    )
+    mailbox_identity()
 }
 
 const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;
@@ -5034,6 +5044,31 @@ destination_port = "143"
                 ],
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_configured_endpoint_does_not_become_an_endpoint_identity() {
+        let malformed_host = r#"
+destination_host = "mail.example:0"
+destination_user = "target@example.test"
+destination_tls = "imaps"
+destination_port = ""
+"#;
+        assert_eq!(
+            normalized_destination_identity("Target@example.test", Some(malformed_host)),
+            "mailbox:target@example.test"
+        );
+
+        let malformed_port = r#"
+destination_host = "mail.example"
+destination_user = "target@example.test"
+destination_tls = "imaps"
+destination_port = "000"
+"#;
+        assert_eq!(
+            normalized_destination_identity("Target@example.test", Some(malformed_port)),
+            "mailbox:target@example.test"
         );
     }
 
