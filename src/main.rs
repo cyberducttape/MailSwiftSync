@@ -6109,6 +6109,7 @@ impl App {
         host: &mut String,
         user: &mut String,
         password: &mut String,
+        password_required: bool,
         color: Color32,
     ) {
         let editable = ui.ctx().data(|data| {
@@ -6155,31 +6156,37 @@ impl App {
                         .data_mut(|data| data.insert_temp(visibility_id, !visible));
                 }
             });
-            inline_error(ui, "Password", password, title.starts_with("01"));
+            inline_error(ui, "Password", password, password_required);
         });
     }
     fn preview(&mut self, ctx: &egui::Context) {
         if !self.preview {
             return;
         }
-        egui::Window::new("Command preview")
+        egui::Window::new("Execution plan")
             .open(&mut self.preview)
             .default_width(670.0)
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new(
-                        "Passwords are redacted. They are never written to the saved profile.",
+                        "Passwords are redacted. This is an argument list for review, not a shell command to paste.",
                     )
                     .color(MUTED),
                 );
                 let (exe, args) = self.form.command(true);
-                let mut cmd = format!("{} {}", exe, args.join(" "));
-                ui.add(
-                    egui::TextEdit::multiline(&mut cmd)
-                        .code_editor()
-                        .desired_rows(10)
-                        .interactive(false),
-                );
+                ui.label(RichText::new(format!("Executable: {exe}")).monospace());
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        for (index, argument) in args.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!("[{index:>3}]")).monospace().color(MUTED),
+                                );
+                                ui.label(RichText::new(argument).monospace());
+                            });
+                        }
+                    });
             });
     }
     fn bulk_dialog(&mut self, ctx: &egui::Context) {
@@ -7113,34 +7120,24 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.label(RichText::new("WORKSPACE").size(11.0).strong().color(MUTED));
                 ui.add_space(6.0);
-                for (view, label, detail) in [
-                    (
-                        WorkspaceView::Overview,
-                        "Overview",
-                        "Readiness and next step",
-                    ),
-                    (
-                        WorkspaceView::Plan,
-                        "Migration plan",
-                        "Endpoints and sync rules",
-                    ),
-                    (WorkspaceView::Mailboxes, "Mailboxes", "Scope and queue"),
-                    (WorkspaceView::Activity, "Activity", "Runs and diagnostics"),
-                    (
-                        WorkspaceView::Verification,
-                        "Verification",
-                        "Evidence and confidence",
-                    ),
+                for (view, label) in [
+                    (WorkspaceView::Overview, "Overview"),
+                    (WorkspaceView::Plan, "Migration plan"),
+                    (WorkspaceView::Mailboxes, "Mailboxes"),
+                    (WorkspaceView::Activity, "Activity"),
+                    (WorkspaceView::Verification, "Verification"),
                 ] {
                     let selected = self.active_view == view;
                     if ui
-                        .selectable_label(selected, RichText::new(label).strong())
+                        .add_sized(
+                            [ui.available_width(), 32.0],
+                            egui::Button::selectable(selected, RichText::new(label).strong()),
+                        )
                         .clicked()
                     {
                         self.active_view = view;
                     }
-                    ui.label(RichText::new(detail).size(10.0).color(MUTED));
-                    ui.add_space(5.0);
+                    ui.add_space(4.0);
                 }
             });
         egui::CentralPanel::default()
@@ -7170,15 +7167,17 @@ impl eframe::App for App {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| if ui.button("Save non-secret profile").clicked() { self.status = match self.form.save() { Ok(()) => "Profile saved; passwords were not saved".into(), Err(e) => format!("Could not save profile: {e}") }; });
                             });
                             ui.add_space(10.0);
+                            let destination_password_required =
+                                self.form.engine() != core::Engine::Dovecot;
                             if ui.available_width() > 900.0 {
                                 ui.columns(2, |c| {
-                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE);
-                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL);
+                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, BLUE);
+                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, TEAL);
                                 });
                             } else {
-                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, BLUE);
+                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, BLUE);
                                 ui.add_space(8.0);
-                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, TEAL);
+                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, TEAL);
                             }
                             ui.horizontal(|ui| {
                                 ui.label("Source port");
