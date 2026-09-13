@@ -57,3 +57,18 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Compile release target
         run: cargo build --locked --release --all-features --target ${{ matrix.target }}
+
+  native-runtime-tests:
+    name: Native runtime tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+        with:
+          components: rustfmt, clippy
+      - name: Run native test suite
+        run: cargo test --locked --all-targets --all-features
