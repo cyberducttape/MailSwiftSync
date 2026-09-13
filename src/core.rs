@@ -144,6 +144,16 @@ pub struct Project {
     pub destination_endpoint: String,
     pub phase: Phase,
 }
+
+/// Compact project row for workspace selection. It intentionally omits
+/// mailbox configuration and plan snapshots so switching customers never
+/// loads secrets or large historical plans into the UI shell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectListItem {
+    pub id: String,
+    pub name: String,
+    pub phase: Phase,
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxJob {
     pub id: String,
@@ -2090,6 +2100,20 @@ impl StateStore {
     }
     pub fn latest_project(&self) -> rusqlite::Result<Option<Project>> {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects ORDER BY created_at DESC, rowid DESC LIMIT 1", [], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
+    }
+    pub fn recent_projects(&self, limit: usize) -> rusqlite::Result<Vec<ProjectListItem>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,name,phase FROM projects ORDER BY created_at DESC, rowid DESC LIMIT ?1",
+        )?;
+        statement
+            .query_map([limit as i64], |row| {
+                Ok(ProjectListItem {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    phase: Phase::parse(&row.get::<_, String>(2)?)?,
+                })
+            })?
+            .collect()
     }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
@@ -4600,5 +4624,23 @@ destination_port = "143"
                 .is_err()
         );
         assert!(db.evidence(&jobs[1]).unwrap().is_none());
+    }
+
+    #[test]
+    fn recent_projects_returns_compact_rows_for_workspace_selection() {
+        let db = StateStore::in_memory().unwrap();
+        let first = db
+            .create_project("First customer", "source-a", "destination-a")
+            .unwrap();
+        let second = db
+            .create_project("Second customer", "source-b", "destination-b")
+            .unwrap();
+
+        let projects = db.recent_projects(1).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, second.id);
+        assert_eq!(projects[0].name, "Second customer");
+        assert_eq!(projects[0].phase, Phase::Discovery);
+        assert_ne!(projects[0].id, first.id);
     }
 }

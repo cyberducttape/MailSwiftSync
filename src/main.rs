@@ -6735,6 +6735,32 @@ impl eframe::App for App {
                             .italics()
                             .color(MUTED),
                     );
+                    if let Ok(projects) = self.store.recent_projects(8)
+                        && !projects.is_empty()
+                    {
+                        let selected_name = self
+                            .selected_project_id
+                            .as_deref()
+                            .and_then(|id| projects.iter().find(|project| project.id == id))
+                            .map(|project| project.name.as_str())
+                            .unwrap_or("Select project");
+                        egui::ComboBox::from_id_salt("project_switcher")
+                            .selected_text(selected_name)
+                            .width(180.0)
+                            .show_ui(ui, |ui| {
+                                for project in projects {
+                                    let selected = self.selected_project_id.as_deref()
+                                        == Some(project.id.as_str());
+                                    if ui.selectable_label(
+                                        selected,
+                                        format!("{} · {}", project.name, format_phase_name(project.phase)),
+                                    ).clicked() {
+                                        self.selected_project_id = Some(project.id.clone());
+                                        self.active_view = WorkspaceView::Overview;
+                                    }
+                                }
+                            });
+                    }
                     if ui.button("Batch queue").clicked() {
                         self.bulk_open = true;
                     }
