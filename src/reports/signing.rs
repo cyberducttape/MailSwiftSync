@@ -23,13 +23,14 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
     use std::{os::windows::ffi::OsStrExt, ptr};
     use windows_sys::Win32::{
         Foundation::{HLOCAL, LocalFree},
+        Security::Authorization::SE_FILE_OBJECT,
         Security::{
-            ACCESS_ALLOWED_ACE, ACCESS_ALLOWED_ACE_TYPE, ACE_HEADER, CreateWellKnownSid,
-            DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetNamedSecurityInfoW,
-            GetSecurityDescriptorControl, GetSecurityDescriptorDacl, INHERITED_ACE,
-            OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
-            SE_FILE_OBJECT, SECURITY_MAX_SID_SIZE, WinLocalSystemSid,
+            ACCESS_ALLOWED_ACE, ACE_HEADER, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
+            EqualSid, GetAce, GetNamedSecurityInfoW, GetSecurityDescriptorControl,
+            GetSecurityDescriptorDacl, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+            SE_DACL_PROTECTED, SECURITY_MAX_SID_SIZE, WinLocalSystemSid,
         },
+        System::SystemServices::ACCESS_ALLOWED_ACE_TYPE,
     };
 
     let metadata = std::fs::metadata(path)

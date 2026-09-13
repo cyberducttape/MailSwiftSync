@@ -21,6 +21,9 @@ All notable changes to MailSwiftSync are documented here.
   bytes before the key leaves the signing operation.
 - Hardened the Windows signer further by verifying the protected DACL contains
   only the file owner and LocalSystem; broad or inherited ACLs now fail closed.
+- Corrected the Windows security API feature wiring used by the signing-key
+  DACL verifier so the gated implementation is compiled with its required
+  system-services bindings.
 - Plan fingerprints and immutable run snapshots now bind the SHA-256 content
   identity of the selected engine executable, configured trust bundles, and
   Dovecot configuration, so replacing a file at the same path invalidates a
