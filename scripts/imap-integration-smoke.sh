@@ -129,6 +129,19 @@ imapsync \
   --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
   --automap --nolog
 
+set +e
+imapsync \
+  --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "incorrect-password" --notls1 \
+  --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
+  --automap --nolog > "$workspace/bad-auth.log" 2>&1
+bad_auth_status=$?
+set -e
+if [[ "$bad_auth_status" == 0 ]]; then
+  echo "FAIL: invalid source credentials unexpectedly succeeded" >&2
+  exit 1
+fi
+echo "PASS: invalid source credentials were rejected (exit $bad_auth_status)"
+
 destination_messages="$(find "$workspace/destination/mail/$user/Maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
 if [[ "$destination_messages" -lt 1 ]]; then
   echo "FAIL: imapsync reported success but destination Maildir has no fixture message" >&2
