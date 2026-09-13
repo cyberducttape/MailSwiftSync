@@ -1360,20 +1360,39 @@ fn run_streaming(
     // bounded event queue is temporarily full, this send may wait, but the
     // child pipes are already being drained and cannot deadlock the engine.
     let (registration_tx, registration_rx) = mpsc::sync_channel(1);
-    let process_started = tx
-        .send(Event::ProcessStarted(
-            run_id.to_owned(),
-            job_id.to_owned(),
-            child.id(),
-            start_ticks,
-            process_group,
-            session_id,
-            executable.to_owned(),
-            registration_tx,
-        ))
-        .is_ok();
+    let registration_deadline = std::time::Instant::now() + PROCESS_REGISTRATION_ACK_TIMEOUT;
+    let mut process_started_event = Some(Event::ProcessStarted(
+        run_id.to_owned(),
+        job_id.to_owned(),
+        child.id(),
+        start_ticks,
+        process_group,
+        session_id,
+        executable.to_owned(),
+        registration_tx,
+    ));
+    let process_started = loop {
+        if cancel.load(Ordering::Relaxed) {
+            break false;
+        }
+        let remaining = registration_deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break false;
+        }
+        match tx.try_send(
+            process_started_event
+                .take()
+                .expect("registration event exists"),
+        ) {
+            Ok(()) => break true,
+            Err(mpsc::TrySendError::Full(event)) => {
+                process_started_event = Some(event);
+                thread::sleep(remaining.min(Duration::from_millis(10)));
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => break false,
+        }
+    };
     let result = if process_started {
-        let registration_deadline = std::time::Instant::now() + PROCESS_REGISTRATION_ACK_TIMEOUT;
         let registration = loop {
             if cancel.load(Ordering::Relaxed) {
                 break Err("cancelled before durable process registration".to_owned());
