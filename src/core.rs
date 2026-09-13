@@ -674,6 +674,8 @@ fn bounded_event_detail(_kind: &str, detail: &str) -> String {
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
+        prepare_database_file(path)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let store = Self {
             connection: Connection::open(path)?,
         };
@@ -2954,6 +2956,40 @@ fn migration_backup_path(path: &Path, schema_version: i64) -> PathBuf {
         "{file_name}.pre-migrate-v{schema_version}.{}.db",
         Uuid::new_v4()
     ))
+}
+
+/// Ensure SQLite's first file creation happens with owner-only permissions.
+/// The later chmod calls still repair existing databases and sidecars, but
+/// this removes the initial permissive-umask window for a new ledger.
+fn prepare_database_file(path: &Path) -> std::io::Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+            .map(drop)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map(drop)
+    }
+    .or_else(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    })
 }
 
 #[cfg(unix)]
