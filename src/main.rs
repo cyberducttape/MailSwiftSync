@@ -2735,7 +2735,7 @@ impl App {
             return;
         }
         let mut open = self.cockpit_open;
-        egui::Window::new("Migration Project Cockpit").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
+        egui::Window::new("Preflight & readiness").open(&mut open).default_width(820.0).default_height(560.0).show(ctx, |ui| {
             ui.heading("Operator view"); ui.label(RichText::new("A durable migration project records phases and evidence independently of the desktop session.").color(MUTED)); ui.add_space(10.0);
             if ui.add_enabled(self.capability_receiver.is_none() && self.form.engine() != core::Engine::Dovecot, egui::Button::new("Run authenticated IMAPS readiness probe")).clicked() { self.start_capability_probe(); }
             if self.form.engine() == core::Engine::Dovecot { ui.label(RichText::new("Dovecot dry preflight checks the remote imapc source; destination readiness still requires administrative review.").size(11.0).color(MUTED)); }
@@ -2806,7 +2806,7 @@ impl App {
             }
             ui.add_space(12.0); ui.separator(); ui.heading("Preflight assessment"); if ui.button("Refresh assessment").clicked() { self.assess_plan(); }
             egui::Grid::new("preflight").striped(true).show(ui, |ui| { ui.strong("Check"); ui.strong("Result"); ui.end_row(); for (name, detail, pass) in &self.preflight { ui.label(RichText::new(if *pass { "✓" } else { "!" }).color(if *pass { TEAL } else { ALERT })); ui.label(RichText::new(name).strong()); ui.label(detail); ui.end_row(); } });
-            ui.add_space(10.0); ui.label(RichText::new("Next engine milestones: server capability negotiation, folder discovery, UIDVALIDITY-aware checkpoints, and message-level verification evidence.").size(11.0).color(MUTED));
+            ui.add_space(10.0); ui.label(RichText::new("Use this assessment to resolve blockers before live migration. Verification evidence is reviewed separately in the Verification workspace.").color(MUTED));
         });
         self.cockpit_open = open;
     }
@@ -3008,7 +3008,7 @@ impl App {
                     .color(if self.form.dry_run { TEAL } else { ALERT }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new(format!("{passed}/{total} checks passed"))
+                        RichText::new(format!("{passed}/{total} plan checks complete"))
                             .strong()
                             .color(if passed == total { TEAL } else { ALERT }),
                     );
@@ -6231,7 +6231,7 @@ impl App {
                     ui.label(RichText::new("Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count.").size(11.0).color(MUTED));
                 });
                 ui.add_space(8.0);
-                ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
+                        ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.").size(11.0).color(ALERT)); });
             });
             if !editable {
                 ui.label(RichText::new("Advanced plan settings are locked while a migration is running.").color(MUTED));
