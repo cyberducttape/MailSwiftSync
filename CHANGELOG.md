@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added a service-manager deployment guide with a least-privilege systemd
+  example and a Windows wrapper pattern, including the current unattended
+  automation and credential-broker boundaries.
 - Execution journal clipboard actions now default to a metadata-free support
   summary; copying raw redacted engine output is explicitly labeled as
   potentially containing mailbox metadata.
@@ -555,7 +558,10 @@ All notable changes to MailSwiftSync are documented here.
 - Reject control characters in hosts, usernames, and passwords before validation, process execution, or authenticated IMAP probing.
 - Batch startup now atomically records the parent run and marks every child job as running before worker execution, so restart recovery cannot lose queued children between UI events.
 - Dovecot mode no longer offers the dual-IMAPS readiness probe when the destination has no IMAP credential; native `doveadm` dry preflight is now the explicit destination check.
-- Remote Dovecot execution is now disabled by default until secret-broker delivery exists; operators must explicitly acknowledge the current destination process-argument exposure to opt in.
+- Remote Dovecot execution was disabled by default pending secret-broker
+  delivery. The former opt-in compatibility path was subsequently removed;
+  current builds reject remote execution rather than exposing destination
+  process-argument credentials.
 - Bulk imports no longer require password columns; missing credentials can be entered in masked per-row fields, reducing the need to keep plaintext passwords in migration spreadsheets.
 - Separated structural bulk-import validation from credential-required execution validation, so passwordless identity imports are accepted but cannot be launched until credentials are supplied.
 - Added project-level Markdown verification reports covering every durable mailbox job, evidence scope, confidence, unresolved states, and recent runs.

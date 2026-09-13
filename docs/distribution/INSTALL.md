@@ -15,3 +15,6 @@ engine or configure a mail server.
 The archive includes the project README and the first-launch guide. Verify the
 adjacent `.sha256` file before use. Release artifacts also carry GitHub build
 provenance and are published with the release manifest.
+
+For Linux headless deployments, see the [container deployment guide](../container.md)
+and the [service-manager deployment guide](SERVICE.md).

@@ -2,7 +2,9 @@
 
 This runbook is for attended migrations on a dedicated Unix admin workstation or jump host. MailSwiftSync is restart-aware, not unattended automation: keep an operator present for live work and review every `Attention` or `Failed` mailbox.
 
-For supervised automation, the binary also exposes a headless one-shot path:
+For supervised automation, the binary also exposes a headless one-shot path.
+See the [service-manager deployment guide](../distribution/SERVICE.md) for
+systemd and Windows wrapper examples:
 
 ```text
 mailswiftsync headless /path/to/state.db preflight

@@ -29,8 +29,9 @@ docker run --rm \
     /var/lib/mailswiftsync/state.db /backups/state.db
 ```
 
-For continuous automation, run `supervise` under an external service manager
-or container restart policy. The container does not grant the process access
+For continuous supervision, run `supervise` under an external service manager
+or container restart policy; see [service-manager deployment](distribution/SERVICE.md)
+for a hardened systemd example. The container does not grant the process access
 to a secret manager, OAuth provider, host Dovecot socket, or a display; those
 must be explicitly integrated and documented by the deployment owner.
 
