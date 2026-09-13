@@ -2928,13 +2928,26 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
             "{host}: folder inventory returned no untagged LIST records"
         ));
     }
-    let _ = stream.write_all(b"a006 LOGOUT\r\n");
     let caps = core::ServerCapabilities::parse_with_inventory(&post_auth_response, &list_response);
     if caps.values.is_empty() {
         return Err(format!(
             "{host}: server did not return a CAPABILITY response"
         ));
     }
+    let mut caps = caps;
+    if caps.supports("QUOTA") {
+        let mut quota_response = String::new();
+        stream
+            .write_all(b"a006 GETQUOTAROOT \"\"\r\n")
+            .map_err(|e| e.to_string())?;
+        // A provider can advertise QUOTA while denying the root query. Keep
+        // that result explicitly unknown; quota support is advisory and must
+        // not turn an otherwise valid mailbox into a false capacity failure.
+        if read_imap_tagged(&mut stream, "a006", &mut quota_response, &mut buffer).is_ok() {
+            caps.record_quota_response(&quota_response);
+        }
+    }
+    let _ = stream.write_all(b"a007 LOGOUT\r\n");
     Ok(caps)
 }
 
@@ -2951,18 +2964,27 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
         &form.profile.destination_host,
         &form.profile.destination_port,
     )?;
-    probe_tls_capabilities_with_transport(
+    let source_capabilities = probe_tls_capabilities_with_transport(
         &source,
         &form.profile.source_user,
         form.source_password.as_str(),
         &form.profile.source_tls,
     )?;
-    probe_tls_capabilities_with_transport(
+    if source_capabilities.quota_exceeded {
+        return Err(
+            "source mailbox quota is exhausted according to the authenticated IMAP quota response"
+                .into(),
+        );
+    }
+    let destination_capabilities = probe_tls_capabilities_with_transport(
         &destination,
         &form.profile.destination_user,
         form.destination_password.as_str(),
         &form.profile.destination_tls,
     )?;
+    if destination_capabilities.quota_exceeded {
+        return Err("destination mailbox quota is exhausted according to the authenticated IMAP quota response".into());
+    }
     Ok(())
 }
 
@@ -2971,6 +2993,18 @@ fn fresh_imap_authentication_applies(form: &Form) -> bool {
         && form.engine() == core::Engine::ImapSync
         && form.profile.source_tls != "plain"
         && form.profile.destination_tls != "plain"
+}
+
+fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
+    if !caps.supports("QUOTA") {
+        "quota not advertised"
+    } else if caps.quota_exceeded {
+        "quota exceeded"
+    } else if caps.quota_observed {
+        "quota reported within limit"
+    } else {
+        "quota status unavailable; verify capacity with the provider"
+    }
 }
 
 impl App {
@@ -3165,32 +3199,34 @@ impl App {
             self.preflight.push((
                 "Source capabilities".into(),
                 format!(
-                    "{} · {} folder(s) discovered{}",
+                    "{} · {} folder(s) discovered{} · {}",
                     caps.strategy().join(" · "),
                     caps.mailbox_count,
                     if caps.special_use_mailboxes > 0 {
                         format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)
                     } else {
                         String::new()
-                    }
+                    },
+                    quota_summary(caps)
                 ),
-                caps.inventory_complete,
+                caps.inventory_complete && !caps.quota_exceeded,
             ));
         }
         if let Some(caps) = &self.destination_capabilities {
             self.preflight.push((
                 "Destination capabilities".into(),
                 format!(
-                    "{} · {} folder(s) discovered{}",
+                    "{} · {} folder(s) discovered{} · {}",
                     caps.strategy().join(" · "),
                     caps.mailbox_count,
                     if caps.special_use_mailboxes > 0 {
                         format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)
                     } else {
                         String::new()
-                    }
+                    },
+                    quota_summary(caps)
                 ),
-                caps.inventory_complete,
+                caps.inventory_complete && !caps.quota_exceeded,
             ));
         }
         if self.form.engine() == core::Engine::ImapSync {

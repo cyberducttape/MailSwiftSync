@@ -488,6 +488,11 @@ pub struct ServerCapabilities {
     pub inventory_complete: bool,
     pub mailbox_count: usize,
     pub special_use_mailboxes: usize,
+    /// Whether a QUOTA response was observed after authentication. False is
+    /// deliberately not interpreted as “there is no quota”; many providers
+    /// do not advertise or expose a reliable quota query.
+    pub quota_observed: bool,
+    pub quota_exceeded: bool,
 }
 
 impl ServerCapabilities {
@@ -539,6 +544,45 @@ impl ServerCapabilities {
             inventory_complete: !inventory_lines.is_empty(),
             mailbox_count: inventory_lines.len(),
             special_use_mailboxes,
+            quota_observed: false,
+            quota_exceeded: false,
+        }
+    }
+
+    /// Incorporate an optional authenticated `GETQUOTAROOT` response. A
+    /// quota is considered exhausted only when a finite non-zero limit is
+    /// reported and usage is at or above that limit. Malformed or absent
+    /// quota data remains unknown instead of becoming a false success.
+    pub fn record_quota_response(&mut self, response: &str) {
+        for line in response.lines() {
+            let tokens = line.split_whitespace().collect::<Vec<_>>();
+            if !tokens
+                .first()
+                .is_some_and(|token| token.eq_ignore_ascii_case("*"))
+                || !tokens
+                    .get(1)
+                    .is_some_and(|token| token.eq_ignore_ascii_case("QUOTA"))
+            {
+                continue;
+            }
+            self.quota_observed = true;
+            let mut index = 2;
+            while index + 2 < tokens.len() {
+                let resource = tokens[index].trim_matches(['(', ')']).to_ascii_uppercase();
+                if matches!(resource.as_str(), "STORAGE" | "MESSAGE" | "MESSAGES") {
+                    let usage = tokens[index + 1].parse::<u64>();
+                    let limit = tokens[index + 2].parse::<u64>();
+                    if let (Ok(usage), Ok(limit)) = (usage, limit)
+                        && limit > 0
+                        && usage >= limit
+                    {
+                        self.quota_exceeded = true;
+                    }
+                    index += 3;
+                } else {
+                    index += 1;
+                }
+            }
         }
     }
     pub fn supports(&self, capability: &str) -> bool {
@@ -2870,6 +2914,34 @@ mod tests {
         );
         assert!(!caps.inventory_complete);
         assert_eq!(caps.mailbox_count, 0);
+    }
+
+    #[test]
+    fn quota_parser_distinguishes_unknown_from_exhausted_capacity() {
+        let mut caps = ServerCapabilities::parse_with_inventory(
+            "* CAPABILITY IMAP4rev1 QUOTA\r\na1 OK",
+            "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na2 OK",
+        );
+        caps.record_quota_response("* QUOTAROOT \"\" \"\"\r\na3 OK");
+        assert!(!caps.quota_observed);
+        assert!(!caps.quota_exceeded);
+
+        caps.record_quota_response(
+            "* QUOTA \"\" (STORAGE 100 100 MESSAGE 5 10)\r\na4 OK GETQUOTAROOT completed",
+        );
+        assert!(caps.quota_observed);
+        assert!(caps.quota_exceeded);
+    }
+
+    #[test]
+    fn quota_parser_does_not_treat_zero_limit_as_exhausted() {
+        let mut caps = ServerCapabilities::parse_with_inventory(
+            "* CAPABILITY IMAP4rev1 QUOTA\r\na1 OK",
+            "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na2 OK",
+        );
+        caps.record_quota_response("* QUOTA \"\" (STORAGE 999 0 MESSAGE 999 0)");
+        assert!(caps.quota_observed);
+        assert!(!caps.quota_exceeded);
     }
     #[test]
     fn evidence_is_durable_and_explainable() {
