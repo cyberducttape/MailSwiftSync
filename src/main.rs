@@ -1783,6 +1783,7 @@ struct ActiveRunContext {
     job_id: Option<String>,
     batch_job_ids: Vec<String>,
     batch_child_run_ids: Vec<String>,
+    batch_child_indices: HashMap<String, usize>,
     batch_plan_fingerprints: Vec<String>,
     kind: RunKind,
     dry_run: bool,
@@ -1792,16 +1793,17 @@ struct ActiveRunContext {
 }
 
 impl ActiveRunContext {
+    fn batch_child_index(&self, job_id: &str, child_run_id: &str) -> Option<usize> {
+        let index = self.batch_child_indices.get(child_run_id).copied()?;
+        (self.batch_job_ids.get(index).map(String::as_str) == Some(job_id)
+            && self.batch_child_run_ids.get(index).map(String::as_str) == Some(child_run_id))
+        .then_some(index)
+    }
+
     fn owns_batch_child(&self, parent_run_id: &str, child_run_id: &str, job_id: &str) -> bool {
         matches!(self.kind, RunKind::Batch)
             && self.run_id == parent_run_id
-            && self
-                .batch_job_ids
-                .iter()
-                .zip(&self.batch_child_run_ids)
-                .any(|(owned_job_id, owned_run_id)| {
-                    owned_job_id == job_id && owned_run_id == child_run_id
-                })
+            && self.batch_child_index(job_id, child_run_id).is_some()
     }
 
     fn owns_process(&self, process_run_id: &str, job_id: &str) -> bool {
@@ -1809,13 +1811,7 @@ impl ActiveRunContext {
             return matches!(self.kind, RunKind::Single) && self.job_id.as_deref() == Some(job_id);
         }
         matches!(self.kind, RunKind::Batch)
-            && self
-                .batch_job_ids
-                .iter()
-                .zip(&self.batch_child_run_ids)
-                .any(|(owned_job_id, owned_run_id)| {
-                    owned_job_id == job_id && owned_run_id == process_run_id
-                })
+            && self.batch_child_index(job_id, process_run_id).is_some()
     }
 }
 
@@ -4243,6 +4239,11 @@ impl App {
             project_id: project_id.clone(),
             job_id: None,
             batch_job_ids: selected_job_ids.clone(),
+            batch_child_indices: child_run_ids
+                .iter()
+                .enumerate()
+                .map(|(index, id)| (id.clone(), index))
+                .collect(),
             batch_child_run_ids: child_run_ids,
             batch_plan_fingerprints,
             kind: RunKind::Batch,
@@ -5008,6 +5009,7 @@ impl App {
             job_id: Some(run_job_id.clone()),
             batch_job_ids: Vec::new(),
             batch_child_run_ids: Vec::new(),
+            batch_child_indices: HashMap::new(),
             batch_plan_fingerprints: Vec::new(),
             kind: RunKind::Single,
             dry_run: run_dry_run,
@@ -5328,9 +5330,7 @@ impl App {
                     } => {
                         if let Some(run) = active_run.as_ref()
                             && matches!(run.kind, RunKind::Batch)
-                            && let Some(index) =
-                                run.batch_job_ids.iter().position(|id| id == &job_id)
-                            && run.batch_child_run_ids.get(index) == Some(&child_run_id)
+                            && let Some(index) = run.batch_child_index(&job_id, &child_run_id)
                         {
                             let bulk_index = self
                                 .bulk_job_ids
@@ -5389,9 +5389,7 @@ impl App {
                         }
                         if let Some(run) = active_run.as_ref()
                             && matches!(run.kind, RunKind::Batch)
-                            && let Some(index) =
-                                run.batch_job_ids.iter().position(|id| id == &job_id)
-                            && run.batch_child_run_ids.get(index) == Some(&child_run_id)
+                            && let Some(index) = run.batch_child_index(&job_id, &child_run_id)
                         {
                             let run_status = if matches!(
                                 state.as_str(),
@@ -5490,12 +5488,7 @@ impl App {
                     } => {
                         if let Some(run) = active_run.as_ref()
                             && matches!(run.kind, RunKind::Batch)
-                            && run
-                                .batch_job_ids
-                                .iter()
-                                .position(|id| id == &job_id)
-                                .and_then(|index| run.batch_child_run_ids.get(index))
-                                == Some(&child_run_id)
+                            && run.batch_child_index(&job_id, &child_run_id).is_some()
                         {
                             self.pending_batch_evidence.insert(child_run_id, evidence);
                         } else {
@@ -6107,6 +6100,24 @@ impl App {
                     "{} selected mailbox processes may run concurrently.",
                     selected
                 ));
+                let deletion_enabled = self
+                    .bulk_jobs
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| {
+                        self.bulk_job_ids
+                            .get(*index)
+                            .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
+                            .is_some_and(|state| self.bulk_retry_scope.includes(&state))
+                    })
+                    .any(|(_, job)| job.form.profile.delete2);
+                ui.label(
+                    RichText::new(format!(
+                        "Destination deletion: {}",
+                        if deletion_enabled { "ENABLED ⚠" } else { "disabled" }
+                    ))
+                    .color(if deletion_enabled { ALERT } else { MUTED }),
+                );
                 ui.label(format!("Scope: {}.", self.bulk_retry_scope.label()));
                 ui.label("Each mailbox must already have a matching successful dry validation. Source mail is not deleted by default.");
                 ui.label(RichText::new("Review the queue, concurrency, throttles, and exact plans before continuing.").color(MUTED));
@@ -6873,6 +6884,12 @@ impl eframe::App for App {
                                 ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); });
                                 ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); });
                             });
+                            if self.form.profile.delete2 {
+                                ui.group(|ui| {
+                                    ui.label(RichText::new("⚠ DESTINATION DELETION ENABLED").strong().color(ALERT));
+                                    ui.label(RichText::new("Messages that exist only on the destination may be removed during live migration.").color(ALERT));
+                                });
+                            }
                         });
                         ui.add_space(14.0);
                         ui.horizontal(|ui| {
@@ -7790,6 +7807,7 @@ mod tests {
             job_id: None,
             batch_job_ids: vec!["job-a".into(), "job-b".into()],
             batch_child_run_ids: vec!["child-a".into(), "child-b".into()],
+            batch_child_indices: HashMap::from([("child-a".into(), 0), ("child-b".into(), 1)]),
             batch_plan_fingerprints: vec!["plan-a".into(), "plan-b".into()],
             kind: RunKind::Batch,
             dry_run: true,
