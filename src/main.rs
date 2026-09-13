@@ -1751,6 +1751,10 @@ struct App {
     /// This is deliberately separate from `active_run`, which is execution
     /// ownership and must never be inferred from UI selection.
     selected_project_id: Option<String>,
+    /// The project browser normally keeps a compact recent index. This flag
+    /// is set only when the operator explicitly asks for the searchable full
+    /// project index.
+    ui_all_projects_loaded: bool,
     /// A selected project that is not the current editable execution context
     /// is a historical read-only view. Keeping this explicit prevents the
     /// header/project browser from implying that the visible plan is safe to
@@ -2152,6 +2156,7 @@ impl Default for App {
             selected_project_id: restored_bulk_project_id
                 .clone()
                 .or_else(|| project_id.clone()),
+            ui_all_projects_loaded: false,
             workspace_read_only: false,
             projects_open: false,
             project_search: String::new(),
@@ -2483,7 +2488,12 @@ impl App {
             return;
         }
         self.ui_snapshot_refreshed_at = Some(std::time::Instant::now());
-        if let Ok(projects) = self.store.recent_projects(500) {
+        let project_limit = if self.ui_all_projects_loaded {
+            usize::MAX
+        } else {
+            500
+        };
+        if let Ok(projects) = self.store.recent_projects(project_limit) {
             self.ui_projects = projects;
         }
         let project_id = self.active_project_id().map(str::to_owned);
@@ -2497,6 +2507,17 @@ impl App {
         if let Some(project_id) = project_id {
             if let Ok(project) = self.store.project(&project_id) {
                 self.ui_project = project;
+                if let Some(project) = self.ui_project.as_ref()
+                    && !self.ui_projects.iter().any(|item| item.id == project.id)
+                {
+                    self.ui_projects.push(core::ProjectListItem {
+                        id: project.id.clone(),
+                        name: project.name.clone(),
+                        source_endpoint: project.source_endpoint.clone(),
+                        destination_endpoint: project.destination_endpoint.clone(),
+                        phase: project.phase,
+                    });
+                }
             }
             if let Ok(jobs) = self.store.mailboxes(&project_id) {
                 self.ui_jobs = jobs;
@@ -8270,6 +8291,12 @@ impl eframe::App for App {
                                         {
                                             self.select_workspace_project(project.id.clone());
                                         }
+                                    }
+                                    ui.separator();
+                                    if ui.selectable_label(false, "All projects…").clicked() {
+                                        self.ui_all_projects_loaded = true;
+                                        self.refresh_ui_snapshot_now();
+                                        self.projects_open = true;
                                     }
                                 });
                         });

@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Preserved the selected project in the workspace index even when it falls
+  outside the compact recent-project window. Added an explicit searchable
+  “All projects…” action to the header switcher; it loads the complete durable
+  project index into the Projects browser without making every normal frame
+  query the full ledger.
 - Fixed header label refresh after selecting a project outside the initial
   switcher view. Project selection now invalidates the throttled workspace
   snapshot immediately and falls back to the selected durable project record,
