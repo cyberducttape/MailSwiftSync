@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved batch retry scopes, mailbox-selection state sets, and live-confirmation
+  summary data into `src/controller/batch.rs`, so retry eligibility and
+  automation policy are shared controller rules rather than UI-local types.
 - Extracted shared phase, mailbox-state, status-severity, and health-summary
   presentation helpers into `src/ui/status.rs`, reducing UI logic in the
   application entrypoint while keeping the semantic palette centralized.
