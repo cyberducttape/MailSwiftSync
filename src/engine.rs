@@ -154,16 +154,55 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
         "debugimap1",
         "debugimap2",
     ];
-    for option in options {
-        let name = option
+    const VALUE_OPTIONS: &[&str] = &[
+        "maxlinelength",
+        "timeout",
+        "reconnectretry1",
+        "reconnectretry2",
+        "errorsmax",
+        "maxsleep",
+        "sleep",
+        "debug",
+        "debugimap1",
+        "debugimap2",
+    ];
+    let mut index = 0;
+    while index < options.len() {
+        let option = &options[index];
+        let (name, inline_value) = option
             .split_once('=')
-            .map_or(option.as_str(), |(name, _)| name);
+            .map_or((option.as_str(), None), |(name, value)| (name, Some(value)));
         let normalized_name = name.trim_start_matches('-');
         if !ALLOWED.contains(&normalized_name) {
             return Err(format!(
                 "Extra options: {name} is not in the safe imapsync option allowlist; use the typed migration controls for settings controlled by the plan"
             ));
         }
+        if option.chars().any(char::is_control) {
+            return Err("Extra options cannot contain control characters.".into());
+        }
+        if VALUE_OPTIONS.contains(&normalized_name) {
+            let value = if let Some(value) = inline_value {
+                value
+            } else {
+                let Some(value) = options.get(index + 1) else {
+                    return Err(format!("Extra options: {name} requires a value."));
+                };
+                if value.starts_with('-') || value.is_empty() {
+                    return Err(format!(
+                        "Extra options: {name} requires a non-option value."
+                    ));
+                }
+                index += 1;
+                value.as_str()
+            };
+            if value.is_empty() || value.chars().any(char::is_control) {
+                return Err(format!("Extra options: {name} requires a safe value."));
+            }
+        } else if inline_value.is_some() {
+            return Err(format!("Extra options: {name} does not accept a value."));
+        }
+        index += 1;
     }
     Ok(())
 }

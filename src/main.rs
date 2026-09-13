@@ -10368,9 +10368,13 @@ mod tests {
         let mut form = dovecot_form();
         form.profile.extra_options = "--nofoldersizes --timeout=30".into();
         assert!(form.validate().is_ok());
+        form.profile.extra_options = "--nofoldersizes --timeout 30".into();
+        assert!(form.validate().is_ok());
         form.profile.extra_options = "--custom-helper /tmp/helper".into();
         let error = form.validate().unwrap_err();
         assert!(error.contains("safe imapsync option allowlist"));
+        form.profile.extra_options = "--timeout".into();
+        assert!(form.validate().unwrap_err().contains("requires a value"));
     }
 
     #[test]
