@@ -3295,13 +3295,7 @@ impl App {
                 } else {
                     "No active run"
                 });
-                ui.label(
-                    RichText::new(&self.status).color(if self.status.contains("Failed") {
-                        ALERT
-                    } else {
-                        BLUE
-                    }),
-                );
+                ui.label(RichText::new(&self.status).color(status_color(&self.status)));
             });
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
@@ -6434,6 +6428,69 @@ fn needs_operator_review(state: &str) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusSeverity {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+fn status_severity(status: &str) -> StatusSeverity {
+    let normalized = status.to_ascii_lowercase();
+    if [
+        "failed",
+        "could not",
+        "error",
+        "unavailable",
+        "rejected",
+        "requires durability",
+        "not started",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return StatusSeverity::Error;
+    }
+    if [
+        "attention",
+        "review",
+        "cancellation",
+        "cancelled",
+        "warning",
+        "blocked",
+        "omitted",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return StatusSeverity::Warning;
+    }
+    if [
+        "completed",
+        "passed",
+        "saved",
+        "acknowledged",
+        "ready",
+        "available",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return StatusSeverity::Success;
+    }
+    StatusSeverity::Info
+}
+
+fn status_color(status: &str) -> Color32 {
+    match status_severity(status) {
+        StatusSeverity::Info => BLUE,
+        StatusSeverity::Success => TEAL,
+        StatusSeverity::Warning => Color32::from_rgb(218, 148, 48),
+        StatusSeverity::Error => ALERT,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureClass {
     Authentication,
     Quota,
@@ -6720,13 +6777,7 @@ impl eframe::App for App {
                                 ui.label(format!("elapsed {}", format_elapsed(started.elapsed())));
                             }
                         }
-                        ui.label(RichText::new(&self.status).color(
-                            if self.status.starts_with("Failed") {
-                                ALERT
-                            } else {
-                                BLUE
-                            },
-                        ));
+                        ui.label(RichText::new(&self.status).color(status_color(&self.status)));
                         ui.separator();
                         ui.label(
                             RichText::new(if self.form.dry_run {
@@ -8382,5 +8433,26 @@ mod tests {
         assert_eq!(next_ui_scale(0.90), 1.00);
         assert_eq!(next_ui_scale(1.10), 1.25);
         assert_eq!(next_ui_scale(1.50), 0.90);
+    }
+
+    #[test]
+    fn status_severity_uses_operational_meaning_not_only_failed_prefixes() {
+        assert_eq!(
+            status_severity("Migration completed and verified"),
+            StatusSeverity::Success
+        );
+        assert_eq!(
+            status_severity("Migration result requires durability review"),
+            StatusSeverity::Error
+        );
+        assert_eq!(
+            status_severity("Cancellation requested…"),
+            StatusSeverity::Warning
+        );
+        assert_eq!(
+            status_severity("Fresh authentication passed; continuing"),
+            StatusSeverity::Success
+        );
+        assert_eq!(status_severity("Dry run in progress"), StatusSeverity::Info);
     }
 }
