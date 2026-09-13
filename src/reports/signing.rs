@@ -18,7 +18,23 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn require_private_key_permissions(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("could not inspect signing key: {error}"))?;
+    if !metadata.is_file() {
+        return Err("signing key path must refer to a regular file".into());
+    }
+    // Windows has no portable mode-bit equivalent. Apply a protected DACL
+    // immediately before reading the key: only the file owner and
+    // LocalSystem retain access, and inherited Users/Administrators access is
+    // removed. Failure is fail-closed rather than silently accepting a broad
+    // inherited ACL.
+    crate::credentials::restrict_file_permissions(path)
+        .map_err(|error| format!("could not protect signing key ACL: {error}"))
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn require_private_key_permissions(_: &Path) -> Result<(), String> {
     Ok(())
 }
@@ -29,8 +45,10 @@ pub(crate) fn sign_file(
     key_id: &str,
 ) -> Result<String, String> {
     require_private_key_permissions(signing_key_path)?;
-    let key_bytes = std::fs::read(signing_key_path)
-        .map_err(|error| format!("could not read signing key: {error}"))?;
+    let key_bytes = zeroize::Zeroizing::new(
+        std::fs::read(signing_key_path)
+            .map_err(|error| format!("could not read signing key: {error}"))?,
+    );
     let key_pair = Ed25519KeyPair::from_pkcs8(&key_bytes)
         .map_err(|_| "signing key is not a supported Ed25519 PKCS#8 key".to_owned())?;
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
