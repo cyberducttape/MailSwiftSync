@@ -102,6 +102,9 @@ pub(crate) struct DovecotStatusAccumulator {
     /// could not be parsed completely. Ignoring these would allow a partial
     /// inventory to accidentally compare equal and become Verified.
     pub(crate) malformed_lines: u64,
+    /// Saturation must never turn an overflowing inventory into an apparently
+    /// exact aggregate match.
+    pub(crate) overflowed: bool,
 }
 
 impl DovecotStatusAccumulator {
@@ -126,9 +129,21 @@ impl DovecotStatusAccumulator {
             return;
         }
         if let (Some(Ok(message_count)), Some(Ok(virtual_size))) = (message_count, virtual_size) {
-            self.folders = self.folders.saturating_add(1);
-            self.messages = self.messages.saturating_add(message_count);
-            self.bytes = self.bytes.saturating_add(virtual_size);
+            let Some(folders) = self.folders.checked_add(1) else {
+                self.overflowed = true;
+                return;
+            };
+            let Some(messages) = self.messages.checked_add(message_count) else {
+                self.overflowed = true;
+                return;
+            };
+            let Some(bytes) = self.bytes.checked_add(virtual_size) else {
+                self.overflowed = true;
+                return;
+            };
+            self.folders = folders;
+            self.messages = messages;
+            self.bytes = bytes;
         } else {
             self.malformed_lines = self.malformed_lines.saturating_add(1);
         }
@@ -143,7 +158,9 @@ pub(crate) fn dovecot_evidence_from_accumulators(
         && destination.folders > 0
         && source.malformed_lines == 0
         && destination.malformed_lines == 0)
-        .then_some(core::MailboxEvidence {
+        .then_some(())
+        .filter(|_| !source.overflowed && !destination.overflowed)
+        .map(|_| core::MailboxEvidence {
             source_messages: source.messages,
             destination_messages: destination.messages,
             source_bytes: source.bytes,
@@ -257,6 +274,29 @@ mod tests {
             messages: 3,
             bytes: 40,
             malformed_lines: 0,
+            overflowed: false,
+        };
+        assert!(dovecot_evidence_from_accumulators(&valid, &status).is_none());
+    }
+
+    #[test]
+    fn dovecot_accumulator_rejects_counter_overflow() {
+        let mut status = DovecotStatusAccumulator {
+            folders: u64::MAX,
+            messages: 0,
+            bytes: 0,
+            malformed_lines: 0,
+            overflowed: false,
+        };
+        status.observe("mailbox messages=1 vsize=1");
+        assert!(status.overflowed);
+
+        let valid = DovecotStatusAccumulator {
+            folders: 1,
+            messages: 1,
+            bytes: 1,
+            malformed_lines: 0,
+            overflowed: false,
         };
         assert!(dovecot_evidence_from_accumulators(&valid, &status).is_none());
     }
