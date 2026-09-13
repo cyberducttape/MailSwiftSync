@@ -37,7 +37,7 @@ Click **Preview redacted command**. Confirm:
 
 ## 5. Run validation
 
-Click **Run dry validation**. The **Execution journal** streams output from the selected engine. A successful Dovecot check should authenticate to the remote source and list its mailboxes; a successful imapsync check should show both logins succeeding and a sensible folder map.
+Click **Run preflight**. The **Execution journal** streams output from the selected engine. A successful Dovecot check should authenticate to the remote source and list its mailboxes; a successful imapsync check should show both logins succeeding and a sensible folder map.
 
 ## 6. Run the live migration
 

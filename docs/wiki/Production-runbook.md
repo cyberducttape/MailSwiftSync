@@ -16,7 +16,7 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 3. Preview the redacted command and confirm the endpoints and mailbox identities. For imapsync, MailSwiftSync owns the journal and passes `--nolog`; do not look for an unmanaged engine log as the audit record.
 4. Run one representative **dry pilot** against a test destination. Resolve authentication, TLS, quota, folder, and configuration failures before increasing scope.
 5. Run the **live pilot** only after the matching preflight succeeds. Confirm the destination again, select Live migration, and accept the live confirmation. If a session password changes or a referenced keyring credential is reloaded, MailSwiftSync requires a new preflight before live promotion.
-6. For a batch, run **bulk dry validation** first, review every row, then promote only the unchanged queue to live. Keep concurrency conservative (normally 1–2 until the provider pair is proven) and never ignore duplicate destinations or Attention items. On a retry, Verified rows are excluded by default; select **Include already verified mailboxes (explicit re-run)** only when you intentionally want to repeat them.
+6. For a batch, run **bulk preflight checks** first, review every row, then promote only the unchanged queue to live. Keep concurrency conservative (normally 1–2 until the provider pair is proven) and never ignore duplicate destinations or Attention items. On a retry, Verified rows are excluded by default; select **Include already verified mailboxes (explicit re-run)** only when you intentionally want to repeat them.
 7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
 8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof; if residual differences are accepted, record the decision and risk in the change ticket until the application provides a durable acceptance action.
 
@@ -54,7 +54,7 @@ destination is not yet reconciled.
 2. Expect interrupted jobs to move to **Attention** and runs to become abandoned. This is conservative recovery, not proof that a transfer failed or succeeded.
 3. Review each Attention item, its classified failure/output, and the destination before retrying. Use the batch queue’s default unresolved-only retry behavior; never enable the explicit Verified re-run option without documenting why.
 4. Confirm no migration engine remains active outside the application. On Windows and macOS, process-recovery guarantees are weaker than the Linux path; prefer a Unix admin host for production windows.
-5. Re-enter credentials as required, rerun dry validation when the plan or credentials changed, and export the resulting evidence after the retry.
+5. Re-enter credentials as required, rerun preflight when the plan or credentials changed, and export the resulting evidence after the retry.
 
 If the application reports **Migration result requires durability review** or a
 `[durability]` error, do not retry the mailbox and do not advance the project
