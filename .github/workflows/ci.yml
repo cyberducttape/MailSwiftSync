@@ -71,7 +71,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Run native test suite
-        run: cargo test --locked --all-targets --all-features
+        env:
+          RUST_BACKTRACE: full
+        run: cargo test --locked --all-targets --all-features -- --test-threads=1
 
   container-build:
     name: Build headless container
