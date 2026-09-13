@@ -302,13 +302,35 @@ fn wait_for_graceful_exit(child: &mut Child, grace: Duration) {
     let started = Instant::now();
     while started.elapsed() < grace {
         match child.try_wait() {
-            Ok(Some(_)) => return,
+            Ok(Some(_)) => {
+                #[cfg(unix)]
+                {
+                    // The session leader can exit while a wrapper or helper
+                    // descendant remains in the migration process group.
+                    // Keep the grace period alive for the group, not merely
+                    // for the leader, so cancellation cannot declare cleanup
+                    // complete while a descendant still has mailbox access.
+                    if !process_group_exists(child.id()) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                #[cfg(not(unix))]
+                return;
+            }
             Ok(None) => thread::sleep(Duration::from_millis(100)),
             Err(_) => break,
         }
     }
     force_kill_process_group(child);
     let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn process_group_exists(pid: u32) -> bool {
+    let result = unsafe { libc::kill(-(pid as libc::pid_t), 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 pub(crate) fn configure_process_group(command: &mut Command) {
