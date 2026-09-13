@@ -6804,6 +6804,38 @@ mod tests {
         assert!(cancel.load(Ordering::Relaxed));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn rejected_process_registration_cancels_child_before_returning() {
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let acknowledger = thread::spawn(move || {
+            if let Ok(Event::ProcessStarted(_, _, _, _, _, _, _, reply)) = rx.recv() {
+                let _ = reply.send(Err("synthetic durable registration rejection".into()));
+            }
+        });
+        let cancel = AtomicBool::new(false);
+        let outcome = run_streaming(
+            "/bin/sh",
+            &["-c".into(), "sleep 30".into()],
+            &[],
+            &tx,
+            "test-run",
+            "test-job",
+            "",
+            &cancel,
+            &[],
+            Duration::from_secs(5),
+            false,
+        );
+        drop(tx);
+        acknowledger.join().unwrap();
+        assert!(
+            outcome
+                .unwrap_err()
+                .contains("process registration failed; child cancelled")
+        );
+    }
+
     #[test]
     fn cleanup_guard_removes_secret_directory_on_scope_exit() {
         let directory = create_secret_directory().unwrap();
