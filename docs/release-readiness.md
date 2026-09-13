@@ -28,6 +28,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Dovecot checkpoint extraction accepts unpadded printable state tokens, and
   semantic Dovecot verification continues when only the bounded diagnostic
   transcript is truncated.
+- Authenticated IMAP readiness probes require an untagged folder inventory,
+  count discovered folders, and surface observed SPECIAL-USE annotations;
+  tagged `LIST` completion alone cannot pass discovery.
 - Verification differences have a durable, audited `Verified with exceptions`
   workflow with operator, reason, timestamp, and evidence-run linkage.
 - Machine-readable proof exports include the complete durable run manifest;
@@ -67,7 +70,11 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Provider-specific OAuth/Modern Auth and equivalent unattended secret-broker delivery. Remote Dovecot execution is deliberately disabled until the application has a delivery mechanism that cannot expose the password through destination-host process inspection.
 - Signed installers for Linux, Windows, and macOS, with checksums and reproducible release instructions. Artifact provenance exists, but native installer signing/notarization is still outstanding.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
-- Preflight checks for DNS, TCP/TLS, authentication, quotas, source size, folder inventory, special-use folders, and destination readiness.
+- Preflight checks for DNS, TCP/TLS, authentication, folder inventory, and
+  observed special-use folders are implemented for the authenticated IMAP
+  probe. Quota capacity, source-size forecasting, and provider-specific
+  destination readiness remain explicit unknowns where the server cannot
+  provide a reliable query.
 - Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints remain engine resume tokens, not UIDVALIDITY-aware message proof.
 - Bounded concurrency, throttling, maintenance windows, and a scheduler/API that can survive the desktop closing.
 - Independent message-level mismatch reporting and reconciliation; current reports are aggregate/engine evidence plus durable exception acceptance.
