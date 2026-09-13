@@ -6318,20 +6318,17 @@ impl App {
                 let live_count = self
                     .bulk_jobs
                     .iter()
-                    .enumerate()
-                    .filter(|(index, _)| {
-                        self.bulk_job_ids
-                            .get(*index)
-                            .and_then(|job_id| self.store.mailbox_state(job_id).ok().flatten())
-                            .is_some_and(|state| self.bulk_retry_scope.includes(&state))
-                    })
+                    .filter(|job| self.bulk_retry_scope.includes(&display_state_key(&job.state)))
                     .count();
                 let label = if self.form.dry_run {
-                        format!("Run {} preflight checks", self.bulk_jobs.len())
+                    format!("Run {} preflight checks", self.bulk_jobs.len())
                 } else {
-                    format!("Run {} live migrations", live_count)
+                    format!("Start {live_count} live migrations")
                 };
-                if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(BLUE)).clicked() { self.start_bulk(); }
+                let can_start = !self.running()
+                    && !self.bulk_jobs.is_empty()
+                    && (self.form.dry_run || live_count > 0);
+                if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start_bulk(); }
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -6340,7 +6337,7 @@ impl App {
                     queue_editable,
                     egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16),
                 );
-                ui.label(RichText::new("bounded 1–16 workers").size(11.0).color(MUTED));
+                ui.label(RichText::new("bounded 1–16 workers; live runs are capped by this value").size(11.0).color(MUTED));
             });
             ui.horizontal(|ui| {
                 ui.label("Transient retries");
@@ -6841,6 +6838,10 @@ fn display_job_state(state: &str) -> &'static str {
         "attention" => "Attention",
         _ => "Unknown",
     }
+}
+
+fn display_state_key(state: &str) -> String {
+    state.to_ascii_lowercase().replace(' ', "_")
 }
 
 fn job_state_badge(state: &str) -> (&'static str, Color32) {
@@ -8926,6 +8927,16 @@ mod tests {
         assert_eq!(next_ui_scale(0.90), 1.00);
         assert_eq!(next_ui_scale(1.10), 1.25);
         assert_eq!(next_ui_scale(1.50), 0.90);
+    }
+
+    #[test]
+    fn displayed_batch_states_map_to_durable_retry_keys() {
+        assert_eq!(display_state_key("Failed"), "failed");
+        assert_eq!(display_state_key("Delta required"), "delta_required");
+        assert_eq!(
+            display_state_key("Verification difference"),
+            "verification_difference"
+        );
     }
 
     #[test]
