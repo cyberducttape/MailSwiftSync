@@ -1526,6 +1526,24 @@ struct ActiveRunContext {
     plan_fingerprint: String,
     credential_fingerprint: String,
 }
+
+/// Proof that the credentials were freshly authenticated for the exact plan
+/// that is about to be executed.  Keeping this named (rather than as a tuple)
+/// makes it harder to accidentally compare the two digests in the wrong
+/// order when the live-admission path evolves.
+#[derive(Clone, PartialEq, Eq)]
+struct LiveAuthProof {
+    plan_fingerprint: String,
+    credential_fingerprint: String,
+}
+
+impl LiveAuthProof {
+    fn matches(&self, plan_fingerprint: &str, credential_fingerprint: &str) -> bool {
+        self.plan_fingerprint == plan_fingerprint
+            && self.credential_fingerprint == credential_fingerprint
+    }
+}
+
 struct App {
     form: Form,
     output: VecDeque<String>,
@@ -1563,8 +1581,8 @@ struct App {
     /// Fresh authentication completed immediately before an IMAPS live run.
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
-    live_auth_receiver: Option<Receiver<Result<(String, String), String>>>,
-    live_auth_proof: Option<(String, String)>,
+    live_auth_receiver: Option<Receiver<Result<LiveAuthProof, String>>>,
+    live_auth_proof: Option<LiveAuthProof>,
     source_capabilities: Option<core::ServerCapabilities>,
     destination_capabilities: Option<core::ServerCapabilities>,
     live_confirm_open: bool,
@@ -2205,7 +2223,10 @@ impl App {
                         &destination_user,
                         destination_password.as_str(),
                     )
-                    .map(|_| (plan_fingerprint, credential_fingerprint))
+                    .map(|_| LiveAuthProof {
+                        plan_fingerprint,
+                        credential_fingerprint,
+                    })
                 });
             let _ = tx.send(result);
         });
@@ -4187,8 +4208,10 @@ impl App {
         if self.requires_live_imaps_auth_probe() {
             let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
             let credential_fingerprint = self.form.credential_fingerprint();
-            if self.live_auth_proof.as_ref()
-                != Some(&(plan_fingerprint.clone(), credential_fingerprint.clone()))
+            if !self
+                .live_auth_proof
+                .as_ref()
+                .is_some_and(|proof| proof.matches(&plan_fingerprint, &credential_fingerprint))
             {
                 self.start_live_imaps_auth_probe(plan_fingerprint, credential_fingerprint);
                 return;
@@ -7017,5 +7040,17 @@ mod tests {
         assert_eq!(evidence.source_folders, 2);
         assert_eq!(evidence.source_messages, 12);
         assert_eq!(evidence.confidence_percent(), 85);
+    }
+
+    #[test]
+    fn live_auth_proof_requires_matching_plan_and_credentials() {
+        let proof = LiveAuthProof {
+            plan_fingerprint: "plan-a".into(),
+            credential_fingerprint: "credentials-a".into(),
+        };
+
+        assert!(proof.matches("plan-a", "credentials-a"));
+        assert!(!proof.matches("plan-b", "credentials-a"));
+        assert!(!proof.matches("plan-a", "credentials-b"));
     }
 }
