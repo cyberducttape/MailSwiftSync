@@ -1564,6 +1564,9 @@ impl StateStore {
         if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        if checkpoint.is_some() && run_status != "completed" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if !matches!(
             run_status,
             "completed" | "failed" | "cancelled" | "verification_failed"
@@ -2139,6 +2142,37 @@ mod tests {
         );
         assert_eq!(
             db.run_status("checkpoint-invalid").unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(db.mailbox_checkpoint(&job).unwrap(), None);
+    }
+
+    #[test]
+    fn failed_run_cannot_replace_previous_dovecot_checkpoint() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("checkpoint-failure", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source@example", "destination@example")
+            .unwrap();
+        db.begin_run(&project.id, &job, "checkpoint-failure-run", "dovecot")
+            .unwrap();
+
+        assert!(
+            db.finish_run_for_mailbox_with_checkpoint(
+                &project.id,
+                &job,
+                "checkpoint-failure-run",
+                "failed",
+                "failed",
+                "verification failed",
+                Some("AQAAAHm4+Jk="),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.run_status("checkpoint-failure-run").unwrap().as_deref(),
             Some("running")
         );
         assert_eq!(db.mailbox_checkpoint(&job).unwrap(), None);

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Failed or cancelled mailbox runs can no longer commit a newly captured
+  Dovecot checkpoint; resume state advances only with a successful terminal
+  engine result.
 - Batch `JobState` notifications are now presentation-only for terminal
   outcomes; mailbox state, child-run status, evidence, checkpoints, and dry
   preflight data commit together in `JobFinished`, preserving the durability

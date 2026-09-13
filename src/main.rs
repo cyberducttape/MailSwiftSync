@@ -5142,7 +5142,10 @@ impl App {
                                     "verification_difference".into()
                                 }
                             });
-                            let checkpoint = self.pending_batch_checkpoints.remove(&child_run_id);
+                            let checkpoint = self
+                                .pending_batch_checkpoints
+                                .remove(&child_run_id)
+                                .filter(|_| run_status == "completed");
                             if run.batch_job_ids.iter().any(|id| id == &job_id)
                                 && let Some(bulk_index) =
                                     self.bulk_job_ids.iter().position(|id| id == &job_id)
@@ -5315,9 +5318,10 @@ impl App {
             } else {
                 self.pending_evidence.take()
             };
-            let terminal_checkpoint = if !was_bulk_run {
+            let terminal_checkpoint = if !was_bulk_run && succeeded {
                 self.pending_checkpoint.take()
             } else {
+                self.pending_checkpoint = None;
                 None
             };
             if succeeded && !run_context.dry_run && terminal_evidence.is_none() {
