@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Corrected the security policy’s transport wording to document certificate
+  validation on both IMAPS and STARTTLS readiness probes.
 - Updated the compatibility matrix to reflect the current packaged
   MailSwiftSync integration lab and its exact tested scope, while keeping
   engine-interruption, storage-fault, and provider-specific coverage explicit.
