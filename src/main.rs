@@ -3582,7 +3582,12 @@ impl App {
             .collect::<Vec<_>>();
         let mut jobs = jobs;
         for (selected_index, job) in jobs.iter_mut().enumerate() {
-            if let Err(error) = job.form.load_configured_keyring_credentials() {
+            let credential_load = if live {
+                job.form.reload_configured_keyring_credentials()
+            } else {
+                job.form.load_configured_keyring_credentials()
+            };
+            if let Err(error) = credential_load {
                 self.bulk_message = format!(
                     "Could not load credentials for mailbox {} (queue row {}): {error}",
                     selected_index + 1,
