@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved CSV/XLS/XLSX validation, worksheet selection, credential-safe row
+  conversion, and import limits into the dedicated `bulk_import` module;
+  `App` now owns only import scheduling and queue presentation.
 - Extracted executable, trust-file, and snapshot identity hashing into the
   dedicated `plan_identity` module, reducing plan-admission policy's coupling
   to the GUI monolith without changing the fingerprint format.

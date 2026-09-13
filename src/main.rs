@@ -1,3 +1,4 @@
+mod bulk_import;
 mod cli;
 mod controller;
 mod core;
@@ -45,7 +46,6 @@ use runner::{
 #[cfg(test)]
 use std::process::Command;
 
-use calamine::{Reader, open_workbook_auto};
 use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
@@ -1485,25 +1485,12 @@ pub(crate) enum StreamOutcome {
     DeltaRequired,
 }
 
-#[derive(Clone)]
-struct BulkJob {
-    label: String,
-    form: Form,
-    state: String,
-}
-
 struct PendingSheetImport {
     path: std::path::PathBuf,
     sheets: Vec<String>,
 }
 
-enum BulkImportResult {
-    Jobs(Vec<BulkJob>),
-    Workbook {
-        path: std::path::PathBuf,
-        sheets: Vec<String>,
-    },
-}
+use bulk_import::{BulkImportResult, BulkJob};
 
 fn bulk_selection_value(
     jobs: &[BulkJob],
@@ -1549,60 +1536,6 @@ fn canonical_destination_identity(profile: &Profile) -> Result<String, String> {
         &profile.destination_port,
     )
     .map_err(|error| format!("Invalid destination endpoint: {error}"))
-}
-
-fn validate_bulk_import_file(path: &std::path::Path) -> Result<(), String> {
-    let size = std::fs::metadata(path)
-        .map_err(|error| format!("Could not inspect import file: {error}"))?
-        .len();
-    if size > MAX_BULK_IMPORT_BYTES {
-        return Err(format!(
-            "The import file is {} bytes; the limit is {} bytes.",
-            size, MAX_BULK_IMPORT_BYTES
-        ));
-    }
-    Ok(())
-}
-
-fn validate_workbook_container_limits(
-    entry_count: usize,
-    uncompressed_bytes: u64,
-) -> Result<(), String> {
-    if entry_count > MAX_BULK_IMPORT_ARCHIVE_ENTRIES {
-        return Err(format!(
-            "The XLSX archive contains {entry_count} entries; the limit is {MAX_BULK_IMPORT_ARCHIVE_ENTRIES}."
-        ));
-    }
-    if uncompressed_bytes > MAX_BULK_IMPORT_UNCOMPRESSED_BYTES {
-        return Err(format!(
-            "The XLSX archive expands to {uncompressed_bytes} bytes; the limit is {MAX_BULK_IMPORT_UNCOMPRESSED_BYTES} bytes."
-        ));
-    }
-    Ok(())
-}
-
-/// Inspect XLSX ZIP metadata before calamine decompresses workbook members.
-/// The ordinary file-size limit alone is insufficient because a small ZIP can
-/// contain a very large expanded XML payload.
-fn validate_xlsx_container(path: &std::path::Path) -> Result<(), String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("Could not open XLSX import file: {error}"))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| format!("The XLSX archive is invalid: {error}"))?;
-    let entry_count = archive.len();
-    validate_workbook_container_limits(entry_count, 0)?;
-    let mut uncompressed_bytes = 0_u64;
-    for index in 0..entry_count {
-        let entry_size = {
-            let entry = archive
-                .by_index(index)
-                .map_err(|error| format!("Could not inspect XLSX archive entry: {error}"))?;
-            entry.size()
-        };
-        uncompressed_bytes = uncompressed_bytes.saturating_add(entry_size);
-        validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
-    }
-    validate_workbook_container_limits(entry_count, uncompressed_bytes)
 }
 
 fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Result<Option<String>, String> {
@@ -4777,60 +4710,6 @@ impl App {
             }
         });
     }
-    fn job_from_values(
-        values: &mut HashMap<String, String>,
-        base: &Form,
-        row: usize,
-    ) -> Result<BulkJob, String> {
-        // Remove credentials from the ordinary row map before processing the
-        // remaining fields. They are moved directly into zeroizing storage so
-        // the map does not retain a second live copy for the rest of the row.
-        let source_password = values.remove("source_password").unwrap_or_default();
-        let destination_password = values.remove("destination_password").unwrap_or_default();
-        let get = |key: &str| {
-            values
-                .get(key)
-                .map(String::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_owned()
-        };
-        let mut form = base.clone();
-        form.profile.source_host = get("source_host");
-        form.profile.source_user = get("source_user");
-        if let Some(value) = values.get("source_credential_id") {
-            form.profile.source_credential_id = value.trim().to_owned();
-        }
-        // Whitespace is meaningful in passwords. Trim only semantic fields;
-        // otherwise a valid credential such as ` Secret ` is silently changed.
-        form.source_password = SecretString::new(source_password);
-        form.profile.destination_host = get("destination_host");
-        form.profile.destination_user = get("destination_user");
-        if let Some(value) = values.get("destination_credential_id") {
-            form.profile.destination_credential_id = value.trim().to_owned();
-        }
-        form.destination_password = SecretString::new(destination_password);
-        form.validate_for_import()
-            .map_err(|e| format!("Row {row}: {e}"))?;
-        let label = values
-            .get("name")
-            .filter(|v| !v.trim().is_empty())
-            .cloned()
-            .unwrap_or_else(|| {
-                format!(
-                    "Row {row}: {} → {}",
-                    form.profile.source_user, form.profile.destination_user
-                )
-            });
-        Ok(BulkJob {
-            label,
-            form,
-            // Import only proves that the row is structurally valid. It has
-            // not authenticated either endpoint or established a durable
-            // preflight plan, so it must not present as live-ready.
-            state: "imported".into(),
-        })
-    }
     fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {
         match result {
             Ok(BulkImportResult::Jobs(jobs)) => {
@@ -4883,9 +4762,9 @@ impl App {
                 .unwrap_or("")
                 .to_ascii_lowercase();
             let result = if ext == "csv" {
-                App::read_csv(&path, &base).map(BulkImportResult::Jobs)
+                bulk_import::read_csv(&path, &base).map(BulkImportResult::Jobs)
             } else if ext == "xls" || ext == "xlsx" {
-                App::workbook_sheets(&path)
+                bulk_import::workbook_sheets(&path)
                     .map(|sheets| BulkImportResult::Workbook { path, sheets })
             } else {
                 Err("Choose a .csv, .xls, or .xlsx file.".into())
@@ -4904,7 +4783,8 @@ impl App {
         self.bulk_message = "Importing the selected worksheet in the background…".into();
         self.bulk_import_receiver = Some(receiver);
         thread::spawn(move || {
-            let result = App::read_sheet(&path, &base, sheet_index).map(BulkImportResult::Jobs);
+            let result =
+                bulk_import::read_sheet(&path, &base, sheet_index).map(BulkImportResult::Jobs);
             let _ = sender.send(result);
         });
     }
@@ -4974,168 +4854,6 @@ impl App {
             "Applied the {} keyring ID to {applied} row(s) without a credential reference.",
             if source { "source" } else { "destination" }
         );
-    }
-    fn read_csv(path: &std::path::Path, base: &Form) -> Result<Vec<BulkJob>, String> {
-        validate_bulk_import_file(path)?;
-        let mut reader = csv::Reader::from_path(path).map_err(|e| e.to_string())?;
-        let headers = reader
-            .headers()
-            .map_err(|e| e.to_string())?
-            .iter()
-            .map(|s| s.trim().to_ascii_lowercase())
-            .collect::<Vec<_>>();
-        Self::validate_headers(&headers, base)?;
-        if headers.len() > MAX_BULK_IMPORT_COLUMNS {
-            return Err(format!(
-                "The file has too many columns; the limit is {MAX_BULK_IMPORT_COLUMNS}."
-            ));
-        }
-        let mut jobs = Vec::new();
-        for (index, record) in reader.records().enumerate() {
-            if index >= MAX_BULK_IMPORT_ROWS {
-                return Err(format!(
-                    "The file exceeds the {MAX_BULK_IMPORT_ROWS}-row import limit."
-                ));
-            }
-            let record = record.map_err(|e| e.to_string())?;
-            if record.len() != headers.len() {
-                return Err(format!(
-                    "Row {} has {} values but the header has {} columns.",
-                    index + 2,
-                    record.len(),
-                    headers.len()
-                ));
-            }
-            let mut values = headers
-                .iter()
-                .zip(record.iter())
-                .map(|(h, v)| {
-                    if v.len() > MAX_BULK_IMPORT_CELL_BYTES {
-                        return Err(format!(
-                            "Row {} contains a cell larger than {} bytes.",
-                            index + 2,
-                            MAX_BULK_IMPORT_CELL_BYTES
-                        ));
-                    }
-                    Ok((h.clone(), v.to_owned()))
-                })
-                .collect::<Result<HashMap<_, _>, String>>()?;
-            jobs.push(Self::job_from_values(&mut values, base, index + 2)?);
-        }
-        if jobs.is_empty() {
-            return Err("The file has no migration rows.".into());
-        }
-        Ok(jobs)
-    }
-    fn workbook_sheets(path: &std::path::Path) -> Result<Vec<String>, String> {
-        validate_bulk_import_file(path)?;
-        validate_xlsx_container(path)?;
-        let book = open_workbook_auto(path).map_err(|e| e.to_string())?;
-        let sheets = book.sheet_names().to_vec();
-        if sheets.is_empty() {
-            Err("The workbook has no worksheets.".into())
-        } else {
-            Ok(sheets)
-        }
-    }
-
-    fn read_sheet(
-        path: &std::path::Path,
-        base: &Form,
-        sheet_index: usize,
-    ) -> Result<Vec<BulkJob>, String> {
-        validate_bulk_import_file(path)?;
-        validate_xlsx_container(path)?;
-        let mut book = open_workbook_auto(path).map_err(|e| e.to_string())?;
-        let range = book
-            .worksheet_range_at(sheet_index)
-            .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?
-            .map_err(|e| e.to_string())?;
-        let mut rows = range.rows();
-        let headers = rows
-            .next()
-            .ok_or("The worksheet is empty.")?
-            .iter()
-            .map(|x| x.to_string().trim().to_ascii_lowercase())
-            .collect::<Vec<_>>();
-        if headers.len() > MAX_BULK_IMPORT_COLUMNS {
-            return Err(format!(
-                "The worksheet has too many columns; the limit is {MAX_BULK_IMPORT_COLUMNS}."
-            ));
-        }
-        Self::validate_headers(&headers, base)?;
-        let mut jobs = Vec::new();
-        for (index, row) in rows.enumerate() {
-            if index >= MAX_BULK_IMPORT_ROWS {
-                return Err(format!(
-                    "The worksheet exceeds the {MAX_BULK_IMPORT_ROWS}-row import limit."
-                ));
-            }
-            if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
-                continue;
-            }
-            if row.len() != headers.len() {
-                return Err(format!(
-                    "Row {} has {} values but the header has {} columns.",
-                    index + 2,
-                    row.len(),
-                    headers.len()
-                ));
-            }
-            let mut values = headers
-                .iter()
-                .zip(row.iter())
-                .map(|(h, v)| {
-                    let value = v.to_string();
-                    if value.len() > MAX_BULK_IMPORT_CELL_BYTES {
-                        return Err(format!(
-                            "Row {} contains a cell larger than {} bytes.",
-                            index + 2,
-                            MAX_BULK_IMPORT_CELL_BYTES
-                        ));
-                    }
-                    Ok((h.clone(), value))
-                })
-                .collect::<Result<HashMap<_, _>, String>>()?;
-            jobs.push(Self::job_from_values(&mut values, base, index + 2)?);
-        }
-        if jobs.is_empty() {
-            return Err("The worksheet has no migration rows.".into());
-        }
-        Ok(jobs)
-    }
-    fn validate_headers(headers: &[String], _base: &Form) -> Result<(), String> {
-        let mut seen = HashSet::new();
-        for header in headers {
-            if header.is_empty() || !seen.insert(header.clone()) {
-                return Err(
-                    "The migration file contains an empty or duplicate column header.".into(),
-                );
-            }
-        }
-        if seen.contains("extra_options") {
-            return Err(
-                "The migration file cannot contain extra_options; configure trusted engine options in the application instead of importing executable command settings.".into(),
-            );
-        }
-        let required = vec![
-            "source_host",
-            "source_user",
-            "destination_host",
-            "destination_user",
-        ];
-        let missing = required
-            .into_iter()
-            .filter(|header| !seen.contains(*header))
-            .collect::<Vec<_>>();
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(format!(
-                "Missing required column(s): {}.",
-                missing.join(", ")
-            ))
-        }
     }
     fn start_bulk(&mut self) {
         if !self.profile_available {
@@ -9470,9 +9188,8 @@ mod tests {
 
     #[test]
     fn bulk_headers_allow_credentials_to_be_entered_after_import() {
-        let base = Form::default();
         assert!(
-            App::validate_headers(
+            bulk_import::validate_headers(
                 &[
                     "source_host",
                     "source_user",
@@ -9480,19 +9197,17 @@ mod tests {
                     "destination_user"
                 ]
                 .map(String::from),
-                &base,
             )
             .is_ok()
         );
         assert!(
-            App::validate_headers(
+            bulk_import::validate_headers(
                 &["source_host", "source_user", "destination_host"].map(String::from),
-                &base,
             )
             .is_err()
         );
         assert!(
-            App::validate_headers(
+            bulk_import::validate_headers(
                 &[
                     "source_host",
                     "source_user",
@@ -9501,7 +9216,6 @@ mod tests {
                     "extra_options",
                 ]
                 .map(String::from),
-                &base,
             )
             .unwrap_err()
             .contains("cannot contain extra_options")
@@ -9515,7 +9229,7 @@ mod tests {
         values.insert("source_user".into(), "old@example".into());
         values.insert("destination_host".into(), "new.example".into());
         values.insert("destination_user".into(), "new@example".into());
-        let job = App::job_from_values(&mut values, &Form::default(), 2).unwrap();
+        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2).unwrap();
         assert_eq!(job.state, "imported");
         assert_eq!(
             job_state_badge(&job.state, ThemeColors::dark()).0,
@@ -9534,7 +9248,7 @@ mod tests {
         values.insert("destination_host".into(), "new.example".into());
         values.insert("destination_user".into(), "new@example".into());
         values.insert("destination_password".into(), " Destination! ".into());
-        let job = App::job_from_values(&mut values, &Form::default(), 2).unwrap();
+        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2).unwrap();
         assert_eq!(job.form.source_password.as_str(), " Secret123 ");
         assert_eq!(job.form.destination_password.as_str(), " Destination! ");
     }
@@ -9547,7 +9261,7 @@ mod tests {
         ));
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(MAX_BULK_IMPORT_BYTES + 1).unwrap();
-        let error = validate_bulk_import_file(&path).unwrap_err();
+        let error = bulk_import::validate_bulk_import_file(&path).unwrap_err();
         assert!(error.contains("import file"));
         assert!(error.contains("limit"));
         std::fs::remove_file(path).unwrap();
@@ -9556,19 +9270,19 @@ mod tests {
     #[test]
     fn xlsx_container_limits_reject_expansion_before_parsing() {
         assert!(
-            validate_workbook_container_limits(
+            bulk_import::validate_workbook_container_limits(
                 MAX_BULK_IMPORT_ARCHIVE_ENTRIES,
                 MAX_BULK_IMPORT_UNCOMPRESSED_BYTES
             )
             .is_ok()
         );
-        let error = validate_workbook_container_limits(
+        let error = bulk_import::validate_workbook_container_limits(
             MAX_BULK_IMPORT_ARCHIVE_ENTRIES + 1,
             MAX_BULK_IMPORT_UNCOMPRESSED_BYTES,
         )
         .unwrap_err();
         assert!(error.contains("entries"));
-        let error = validate_workbook_container_limits(
+        let error = bulk_import::validate_workbook_container_limits(
             MAX_BULK_IMPORT_ARCHIVE_ENTRIES,
             MAX_BULK_IMPORT_UNCOMPRESSED_BYTES + 1,
         )
@@ -9630,7 +9344,7 @@ mod tests {
             "destination_credential_id".into(),
             "destination-alice".into(),
         );
-        let job = App::job_from_values(&mut values, &Form::default(), 2).unwrap();
+        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2).unwrap();
         assert_eq!(job.form.profile.source_credential_id, "source-alice");
         assert_eq!(
             job.form.profile.destination_credential_id,
@@ -9642,11 +9356,11 @@ mod tests {
         let mut base = Form::default();
         base.profile.source_credential_id = "shared-source".into();
         base.profile.destination_credential_id = "shared-destination".into();
-        let mut inherited_values = values
+        let inherited_values = values
             .into_iter()
             .filter(|(key, _)| key != "source_credential_id" && key != "destination_credential_id")
             .collect();
-        let inherited = App::job_from_values(&mut inherited_values, &base, 3).unwrap();
+        let inherited = bulk_import::job_from_values(inherited_values, &base, 3).unwrap();
         assert_eq!(inherited.form.profile.source_credential_id, "shared-source");
         assert_eq!(
             inherited.form.profile.destination_credential_id,

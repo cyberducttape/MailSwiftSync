@@ -1,0 +1,279 @@
+//! Untrusted mailbox-list import and structural validation.
+//!
+//! Parsing is deliberately independent from egui state. The UI owns the
+//! worker thread and queue presentation; this module owns file limits,
+//! worksheet selection, row validation, and conversion into import jobs.
+
+use crate::{Form, SecretString};
+use calamine::{Reader, open_workbook_auto};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+#[derive(Clone)]
+pub(crate) struct BulkJob {
+    pub(crate) label: String,
+    pub(crate) form: Form,
+    pub(crate) state: String,
+}
+
+pub(crate) enum BulkImportResult {
+    Jobs(Vec<BulkJob>),
+    Workbook { path: PathBuf, sheets: Vec<String> },
+}
+
+pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String> {
+    validate_bulk_import_file(path)?;
+    let mut reader = csv::Reader::from_path(path).map_err(|error| error.to_string())?;
+    let headers = reader
+        .headers()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    validate_headers(&headers)?;
+    if headers.len() > crate::MAX_BULK_IMPORT_COLUMNS {
+        return Err(format!(
+            "The file has too many columns; the limit is {}.",
+            crate::MAX_BULK_IMPORT_COLUMNS
+        ));
+    }
+    let mut jobs = Vec::new();
+    for (index, record) in reader.records().enumerate() {
+        if index >= crate::MAX_BULK_IMPORT_ROWS {
+            return Err(format!(
+                "The file exceeds the {}-row import limit.",
+                crate::MAX_BULK_IMPORT_ROWS
+            ));
+        }
+        let record = record.map_err(|error| error.to_string())?;
+        let row_number = index + 2;
+        let values = record_values(&headers, record.iter(), row_number)?;
+        jobs.push(job_from_values(values, base, row_number)?);
+    }
+    if jobs.is_empty() {
+        return Err("The file has no migration rows.".into());
+    }
+    Ok(jobs)
+}
+
+pub(crate) fn workbook_sheets(path: &Path) -> Result<Vec<String>, String> {
+    validate_bulk_import_file(path)?;
+    validate_xlsx_container(path)?;
+    let book = open_workbook_auto(path).map_err(|error| error.to_string())?;
+    let sheets = book.sheet_names().to_vec();
+    if sheets.is_empty() {
+        Err("The workbook has no worksheets.".into())
+    } else {
+        Ok(sheets)
+    }
+}
+
+pub(crate) fn read_sheet(
+    path: &Path,
+    base: &Form,
+    sheet_index: usize,
+) -> Result<Vec<BulkJob>, String> {
+    validate_bulk_import_file(path)?;
+    validate_xlsx_container(path)?;
+    let mut book = open_workbook_auto(path).map_err(|error| error.to_string())?;
+    let range = book
+        .worksheet_range_at(sheet_index)
+        .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?
+        .map_err(|error| error.to_string())?;
+    let mut rows = range.rows();
+    let headers = rows
+        .next()
+        .ok_or("The worksheet is empty.")?
+        .iter()
+        .map(|value| value.to_string().trim().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if headers.len() > crate::MAX_BULK_IMPORT_COLUMNS {
+        return Err(format!(
+            "The worksheet has too many columns; the limit is {}.",
+            crate::MAX_BULK_IMPORT_COLUMNS
+        ));
+    }
+    validate_headers(&headers)?;
+    let mut jobs = Vec::new();
+    for (index, row) in rows.enumerate() {
+        if index >= crate::MAX_BULK_IMPORT_ROWS {
+            return Err(format!(
+                "The worksheet exceeds the {}-row import limit.",
+                crate::MAX_BULK_IMPORT_ROWS
+            ));
+        }
+        if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
+            continue;
+        }
+        let row_number = index + 2;
+        let values = record_values(
+            &headers,
+            row.iter().map(|value| value.to_string()),
+            row_number,
+        )?;
+        jobs.push(job_from_values(values, base, row_number)?);
+    }
+    if jobs.is_empty() {
+        return Err("The worksheet has no migration rows.".into());
+    }
+    Ok(jobs)
+}
+
+fn record_values<I>(
+    headers: &[String],
+    values: I,
+    row: usize,
+) -> Result<HashMap<String, String>, String>
+where
+    I: IntoIterator,
+    I::Item: Into<String>,
+{
+    let values = values.into_iter().map(Into::into).collect::<Vec<String>>();
+    if values.len() != headers.len() {
+        return Err(format!(
+            "Row {row} has {} values but the header has {} columns.",
+            values.len(),
+            headers.len()
+        ));
+    }
+    headers
+        .iter()
+        .zip(values)
+        .map(|(header, value)| {
+            if value.len() > crate::MAX_BULK_IMPORT_CELL_BYTES {
+                return Err(format!(
+                    "Row {row} contains a cell larger than {} bytes.",
+                    crate::MAX_BULK_IMPORT_CELL_BYTES
+                ));
+            }
+            Ok((header.clone(), value))
+        })
+        .collect()
+}
+
+pub(crate) fn job_from_values(
+    mut values: HashMap<String, String>,
+    base: &Form,
+    row: usize,
+) -> Result<BulkJob, String> {
+    let source_password = values.remove("source_password").unwrap_or_default();
+    let destination_password = values.remove("destination_password").unwrap_or_default();
+    let get = |key: &str| {
+        values
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_owned()
+    };
+    let mut form = base.clone();
+    form.profile.source_host = get("source_host");
+    form.profile.source_user = get("source_user");
+    if let Some(value) = values.get("source_credential_id") {
+        form.profile.source_credential_id = value.trim().to_owned();
+    }
+    form.source_password = SecretString::new(source_password);
+    form.profile.destination_host = get("destination_host");
+    form.profile.destination_user = get("destination_user");
+    if let Some(value) = values.get("destination_credential_id") {
+        form.profile.destination_credential_id = value.trim().to_owned();
+    }
+    form.destination_password = SecretString::new(destination_password);
+    form.validate_for_import()
+        .map_err(|error| format!("Row {row}: {error}"))?;
+    let label = values
+        .get("name")
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| {
+            format!(
+                "Row {row}: {} → {}",
+                form.profile.source_user, form.profile.destination_user
+            )
+        });
+    Ok(BulkJob {
+        label,
+        form,
+        state: "imported".into(),
+    })
+}
+
+pub(crate) fn validate_headers(headers: &[String]) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for header in headers {
+        if header.is_empty() || !seen.insert(header.clone()) {
+            return Err("The migration file contains an empty or duplicate column header.".into());
+        }
+    }
+    if seen.contains("extra_options") {
+        return Err("The migration file cannot contain extra_options; configure trusted engine options in the application instead of importing executable command settings.".into());
+    }
+    let missing = [
+        "source_host",
+        "source_user",
+        "destination_host",
+        "destination_user",
+    ]
+    .into_iter()
+    .filter(|header| !seen.contains(*header))
+    .collect::<Vec<_>>();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Missing required column(s): {}.",
+            missing.join(", ")
+        ))
+    }
+}
+
+pub(crate) fn validate_bulk_import_file(path: &Path) -> Result<(), String> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| format!("Could not inspect import file: {error}"))?
+        .len();
+    if size > crate::MAX_BULK_IMPORT_BYTES {
+        return Err(format!(
+            "The import file is {size} bytes; the limit is {} bytes.",
+            crate::MAX_BULK_IMPORT_BYTES
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_workbook_container_limits(
+    entry_count: usize,
+    uncompressed_bytes: u64,
+) -> Result<(), String> {
+    if entry_count > crate::MAX_BULK_IMPORT_ARCHIVE_ENTRIES {
+        return Err(format!(
+            "The XLSX archive contains {entry_count} entries; the limit is {}.",
+            crate::MAX_BULK_IMPORT_ARCHIVE_ENTRIES
+        ));
+    }
+    if uncompressed_bytes > crate::MAX_BULK_IMPORT_UNCOMPRESSED_BYTES {
+        return Err(format!(
+            "The XLSX archive expands to {uncompressed_bytes} bytes; the limit is {} bytes.",
+            crate::MAX_BULK_IMPORT_UNCOMPRESSED_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn validate_xlsx_container(path: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("Could not open XLSX import file: {error}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| format!("The XLSX archive is invalid: {error}"))?;
+    let entry_count = archive.len();
+    validate_workbook_container_limits(entry_count, 0)?;
+    let mut uncompressed_bytes = 0_u64;
+    for index in 0..entry_count {
+        let entry_size = archive
+            .by_index(index)
+            .map_err(|error| format!("Could not inspect XLSX archive entry: {error}"))?
+            .size();
+        uncompressed_bytes = uncompressed_bytes.saturating_add(entry_size);
+        validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
+    }
+    Ok(())
+}
