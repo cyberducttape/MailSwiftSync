@@ -1198,6 +1198,12 @@ impl StateStore {
         tx.commit()
     }
     pub fn finish_run(&self, run_id: &str, status: &str, detail: &str) -> rusqlite::Result<()> {
+        if !matches!(
+            status,
+            "completed" | "failed" | "cancelled" | "abandoned" | "verification_failed"
+        ) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let tx = self.connection.unchecked_transaction()?;
         let project_id: String = tx.query_row(
             "SELECT project_id FROM runs WHERE id=?1 AND status='running'",
@@ -2698,6 +2704,22 @@ mod tests {
         assert_eq!(
             db.mailbox_state(&jobs[1]).unwrap().as_deref(),
             Some("queued")
+        );
+    }
+
+    #[test]
+    fn parent_run_rejects_unknown_terminal_status() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("run-status", "source", "destination")
+            .unwrap();
+        db.insert_run_for_test(&project.id, None, "run-status", "test")
+            .unwrap();
+
+        assert!(db.finish_run("run-status", "invented", "invalid").is_err());
+        assert_eq!(
+            db.run_status("run-status").unwrap().as_deref(),
+            Some("running")
         );
     }
 
