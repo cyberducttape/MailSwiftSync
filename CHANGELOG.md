@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Durable checkpoint completion APIs now reject empty, whitespace-containing,
+  control-character, or oversized Dovecot state values at the storage boundary;
+  malformed resume state cannot be written by non-UI callers.
 - Live Dovecot syncs now pass the mailbox's last committed `-s` state string
   and atomically commit a newly emitted checkpoint with the terminal child
   result; dry preflight remains non-stateful and failed runs preserve the
