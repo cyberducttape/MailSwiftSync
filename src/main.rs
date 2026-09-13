@@ -1840,6 +1840,7 @@ struct App {
     preview: bool,
     bulk_jobs: Vec<BulkJob>,
     bulk_open: bool,
+    settings_open: bool,
     bulk_message: String,
     advanced_open: bool,
     engine_open: bool,
@@ -2069,6 +2070,7 @@ impl Default for App {
             preview: false,
             bulk_jobs: restored_bulk_jobs,
             bulk_open: false,
+            settings_open: false,
             bulk_message: if restored_bulk_project_id.is_some() {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
@@ -2158,6 +2160,7 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     }
 }
 
+#[cfg(test)]
 fn next_ui_scale(current: f32) -> f32 {
     const SCALES: [f32; 5] = [0.90, 1.00, 1.10, 1.25, 1.50];
     SCALES
@@ -2808,6 +2811,61 @@ impl App {
         self.cockpit_open = open;
     }
 
+    fn settings_dialog(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        let mut open = self.settings_open;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading("Operator settings");
+                ui.label(RichText::new("Workspace tools are grouped here so the header stays focused on project and run status.").color(MUTED));
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.heading("Appearance");
+                    ui.horizontal(|ui| {
+                        ui.label("Theme");
+                        let label = if self.dark_mode { "Dark" } else { "Light" };
+                        if ui.button(label).clicked() {
+                            self.dark_mode = !self.dark_mode;
+                            if let Err(error) = (AppearancePreferences { dark_mode: self.dark_mode, ui_scale: self.ui_scale }).save() {
+                                self.status = format!("Could not save appearance preference: {error}");
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Interface size: {:.0}%", self.ui_scale * 100.0));
+                        if ui.button("Decrease").clicked() {
+                            self.ui_scale = (self.ui_scale - 0.10).max(0.90);
+                        }
+                        if ui.button("Increase").clicked() {
+                            self.ui_scale = (self.ui_scale + 0.10).min(1.50);
+                        }
+                    });
+                    if ui.button("Save appearance preferences").clicked()
+                        && let Err(error) = (AppearancePreferences { dark_mode: self.dark_mode, ui_scale: self.ui_scale }).save()
+                    {
+                        self.status = format!("Could not save appearance preference: {error}");
+                    }
+                });
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.heading("Migration configuration");
+                    if ui.button("Credentials").clicked() { self.keyring_open = true; }
+                    if ui.button(format!("Engine: {}", self.form.engine().label())).clicked() { self.engine_open = true; }
+                    if ui.button("Advanced options").clicked() { self.advanced_open = true; }
+                    if ui.button("Preflight & readiness").clicked() {
+                        self.cockpit_open = true;
+                        self.assess_plan();
+                    }
+                });
+            });
+        self.settings_open = open;
+    }
+
     fn readiness_score(&self) -> (usize, usize) {
         let checks = 5
             + usize::from(self.source_capabilities.is_some())
@@ -3113,7 +3171,7 @@ impl App {
                 if ui.button("Open migration plan  →").clicked() {
                     self.active_view = WorkspaceView::Plan;
                 }
-                if ui.button("Open Project Cockpit").clicked() {
+                if ui.button("Open preflight & readiness").clicked() {
                     self.cockpit_open = true;
                     self.assess_plan();
                 }
@@ -6336,19 +6394,58 @@ impl App {
         }
         let mut open = self.live_confirm_open;
         let mut close_requested = false;
-        egui::Window::new("Confirm live migration").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-            ui.heading(RichText::new("Destination changes require confirmation").color(ALERT));
-            ui.label(format!("This will invoke {} with the current credentials and rules.", self.form.engine().label()));
-            ui.add_space(8.0);
-            ui.label(RichText::new(format!("Project: {}", self.form.profile.name)).strong());
-            ui.label(format!("{}  →  {}", self.form.profile.source_host, self.form.profile.destination_host));
-            ui.label("Source mail is not deleted by default. Destination deletion is disabled unless explicitly enabled in Advanced options.");
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() { close_requested = true; }
-                if ui.add(egui::Button::new(RichText::new("I understand — start migration").color(Color32::WHITE)).fill(ALERT)).clicked() { close_requested = true; self.live_confirmed = true; self.live_confirmation_plan = Some(plan_fingerprint_digest(&self.form.plan_fingerprint())); self.start(); }
+        egui::Window::new("Confirm live migration")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(RichText::new("Destination changes require confirmation").color(ALERT));
+                ui.label(format!(
+                    "This will invoke {} with the current credentials and rules.",
+                    self.form.engine().label()
+                ));
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("Project: {}", self.form.profile.name)).strong());
+                ui.label(format!(
+                    "{}  →  {}",
+                    self.form.profile.source_host, self.form.profile.destination_host
+                ));
+                let deletion_enabled = self.form.profile.delete2;
+                ui.label("Source mail: not deleted by default");
+                ui.label(
+                    RichText::new(format!(
+                        "Destination deletion: {}",
+                        if deletion_enabled {
+                            "ENABLED ⚠"
+                        } else {
+                            "disabled"
+                        }
+                    ))
+                    .color(if deletion_enabled { ALERT } else { MUTED }),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close_requested = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("I understand — start migration")
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(ALERT),
+                        )
+                        .clicked()
+                    {
+                        close_requested = true;
+                        self.live_confirmed = true;
+                        self.live_confirmation_plan =
+                            Some(plan_fingerprint_digest(&self.form.plan_fingerprint()));
+                        self.start();
+                    }
+                });
             });
-        });
         self.live_confirm_open = open && !close_requested;
     }
 
@@ -6717,16 +6814,13 @@ impl eframe::App for App {
             )
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new("MAILSWIFTSYNC")
-                            .strong()
-                            .size(23.0)
-                            .color(if self.dark_mode {
-                                Color32::from_rgb(232, 238, 247)
-                            } else {
-                                NAVY
-                            }),
-                    );
+                    ui.label(RichText::new("MAILSWIFTSYNC").strong().size(23.0).color(
+                        if self.dark_mode {
+                            Color32::from_rgb(232, 238, 247)
+                        } else {
+                            NAVY
+                        },
+                    ));
                     ui.label(
                         RichText::new("mailbox migration control plane")
                             .italics()
@@ -6748,67 +6842,25 @@ impl eframe::App for App {
                                 for project in projects {
                                     let selected = self.selected_project_id.as_deref()
                                         == Some(project.id.as_str());
-                                    if ui.selectable_label(
-                                        selected,
-                                        format!("{} · {}", project.name, format_phase_name(project.phase)),
-                                    ).clicked() {
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            format!(
+                                                "{} · {}",
+                                                project.name,
+                                                format_phase_name(project.phase)
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
                                         self.selected_project_id = Some(project.id.clone());
                                         self.active_view = WorkspaceView::Overview;
                                     }
                                 }
                             });
                     }
-                    if ui.button("Batch queue").clicked() {
-                        self.bulk_open = true;
-                    }
-                    if ui.button("Credentials").clicked() {
-                        self.keyring_open = true;
-                    }
-                    if ui
-                        .button(if self.dark_mode {
-                            "Appearance: Dark"
-                        } else {
-                            "Appearance: Light"
-                        })
-                        .clicked()
-                    {
-                        self.dark_mode = !self.dark_mode;
-                        if let Err(error) = (AppearancePreferences {
-                            dark_mode: self.dark_mode,
-                            ui_scale: self.ui_scale,
-                        })
-                        .save()
-                        {
-                            self.status = format!("Could not save appearance preference: {error}");
-                        }
-                    }
-                    if ui
-                        .button(format!("UI {:.0}%", self.ui_scale * 100.0))
-                        .on_hover_text("Cycle the operator interface scale between 90%, 100%, 110%, 125%, and 150%.")
-                        .clicked()
-                    {
-                        self.ui_scale = next_ui_scale(self.ui_scale);
-                        if let Err(error) = (AppearancePreferences {
-                            dark_mode: self.dark_mode,
-                            ui_scale: self.ui_scale,
-                        })
-                        .save()
-                        {
-                            self.status = format!("Could not save appearance preference: {error}");
-                        }
-                    }
-                    if ui
-                        .button(format!("Engine: {}", self.form.engine().label()))
-                        .clicked()
-                    {
-                        self.engine_open = true;
-                    }
-                    if ui.button("Advanced options").clicked() {
-                        self.advanced_open = true;
-                    }
-                    if ui.button("Project cockpit").clicked() {
-                        self.cockpit_open = true;
-                        self.assess_plan();
+                    if ui.button("⚙ Settings").clicked() {
+                        self.settings_open = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.running() {
@@ -6982,6 +7034,7 @@ impl eframe::App for App {
         self.preview(ctx);
         self.bulk_dialog(ctx);
         self.bulk_live_confirmation(ctx);
+        self.settings_dialog(ctx);
         self.keyring_dialog(ctx);
         self.advanced_dialog(ctx);
         self.engine_dialog(ctx);
