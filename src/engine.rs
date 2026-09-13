@@ -45,17 +45,16 @@ pub(crate) fn imapsync_args(
         source_host,
         "--user1".into(),
         profile.source_user.clone(),
-        "--password1".into(),
-        p1.into(),
+    ];
+    append_auth_args(&mut args, 1, &profile.source_auth, p1);
+    args.extend([
         "--host2".into(),
         destination_host,
         "--user2".into(),
         profile.destination_user.clone(),
-        "--password2".into(),
-        p2.into(),
-        "--port1".into(),
-        source_port,
-    ];
+    ]);
+    append_auth_args(&mut args, 2, &profile.destination_auth, p2);
+    args.extend(["--port1".into(), source_port]);
     if profile.source_tls == "plain" {
         // Plain mode must disable both implicit SSL and imapsync's default
         // opportunistic STARTTLS negotiation.
@@ -122,6 +121,19 @@ pub(crate) fn imapsync_args(
         args.extend(extra);
     }
     args
+}
+
+fn append_auth_args(args: &mut Vec<String>, side: u8, method: &str, credential: &str) {
+    if method == "oauth2" {
+        args.extend([
+            format!("--authmech{side}"),
+            "XOAUTH2".into(),
+            format!("--oauthaccesstoken{side}"),
+            credential.into(),
+        ]);
+    } else {
+        args.extend([format!("--password{side}"), credential.into()]);
+    }
 }
 
 fn append_ssl_args(args: &mut Vec<String>, option: &str, ca_bundle: &str) {

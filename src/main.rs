@@ -23,6 +23,7 @@ use process::{
     terminate_recorded_process_group, wait_with_timeout,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use calamine::{Reader, open_workbook_auto};
 use eframe::{
     egui,
@@ -98,10 +99,16 @@ struct Profile {
     #[serde(default)]
     allow_insecure_source_transport: bool,
     source_user: String,
+    /// `password` uses LOGIN/password authentication; `oauth2` uses an
+    /// operator-supplied OAuth 2.0 access token with XOAUTH2.
+    #[serde(default = "default_auth_method")]
+    source_auth: String,
     #[serde(default)]
     source_credential_id: String,
     destination_host: String,
     destination_user: String,
+    #[serde(default = "default_auth_method")]
+    destination_auth: String,
     #[serde(default)]
     destination_credential_id: String,
     #[serde(default)]
@@ -227,9 +234,13 @@ struct RunProfileSnapshot {
     source_certificate_pin_sha256: String,
     allow_insecure_source_transport: bool,
     source_user: String,
+    #[serde(default = "default_auth_method")]
+    source_auth: String,
     source_credential_id: String,
     destination_host: String,
     destination_user: String,
+    #[serde(default = "default_auth_method")]
+    destination_auth: String,
     destination_credential_id: String,
     destination_port: String,
     destination_tls: String,
@@ -279,6 +290,14 @@ fn default_migration_timeout_hours() -> u64 {
 }
 fn default_source_tls() -> String {
     "imaps".into()
+}
+
+fn default_auth_method() -> String {
+    "password".into()
+}
+
+fn auth_method_is_oauth(method: &str) -> bool {
+    method == "oauth2"
 }
 
 fn default_destination_tls() -> String {
@@ -496,7 +515,9 @@ impl Default for Form {
                 name: "New migration".into(),
                 imapsync_path: "imapsync".into(),
                 source_tls: default_source_tls(),
+                source_auth: default_auth_method(),
                 destination_tls: default_destination_tls(),
+                destination_auth: default_auth_method(),
                 doveadm_path: default_doveadm_path(),
                 ssh_path: default_ssh_path(),
                 dovecot_execution: default_dovecot_execution(),
@@ -571,14 +592,14 @@ impl Form {
     fn store_keyring_password(&self, source: bool) -> Result<(), String> {
         let entry = self
             .keyring_entry(source)?
-            .ok_or("Enter a keyring ID before storing a password.")?;
+            .ok_or("Enter a keyring ID before storing a credential.")?;
         let password = if source {
             self.source_password.as_str()
         } else {
             self.destination_password.as_str()
         };
         if password.is_empty() {
-            return Err("Enter a password before storing it in the OS keyring.".into());
+            return Err("Enter a credential before storing it in the OS keyring.".into());
         }
         entry
             .set_password(password)
@@ -662,10 +683,45 @@ impl Form {
             ),
         ];
         if require_credentials {
-            required.push(("Source password", self.source_password.as_str()));
+            required.push((
+                if auth_method_is_oauth(&self.profile.source_auth) {
+                    "Source OAuth 2.0 access token"
+                } else {
+                    "Source password"
+                },
+                self.source_password.as_str(),
+            ));
         }
         if require_credentials && self.engine() != core::Engine::Dovecot {
-            required.push(("Destination password", self.destination_password.as_str()));
+            required.push((
+                if auth_method_is_oauth(&self.profile.destination_auth) {
+                    "Destination OAuth 2.0 access token"
+                } else {
+                    "Destination password"
+                },
+                self.destination_password.as_str(),
+            ));
+        }
+        if self.engine() == core::Engine::Dovecot
+            && (auth_method_is_oauth(&self.profile.source_auth)
+                || auth_method_is_oauth(&self.profile.destination_auth))
+        {
+            return Err(
+                "OAuth 2.0 authentication is currently supported for imapsync only; Dovecot native execution requires password authentication.".into(),
+            );
+        }
+        for (label, method) in [
+            ("Source authentication", self.profile.source_auth.as_str()),
+            (
+                "Destination authentication",
+                self.profile.destination_auth.as_str(),
+            ),
+        ] {
+            if !matches!(method, "" | "password" | "oauth2") {
+                return Err(format!(
+                    "{label} must be password or OAuth 2.0 access token."
+                ));
+            }
         }
         let source_port = self.profile.source_port.trim();
         if !source_port.is_empty() && source_port.parse::<u16>().map_or(true, |port| port == 0) {
@@ -774,8 +830,8 @@ impl Form {
                 "Destination username",
                 self.profile.destination_user.as_str(),
             ),
-            ("Source password", self.source_password.as_str()),
-            ("Destination password", self.destination_password.as_str()),
+            ("Source credential", self.source_password.as_str()),
+            ("Destination credential", self.destination_password.as_str()),
         ] {
             if !value.is_empty() && value.chars().any(char::is_control) {
                 return Err(format!("{label} cannot contain control characters."));
@@ -848,6 +904,8 @@ impl Form {
         let mut args = self.args_with_throttle_divisor(false, throttle_divisor);
         remove_option(&mut args, "--password1");
         remove_option(&mut args, "--password2");
+        remove_option(&mut args, "--oauthaccesstoken1");
+        remove_option(&mut args, "--oauthaccesstoken2");
         let secret_dir = create_secret_directory()?;
         let source_file = secret_dir.join("source.secret");
         let destination_file = secret_dir.join("destination.secret");
@@ -859,12 +917,28 @@ impl Form {
                 "Could not prepare temporary credential files: {error}"
             ));
         }
-        args.extend([
-            "--passfile1".into(),
-            source_file.to_string_lossy().into_owned(),
-            "--passfile2".into(),
-            destination_file.to_string_lossy().into_owned(),
-        ]);
+        if auth_method_is_oauth(&self.profile.source_auth) {
+            args.extend([
+                "--oauthaccesstoken1".into(),
+                source_file.to_string_lossy().into_owned(),
+            ]);
+        } else {
+            args.extend([
+                "--passfile1".into(),
+                source_file.to_string_lossy().into_owned(),
+            ]);
+        }
+        if auth_method_is_oauth(&self.profile.destination_auth) {
+            args.extend([
+                "--oauthaccesstoken2".into(),
+                destination_file.to_string_lossy().into_owned(),
+            ]);
+        } else {
+            args.extend([
+                "--passfile2".into(),
+                destination_file.to_string_lossy().into_owned(),
+            ]);
+        }
         Ok(PreparedCommand {
             executable: self.profile.imapsync_path.clone(),
             args,
@@ -881,13 +955,17 @@ impl Form {
         if self.engine() == core::Engine::ImapSync {
             remove_option(&mut args, "--password1");
             remove_option(&mut args, "--password2");
+            remove_option(&mut args, "--oauthaccesstoken1");
+            remove_option(&mut args, "--oauthaccesstoken2");
         }
         format!(
-            "{}\n{}\ncredential-source1={}\ncredential-source2={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-certificate-pin={}\ndestination-ca-bundle={}\ndestination-certificate-pin={}",
+            "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-certificate-pin={}\ndestination-ca-bundle={}\ndestination-certificate-pin={}",
             executable,
             args.join("\u{1f}"),
             self.profile.source_credential_id.trim(),
             self.profile.destination_credential_id.trim(),
+            self.profile.source_auth,
+            self.profile.destination_auth,
             self.profile.allow_insecure_source_transport,
             self.profile.source_ca_bundle.trim(),
             self.profile
@@ -932,9 +1010,11 @@ impl Form {
                 source_certificate_pin_sha256: profile.source_certificate_pin_sha256.clone(),
                 allow_insecure_source_transport: profile.allow_insecure_source_transport,
                 source_user: profile.source_user.clone(),
+                source_auth: profile.source_auth.clone(),
                 source_credential_id: profile.source_credential_id.clone(),
                 destination_host: profile.destination_host.clone(),
                 destination_user: profile.destination_user.clone(),
+                destination_auth: profile.destination_auth.clone(),
                 destination_credential_id: profile.destination_credential_id.clone(),
                 destination_port: profile.destination_port.clone(),
                 destination_tls: profile.destination_tls.clone(),
@@ -3068,7 +3148,8 @@ fn imap_command_succeeded(response: &str, tag: &str) -> bool {
 fn probe_tls_capabilities_with_transport(
     host: &str,
     user: &str,
-    password: &str,
+    credential: &str,
+    auth_method: &str,
     transport: &str,
     ca_bundle: &str,
     certificate_pin_sha256: &str,
@@ -3158,7 +3239,14 @@ fn probe_tls_capabilities_with_transport(
             .complete_io(&mut stream.sock)
             .map_err(|error| format!("{host}: TLS handshake failed: {error}"))?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
-        return complete_authenticated_imap_probe(stream, host, user, password, greeting);
+        return complete_authenticated_imap_probe(
+            stream,
+            host,
+            user,
+            credential,
+            auth_method,
+            greeting,
+        );
     }
 
     let connection = ClientConnection::new(Arc::new(config), name)
@@ -3166,7 +3254,7 @@ fn probe_tls_capabilities_with_transport(
     let mut stream = StreamOwned::new(connection, tcp);
     let greeting = read_imap_greeting(&mut stream, host)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
-    complete_authenticated_imap_probe(stream, host, user, password, greeting)
+    complete_authenticated_imap_probe(stream, host, user, credential, auth_method, greeting)
 }
 
 fn verify_certificate_pin(
@@ -3195,7 +3283,8 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     mut stream: S,
     host: &str,
     user: &str,
-    password: &str,
+    credential: &str,
+    auth_method: &str,
     greeting: String,
 ) -> Result<core::ServerCapabilities, String> {
     let mut response = String::new();
@@ -3209,17 +3298,32 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     }
     let preauth = greeting.contains("* PREAUTH");
     if !preauth {
-        let quoted_password = Zeroizing::new(imap_quote(password)?);
-        let login = format!(
-            "a002 LOGIN {} {}\r\n",
-            imap_quote(user)?,
-            quoted_password.as_str()
-        );
-        let login = Zeroizing::new(login);
-        stream
-            .write_all(login.as_bytes())
-            .map_err(|e| e.to_string())?;
-        read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
+        if auth_method == "oauth2" {
+            let encoded = xoauth2_payload(user, credential);
+            stream
+                .write_all(b"a002 AUTHENTICATE XOAUTH2\r\n")
+                .map_err(|e| e.to_string())?;
+            read_imap_auth_continuation(&mut stream, &mut response, &mut buffer)?;
+            let encoded = Zeroizing::new(encoded);
+            stream
+                .write_all(encoded.as_bytes())
+                .and_then(|_| stream.write_all(b"\r\n"))
+                .map_err(|e| e.to_string())?;
+            response.clear();
+            read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
+        } else {
+            let quoted_password = Zeroizing::new(imap_quote(credential)?);
+            let login = format!(
+                "a002 LOGIN {} {}\r\n",
+                imap_quote(user)?,
+                quoted_password.as_str()
+            );
+            let login = Zeroizing::new(login);
+            stream
+                .write_all(login.as_bytes())
+                .map_err(|e| e.to_string())?;
+            read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
+        }
         if !imap_command_succeeded(&response, "a002") {
             return Err(format!("{host}: IMAP authentication failed"));
         }
@@ -3281,6 +3385,34 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     Ok(caps)
 }
 
+fn xoauth2_payload(user: &str, access_token: &str) -> String {
+    let auth = Zeroizing::new(format!(
+        "user={}\x01auth=Bearer {}\x01\x01",
+        user, access_token
+    ));
+    BASE64_STANDARD.encode(auth.as_bytes())
+}
+
+fn read_imap_auth_continuation<S: Read>(
+    stream: &mut S,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+) -> Result<(), String> {
+    loop {
+        let count = stream.read(buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            return Err("IMAP connection closed during OAuth authentication".into());
+        }
+        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        if response.lines().any(|line| line.starts_with('+')) {
+            return Ok(());
+        }
+        if response.len() > 65_536 {
+            return Err("IMAP OAuth authentication challenge exceeded 64 KiB".into());
+        }
+    }
+}
+
 /// Re-authenticate both encrypted endpoints immediately before a live imapsync
 /// child is launched. Plain transport remains excluded because it has no TLS
 /// boundary to validate and is already protected by the explicit transport
@@ -3298,6 +3430,7 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
         &source,
         &form.profile.source_user,
         form.source_password.as_str(),
+        &form.profile.source_auth,
         &form.profile.source_tls,
         &form.profile.source_ca_bundle,
         &form.profile.source_certificate_pin_sha256,
@@ -3312,6 +3445,7 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
         &destination,
         &form.profile.destination_user,
         form.destination_password.as_str(),
+        &form.profile.destination_auth,
         &form.profile.destination_tls,
         &form.profile.destination_ca_bundle,
         &form.profile.destination_certificate_pin_sha256,
@@ -3516,7 +3650,9 @@ impl App {
         let destination_user = self.form.profile.destination_user.clone();
         let destination_password = self.form.destination_password.clone();
         let source_tls = self.form.profile.source_tls.clone();
+        let source_auth = self.form.profile.source_auth.clone();
         let destination_tls = self.form.profile.destination_tls.clone();
+        let destination_auth = self.form.profile.destination_auth.clone();
         let source_ca_bundle = self.form.profile.source_ca_bundle.clone();
         let source_certificate_pin_sha256 = self.form.profile.source_certificate_pin_sha256.clone();
         let destination_ca_bundle = self.form.profile.destination_ca_bundle.clone();
@@ -3527,6 +3663,7 @@ impl App {
                 &source,
                 &source_user,
                 source_password.as_str(),
+                &source_auth,
                 &source_tls,
                 &source_ca_bundle,
                 &source_certificate_pin_sha256,
@@ -3536,6 +3673,7 @@ impl App {
                     &destination,
                     &destination_user,
                     destination_password.as_str(),
+                    &destination_auth,
                     &destination_tls,
                     &destination_ca_bundle,
                     &destination_certificate_pin_sha256,
@@ -3583,7 +3721,9 @@ impl App {
         let destination_user = self.form.profile.destination_user.clone();
         let destination_password = self.form.destination_password.clone();
         let source_tls = self.form.profile.source_tls.clone();
+        let source_auth = self.form.profile.source_auth.clone();
         let destination_tls = self.form.profile.destination_tls.clone();
+        let destination_auth = self.form.profile.destination_auth.clone();
         let source_ca_bundle = self.form.profile.source_ca_bundle.clone();
         let source_certificate_pin_sha256 = self.form.profile.source_certificate_pin_sha256.clone();
         let destination_ca_bundle = self.form.profile.destination_ca_bundle.clone();
@@ -3597,6 +3737,7 @@ impl App {
                 &source,
                 &source_user,
                 source_password.as_str(),
+                &source_auth,
                 &source_tls,
                 &source_ca_bundle,
                 &source_certificate_pin_sha256,
@@ -3606,6 +3747,7 @@ impl App {
                     &destination,
                     &destination_user,
                     destination_password.as_str(),
+                    &destination_auth,
                     &destination_tls,
                     &destination_ca_bundle,
                     &destination_certificate_pin_sha256,
@@ -7986,6 +8128,7 @@ impl App {
         title: &str,
         host: &mut String,
         user: &mut String,
+        auth_method: &mut String,
         password: &mut String,
         password_required: bool,
         saved_credential: bool,
@@ -8032,7 +8175,37 @@ impl App {
             });
             inline_error(ui, "User", user, true);
             ui.horizontal(|ui| {
-                ui.label("Password");
+                ui.label("Authentication");
+                egui::ComboBox::from_id_salt(("auth_method", title))
+                    .selected_text(if auth_method_is_oauth(auth_method) {
+                        "OAuth 2.0 / XOAUTH2"
+                    } else {
+                        "Password"
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(auth_method, "password".into(), "Password");
+                        ui.selectable_value(auth_method, "oauth2".into(), "OAuth 2.0 / XOAUTH2");
+                    });
+            });
+            if auth_method_is_oauth(auth_method) {
+                ui.label(
+                    RichText::new(
+                        "Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring; MailSwiftSync does not request consent or refresh tokens yet.",
+                    )
+                    .size(11.0)
+                    .color(if ui.visuals().dark_mode {
+                        ThemeColors::dark().text_secondary
+                    } else {
+                        ThemeColors::light().text_secondary
+                    }),
+                );
+            }
+            ui.horizontal(|ui| {
+                ui.label(if auth_method_is_oauth(auth_method) {
+                    "Access token"
+                } else {
+                    "Password"
+                });
                 let visibility_id = password_visibility_id(title);
                 let visible = ui.ctx().data_mut(|data| {
                     let requested = data.get_temp::<bool>(visibility_id).unwrap_or(false);
@@ -8060,18 +8233,26 @@ impl App {
             });
             if saved_credential && password.is_empty() {
                 ui.label(
-                    RichText::new("Saved credential configured; session password not required.")
-                        .color(if ui.visuals().dark_mode {
-                            ThemeColors::dark().success
-                        } else {
-                            ThemeColors::light().success
-                        })
-                        .size(12.0),
+                    RichText::new(if auth_method_is_oauth(auth_method) {
+                        "Saved OAuth credential configured; session token not required."
+                    } else {
+                        "Saved credential configured; session password not required."
+                    })
+                    .color(if ui.visuals().dark_mode {
+                        ThemeColors::dark().success
+                    } else {
+                        ThemeColors::light().success
+                    })
+                    .size(12.0),
                 );
             } else {
                 inline_error(
                     ui,
-                    "Password",
+                    if auth_method_is_oauth(auth_method) {
+                        "Access token"
+                    } else {
+                        "Password"
+                    },
                     password,
                     password_required && !saved_credential,
                 );
@@ -8585,7 +8766,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new(
-                        "Keyring IDs are non-secret references saved in the profile. Passwords stay in the operating system credential store and are loaded only into the active session.",
+                        "Keyring IDs are non-secret references saved in the profile. Passwords and OAuth access tokens stay in the operating system credential store and are loaded only into the active session.",
                     )
                     .color(self.theme_colors().text_secondary),
                 );
@@ -8602,9 +8783,14 @@ impl App {
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Store source password").clicked() {
+                        let source_label = if auth_method_is_oauth(&self.form.profile.source_auth) {
+                            "Store source token"
+                        } else {
+                            "Store source password"
+                        };
+                        if ui.button(source_label).clicked() {
                             self.status = match self.form.store_keyring_password(true) {
-                                Ok(()) => "Source password stored in OS keyring".into(),
+                                Ok(()) => "Source credential stored in OS keyring".into(),
                                 Err(error) => error,
                             };
                         }
@@ -8622,9 +8808,15 @@ impl App {
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Store destination password").clicked() {
+                        let destination_label =
+                            if auth_method_is_oauth(&self.form.profile.destination_auth) {
+                                "Store destination token"
+                            } else {
+                                "Store destination password"
+                            };
+                        if ui.button(destination_label).clicked() {
                             self.status = match self.form.store_keyring_password(false) {
-                                Ok(()) => "Destination password stored in OS keyring".into(),
+                                Ok(()) => "Destination credential stored in OS keyring".into(),
                                 Err(error) => error,
                             };
                         }
@@ -9440,13 +9632,13 @@ impl eframe::App for App {
                                 self.form.engine() != core::Engine::Dovecot;
                             if ui.available_width() > 900.0 {
                                 ui.columns(2, |c| {
-                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
-                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
+                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
+                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                                 });
                             } else {
-                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
+                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
                                 ui.add_space(8.0);
-                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
+                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                             }
                             ui.horizontal_wrapped(|ui| {
                                 ui.label("Source port");
@@ -12397,6 +12589,77 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "--notls1"));
         assert!(!args.iter().any(|arg| arg == "--ssl1"));
         assert!(!args.iter().any(|arg| arg == "--tls1"));
+    }
+
+    #[test]
+    fn imapsync_oauth_mode_uses_xoauth2_without_bearer_token_in_preview() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.source_auth = "oauth2".into();
+        form.profile.destination_auth = "oauth2".into();
+        let args = engine::imapsync_args(
+            &form.profile,
+            "source-access-token",
+            "destination-access-token",
+            true,
+            true,
+            1,
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--authmech1", "XOAUTH2"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--authmech2", "XOAUTH2"])
+        );
+        assert!(args.iter().any(|arg| arg == "--oauthaccesstoken1"));
+        assert!(args.iter().any(|arg| arg == "--oauthaccesstoken2"));
+        assert!(!args.iter().any(|arg| arg.contains("access-token")));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--password1" || arg == "--password2")
+        );
+    }
+
+    #[test]
+    fn imapsync_oauth_runtime_uses_private_token_files() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.source_auth = "oauth2".into();
+        form.profile.destination_auth = "oauth2".into();
+        form.source_password = String::from("source-access-token").into();
+        form.destination_password = String::from("destination-access-token").into();
+        let prepared = form.prepared_command().unwrap();
+        let source_index = prepared
+            .args
+            .iter()
+            .position(|arg| arg == "--oauthaccesstoken1")
+            .unwrap();
+        let destination_index = prepared
+            .args
+            .iter()
+            .position(|arg| arg == "--oauthaccesstoken2")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&prepared.args[source_index + 1]).unwrap(),
+            "source-access-token"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&prepared.args[destination_index + 1]).unwrap(),
+            "destination-access-token"
+        );
+        assert!(!prepared.args.iter().any(|arg| arg.contains("access-token")));
+    }
+
+    #[test]
+    fn xoauth2_payload_uses_rfc_7628_shape() {
+        let payload = BASE64_STANDARD.decode(xoauth2_payload("user@example.test", "token"));
+        assert_eq!(
+            payload.unwrap(),
+            b"user=user@example.test\x01auth=Bearer token\x01\x01"
+        );
     }
 
     #[test]

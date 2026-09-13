@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added per-endpoint OAuth 2.0 access-token authentication for imapsync via
+  XOAUTH2. Tokens can be supplied for the current session or through the OS
+  keyring and are delivered to imapsync through short-lived private files;
+  they are excluded from previews, plan snapshots, SQLite, and reports.
 - Output journals and process tails now maintain aggregate byte counts during
   append and eviction, avoiding a full-buffer scan for every diagnostic line.
 - Moved remaining rendered project, mailbox, evidence, and batch-confirmation

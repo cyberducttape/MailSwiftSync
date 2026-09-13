@@ -127,7 +127,13 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 
 ## Required before calling it production-ready
 
-- Provider-specific OAuth/Modern Auth and equivalent unattended secret-broker delivery. Remote Dovecot execution is deliberately disabled until the application has a delivery mechanism that cannot expose the password through destination-host process inspection.
+- Provider consent flows, automatic OAuth token refresh, and equivalent unattended
+  secret-broker delivery remain outstanding. The imapsync path now supports
+  operator-supplied OAuth 2.0 access tokens with XOAUTH2, including keyring
+  references, private token-file delivery, redacted previews, and fresh
+  pre-live authentication. Remote Dovecot execution is deliberately disabled
+  until the application has a delivery mechanism that cannot expose credentials
+  through destination-host process inspection.
 - Signed installers for Linux, Windows, and macOS, with checksums and reproducible release instructions. Artifact provenance exists, but native installer signing/notarization is still outstanding.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
 - Preflight checks for DNS, TCP/TLS, authentication, folder inventory, and

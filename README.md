@@ -36,7 +36,9 @@ Stable today:
 
 Experimental or planned:
 
-- Provider-specific OAuth/Modern Auth and unattended secret brokering.
+- Interactive provider authorization, token refresh, and unattended secret
+  brokering (the current imapsync path accepts operator-supplied OAuth 2.0
+  access tokens through the OS keyring or session form).
 - Native installers, signed releases, and cross-platform binary distribution.
 - Maintenance windows, scheduler/API operation, and message-level verification for live batches.
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
@@ -110,13 +112,13 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination. Runs have durable identities; on Unix, startup reconciliation terminates recorded interrupted process groups before exposing them for retry.
 - **Single-owner state.** An exclusive application lock protects the project database. If another MailSwiftSync window is open, close that window rather than deleting the lock file; the second session cannot start a migration without durable ownership.
 - **Descendant containment.** Linux uses owned sessions/process groups and Windows uses a kill-on-close Job Object for engine descendants. macOS deliberately fails closed when it cannot prove ownership and should use a Unix admin host for high-stakes windows.
-- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through short-lived owner-only `--passfile1/--passfile2` files; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion. Remote Dovecot execution is unavailable until a secret broker can deliver credentials without destination-host process exposure.
+- **Redacted preview.** Passwords and OAuth access tokens are hidden in the preview. imapsync live runs receive password credentials through short-lived owner-only `--passfile1/--passfile2` files and OAuth credentials through private `--oauthaccesstoken1/--oauthaccesstoken2` token files; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion. Remote Dovecot execution is unavailable until a secret broker can deliver credentials without destination-host process exposure.
 - **Owned engine logging.** imapsync is invoked with `--nolog` by default, so its unmanaged `LOG_imapsync/` files do not become a second uncontrolled record of mailbox metadata. Use MailSwiftSync’s redacted journal and exported reports as the operational record.
 - **Explicit transport policy.** imapsync plans force encrypted source/destination transport (`--ssl1/--ssl2` for IMAPS or `--tls1` for STARTTLS), request certificate verification with `SSL_verify_mode=1`, and reject expert overrides of those settings instead of allowing automatic cleartext fallback. Plain source transport is an explicit insecure warning and requires operator acknowledgement before any authenticated operation, including dry preflight; it is never presented as a verified TLS plan.
 
 ### Current security boundary
 
-The desktop runner does not persist passwords. You may enter a password for the current session or load it through an OS-keyring ID. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion. Remote Dovecot execution is unavailable because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Provider-specific OAuth/Modern Auth and unattended secret brokering are not implemented yet. Never put real passwords in a committed CSV.
+The desktop runner does not persist passwords or OAuth access tokens. For imapsync, choose **OAuth 2.0 / XOAUTH2** per endpoint and enter a currently valid access token, or load it through an OS-keyring ID; live runs write it to a short-lived owner-only token file that imapsync reads without exposing it in argv. The readiness probe performs the same XOAUTH2 authentication before live admission. MailSwiftSync does not yet perform provider consent flows or refresh expired tokens, so operators must obtain and rotate tokens through their approved provider tooling. Dovecot native execution currently supports password authentication only. Remote Dovecot execution is unavailable because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Never put real passwords or tokens in a committed CSV.
 
 ### Dovecot mode
 
