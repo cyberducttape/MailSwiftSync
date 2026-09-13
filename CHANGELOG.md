@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added a controller crash/recovery integration lab that uses a deterministic
+  blocking engine, verifies the running mailbox is durably recorded, simulates
+  an ungraceful controller crash, and confirms `recover` clears ownership and
+  classifies the interrupted job as operator attention. CI now runs this
+  alongside the real-server product integration lab.
 - Promoted the disposable IMAP lab into a product-level integration gate: it
   now starts self-signed STARTTLS Dovecot fixtures, writes an isolated profile
   and owner-only secret files, drives the packaged binary through headless

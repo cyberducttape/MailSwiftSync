@@ -246,6 +246,12 @@ verification. It also checks the destination Maildir. Set
 the product integration gate; it does not replace controller crash/restart
 chaos testing.
 
+The container integration workflow also runs
+`scripts/controller-recovery-smoke.sh`. That lab uses a deterministic blocking
+engine to simulate an ungraceful controller crash and verifies that durable
+running state is recovered into operator attention with no active process
+ownership left behind.
+
 ![Mailboxes workspace](docs/wiki/assets/batch-queue.png)
 
 The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the redacted durable event ledger remains the longer-lived audit record.

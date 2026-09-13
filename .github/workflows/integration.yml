@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   real-engine-transfer:
-    name: Dovecot + imapsync transfer
+    name: Packaged product integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -20,3 +20,5 @@ jobs:
         run: docker build --tag mailswiftsync:integration .
       - name: Run disposable real-server transfer
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+      - name: Run controller crash and recovery lab
+        run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh

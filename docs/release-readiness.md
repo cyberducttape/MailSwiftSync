@@ -86,9 +86,14 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   Dovecot 2.3 or 2.4 configuration syntax to match the installed runtime and
   uses the same pinned Debian Bookworm Dovecot and imapsync packages used by
   the distributed container. Tagged release publication depends on this
-  product-level gate. Controller crash/restart
-  and storage-fault chaos coverage is still required before unattended
-  production use.
+  product-level gate. Storage-fault chaos coverage is still required before
+  unattended production use.
+- A separate controller recovery lab uses a deterministic blocking engine to
+  verify durable `running` state, simulate an ungraceful controller crash, and
+  confirm `recover` clears process ownership and moves interrupted work to
+  operator attention. This covers controller/ledger restart behavior without
+  confusing it with successful engine transfer coverage; disk-full and
+  corruption chaos cases remain outstanding.
 - Headless `status` and `recover` commands expose secret-free durable state and
   reuse the GUI's fail-closed process recovery path. They are control-plane
   primitives, and `headless preflight|live` now drives the existing controller
