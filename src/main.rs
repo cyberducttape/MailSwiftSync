@@ -4225,11 +4225,26 @@ impl App {
             self.bulk_message = "Batch execution requires durable SQLite storage.".into();
             return;
         }
-        let mut all_jobs = self.bulk_jobs.clone();
-        for job in &mut all_jobs {
-            job.form.dry_run = !live;
-        }
-        let selected_indices = all_jobs
+        let durable_states = if live {
+            match self
+                .bulk_job_ids
+                .iter()
+                .map(|job_id| self.store.mailbox_state(job_id))
+                .collect::<rusqlite::Result<Vec<_>>>()
+            {
+                Ok(states) => states,
+                Err(error) => {
+                    self.bulk_message = format!(
+                        "Could not read durable mailbox states; batch was not started: {error}"
+                    );
+                    return;
+                }
+            }
+        } else {
+            vec![None; self.bulk_jobs.len()]
+        };
+        let selected_indices = self
+            .bulk_jobs
             .iter()
             .enumerate()
             .filter(|(index, _)| {
@@ -4240,14 +4255,10 @@ impl App {
                         .is_some_and(|id| self.bulk_selected_ids.contains(id));
                 selected
                     && (!live
-                        || self.bulk_retry_scope.includes(
-                            self.store
-                                .mailbox_state(&self.bulk_job_ids[*index])
-                                .ok()
-                                .flatten()
-                                .as_deref()
-                                .unwrap_or("unknown"),
-                        ))
+                        || durable_states
+                            .get(*index)
+                            .and_then(Option::as_deref)
+                            .is_some_and(|state| self.bulk_retry_scope.includes(state)))
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
@@ -4261,11 +4272,11 @@ impl App {
         if live {
             for &index in &selected_indices {
                 let job_id = &self.bulk_job_ids[index];
-                let job = &all_jobs[index];
-                let state = self.store.mailbox_state(job_id).ok().flatten();
+                let job = &self.bulk_jobs[index];
+                let state = durable_states[index].as_deref();
                 let preflight = self.store.preflight_plan(job_id).ok().flatten();
                 if !matches!(
-                    state.as_deref(),
+                    state,
                     Some(
                         "ready"
                             | "delta_required"
@@ -4289,7 +4300,11 @@ impl App {
         }
         let jobs = selected_indices
             .iter()
-            .map(|&index| all_jobs[index].clone())
+            .map(|&index| {
+                let mut job = self.bulk_jobs[index].clone();
+                job.form.dry_run = !live;
+                job
+            })
             .collect::<Vec<_>>();
         let mut jobs = jobs;
         for (selected_index, job) in jobs.iter_mut().enumerate() {
@@ -4353,7 +4368,7 @@ impl App {
         self.durability_error = false;
         self.pending_batch_evidence.clear();
         self.pending_batch_checkpoints.clear();
-        let mailboxes = all_jobs
+        let mailboxes = jobs
             .iter()
             .map(|job| {
                 let config = durable_batch_profile_config(&job.form.profile)?;
