@@ -410,9 +410,6 @@ fn bounded_event_detail(_kind: &str, detail: &str) -> String {
     format!("{}{}", &detail[..end], DURABLE_EVENT_TRUNCATION_SUFFIX)
 }
 
-// Keep the storage API broad enough for controller and integration-test
-// consumers without suppressing dead-code diagnostics for the whole module.
-#[allow(dead_code)]
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
@@ -649,6 +646,7 @@ impl StateStore {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub fn create_project(
         &self,
         name: &str,
@@ -697,6 +695,7 @@ impl StateStore {
         tx.commit()?;
         Ok((project, job_id))
     }
+    #[cfg(test)]
     pub fn create_project_with_mailboxes(
         &self,
         name: &str,
@@ -872,6 +871,7 @@ impl StateStore {
         )?;
         tx.commit()
     }
+    #[cfg(test)]
     pub fn add_mailbox(
         &self,
         project_id: &str,
@@ -908,6 +908,7 @@ impl StateStore {
         tx.commit()?;
         Ok(id)
     }
+    #[cfg(test)]
     pub fn set_mailbox_state(&self, job_id: &str, state: &str) -> rusqlite::Result<()> {
         if !matches!(
             state,
@@ -1013,6 +1014,7 @@ impl StateStore {
     /// terminal: claimed children become abandoned and unclaimed children
     /// are also abandoned so their queued rows cannot wedge future retries.
     /// Only mailboxes that were actually claimed are moved to `attention`.
+    #[cfg(test)]
     pub fn recover_abandoned_jobs(&self) -> rusqlite::Result<usize> {
         self.recover_abandoned_jobs_preserving(&[])
     }
@@ -1141,18 +1143,7 @@ impl StateStore {
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         self.event(project_id, kind, detail)
     }
-    pub fn record_events(
-        &self,
-        project_id: &str,
-        kind: &str,
-        details: &[String],
-    ) -> rusqlite::Result<()> {
-        let batch = details
-            .iter()
-            .map(|detail| (project_id, kind, detail.as_str()))
-            .collect::<Vec<_>>();
-        self.record_events_batch(&batch)
-    }
+    #[cfg(test)]
     pub fn record_events_batch(&self, events: &[(&str, &str, &str)]) -> rusqlite::Result<()> {
         if events.is_empty() {
             return Ok(());
@@ -1183,6 +1174,7 @@ impl StateStore {
     /// them. The run supplies the project identity inside the same
     /// transaction, so callers cannot accidentally cross-wire a project and
     /// run while persisting asynchronous output.
+    #[cfg(test)]
     pub fn record_run_events_batch(
         &self,
         run_id: &str,
@@ -1279,6 +1271,7 @@ impl StateStore {
     /// Atomically records a run and moves its mailbox into `running`.
     /// Keeping these writes together prevents restart recovery from seeing a
     /// running mailbox without the run record needed to explain it.
+    #[cfg(test)]
     pub fn begin_run(
         &self,
         project_id: &str,
@@ -1337,6 +1330,7 @@ impl StateStore {
     /// Start a batch as one durable boundary. Child mailboxes remain queued
     /// until an individual worker claims them, so durable state reflects work
     /// that has actually reached the execution layer.
+    #[cfg(test)]
     pub fn begin_batch_run(
         &self,
         project_id: &str,
@@ -1349,6 +1343,7 @@ impl StateStore {
     }
     /// Atomically starts a batch and stores its immutable, secret-free plan
     /// snapshot alongside the parent run (with session passwords excluded).
+    #[cfg(test)]
     pub fn begin_batch_run_with_snapshot(
         &self,
         project_id: &str,
@@ -1674,6 +1669,7 @@ impl StateStore {
     /// mailbox state.  Completion is deliberately one transaction: a run
     /// must never be marked finished while its mailbox remains `running` (or
     /// vice versa) after a database failure or process interruption.
+    #[cfg(test)]
     pub fn finish_run_for_mailbox(
         &self,
         project_id: &str,
@@ -1829,6 +1825,7 @@ impl StateStore {
     /// `running` here because the evidence and terminal transition share one
     /// transaction; ordinary mailbox-state updates still reject that jump.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn finish_run_for_mailbox_with_evidence(
         &self,
         project_id: &str,
@@ -1953,6 +1950,7 @@ impl StateStore {
         )?;
         tx.commit()
     }
+    #[cfg(test)]
     pub fn run_status(&self, run_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row("SELECT status FROM runs WHERE id=?1", [run_id], |row| {
@@ -1960,6 +1958,7 @@ impl StateStore {
             })
             .optional()
     }
+    #[cfg(test)]
     pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
