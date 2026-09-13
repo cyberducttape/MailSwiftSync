@@ -3,6 +3,7 @@ mod core;
 mod credentials;
 mod endpoint;
 mod engine;
+mod oauth;
 mod process;
 mod reports;
 mod ui;
@@ -23,7 +24,6 @@ use process::{
     terminate_recorded_process_group, wait_with_timeout,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use calamine::{Reader, open_workbook_auto};
 use eframe::{
     egui,
@@ -31,6 +31,7 @@ use eframe::{
 };
 use egui_extras::{Column, TableBuilder};
 use keyring::Entry;
+use oauth::{read_auth_continuation, xoauth2_payload};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use rustls_pemfile::certs;
@@ -3303,7 +3304,7 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
             stream
                 .write_all(b"a002 AUTHENTICATE XOAUTH2\r\n")
                 .map_err(|e| e.to_string())?;
-            read_imap_auth_continuation(&mut stream, &mut response, &mut buffer)?;
+            read_auth_continuation(&mut stream, &mut response, &mut buffer)?;
             let encoded = Zeroizing::new(encoded);
             stream
                 .write_all(encoded.as_bytes())
@@ -3383,34 +3384,6 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     }
     let _ = stream.write_all(b"a007 LOGOUT\r\n");
     Ok(caps)
-}
-
-fn xoauth2_payload(user: &str, access_token: &str) -> String {
-    let auth = Zeroizing::new(format!(
-        "user={}\x01auth=Bearer {}\x01\x01",
-        user, access_token
-    ));
-    BASE64_STANDARD.encode(auth.as_bytes())
-}
-
-fn read_imap_auth_continuation<S: Read>(
-    stream: &mut S,
-    response: &mut String,
-    buffer: &mut [u8; 4096],
-) -> Result<(), String> {
-    loop {
-        let count = stream.read(buffer).map_err(|e| e.to_string())?;
-        if count == 0 {
-            return Err("IMAP connection closed during OAuth authentication".into());
-        }
-        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
-        if response.lines().any(|line| line.starts_with('+')) {
-            return Ok(());
-        }
-        if response.len() > 65_536 {
-            return Err("IMAP OAuth authentication challenge exceeded 64 KiB".into());
-        }
-    }
 }
 
 /// Re-authenticate both encrypted endpoints immediately before a live imapsync
@@ -10690,6 +10663,7 @@ fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use uuid::Uuid;
 
     fn dovecot_form() -> Form {

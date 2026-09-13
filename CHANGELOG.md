@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Isolated XOAUTH2 payload construction and IMAP challenge handling in the
+  dedicated OAuth module so provider authentication work can evolve outside
+  the main application controller.
 - Headless batch-live now requires every selected mailbox to be in an
   explicitly verified terminal state; an unchanged `ready` row or missing
   durable row cannot produce a false success result.
