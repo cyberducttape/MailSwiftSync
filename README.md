@@ -160,6 +160,7 @@ or recovered without opening the GUI:
 mailswiftsync status /path/to/state.db
 mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync recover /path/to/state.db
+mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
 mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
 mailswiftsync headless /path/to/state.db batch-preflight
@@ -170,6 +171,10 @@ mailswiftsync headless /path/to/state.db batch-live
 process identities. `recover` takes the application lock, verifies recorded
 process ownership before signalling anything, preserves identities it cannot
 prove, and applies the same conservative recovery transition as GUI startup.
+`support-bundle` emits a private, sanitized JSON artifact for incident triage;
+it excludes endpoints, credentials, plan snapshots, command paths, mailbox
+content, and diagnostic text while retaining schema, platform, health, and
+bounded run metadata.
 These commands are headless control-plane operations; they do not yet replace
 the GUI with a continuously running scheduler. `headless live` is an explicit
 one-shot operation for a single-mailbox project: it runs a fresh dry preflight

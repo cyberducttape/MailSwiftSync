@@ -43,6 +43,10 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   omits endpoints, credential references, plan snapshots, executable paths,
   and diagnostic detail while retaining the complete run metadata and evidence
   digests. The operator project report remains the forensic artifact.
+- A headless `support-bundle <state.db> <output.json>` export provides a
+  sanitized incident artifact containing platform/schema/health facts without
+  credentials, endpoints, plans, command paths, mailbox content, or diagnostic
+  text.
 - Run metadata records the version string returned by each engine when its
   executable supports `--version`; unavailable versions remain explicit in
   exports rather than being guessed.

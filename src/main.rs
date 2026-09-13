@@ -4629,6 +4629,14 @@ impl App {
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
+    fn export_support_bundle_dialog(&self) -> Result<(), String> {
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-support-bundle.json")
+            .save_file()
+            .ok_or("Support-bundle export cancelled.")?;
+        export_support_bundle(&persistent_state_path(), &path)
+    }
+
     fn export_project_health(&self) -> Result<(), String> {
         let project_id = self
             .active_project_id()
@@ -4719,6 +4727,10 @@ impl App {
                 if ui.button("Export customer proof JSON…").clicked() {
                     let result = self.export_customer_proof();
                     self.report_export_result("Customer proof", result);
+                }
+                if ui.button("Export support bundle…").clicked() {
+                    let result = self.export_support_bundle_dialog();
+                    self.report_export_result("Support bundle", result);
                 }
                 if ui.button("Export project health…").clicked() {
                     let result = self.export_project_health();
@@ -8596,6 +8608,35 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("support-bundle") {
+        let (Some(state), Some(output)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync support-bundle <state.db> <output.json>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync support-bundle <state.db> <output.json>");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let output = std::path::PathBuf::from(output);
+        let _lock = match acquire_instance_lock(&state) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Support-bundle export refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match export_support_bundle(&state, &output) {
+            Ok(()) => {
+                println!("Created sanitized support bundle: {}", output.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Support-bundle export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
@@ -8635,7 +8676,7 @@ fn main() -> eframe::Result<()> {
         }
     }
     eprintln!(
-        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, or `headless`; run without a command for the GUI."
+        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, `support-bundle`, or `headless`; run without a command for the GUI."
     );
     std::process::exit(2);
 }
@@ -8664,6 +8705,100 @@ struct HeadlessMailboxStatus {
     destination_mailbox: String,
     state: String,
     attention_reason: Option<String>,
+}
+
+/// Build a support artifact from durable state without including anything
+/// that could disclose credentials, mailbox content, or internal topology.
+fn export_support_bundle(
+    state_path: &std::path::Path,
+    output_path: &std::path::Path,
+) -> Result<(), String> {
+    let store = core::StateStore::open(state_path).map_err(|error| error.to_string())?;
+    let projects = store
+        .recent_projects(1_000)
+        .map_err(|error| error.to_string())?;
+    let mut project_values = Vec::with_capacity(projects.len());
+    for project in projects {
+        let jobs = store
+            .mailboxes(&project.id)
+            .map_err(|error| error.to_string())?;
+        let mailbox_values = jobs
+            .iter()
+            .map(|job| {
+                Ok(serde_json::json!({
+                    "id": job.id,
+                    "state": job.state,
+                    "attention_reason": store.mailbox_attention_reason(&job.id)
+                        .map_err(|error| error.to_string())?
+                        .map(|reason| reason.as_str()),
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let runs = store
+            .recent_run_list(&project.id, 100)
+            .map_err(|error| error.to_string())?;
+        let run_values = runs
+            .into_iter()
+            .map(|run| {
+                Ok(serde_json::json!({
+                    "run_id": run.id,
+                    "job_id": run.job_id,
+                    "parent_run_id": run.parent_run_id,
+                    "engine": run.engine,
+                    "engine_version": store.engine_version(&run.id)
+                        .map_err(|error| error.to_string())?,
+                    "phase_at_start": run.phase_at_start,
+                    "status": run.status,
+                    "started_at": run.started_at,
+                    "finished_at": run.finished_at,
+                    "has_detail": !run.detail.is_empty(),
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        project_values.push(serde_json::json!({
+            "project_id": project.id,
+            "project_name": project.name,
+            "phase": project.phase.as_str(),
+            "mailbox_count": jobs.len(),
+            "mailboxes": mailbox_values,
+            "recent_runs": run_values,
+        }));
+    }
+    let active_processes = store
+        .active_processes()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|process| {
+            serde_json::json!({
+                "run_id": process.run_id,
+                "job_id": process.job_id,
+                "pid": process.pid,
+            })
+        })
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "format": "mailswiftsync-support-bundle",
+        "format_version": 1,
+        "application_version": env!("CARGO_PKG_VERSION"),
+        "schema_version": core::CURRENT_SCHEMA_VERSION,
+        "platform": {
+            "os": std::env::consts::OS,
+            "architecture": std::env::consts::ARCH,
+        },
+        "active_processes": active_processes,
+        "projects": project_values,
+        "redaction": {
+            "endpoints": "excluded",
+            "credentials": "excluded",
+            "plan_snapshots": "excluded",
+            "command_paths": "excluded",
+            "mail_content": "excluded",
+            "diagnostic_text": "excluded",
+        },
+        "note": "This bundle is intended for support and incident triage. It contains durable state classifications and run metadata, not a forensic log or migration proof."
+    });
+    let report = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    write_private_atomic(output_path, &report).map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -9114,6 +9249,35 @@ mod tests {
         let path = directory.join("proof.json");
         std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
         assert!(verify_proof_file(&path).unwrap().contains("verified"));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn support_bundle_excludes_topology_and_diagnostic_material() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-support-bundle-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = directory.join("state.db");
+        let output = directory.join("support.json");
+        let store = core::StateStore::open(&state).unwrap();
+        let project = store
+            .create_project("Support fixture", "source.internal", "destination.internal")
+            .unwrap();
+        store
+            .add_mailbox(&project.id, "alice@example.test", "alice@example.test")
+            .unwrap();
+        drop(store);
+
+        export_support_bundle(&state, &output).unwrap();
+        let text = std::fs::read_to_string(&output).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["format"], "mailswiftsync-support-bundle");
+        assert!(!text.contains("source.internal"));
+        assert!(!text.contains("destination.internal"));
+        assert_eq!(value["redaction"]["credentials"], "excluded");
+        assert_eq!(value["redaction"]["diagnostic_text"], "excluded");
         let _ = std::fs::remove_dir_all(directory);
     }
 
