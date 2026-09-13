@@ -3,6 +3,7 @@ mod credentials;
 mod endpoint;
 mod engine;
 mod process;
+mod reports;
 mod verification;
 
 use credentials::{
@@ -26,7 +27,6 @@ use eframe::{
 };
 use egui_extras::{Column, TableBuilder};
 use keyring::Entry;
-use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use rustls_pemfile::certs;
@@ -380,55 +380,12 @@ fn hex_decode<const N: usize>(value: &str) -> Result<[u8; N], String> {
     Ok(output)
 }
 
-#[cfg(unix)]
-fn require_private_key_permissions(path: &std::path::Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(path)
-        .map_err(|error| format!("could not inspect signing key: {error}"))?
-        .permissions()
-        .mode();
-    if mode & 0o077 != 0 {
-        return Err("signing key must be owner-only (0600 or stricter)".into());
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn require_private_key_permissions(_: &std::path::Path) -> Result<(), String> {
-    Ok(())
-}
-
 fn sign_proof_file(
     path: &std::path::Path,
     signing_key_path: &std::path::Path,
     key_id: &str,
 ) -> Result<String, String> {
-    require_private_key_permissions(signing_key_path)?;
-    let key_bytes = std::fs::read(signing_key_path)
-        .map_err(|error| format!("could not read signing key: {error}"))?;
-    let key_pair = Ed25519KeyPair::from_pkcs8(&key_bytes)
-        .map_err(|_| "signing key is not a supported Ed25519 PKCS#8 key".to_owned())?;
-    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
-    let mut value = with_proof_digest(value)?;
-    let payload = canonical_signed_proof_payload(&value)?;
-    let signature = key_pair.sign(payload.as_bytes());
-    value
-        .as_object_mut()
-        .expect("proof object checked by with_proof_digest")
-        .insert(
-            "proof_signature".into(),
-            serde_json::json!({
-                "algorithm": "Ed25519",
-                "key_id": key_id,
-                "public_key": hex_encode(key_pair.public_key().as_ref()),
-                "signature": hex_encode(signature.as_ref()),
-            }),
-        );
-    let output = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-    write_private_atomic(path, &output).map_err(|error| error.to_string())?;
-    Ok(format!("Signed migration proof with key {key_id}"))
+    reports::signing::sign_file(path, signing_key_path, key_id)
 }
 
 #[cfg(test)]
@@ -440,89 +397,7 @@ fn verify_proof_file_with_trust(
     path: &std::path::Path,
     trusted_public_key: Option<&str>,
 ) -> Result<String, String> {
-    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let mut value: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
-    let object = value
-        .as_object_mut()
-        .ok_or("Migration proof must be a JSON object.")?;
-    if !matches!(
-        object.get("format").and_then(serde_json::Value::as_str),
-        Some("mailswiftsync-project-report" | "mailswiftsync-customer-proof")
-    ) {
-        return Err("Unsupported migration proof format.".into());
-    }
-    let signature = object.get("proof_signature").cloned();
-    let expected = object
-        .remove("proof_digest")
-        .and_then(|digest| digest.as_str().map(str::to_owned))
-        .ok_or("Migration proof is missing proof_digest.")?;
-    let mut digest_value = value.clone();
-    digest_value
-        .as_object_mut()
-        .expect("proof object checked above")
-        .remove("proof_signature");
-    let canonical = serde_json::to_string(&digest_value).map_err(|error| error.to_string())?;
-    let actual = plan_snapshot_sha256(&canonical);
-    if expected != actual {
-        return Err(format!(
-            "Migration proof digest mismatch: expected {expected}, calculated {actual}."
-        ));
-    }
-    value
-        .as_object_mut()
-        .expect("proof object checked above")
-        .insert("proof_digest".into(), serde_json::Value::String(expected));
-    if let Some(signature_value) = signature {
-        let signature_object = signature_value
-            .as_object()
-            .ok_or("Migration proof signature must be an object.")?;
-        if signature_object
-            .get("algorithm")
-            .and_then(serde_json::Value::as_str)
-            != Some("Ed25519")
-        {
-            return Err("Unsupported migration proof signature algorithm.".into());
-        }
-        let public_key = hex_decode::<32>(
-            signature_object
-                .get("public_key")
-                .and_then(serde_json::Value::as_str)
-                .ok_or("Migration proof signature is missing public_key.")?,
-        )?;
-        let trust_pinned = trusted_public_key.is_some();
-        if let Some(trusted) = trusted_public_key {
-            let trusted = hex_decode::<32>(trusted.trim())?;
-            if trusted != public_key {
-                return Err("Migration proof signer does not match the trusted public key.".into());
-            }
-        }
-        let signature = hex_decode::<64>(
-            signature_object
-                .get("signature")
-                .and_then(serde_json::Value::as_str)
-                .ok_or("Migration proof signature is missing signature.")?,
-        )?;
-        let payload = canonical_signed_proof_payload(&value)?;
-        UnparsedPublicKey::new(&ED25519, public_key)
-            .verify(payload.as_bytes(), &signature)
-            .map_err(|_| "Migration proof signature verification failed.".to_owned())?;
-        let key_id = signature_object
-            .get("key_id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unidentified");
-        let trust_message = if trust_pinned {
-            "trusted public key matched"
-        } else {
-            "signer identity is not trust-pinned"
-        };
-        return Ok(format!(
-            "Migration proof verified: {actual}; Ed25519 signature valid for key {key_id}; {trust_message}"
-        ));
-    }
-    Ok(format!(
-        "Migration proof digest verified (unsigned integrity-only artifact): {actual}"
-    ))
+    reports::signing::verify_file(path, trusted_public_key)
 }
 
 /// Persist only an opaque identity for a preflighted plan. The full
@@ -5244,92 +5119,7 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        Self::export_customer_proof_from_store(&self.store, project_id, path)
-    }
-
-    fn export_customer_proof_from_store(
-        store: &core::StateStore,
-        project_id: &str,
-        path: &std::path::Path,
-    ) -> Result<(), String> {
-        let snapshot = store
-            .project_report_snapshot(project_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("The durable migration project no longer exists.")?;
-        if snapshot.mailboxes.is_empty() {
-            return Err("The project has no mailbox jobs to report.".into());
-        }
-        let project = snapshot.project;
-        let mailboxes = snapshot
-            .mailboxes
-            .into_iter()
-            .map(|mailbox| {
-                let job = mailbox.job;
-                let evidence = match mailbox.evidence {
-                    Some((run_id, value, plan_snapshot)) => {
-                        let plan_snapshot = plan_snapshot
-                            .ok_or("The customer proof refers to a missing evidence run.")?;
-                        Some(serde_json::json!({
-                            "run_id": run_id,
-                            "scope": value.evidence_scope().label(),
-                            "evidence_level": value.evidence_level(),
-                            "evidence_digest": evidence_digest(&run_id, &plan_snapshot, &value),
-                            "source_folders": value.source_folders,
-                            "destination_folders": value.destination_folders,
-                            "source_messages": value.source_messages,
-                            "destination_messages": value.destination_messages,
-                            "source_bytes": value.source_bytes,
-                            "destination_bytes": value.destination_bytes,
-                            "unmatched_messages": value.unmatched_messages,
-                            "failed_messages": value.failed_messages,
-                        }))
-                    }
-                    None => None,
-                };
-                Ok(serde_json::json!({
-                    "source_mailbox": job.source_mailbox,
-                    "destination_mailbox": job.destination_mailbox,
-                    "state": job.state,
-                    "verification_acceptance": mailbox.acceptance.map(|value| serde_json::json!({
-                        "run_id": value.run_id,
-                        "operator": value.operator,
-                        "reason": value.reason,
-                        "accepted_at": value.accepted_at,
-                    })),
-                    "evidence": evidence,
-                }))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let run_manifest = snapshot
-            .runs
-            .into_iter()
-            .map(|run| {
-                let value = run.run;
-                Ok(serde_json::json!({
-                    "run_id": value.id,
-                    "engine": value.engine,
-                    "engine_version": run.engine_version,
-                    "phase_at_start": value.phase_at_start,
-                    "status": value.status,
-                    "started_at": value.started_at,
-                    "finished_at": value.finished_at,
-                }))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let value = with_proof_digest(serde_json::json!({
-            "format": "mailswiftsync-customer-proof",
-            "format_version": 1,
-            "application_version": env!("CARGO_PKG_VERSION"),
-            "project": {
-                "name": project.name,
-                "phase": format!("{:?}", project.phase),
-            },
-            "mailboxes": mailboxes,
-            "runs": run_manifest,
-            "note": "This customer proof contains no passwords, credential references, endpoints, plan snapshots, executable paths, or diagnostic details. Aggregate and engine-confirmed evidence are not independent message-level reconciliation. Verify the proof digest, and add an Ed25519 signature before treating it as an authenticated artifact."
-        }))?;
-        let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-        write_private_atomic(path, &report).map_err(|e| e.to_string())
+        reports::customer::export_from_store(&self.store, project_id, path)
     }
 
     fn export_support_bundle_dialog(&self) -> Result<(), String> {
@@ -5345,71 +5135,11 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        let project = self
-            .store
-            .project(project_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("The durable migration project no longer exists.")?;
-        let jobs = self
-            .store
-            .mailboxes(project_id)
-            .map_err(|e| e.to_string())?;
-        let runs = self
-            .store
-            .recent_runs(project_id, 20)
-            .map_err(|e| e.to_string())?;
-        let attention = jobs
-            .iter()
-            .filter(|job| needs_operator_review(&job.state))
-            .map(|job| {
-                serde_json::json!({
-                    "id": job.id,
-                    "source_mailbox": job.source_mailbox,
-                    "destination_mailbox": job.destination_mailbox,
-                    "state": job.state,
-                })
-            })
-            .collect::<Vec<_>>();
-        let recent_runs = runs
-            .iter()
-            .map(|run| {
-                serde_json::json!({
-                    "id": run.id,
-                    "job_id": run.job_id,
-                    "parent_run_id": run.parent_run_id,
-                    "engine": run.engine,
-                    "phase_at_start": run.phase_at_start,
-                    "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
-                    "status": run.status,
-                    "started_at": run.started_at,
-                    "finished_at": run.finished_at,
-                    "detail": run.detail,
-                })
-            })
-            .collect::<Vec<_>>();
-        let value = serde_json::json!({
-            "format": "mailswiftsync-project-health",
-            "version": 1,
-            "project": {
-                "id": project.id,
-                "name": project.name,
-                "phase": format!("{:?}", project.phase),
-                "source_endpoint": project.source_endpoint,
-                "destination_endpoint": project.destination_endpoint,
-            },
-            "mailboxes": {
-                "total": jobs.len(),
-                "by_state": project_health_state_counts(&jobs),
-                "attention": attention,
-            },
-            "recent_runs": recent_runs,
-        });
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-project-health.json")
             .save_file()
             .ok_or("Health export cancelled.")?;
-        let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-        write_private_atomic(&path, &report).map_err(|e| e.to_string())
+        reports::operator::export_health(&self.store, project_id, &path)
     }
 
     fn verification_view(&mut self, ui: &mut egui::Ui) {
@@ -9827,7 +9557,7 @@ fn main() -> eframe::Result<()> {
             eprintln!("Customer-proof export refused: no durable migration project is available");
             std::process::exit(1);
         };
-        match App::export_customer_proof_from_store(&store, &project_id, &output) {
+        match reports::customer::export_from_store(&store, &project_id, &output) {
             Ok(()) => {
                 println!("Created customer migration proof: {}", output.display());
                 return Ok(());

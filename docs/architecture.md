@@ -41,6 +41,12 @@ The evidence schema can hold source/destination folder and message counts, byte 
 
 The ledger records project lifecycle, redacted run output, and reconciliation evidence. The Dovecot adapter obtains aggregate folder/message/virtual-size status from both the remote `imapc` source and the destination after a live run. The imapsync adapter consumes its final summary. Verification exports include the durable run identifier and timestamps, so an audit artifact can be traced to one execution. Unix migrations run in their own process group; cancellation allows graceful shutdown before escalation, and Linux children receive a parent-death signal as an additional crash-safety measure. The runner records each started process together with platform process start-time, process-group, and session identity. Startup terminates a recorded Unix group only when those identity values still match; otherwise it refuses to signal the PID and leaves the job for operator review. Windows children are attached to a kill-on-close Job Object; macOS validates identity through `proc_pidinfo` and retains the conservative no-signal fallback when that native query fails. The process record is best-effort during the short interval before the UI receives the child-start event. The current Dovecot checkpoint is an engine resume token, not UIDVALIDITY-aware verification evidence; explainable message-level mismatch records remain future milestones.
 
+Report generation is isolated under `src/reports/`. Customer proof, operator
+health, and signing/verification builders receive explicit durable inputs and
+paths; they do not construct `App`, restore a GUI profile, perform startup
+recovery, or own egui state. The GUI and headless CLI therefore share the same
+artifact code while keeping controller and presentation concerns replaceable.
+
 Each run also stores the project phase observed at admission. This is immutable
 provenance for reports and incident review, not a claim that the current engine
 has distinct implementation semantics for every lifecycle phase.
