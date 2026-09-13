@@ -2584,8 +2584,7 @@ impl App {
             core::Phase::Complete,
         ];
         let current = self
-            .project_id
-            .as_deref()
+            .active_project_id()
             .and_then(|id| self.store.project(id).ok().flatten())
             .map(|project| project.phase)
             .unwrap_or(core::Phase::Discovery);
