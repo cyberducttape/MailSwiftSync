@@ -1554,7 +1554,8 @@ impl StateStore {
     fn record_evidence(&self, job_id: &str, value: &MailboxEvidence) -> rusqlite::Result<()> {
         self.record_evidence_for_run(job_id, "legacy", value)
     }
-    pub fn record_evidence_for_run(
+    #[cfg(test)]
+    fn record_evidence_for_run(
         &self,
         job_id: &str,
         run_id: &str,
