@@ -14,8 +14,8 @@ use credentials::{
 use process::terminate_process_group_by_pid;
 use process::{
     InstanceLock, ProcessLaunchLimiter, ProcessOutcome, acquire_instance_lock,
-    collect_redacted_lines_with_callback, configure_process_group, for_each_lossy_line,
-    linux_process_identity, recorded_process_matches, terminate_process_group,
+    attach_child_supervisor, collect_redacted_lines_with_callback, configure_process_group,
+    for_each_lossy_line, linux_process_identity, recorded_process_matches, terminate_process_group,
     terminate_recorded_process_group, wait_with_timeout,
 };
 
@@ -25,6 +25,7 @@ use eframe::{
     egui::{Color32, RichText, Stroke},
 };
 use keyring::Entry;
+use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde::{Deserialize, Serialize};
@@ -116,9 +117,9 @@ struct Profile {
     /// Maximum runtime for one migration process, in hours.
     #[serde(default = "default_migration_timeout_hours")]
     migration_timeout_hours: u64,
-    /// Remote Dovecot currently receives this value in a destination-side
-    /// command override. Keep the unsafe compatibility path opt-in until a
-    /// deployment-independent secret broker is available.
+    /// Legacy profile field retained for deserialization compatibility. Remote
+    /// Dovecot execution is rejected until a deployment-independent secret
+    /// broker is available, so this value has no effect.
     #[serde(default)]
     allow_remote_password_in_argv: bool,
     automap: bool,
@@ -310,7 +311,92 @@ fn with_proof_digest(mut value: serde_json::Value) -> Result<serde_json::Value, 
     Ok(value)
 }
 
+fn canonical_signed_proof_payload(value: &serde_json::Value) -> Result<String, String> {
+    let mut unsigned = value.clone();
+    unsigned
+        .as_object_mut()
+        .ok_or("Migration proof must be a JSON object.")?
+        .remove("proof_signature");
+    serde_json::to_string(&unsigned).map_err(|error| error.to_string())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn hex_decode<const N: usize>(value: &str) -> Result<[u8; N], String> {
+    if value.len() != N * 2 {
+        return Err(format!("expected {} hexadecimal bytes", N));
+    }
+    let mut output = [0_u8; N];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let text = std::str::from_utf8(chunk).map_err(|_| "invalid hexadecimal text".to_owned())?;
+        output[index] = u8::from_str_radix(text, 16)
+            .map_err(|_| "invalid hexadecimal signature material".to_owned())?;
+    }
+    Ok(output)
+}
+
+#[cfg(unix)]
+fn require_private_key_permissions(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path)
+        .map_err(|error| format!("could not inspect signing key: {error}"))?
+        .permissions()
+        .mode();
+    if mode & 0o077 != 0 {
+        return Err("signing key must be owner-only (0600 or stricter)".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn require_private_key_permissions(_: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn sign_proof_file(
+    path: &std::path::Path,
+    signing_key_path: &std::path::Path,
+    key_id: &str,
+) -> Result<String, String> {
+    require_private_key_permissions(signing_key_path)?;
+    let key_bytes = std::fs::read(signing_key_path)
+        .map_err(|error| format!("could not read signing key: {error}"))?;
+    let key_pair = Ed25519KeyPair::from_pkcs8(&key_bytes)
+        .map_err(|_| "signing key is not a supported Ed25519 PKCS#8 key".to_owned())?;
+    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
+    let mut value = with_proof_digest(value)?;
+    let payload = canonical_signed_proof_payload(&value)?;
+    let signature = key_pair.sign(payload.as_bytes());
+    value
+        .as_object_mut()
+        .expect("proof object checked by with_proof_digest")
+        .insert(
+            "proof_signature".into(),
+            serde_json::json!({
+                "algorithm": "Ed25519",
+                "key_id": key_id,
+                "public_key": hex_encode(key_pair.public_key().as_ref()),
+                "signature": hex_encode(signature.as_ref()),
+            }),
+        );
+    let output = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+    write_private_atomic(path, &output).map_err(|error| error.to_string())?;
+    Ok(format!("Signed migration proof with key {key_id}"))
+}
+
+#[cfg(test)]
 fn verify_proof_file(path: &std::path::Path) -> Result<String, String> {
+    verify_proof_file_with_trust(path, None)
+}
+
+fn verify_proof_file_with_trust(
+    path: &std::path::Path,
+    trusted_public_key: Option<&str>,
+) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
@@ -322,18 +408,71 @@ fn verify_proof_file(path: &std::path::Path) -> Result<String, String> {
     {
         return Err("Unsupported migration proof format.".into());
     }
+    let signature = object.get("proof_signature").cloned();
     let expected = object
         .remove("proof_digest")
         .and_then(|digest| digest.as_str().map(str::to_owned))
         .ok_or("Migration proof is missing proof_digest.")?;
-    let canonical = serde_json::to_string(&value).map_err(|error| error.to_string())?;
+    let mut digest_value = value.clone();
+    digest_value
+        .as_object_mut()
+        .expect("proof object checked above")
+        .remove("proof_signature");
+    let canonical = serde_json::to_string(&digest_value).map_err(|error| error.to_string())?;
     let actual = plan_snapshot_sha256(&canonical);
     if expected != actual {
         return Err(format!(
             "Migration proof digest mismatch: expected {expected}, calculated {actual}."
         ));
     }
-    Ok(format!("Migration proof verified: {actual}"))
+    value
+        .as_object_mut()
+        .expect("proof object checked above")
+        .insert("proof_digest".into(), serde_json::Value::String(expected));
+    if let Some(signature_value) = signature {
+        let signature_object = signature_value
+            .as_object()
+            .ok_or("Migration proof signature must be an object.")?;
+        if signature_object
+            .get("algorithm")
+            .and_then(serde_json::Value::as_str)
+            != Some("Ed25519")
+        {
+            return Err("Unsupported migration proof signature algorithm.".into());
+        }
+        let public_key = hex_decode::<32>(
+            signature_object
+                .get("public_key")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("Migration proof signature is missing public_key.")?,
+        )?;
+        if let Some(trusted) = trusted_public_key {
+            let trusted = hex_decode::<32>(trusted.trim())?;
+            if trusted != public_key {
+                return Err("Migration proof signer does not match the trusted public key.".into());
+            }
+        }
+        let signature = hex_decode::<64>(
+            signature_object
+                .get("signature")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("Migration proof signature is missing signature.")?,
+        )?;
+        let payload = canonical_signed_proof_payload(&value)?;
+        UnparsedPublicKey::new(&ED25519, public_key)
+            .verify(payload.as_bytes(), &signature)
+            .map_err(|_| "Migration proof signature verification failed.".to_owned())?;
+        let key_id = signature_object
+            .get("key_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unidentified");
+        return Ok(format!(
+            "Migration proof verified: {actual}; Ed25519 signature valid for key {key_id}"
+        ));
+    }
+    Ok(format!(
+        "Migration proof digest verified (unsigned integrity-only artifact): {actual}"
+    ))
 }
 
 /// Persist only an opaque identity for a preflighted plan. The full
@@ -473,6 +612,7 @@ impl Form {
         let path = Self::path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            restrict_directory_permissions(parent).map_err(|e| e.to_string())?;
         }
         let content = toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?;
         write_private_atomic(&path, &content).map_err(|e| e.to_string())
@@ -636,6 +776,7 @@ impl Form {
                     ));
                 }
             }
+            return Err("Remote Dovecot execution is not available: the current SSH compatibility path would expose the source password to destination-host process inspection. Use local doveadm or imapsync until a secret broker is implemented.".into());
         }
         for (label, value) in required {
             if value.trim().is_empty() {
@@ -727,8 +868,8 @@ impl Form {
         checkpoint: Option<&str>,
     ) -> Result<PreparedCommand, String> {
         if self.engine() == core::Engine::Dovecot {
-            if !self.local_doveadm() && !self.profile.allow_remote_password_in_argv {
-                return Err("Remote Dovecot execution is disabled by default because the source password may be visible in the destination command line. Enable the explicit remote-password compatibility acknowledgement only on a trusted destination, or use a secret broker.".into());
+            if !self.local_doveadm() {
+                return Err("Remote Dovecot execution is not available: the current SSH compatibility path would expose the source password to destination-host process inspection. Use local doveadm or imapsync until a secret broker is implemented.".into());
             }
             let (executable, args) = self.command_with_checkpoint(false, checkpoint);
             let env = if self.local_doveadm() {
@@ -1274,6 +1415,16 @@ fn run_streaming(
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let _child_supervisor = match attach_child_supervisor(&child) {
+        Ok(supervisor) => supervisor,
+        Err(error) => {
+            terminate_process_group(&mut child);
+            let _ = child.wait();
+            return Err(format!(
+                "could not establish descendant process supervision for {executable}: {error}"
+            ));
+        }
+    };
     let identity = linux_process_identity(child.id());
     let (start_ticks, process_group, session_id) = identity
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
@@ -1569,19 +1720,20 @@ fn record_evidence_line(lines: &Mutex<Vec<String>>, line: &str) {
     }
 }
 
-/// Dovecot's stateful sync state is emitted as a compact, single-line
-/// base64-like token. Keep the parser deliberately conservative: a line is
-/// treated as a checkpoint only when it contains no whitespace, uses the
-/// base64 alphabet, and includes padding. Ordinary diagnostic lines therefore
-/// cannot silently become resume state.
+/// Dovecot emits the stateful-sync resume value as a compact, single-line
+/// token. The public contract does not require padded base64, so only the
+/// documented shape (printable, non-whitespace, bounded single line) is
+/// enforced here; the durable store applies the same safety bound.
 fn dovecot_state_candidate(line: &str) -> Option<String> {
     let value = line.trim();
-    if value.len() < 8 || value.len() > 4096 || !value.contains('=') {
+    if value.len() < 8 || value.len() > 4096 || value.chars().any(char::is_whitespace) {
         return None;
     }
-    if value
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
+    if value.bytes().all(|byte| byte.is_ascii_graphic())
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "success" | "successful" | "completed"
+        )
     {
         Some(value.to_owned())
     } else {
@@ -1624,6 +1776,16 @@ fn run_capture_lines(
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let _child_supervisor = match attach_child_supervisor(&child) {
+        Ok(supervisor) => supervisor,
+        Err(error) => {
+            terminate_process_group(&mut child);
+            let _ = child.wait();
+            return Err(format!(
+                "could not establish descendant process supervision for {executable}: {error}"
+            ));
+        }
+    };
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
@@ -1679,9 +1841,55 @@ fn run_capture_lines(
     );
     let status = status?;
     if capture_truncated {
-        lines.push("[diagnostics truncated; semantic evidence is incomplete]".into());
+        lines.push(
+            "[diagnostics truncated; semantic verification continued from the full stream]".into(),
+        );
     }
     Ok((status, lines, capture_truncated))
+}
+
+/// Ask an engine for its version without passing credentials or mailbox
+/// arguments. This is best-effort metadata: an old wrapper may not implement
+/// `--version`, in which case the run explicitly remains unversioned.
+fn probe_engine_version(executable: &str) -> Option<String> {
+    let cancel = AtomicBool::new(false);
+    let mut candidates = vec![(executable.to_owned(), vec!["--version".into()])];
+    if std::path::Path::new(executable)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("doveadm"))
+    {
+        let sibling = std::path::Path::new(executable)
+            .parent()
+            .map(|parent| parent.join("dovecot"))
+            .unwrap_or_else(|| std::path::PathBuf::from("dovecot"));
+        candidates.push((
+            sibling.to_string_lossy().into_owned(),
+            vec!["--version".into()],
+        ));
+    }
+    for (candidate, args) in candidates {
+        let Ok((status, lines, _)) = run_capture_lines(
+            &candidate,
+            &args,
+            &[],
+            &cancel,
+            &[],
+            Duration::from_secs(5),
+            None,
+        ) else {
+            continue;
+        };
+        if status.exit_code == Some(0)
+            && let Some(line) = lines
+                .into_iter()
+                .map(|line| line.trim().to_owned())
+                .find(|line| !line.is_empty() && line.len() <= 512)
+        {
+            return Some(line);
+        }
+    }
+    None
 }
 
 fn run_dovecot_destination_preflight(
@@ -1759,10 +1967,14 @@ fn run_dovecot_verification(
             ));
         }
         if truncated {
-            return Err(format!(
-                "Dovecot verification command {} exceeded diagnostic capture limits; evidence is incomplete",
-                index + 1
-            ));
+            let _ = tx.send(Event::RunLine {
+                run_id: run_id.to_owned(),
+                job_id: job_id.to_owned(),
+                text: format!(
+                    "{prefix}[verification/{}] diagnostic transcript truncated; semantic accumulator processed the complete stream",
+                    index + 1
+                ),
+            });
         }
         let status = accumulator
             .lock()
@@ -1808,7 +2020,7 @@ struct BulkConfirmationSummary {
 impl BulkRetryScope {
     fn includes(self, state: &str) -> bool {
         match self {
-            Self::Unresolved => state != "verified",
+            Self::Unresolved => !matches!(state, "verified" | "verified_with_exceptions"),
             Self::FailedAttention => matches!(state, "failed" | "attention"),
             Self::DeltaRequired => state == "delta_required",
             Self::All => true,
@@ -1817,7 +2029,7 @@ impl BulkRetryScope {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Unresolved => "Unresolved (skip verified)",
+            Self::Unresolved => "Unresolved (skip verified and accepted exceptions)",
             Self::FailedAttention => "Failed or Attention only",
             Self::DeltaRequired => "Delta required only",
             Self::All => "All rows (explicit re-run)",
@@ -2066,18 +2278,20 @@ struct App {
     bulk_retry_scope: BulkRetryScope,
     bulk_source_keyring_apply: String,
     bulk_destination_keyring_apply: String,
+    verification_exception_operator: String,
+    verification_exception_reason: String,
     reopen_reason: String,
 }
 impl Default for App {
     fn default() -> Self {
         let appearance = AppearancePreferences::load();
-        let state_path = dirs_next::data_local_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("mailswiftsync/state.db");
-        if let Some(parent) = state_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-            let _ = restrict_directory_permissions(parent);
-        }
+        let state_path = persistent_state_path();
+        let state_directory_error = state_path.parent().and_then(|parent| {
+            std::fs::create_dir_all(parent)
+                .and_then(|_| restrict_directory_permissions(parent))
+                .err()
+                .map(|error| format!("Could not secure persistent state directory: {error}"))
+        });
         let instance_lock = acquire_instance_lock(&state_path);
         let (store, mut persistence_warning) = match &instance_lock {
             Ok(_) => match core::StateStore::open(&state_path) {
@@ -2092,6 +2306,9 @@ impl Default for App {
                 Some(format!("Persistent SQLite state unavailable: {error}")),
             ),
         };
+        if let Some(error) = state_directory_error {
+            persistence_warning.get_or_insert(error);
+        }
         let (recovered, orphaned, unverified_processes) = if persistence_warning.is_none() {
             let processes = match store.active_processes() {
                 Ok(processes) => processes,
@@ -2374,9 +2591,21 @@ impl Default for App {
             bulk_retry_scope: BulkRetryScope::default(),
             bulk_source_keyring_apply: String::new(),
             bulk_destination_keyring_apply: String::new(),
+            verification_exception_operator: String::new(),
+            verification_exception_reason: String::new(),
             reopen_reason: String::new(),
         }
     }
+}
+
+fn persistent_state_path() -> PathBuf {
+    std::env::var_os("MAILSWIFTSYNC_STATE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs_next::data_local_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("mailswiftsync/state.db")
+        })
 }
 
 fn format_phase_name(phase: core::Phase) -> &'static str {
@@ -3481,11 +3710,13 @@ impl App {
                 } else {
                     let counts = project_health_state_counts(&durable_jobs);
                     ui.heading(format!("{} total", durable_jobs.len()));
+                    let verified_count = counts.get("verified").copied().unwrap_or(0)
+                        + counts.get("verified_with_exceptions").copied().unwrap_or(0);
                     ui.label(format!(
                         "{} ready · {} running · {} verified",
                         counts.get("ready").copied().unwrap_or(0),
                         counts.get("running").copied().unwrap_or(0),
-                        counts.get("verified").copied().unwrap_or(0),
+                        verified_count,
                     ));
                     if attention_count > 0 {
                         ui.label(
@@ -3586,7 +3817,7 @@ impl App {
                         "attention" => "Attention",
                         "failed" => "Failed",
                         "delta_required" => "Delta required",
-                        "verified" => "Verified",
+                        "verified" | "verified_with_exceptions" => "Verified",
                         "ready" => "Ready",
                         _ => "All states",
                     })
@@ -3598,6 +3829,7 @@ impl App {
                             ("failed", "Failed"),
                             ("delta_required", "Delta required"),
                             ("verified", "Verified"),
+                            ("verified_with_exceptions", "Verified with exceptions"),
                         ] {
                             ui.selectable_value(&mut self.bulk_state_filter, value.into(), label);
                         }
@@ -3636,6 +3868,7 @@ impl App {
             ui.strong("Source");
             ui.strong("Destination");
             ui.strong("State");
+            ui.strong("Operator action");
             ui.end_row();
             egui::ScrollArea::vertical()
                 .id_salt("mailbox_overview_rows")
@@ -3672,6 +3905,30 @@ impl App {
                                 ));
                                 let (badge, color) = job_state_badge(&job.state);
                                 ui.label(RichText::new(badge).color(color));
+                                if job.state == "attention" {
+                                    match self.store.mailbox_attention_reason(job_id) {
+                                        Ok(Some(reason)) => {
+                                            ui.label(
+                                                RichText::new(reason.recommended_action())
+                                                    .color(MUTED),
+                                            );
+                                        }
+                                        Ok(None) => {
+                                            ui.label(
+                                                RichText::new("Inspect durable run detail")
+                                                    .color(MUTED),
+                                            );
+                                        }
+                                        Err(_) => {
+                                            ui.label(
+                                                RichText::new("Attention reason unavailable")
+                                                    .color(ALERT),
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    ui.label("");
+                                }
                                 ui.end_row();
                             }
                         });
@@ -3951,13 +4208,16 @@ impl App {
             .set_file_name("mailswiftsync-project-report.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
-        let verified = jobs.iter().filter(|job| job.state == "verified").count();
+        let verified = jobs
+            .iter()
+            .filter(|job| matches!(job.state.as_str(), "verified" | "verified_with_exceptions"))
+            .count();
         let attention = jobs
             .iter()
             .filter(|job| needs_operator_review(&job.state))
             .count();
         let mut report = format!(
-            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Evidence run | Evidence | Evidence digest | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---|---:|---:|---:|---:|\n",
+            "# MailSwiftSync project report\n\n- Project: {}\n- Project ID: `{}`\n- Source endpoint: {}\n- Destination endpoint: {}\n- Phase: `{:?}`\n- Mailboxes: {}\n- Verified: {}\n- Attention required: {}\n\n## Mailbox results\n\n| Source mailbox | Destination mailbox | State | Attention reason | Recommended action | Exception acceptance | Evidence run | Evidence | Evidence digest | Source messages | Destination messages | Unmatched | Failed |\n|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|\n",
             markdown_escape(&project.name),
             project.id,
             markdown_escape(&project.source_endpoint),
@@ -3968,16 +4228,35 @@ impl App {
             attention,
         );
         for job in jobs {
+            let attention_reason = self
+                .store
+                .mailbox_attention_reason(&job.id)
+                .map_err(|e| e.to_string())?;
+            let acceptance = self
+                .store
+                .latest_verification_acceptance(&job.id)
+                .map_err(|e| e.to_string())?;
+            let acceptance_summary = acceptance
+                .as_ref()
+                .map(|value| format!("{}: {}", value.operator, value.reason))
+                .unwrap_or_else(|| "—".into());
+            let reason_label = attention_reason.map(|reason| reason.label()).unwrap_or("—");
+            let recommended_action = attention_reason
+                .map(|reason| reason.recommended_action())
+                .unwrap_or("—");
             if let Some((evidence_run_id, evidence)) = self
                 .store
                 .latest_evidence_for_run(&job.id)
                 .map_err(|e| e.to_string())?
             {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | `{}` | {} | `{}` | {} | {} | {} | {} |\n",
+                    "| {} | {} | `{}` | {} | {} | {} | `{}` | {} | `{}` | {} | {} | {} | {} |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
+                    markdown_escape(reason_label),
+                    markdown_escape(recommended_action),
+                    markdown_escape(&acceptance_summary),
                     evidence_run_id,
                     evidence.evidence_level(),
                     evidence_digest(
@@ -3997,19 +4276,28 @@ impl App {
                 ));
             } else {
                 report.push_str(&format!(
-                    "| {} | {} | `{}` | — | missing | — | — | — | — | — |\n",
+                    "| {} | {} | `{}` | {} | {} | {} | — | missing | — | — | — | — | — |\n",
                     markdown_escape(&job.source_mailbox),
                     markdown_escape(&job.destination_mailbox),
                     job.state,
+                    markdown_escape(reason_label),
+                    markdown_escape(recommended_action),
+                    markdown_escape(&acceptance_summary),
                 ));
             }
         }
-        report.push_str("\n## Recent runs\n\n| Run | Engine | Phase at start | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|---|\n");
+        report.push_str("\n## Recent runs\n\n| Run | Engine | Engine version | Phase at start | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|---|---|\n");
         for run in runs {
+            let engine_version = self
+                .store
+                .engine_version(&run.id)
+                .map_err(|e| e.to_string())?
+                .unwrap_or_else(|| "unavailable".into());
             report.push_str(&format!(
-                "| `{}` | {} | `{}` | `{}` | `{}` | {} | {} | {} |\n",
+                "| `{}` | {} | {} | `{}` | `{}` | `{}` | {} | {} | {} |\n",
                 run.id,
                 markdown_escape(&run.engine),
+                markdown_escape(&engine_version),
                 markdown_escape(&run.phase_at_start),
                 run.status,
                 plan_snapshot_sha256(&run.plan_snapshot),
@@ -4022,7 +4310,7 @@ impl App {
                 }),
             ));
         }
-        report.push_str("\nEvidence levels describe what was actually established. Engine-confirmed output is not independent message-level reconciliation, and aggregate totals are not proof of message identity. Missing evidence or any state other than `verified` requires operator review before declaring the project complete.\n");
+        report.push_str("\nEvidence levels describe what was actually established. Engine-confirmed output is not independent message-level reconciliation, and aggregate totals are not proof of message identity. Missing evidence or any state other than `verified` or `verified_with_exceptions` requires operator review before declaring the project complete.\n");
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
@@ -4042,13 +4330,18 @@ impl App {
         if jobs.is_empty() {
             return Err("The project has no mailbox jobs to report.".into());
         }
-        let runs = self
-            .store
-            .recent_runs(project_id, 20)
-            .map_err(|e| e.to_string())?;
+        let runs = self.store.all_runs(project_id).map_err(|e| e.to_string())?;
         let mailboxes = jobs
             .into_iter()
             .map(|job| {
+                let attention_reason = self
+                    .store
+                    .mailbox_attention_reason(&job.id)
+                    .map_err(|e| e.to_string())?;
+                let acceptance = self
+                    .store
+                    .latest_verification_acceptance(&job.id)
+                    .map_err(|e| e.to_string())?;
                 let evidence = self
                     .store
                     .latest_evidence_for_run(&job.id)
@@ -4070,6 +4363,9 @@ impl App {
                             "source_mailbox": job.source_mailbox,
                             "destination_mailbox": job.destination_mailbox,
                             "state": job.state,
+                            "attention_reason": attention_reason.map(|reason| reason.as_str()),
+                            "recommended_action": attention_reason.map(|reason| reason.recommended_action()),
+                            "verification_acceptance": acceptance,
                             "evidence": {
                                 "run_id": evidence_run_id,
                                 "scope": evidence.evidence_scope().label(),
@@ -4092,6 +4388,9 @@ impl App {
                         "source_mailbox": job.source_mailbox,
                         "destination_mailbox": job.destination_mailbox,
                         "state": job.state,
+                        "attention_reason": attention_reason.map(|reason| reason.as_str()),
+                        "recommended_action": attention_reason.map(|reason| reason.recommended_action()),
+                        "verification_acceptance": acceptance,
                         "evidence": null
                     })),
                 }
@@ -4100,23 +4399,30 @@ impl App {
         let run_values = runs
             .into_iter()
             .map(|run| {
-                serde_json::json!({
+                let engine_version = self
+                    .store
+                    .engine_version(&run.id)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
                     "id": run.id,
                     "job_id": run.job_id,
                     "parent_run_id": run.parent_run_id,
                     "engine": run.engine,
+                    "engine_version": engine_version,
                     "phase_at_start": run.phase_at_start,
                     "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                     "status": run.status,
                     "started_at": run.started_at,
                     "finished_at": run.finished_at,
                     "detail": run.detail,
-                })
+                }))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, String>>()?;
         let value = serde_json::json!({
             "format": "mailswiftsync-project-report",
-            "format_version": 1,
+            "format_version": 2,
+            "application_version": env!("CARGO_PKG_VERSION"),
+            "run_manifest_complete": true,
             "project": {
                 "id": project.id,
                 "name": project.name,
@@ -4126,7 +4432,7 @@ impl App {
             },
             "mailboxes": mailboxes,
             "runs": run_values,
-            "note": "Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
+            "note": "The run manifest contains every durable run for this project. Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
         });
         let value = with_proof_digest(value)?;
         let path = rfd::FileDialog::new()
@@ -4233,7 +4539,10 @@ impl App {
             if let Some(project_id) = selected_project.as_deref() {
                 match self.store.mailboxes(project_id) {
                     Ok(jobs) => {
-                        let verified = jobs.iter().filter(|job| job.state == "verified").count();
+                        let verified = jobs
+                            .iter()
+                            .filter(|job| matches!(job.state.as_str(), "verified" | "verified_with_exceptions"))
+                            .count();
                         let review = jobs.iter().filter(|job| needs_operator_review(&job.state)).count();
                         ui.separator();
                         ui.heading("Mailbox evidence");
@@ -4324,6 +4633,50 @@ impl App {
                     }
                     Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(ALERT)); }
                     Err(error) => { ui.label(RichText::new(format!("Could not read evidence: {error}")).color(ALERT)); }
+                }
+                match self.store.mailbox_state(job) {
+                    Ok(Some(state)) if state == "verification_difference" => {
+                        ui.separator();
+                        ui.heading("Accept residual difference");
+                        ui.label(RichText::new("This records an auditable exception; it does not change the underlying evidence or claim exact equality.").color(MUTED));
+                        ui.horizontal(|ui| {
+                            ui.label("Operator");
+                            ui.add(egui::TextEdit::singleline(&mut self.verification_exception_operator).desired_width(220.0));
+                        });
+                        ui.add(egui::TextEdit::multiline(&mut self.verification_exception_reason)
+                            .hint_text("Why is this difference acceptable? Include the change-ticket or customer approval reference.")
+                            .desired_rows(3));
+                        let can_accept = !self.verification_exception_operator.trim().is_empty()
+                            && !self.verification_exception_reason.trim().is_empty();
+                        if ui.add_enabled(can_accept, egui::Button::new("Accept and mark verified with exceptions")).clicked() {
+                            match selected_project.as_deref() {
+                                Some(project_id) => match self.store.accept_verification_difference(
+                                    project_id,
+                                    job,
+                                    &self.verification_exception_operator,
+                                    &self.verification_exception_reason,
+                                ) {
+                                    Ok(()) => {
+                                        self.status = "Verification exception recorded durably".into();
+                                        self.verification_exception_reason.clear();
+                                    }
+                                    Err(error) => self.status = format!("Could not accept verification exception: {error}"),
+                                },
+                                None => self.status = "No active project selected".into(),
+                            }
+                        }
+                    }
+                    Ok(Some(state)) if state == "verified_with_exceptions" => {
+                        if let Ok(Some(acceptance)) = self.store.latest_verification_acceptance(job) {
+                            ui.separator();
+                            ui.label(RichText::new("Verified with exceptions").strong().color(Color32::from_rgb(218, 148, 48)));
+                            ui.label(format!("Accepted by {} at {}: {}", acceptance.operator, acceptance.accepted_at, acceptance.reason));
+                        }
+                    }
+                    Ok(Some(_)) | Ok(None) => {}
+                    Err(error) => {
+                        ui.label(RichText::new(format!("Could not read durable mailbox state: {error}")).color(ALERT));
+                    }
                 }
             } else if let Some(error) = selection_error {
                 ui.label(
@@ -4850,6 +5203,12 @@ impl App {
                     .map(|plan_snapshot| core::BatchChildPlan {
                         engine: job.form.engine().label().to_owned(),
                         plan_snapshot,
+                        engine_version: probe_engine_version(match job.form.engine() {
+                            core::Engine::Dovecot => &job.form.profile.doveadm_path,
+                            core::Engine::Auto | core::Engine::ImapSync => {
+                                &job.form.profile.imapsync_path
+                            }
+                        }),
                     })
             })
             .collect::<Result<Vec<_>, _>>();
@@ -5699,6 +6058,7 @@ impl App {
         let args = prepared.args;
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
+        let observed_engine_version = probe_engine_version(&exe);
         let run_id = uuid::Uuid::new_v4().to_string();
         if let Err(error) = self.store.begin_run_with_snapshot(
             &run_project_id,
@@ -5709,6 +6069,22 @@ impl App {
         ) {
             cleanup_paths(&cleanup);
             self.status = format!("Could not record durable run; nothing was started: {error}");
+            return;
+        }
+        if let Some(version) = observed_engine_version
+            && let Err(error) = self.store.record_engine_version(&run_id, &version)
+        {
+            cleanup_paths(&cleanup);
+            let _ = self.store.finish_run_for_mailbox_with_checkpoint(
+                &run_project_id,
+                &run_job_id,
+                &run_id,
+                "failed",
+                "attention",
+                &format!("could not persist engine version metadata: {error}"),
+                None,
+            );
+            self.status = format!("Could not persist engine version metadata: {error}");
             return;
         }
         self.locked_profile = Some(self.form.profile.clone());
@@ -6652,6 +7028,9 @@ impl App {
         } else {
             match final_state {
                 Some("verified") => "Migration completed and verified",
+                Some("verified_with_exceptions") => {
+                    "Migration completed with accepted verification exceptions"
+                }
                 Some("delta_required") => "Migration completed; final delta or review required",
                 Some("verification_difference") => {
                     "Migration completed; verification found differences requiring review"
@@ -7173,8 +7552,7 @@ impl App {
                 ui.horizontal(|ui| { ui.label("SSH executable"); ui.text_edit_singleline(&mut self.form.profile.ssh_path); });
                 ui.horizontal(|ui| { ui.label("SSH user (optional)"); ui.text_edit_singleline(&mut self.form.profile.dovecot_ssh_user); });
                 ui.horizontal(|ui| { ui.label("Config"); ui.text_edit_singleline(&mut self.form.profile.dovecot_config); });
-                ui.checkbox(&mut self.form.profile.allow_remote_password_in_argv, "I understand the remote Dovecot password may be visible in process arguments");
-                ui.label(RichText::new("Required only for remote execution until keyring/secret-broker delivery is available. Never enable this on an untrusted destination.").size(11.0).color(ALERT));
+                ui.label(RichText::new("Remote Dovecot execution is currently unavailable because the compatibility path would expose the source password in destination-host process inspection. Use local doveadm or imapsync.").size(11.0).color(ALERT));
                 ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(MUTED));
                 }
             });
@@ -7306,6 +7684,7 @@ fn display_job_state(state: &str) -> &'static str {
         "delta_required" => "Delta required",
         "verification_difference" => "Verification difference",
         "completed" => "Completed",
+        "verified_with_exceptions" => "Verified with exceptions",
         "verified" => "Verified",
         "failed" => "Failed",
         "cancelled" => "Cancelled",
@@ -7320,6 +7699,10 @@ fn display_state_key(state: &str) -> String {
 
 fn job_state_badge(state: &str) -> (&'static str, Color32) {
     match state {
+        "verified_with_exceptions" => (
+            "✓ Verified with exceptions",
+            Color32::from_rgb(218, 148, 48),
+        ),
         "verified" => ("✓ Verified", TEAL),
         "completed" => ("✓ Completed", TEAL),
         "running" => ("● Running", BLUE),
@@ -7847,16 +8230,32 @@ impl eframe::App for App {
 fn main() -> eframe::Result<()> {
     let mut arguments = std::env::args_os();
     let _program = arguments.next();
-    if arguments.next().as_deref() == Some(std::ffi::OsStr::new("verify")) {
+    let Some(command) = arguments.next() else {
+        return eframe::run_native(
+            "MailSwiftSync",
+            eframe::NativeOptions {
+                viewport: egui::ViewportBuilder::default()
+                    .with_inner_size([1200.0, 820.0])
+                    .with_min_inner_size([900.0, 640.0]),
+                ..Default::default()
+            },
+            Box::new(|_| Ok(Box::<App>::default())),
+        );
+    };
+    if command == std::ffi::OsStr::new("verify") {
         let Some(path) = arguments.next() else {
-            eprintln!("Usage: mailswiftsync verify <project-report.json>");
+            eprintln!("Usage: mailswiftsync verify <project-report.json> [trusted-public-key-hex]");
             std::process::exit(2);
         };
+        let trusted_public_key = arguments.next();
         if arguments.next().is_some() {
-            eprintln!("Usage: mailswiftsync verify <project-report.json>");
+            eprintln!("Usage: mailswiftsync verify <project-report.json> [trusted-public-key-hex]");
             std::process::exit(2);
         }
-        match verify_proof_file(std::path::Path::new(&path)) {
+        let trusted_public_key = trusted_public_key
+            .as_deref()
+            .and_then(|value| value.to_str());
+        match verify_proof_file_with_trust(std::path::Path::new(&path), trusted_public_key) {
             Ok(message) => {
                 println!("{message}");
                 return Ok(());
@@ -7867,21 +8266,520 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
-    eframe::run_native(
-        "MailSwiftSync",
-        eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1200.0, 820.0])
-                .with_min_inner_size([900.0, 640.0]),
-            ..Default::default()
-        },
-        Box::new(|_| Ok(Box::<App>::default())),
-    )
+    if command == std::ffi::OsStr::new("sign") {
+        let (Some(report), Some(signing_key), key_id) = (
+            arguments.next(),
+            arguments.next(),
+            arguments.next().unwrap_or_else(|| "operator".into()),
+        ) else {
+            eprintln!(
+                "Usage: mailswiftsync sign <project-report.json> <ed25519-pkcs8-key> [key-id]"
+            );
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!(
+                "Usage: mailswiftsync sign <project-report.json> <ed25519-pkcs8-key> [key-id]"
+            );
+            std::process::exit(2);
+        }
+        let report = std::path::PathBuf::from(report);
+        let signing_key = std::path::PathBuf::from(signing_key);
+        let key_id = key_id.to_string_lossy();
+        match sign_proof_file(&report, &signing_key, &key_id) {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration proof signing failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("backup") {
+        let (Some(source), Some(destination)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync backup <state.db> <backup.db>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync backup <state.db> <backup.db>");
+            std::process::exit(2);
+        }
+        let source = std::path::PathBuf::from(source);
+        let destination = std::path::PathBuf::from(destination);
+        let _lock = match acquire_instance_lock(&source) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Ledger backup refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match core::StateStore::open(&source).and_then(|store| store.backup_to(&destination)) {
+            Ok(()) => {
+                println!("Created verified ledger backup: {}", destination.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Ledger backup failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("status") {
+        let Some(state) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync status <state.db> [project-id]");
+            std::process::exit(2);
+        };
+        let project_id = arguments.next();
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync status <state.db> [project-id]");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let _lock = match acquire_instance_lock(&state) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Status refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        let project_id = match project_id.as_deref() {
+            Some(value) => match value.to_str() {
+                Some(value) => Some(value),
+                None => {
+                    eprintln!("Status refused: project ID must be valid UTF-8");
+                    std::process::exit(2);
+                }
+            },
+            None => None,
+        };
+        match headless_status(&state, project_id) {
+            Ok(status) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&status)
+                        .expect("headless status is always serializable")
+                );
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Could not read migration status: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("recover") {
+        let Some(state) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync recover <state.db>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync recover <state.db>");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let _lock = match acquire_instance_lock(&state) {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("Recovery refused: {error}");
+                std::process::exit(1);
+            }
+        };
+        match headless_recover(&state) {
+            Ok(result) => {
+                println!(
+                    "Recovered {} job(s); preserved {} unverified process identity(ies).",
+                    result.recovered_jobs, result.preserved_processes
+                );
+                if result.preserved_processes > 0 {
+                    eprintln!(
+                        "WARNING: process ownership could not be proven for every recorded engine; no unverified process was signalled."
+                    );
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration recovery failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("headless") {
+        let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
+            eprintln!(
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live"
+            );
+            std::process::exit(2);
+        };
+        if arguments.next().is_some()
+            || !matches!(
+                mode.to_str(),
+                Some("preflight" | "live" | "batch-preflight" | "batch-live")
+            )
+        {
+            eprintln!(
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live"
+            );
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let mode = mode.to_string_lossy();
+        let result = match mode.as_ref() {
+            "preflight" => headless_execute(&state, false),
+            "live" => headless_execute(&state, true),
+            "batch-preflight" => headless_batch_execute(&state, false),
+            "batch-live" => headless_batch_execute(&state, true),
+            _ => unreachable!("headless mode was validated above"),
+        };
+        match result {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Headless migration failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    eprintln!(
+        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, or `headless`; run without a command for the GUI."
+    );
+    std::process::exit(2);
+}
+
+#[derive(Debug, Serialize)]
+struct HeadlessStatus {
+    schema_version: i64,
+    active_processes: Vec<core::ActiveProcess>,
+    projects: Vec<HeadlessProjectStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct HeadlessProjectStatus {
+    id: String,
+    name: String,
+    source_endpoint: String,
+    destination_endpoint: String,
+    phase: String,
+    mailboxes: Vec<HeadlessMailboxStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct HeadlessMailboxStatus {
+    id: String,
+    source_mailbox: String,
+    destination_mailbox: String,
+    state: String,
+    attention_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct HeadlessRecoveryResult {
+    recovered_jobs: usize,
+    preserved_processes: usize,
+}
+
+fn headless_status(
+    state_path: &std::path::Path,
+    selected_project_id: Option<&str>,
+) -> Result<HeadlessStatus, String> {
+    let store = core::StateStore::open(state_path).map_err(|error| error.to_string())?;
+    let projects = if let Some(project_id) = selected_project_id {
+        store
+            .project(project_id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        store
+            .recent_projects(1_000)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|project| core::Project {
+                id: project.id,
+                name: project.name,
+                source_endpoint: project.source_endpoint,
+                destination_endpoint: project.destination_endpoint,
+                phase: project.phase,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut result = Vec::with_capacity(projects.len());
+    for project in projects {
+        let mut mailboxes = Vec::new();
+        for mailbox in store
+            .mailboxes(&project.id)
+            .map_err(|error| error.to_string())?
+        {
+            mailboxes.push(HeadlessMailboxStatus {
+                attention_reason: store
+                    .mailbox_attention_reason(&mailbox.id)
+                    .map_err(|error| error.to_string())?
+                    .map(|reason| reason.as_str().to_owned()),
+                id: mailbox.id,
+                source_mailbox: mailbox.source_mailbox,
+                destination_mailbox: mailbox.destination_mailbox,
+                state: mailbox.state,
+            });
+        }
+        result.push(HeadlessProjectStatus {
+            id: project.id,
+            name: project.name,
+            source_endpoint: project.source_endpoint,
+            destination_endpoint: project.destination_endpoint,
+            phase: project.phase.as_str().to_owned(),
+            mailboxes,
+        });
+    }
+    let active_processes = store
+        .active_processes()
+        .map_err(|error| error.to_string())?;
+    Ok(HeadlessStatus {
+        schema_version: core::CURRENT_SCHEMA_VERSION,
+        active_processes,
+        projects: result,
+    })
+}
+
+fn headless_recover(state_path: &std::path::Path) -> Result<HeadlessRecoveryResult, String> {
+    let store = core::StateStore::open(state_path).map_err(|error| error.to_string())?;
+    let processes = store
+        .active_processes()
+        .map_err(|error| error.to_string())?;
+    let mut unverified = Vec::new();
+    for process in &processes {
+        if process.pid > 0 && recorded_process_matches(process) {
+            terminate_recorded_process_group(process);
+        } else {
+            unverified.push(process.clone());
+        }
+    }
+    let recovered_jobs = store
+        .recover_abandoned_jobs_preserving(&unverified)
+        .map_err(|error| error.to_string())?;
+    if unverified.is_empty() {
+        cleanup_stale_secret_directories(&secret_runtime_base());
+    }
+    Ok(HeadlessRecoveryResult {
+        recovered_jobs,
+        preserved_processes: unverified.len(),
+    })
+}
+
+/// Run the existing durable controller without constructing an egui window.
+/// A live invocation always performs a fresh dry preflight first, so this
+/// path cannot promote credentials or a plan left over from another process.
+fn headless_execute(state_path: &std::path::Path, live: bool) -> Result<String, String> {
+    // App::default owns the lock and performs the same startup recovery as
+    // the GUI. The environment override is read only during construction.
+    unsafe { std::env::set_var("MAILSWIFTSYNC_STATE_PATH", state_path) };
+    let mut app = App::default();
+    if !app.persistence_available {
+        return Err("durable SQLite state is unavailable; execution is blocked".into());
+    }
+    if app.process_review_required {
+        return Err(
+            "recorded process ownership could not be verified; run `recover` and review the host before retrying"
+                .into(),
+        );
+    }
+    if !app.bulk_job_ids.is_empty() {
+        return Err(
+            "headless single-mailbox execution refuses a restored batch queue; use the GUI for batch admission or an explicit batch supervisor"
+                .into(),
+        );
+    }
+
+    app.form.dry_run = true;
+    app.start();
+    wait_for_headless_controller(&mut app)?;
+    let project_id = app
+        .project_id
+        .as_deref()
+        .ok_or_else(|| format!("preflight did not create a durable mailbox: {}", app.status))?
+        .to_owned();
+    let job_id = app
+        .job_id
+        .as_deref()
+        .ok_or_else(|| format!("preflight did not create a durable mailbox: {}", app.status))?
+        .to_owned();
+    let mailbox_count = app
+        .store
+        .mailboxes(&project_id)
+        .map_err(|error| error.to_string())?
+        .len();
+    if mailbox_count != 1 {
+        return Err(format!(
+            "headless execution requires exactly one mailbox; durable project contains {mailbox_count}"
+        ));
+    }
+    let preflight_state = app
+        .store
+        .mailbox_state(&job_id)
+        .map_err(|error| error.to_string())?;
+    if preflight_state.as_deref() != Some("ready") {
+        return Err(format!(
+            "preflight did not produce a runnable mailbox (state={:?}, status={})",
+            preflight_state, app.status
+        ));
+    }
+    if !live {
+        return Ok(format!(
+            "Headless preflight completed for project {project_id}, mailbox {job_id}."
+        ));
+    }
+
+    // This is the explicit command-line live confirmation. The plan and
+    // credential fingerprint were captured by the just-completed preflight;
+    // start() still revalidates both before launching an engine.
+    app.form.dry_run = false;
+    app.live_confirmed = true;
+    app.live_confirmation_plan = Some(plan_fingerprint_digest(&app.form.plan_fingerprint()));
+    app.start();
+    wait_for_headless_controller(&mut app)?;
+    let final_state = app
+        .store
+        .mailbox_state(&job_id)
+        .map_err(|error| error.to_string())?;
+    if !matches!(
+        final_state.as_deref(),
+        Some("verified")
+            | Some("verified_with_exceptions")
+            | Some("verification_difference")
+            | Some("delta_required")
+    ) {
+        return Err(format!(
+            "live migration did not reach an evidence-bearing terminal state (state={:?}, status={})",
+            final_state, app.status
+        ));
+    }
+    Ok(format!(
+        "Headless live migration completed for project {project_id}, mailbox {job_id}; state={}.",
+        final_state.unwrap_or_default()
+    ))
+}
+
+/// Drive the existing durable batch worker without a GUI. Only queues already
+/// restored from the ledger are accepted; importing or silently reconstructing
+/// a partial batch in automation would make the scope ambiguous.
+fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<String, String> {
+    unsafe { std::env::set_var("MAILSWIFTSYNC_STATE_PATH", state_path) };
+    let mut app = App::default();
+    if !app.persistence_available {
+        return Err("durable SQLite state is unavailable; batch execution is blocked".into());
+    }
+    if app.process_review_required {
+        return Err(
+            "recorded process ownership could not be verified; run `recover` and review the host before retrying"
+                .into(),
+        );
+    }
+    if app.bulk_jobs.is_empty() {
+        return Err(
+            "no durable batch queue was restored; import and validate the batch in the GUI before using headless batch execution"
+                .into(),
+        );
+    }
+    if app.bulk_job_ids.len() != app.bulk_jobs.len() || app.bulk_project_id.is_none() {
+        return Err(
+            "the restored batch queue has no complete durable identity; refusing ambiguous headless admission"
+                .into(),
+        );
+    }
+    app.bulk_selected_ids.clear();
+    app.bulk_retry_scope = BulkRetryScope::Unresolved;
+    app.form.dry_run = true;
+    app.start_bulk();
+    wait_for_headless_controller(&mut app)?;
+    let project_id = app
+        .bulk_project_id
+        .as_deref()
+        .ok_or_else(|| {
+            format!(
+                "batch preflight lost its durable project: {}",
+                app.bulk_message
+            )
+        })?
+        .to_owned();
+    let job_ids = app.bulk_job_ids.clone();
+    let states = app
+        .store
+        .batch_admission_states(&project_id, &job_ids)
+        .map_err(|error| error.to_string())?;
+    if states.iter().any(|state| state.state != "ready") {
+        return Err(format!(
+            "batch preflight did not make every mailbox runnable (states: {})",
+            states
+                .iter()
+                .map(|state| format!("{}={}", state.job_id, state.state))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !live {
+        return Ok(format!(
+            "Headless batch preflight completed for project {project_id}; {} mailbox(es) are ready.",
+            job_ids.len()
+        ));
+    }
+
+    app.form.dry_run = false;
+    app.bulk_live_confirmed = true;
+    app.start_bulk();
+    wait_for_headless_controller(&mut app)?;
+    let final_mailboxes = app
+        .store
+        .mailboxes(&project_id)
+        .map_err(|error| error.to_string())?;
+    let unresolved = final_mailboxes
+        .iter()
+        .filter(|mailbox| {
+            matches!(
+                mailbox.state.as_str(),
+                "failed" | "attention" | "cancelled" | "queued" | "claimed" | "running"
+            )
+        })
+        .map(|mailbox| format!("{}={}", mailbox.id, mailbox.state))
+        .collect::<Vec<_>>();
+    if !unresolved.is_empty() {
+        return Err(format!(
+            "headless batch live run left unresolved mailbox(es): {}",
+            unresolved.join(", ")
+        ));
+    }
+    Ok(format!(
+        "Headless batch live migration completed for project {project_id}; {} mailbox(es) reached evidence-bearing terminal states.",
+        final_mailboxes.len()
+    ))
+}
+
+fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
+    while app.running() || app.capability_receiver.is_some() || app.live_auth_receiver.is_some() {
+        app.poll();
+        if std::time::Instant::now() >= deadline {
+            if let Some(cancel) = &app.cancel_requested {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            return Err("headless controller wait exceeded seven days".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    if app.durability_error || app.durability_recovery_pending {
+        return Err(format!(
+            "durable terminal state was not confirmed: {}",
+            app.status
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn dovecot_form() -> Form {
         let mut form = Form::default();
@@ -7929,7 +8827,15 @@ mod tests {
             Some("AQAAAHm4+Jk=".into())
         );
         assert!(dovecot_state_candidate("sync completed successfully").is_none());
-        assert!(dovecot_state_candidate("AQAAAHm4+Jk").is_none());
+        assert_eq!(
+            dovecot_state_candidate("AQAAAHm4+Jk"),
+            Some("AQAAAHm4+Jk".into())
+        );
+        assert_eq!(
+            dovecot_state_candidate("state-token_v2"),
+            Some("state-token_v2".into())
+        );
+        assert!(dovecot_state_candidate("completed").is_none());
         assert!(dovecot_state_candidate(" short ").is_none());
     }
 
@@ -7992,6 +8898,54 @@ mod tests {
         assert!(verify_proof_file(&path).unwrap().contains("verified"));
 
         let mut tampered = proof;
+        tampered["project"]["name"] = "Altered migration".into();
+        std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
+        assert!(verify_proof_file(&path).is_err());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn signed_migration_proof_requires_valid_signature_and_trust_pin() {
+        let original = serde_json::json!({
+            "format": "mailswiftsync-project-report",
+            "format_version": 2,
+            "project": { "name": "Signed migration" },
+            "mailboxes": [],
+            "runs": []
+        });
+        let proof = with_proof_digest(original).unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-signed-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("proof.json");
+        let key_path = directory.join("signing-key.pk8");
+        std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+        let key = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .unwrap();
+        std::fs::write(&key_path, key.as_ref()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&key_path).unwrap().permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&key_path, permissions).unwrap();
+        }
+        sign_proof_file(&path, &key_path, "test-key").unwrap();
+        let signed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let public_key = signed["proof_signature"]["public_key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            verify_proof_file_with_trust(&path, Some(&public_key))
+                .unwrap()
+                .contains("signature valid")
+        );
+        assert!(verify_proof_file_with_trust(&path, Some(&"00".repeat(32))).is_err());
+        let mut tampered = signed;
         tampered["project"]["name"] = "Altered migration".into();
         std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
         assert!(verify_proof_file(&path).is_err());
@@ -8266,16 +9220,20 @@ mod tests {
     }
 
     #[test]
-    fn remote_dovecot_execution_requires_explicit_secret_exposure_ack() {
+    fn remote_dovecot_execution_is_rejected_without_secret_broker() {
         let mut form = dovecot_form();
         form.profile.dovecot_ssh_user = "migration".into();
         assert!(
             form.prepared_command()
                 .err()
-                .is_some_and(|error| error.contains("disabled by default"))
+                .is_some_and(|error| error.contains("not available"))
         );
         form.profile.allow_remote_password_in_argv = true;
-        assert!(form.prepared_command().is_ok());
+        assert!(
+            form.prepared_command()
+                .err()
+                .is_some_and(|error| error.contains("not available"))
+        );
     }
 
     #[test]
@@ -8564,6 +9522,7 @@ mod tests {
             "verification_difference",
             "completed",
             "verified",
+            "verified_with_exceptions",
         ];
         assert_eq!(
             states
@@ -9467,5 +10426,34 @@ mod tests {
         assert_eq!(job_state_badge("failed").0, "× Failed");
         assert_ne!(job_state_badge("verified").1, job_state_badge("failed").1);
         assert_eq!(job_state_badge("retrying").0, "↻ Retrying");
+    }
+
+    #[test]
+    fn headless_status_is_secret_free_and_reports_durable_mailboxes() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-headless-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = directory.join("state.db");
+        let db = core::StateStore::open(&state).unwrap();
+        let project = db
+            .create_project_with_mailbox(
+                "headless-status",
+                "source.example",
+                "destination.example",
+                "source-user",
+                "destination-user",
+            )
+            .unwrap()
+            .0;
+        drop(db);
+
+        let status = headless_status(&state, Some(&project.id)).unwrap();
+        assert_eq!(status.schema_version, core::CURRENT_SCHEMA_VERSION);
+        assert_eq!(status.projects.len(), 1);
+        assert_eq!(status.projects[0].mailboxes.len(), 1);
+        assert_eq!(status.projects[0].mailboxes[0].state, "queued");
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains("password"));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

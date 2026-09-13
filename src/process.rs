@@ -11,6 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+
 use fs2::FileExt;
 
 use crate::core;
@@ -33,6 +36,73 @@ pub(crate) struct InstanceLock(std::fs::File);
 impl Drop for InstanceLock {
     fn drop(&mut self) {
         let _ = self.0.unlock();
+    }
+}
+
+/// Owns the external engine's descendant lifetime on platforms that provide a
+/// kernel-level process container. On Windows, closing this handle (including
+/// because the controller crashes) terminates every process assigned to the
+/// job. Unix uses its existing session/process-group supervision instead.
+#[derive(Debug)]
+pub(crate) struct ChildSupervisor {
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl Drop for ChildSupervisor {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if !self.job.is_null() {
+            // SAFETY: the handle was returned by CreateJobObjectW and is
+            // owned exclusively by this guard.
+            unsafe {
+                let _ = windows_sys::Win32::Foundation::CloseHandle(self.job);
+            }
+        }
+    }
+}
+
+pub(crate) fn attach_child_supervisor(child: &Child) -> std::io::Result<ChildSupervisor> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let configured = unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if configured == 0 {
+            unsafe {
+                let _ = windows_sys::Win32::Foundation::CloseHandle(job);
+            }
+            return Err(std::io::Error::last_os_error());
+        }
+        let assigned = unsafe { AssignProcessToJobObject(job, child.as_raw_handle() as _) };
+        if assigned == 0 {
+            unsafe {
+                let _ = windows_sys::Win32::Foundation::CloseHandle(job);
+            }
+            return Err(std::io::Error::last_os_error());
+        }
+        return Ok(ChildSupervisor { job });
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = child;
+        Ok(ChildSupervisor {})
     }
 }
 

@@ -9,11 +9,13 @@ This is a technical preview for administrators who want to test the local-first 
 - Dry-run-first planning, certificate-verified authenticated IMAPS/STARTTLS readiness checks, bounded validation concurrency, cancellation, and transient validation retries.
 - Durable SQLite project state, crash recovery to operator Attention, redacted event history, and Markdown/JSON verification reports.
 - Portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums.
+- A deterministic host-native package path with checksum verification via
+  `scripts/package.sh` and `scripts/verify-release.sh`.
 
 ## Known limitations
 
 - Native installers, code signing, provider OAuth/Modern Auth, and unattended secret brokering are not included. Optional OS-keyring password references are included for local operator-managed sessions.
-- Remote Dovecot credential delivery is an explicit opt-in because the compatibility path may expose a password through destination-host process inspection.
+- Remote Dovecot execution is disabled because the compatibility path may expose a password through destination-host process inspection.
 - Live bulk execution is available only after matching dry validation and explicit operator confirmation; scheduler/API operation, maintenance windows, and unattended operation are not supported.
 - Verification is aggregate evidence unless an engine supplies authoritative results; message-level reconciliation and UIDVALIDITY-aware evidence are not yet implemented. Dovecot live runs do persist and reuse engine-emitted `-s` state strings as a resumability optimization, atomically with each child result.
 

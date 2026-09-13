@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
-    path::Path,
+    path::{Path, PathBuf},
 };
 use uuid::Uuid;
 
@@ -54,6 +54,127 @@ fn normalized_destination_identity(destination_mailbox: &str, config: Option<&st
 }
 
 const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+
+/// Durable operator-review categories. These are intentionally stable wire
+/// values: reports, automation, and future UI versions can classify a row
+/// without parsing human-facing run output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum AttentionReason {
+    Interrupted,
+    VerificationIncomplete,
+    VerificationDifference,
+    ProcessIdentityUnverified,
+    AuthenticationFailed,
+    TransportFailed,
+    PolicyBlocked,
+    ConfigurationInvalid,
+    CapacityLimited,
+    Unknown,
+}
+
+impl AttentionReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interrupted => "interrupted",
+            Self::VerificationIncomplete => "verification_incomplete",
+            Self::VerificationDifference => "verification_difference",
+            Self::ProcessIdentityUnverified => "process_identity_unverified",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::TransportFailed => "transport_failed",
+            Self::PolicyBlocked => "policy_blocked",
+            Self::ConfigurationInvalid => "configuration_invalid",
+            Self::CapacityLimited => "capacity_limited",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "interrupted" => Self::Interrupted,
+            "verification_incomplete" => Self::VerificationIncomplete,
+            "verification_difference" => Self::VerificationDifference,
+            "process_identity_unverified" => Self::ProcessIdentityUnverified,
+            "authentication_failed" => Self::AuthenticationFailed,
+            "transport_failed" => Self::TransportFailed,
+            "policy_blocked" => Self::PolicyBlocked,
+            "configuration_invalid" => Self::ConfigurationInvalid,
+            "capacity_limited" => Self::CapacityLimited,
+            "unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Interrupted => "Interrupted; recovery review required",
+            Self::VerificationIncomplete => "Verification evidence is incomplete",
+            Self::VerificationDifference => "Verification found differences",
+            Self::ProcessIdentityUnverified => "Process ownership could not be verified",
+            Self::AuthenticationFailed => "Authentication failed",
+            Self::TransportFailed => "Network or remote-service failure",
+            Self::PolicyBlocked => "Blocked by migration policy",
+            Self::ConfigurationInvalid => "Configuration is invalid",
+            Self::CapacityLimited => "Capacity or rate limit reached",
+            Self::Unknown => "Operator review required",
+        }
+    }
+
+    pub fn recommended_action(self) -> &'static str {
+        match self {
+            Self::Interrupted | Self::ProcessIdentityUnverified => {
+                "Confirm no migration process remains, then retry"
+            }
+            Self::VerificationIncomplete | Self::VerificationDifference => {
+                "Review the evidence and reconcile before retrying or completing"
+            }
+            Self::AuthenticationFailed => {
+                "Verify credentials and endpoint permissions before retrying"
+            }
+            Self::TransportFailed => "Check endpoint health and retry with bounded backoff",
+            Self::PolicyBlocked | Self::ConfigurationInvalid => {
+                "Correct the migration configuration or policy, then rerun preflight"
+            }
+            Self::CapacityLimited => "Reduce concurrency or rate and retry after capacity recovers",
+            Self::Unknown => "Inspect the durable run detail before choosing an action",
+        }
+    }
+}
+
+fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionReason> {
+    if mailbox_state == "verification_difference" {
+        return Some(AttentionReason::VerificationDifference);
+    }
+    if mailbox_state != "attention" {
+        return None;
+    }
+    let detail = detail.to_ascii_lowercase();
+    if detail.contains("identity") || detail.contains("process") {
+        return Some(AttentionReason::ProcessIdentityUnverified);
+    }
+    if detail.contains("restart") || detail.contains("interrupt") {
+        return Some(AttentionReason::Interrupted);
+    }
+    if detail.contains("verification") || detail.contains("evidence") {
+        return Some(AttentionReason::VerificationIncomplete);
+    }
+    if detail.contains("auth") || detail.contains("credential") || detail.contains("password") {
+        return Some(AttentionReason::AuthenticationFailed);
+    }
+    if detail.contains("rate") || detail.contains("quota") || detail.contains("capacity") {
+        return Some(AttentionReason::CapacityLimited);
+    }
+    if detail.contains("policy") {
+        return Some(AttentionReason::PolicyBlocked);
+    }
+    if detail.contains("config") || detail.contains("invalid") {
+        return Some(AttentionReason::ConfigurationInvalid);
+    }
+    if detail.contains("network") || detail.contains("timeout") || detail.contains("connection") {
+        return Some(AttentionReason::TransportFailed);
+    }
+    Some(AttentionReason::Unknown)
+}
 
 fn valid_dovecot_checkpoint(value: &str) -> bool {
     !value.is_empty()
@@ -110,7 +231,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Discovery => "discovery",
             Self::Preflight => "preflight",
@@ -223,8 +344,9 @@ pub struct RunListItem {
 pub struct BatchChildPlan {
     pub engine: String,
     pub plan_snapshot: String,
+    pub engine_version: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ActiveProcess {
     pub run_id: String,
     pub job_id: String,
@@ -251,6 +373,15 @@ pub struct MailboxEvidence {
     /// True only when the engine supplied a stronger engine-confirmed summary.
     /// Aggregate mailbox totals must never be presented as message-level proof.
     pub authoritative: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerificationAcceptance {
+    pub job_id: String,
+    pub run_id: String,
+    pub operator: String,
+    pub reason: String,
+    pub accepted_at: String,
 }
 
 /// The strongest claim supported by the current verifier adapter. This is a
@@ -431,6 +562,21 @@ impl StateStore {
         let store = Self {
             connection: Connection::open(path)?,
         };
+        let stored_schema_version: i64 =
+            store
+                .connection
+                .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if stored_schema_version < CURRENT_SCHEMA_VERSION
+            && std::fs::metadata(path)
+                .map(|metadata| metadata.len() > 0)
+                .unwrap_or(false)
+        {
+            // Preserve the exact pre-migration ledger before any schema
+            // rewrite. The backup is unique and non-overwriting, so a failed
+            // upgrade never destroys the last recovery artifact.
+            let backup_path = migration_backup_path(path, stored_schema_version);
+            store.backup_to(&backup_path)?;
+        }
         restrict_database_permissions(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         store.migrate()?;
@@ -445,12 +591,36 @@ impl StateStore {
         store.migrate()?;
         Ok(store)
     }
+
+    /// Create a consistent SQLite backup without copying WAL/SHM files by
+    /// hand. The destination must not already exist, preventing an operator
+    /// typo from silently overwriting a prior recovery artifact.
+    pub fn backup_to(&self, destination: &Path) -> rusqlite::Result<()> {
+        if destination.exists() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let destination_string = destination.to_string_lossy().into_owned();
+        self.connection
+            .execute("VACUUM INTO ?1", [&destination_string])?;
+        restrict_database_permissions(destination)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let backup = Connection::open(destination)?;
+        let integrity: String = backup.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        restrict_database_sidecars(destination)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        Ok(())
+    }
     fn migrate(&self) -> rusqlite::Result<()> {
         // Version 2 adds the durable endpoint-qualified destination identity;
-        // version 3 records lifecycle provenance for each admitted run.
+        // version 3 records lifecycle provenance for each admitted run;
+        // version 4 adds a stable operator-review reason for attention rows;
+        // version 5 adds durable verification-exception acceptance records;
+        // version 6 records observed engine-version metadata per run.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
-        const CURRENT_SCHEMA_VERSION: i64 = 3;
         let stored_schema_version: i64 =
             self.connection
                 .query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -479,6 +649,30 @@ impl StateStore {
                 if indexes != 3 {
                     return Ok(false);
                 }
+                let attention_reason_column: i64 = self.connection.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('mailbox_jobs') WHERE name='attention_reason'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if attention_reason_column != 1 {
+                    return Ok(false);
+                }
+                let acceptance_table: i64 = self.connection.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='verification_acceptances'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if acceptance_table != 1 {
+                    return Ok(false);
+                }
+                let engine_versions_table: i64 = self.connection.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='engine_versions'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if engine_versions_table != 1 {
+                    return Ok(false);
+                }
                 let legacy_plan: i64 = self.connection.query_row(
                     "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE preflight_plan IS NOT NULL AND (length(preflight_plan) <> 64 OR preflight_plan GLOB '*[^0-9A-Fa-f]*'))",
                     [],
@@ -505,12 +699,14 @@ impl StateStore {
         let tx = self.connection.unchecked_transaction()?;
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-             CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
+             CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT);
              CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
              CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
              CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
              CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, start_ticks INTEGER, process_group INTEGER, session_id INTEGER, executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
              CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
              CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
              CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
              CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
@@ -518,6 +714,14 @@ impl StateStore {
              CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
              CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
              CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);",
+        )?;
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_verification_acceptances_job ON verification_acceptances(job_id, id DESC)",
+            [],
+        )?;
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_engine_versions_captured ON engine_versions(captured_at DESC)",
+            [],
         )?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = tx
@@ -554,6 +758,15 @@ impl StateStore {
         }
         if !job_columns.iter().any(|column| column == "config") {
             tx.execute("ALTER TABLE mailbox_jobs ADD COLUMN config TEXT", [])?;
+        }
+        if !job_columns
+            .iter()
+            .any(|column| column == "attention_reason")
+        {
+            tx.execute(
+                "ALTER TABLE mailbox_jobs ADD COLUMN attention_reason TEXT",
+                [],
+            )?;
         }
         if !job_columns
             .iter()
@@ -884,7 +1097,7 @@ impl StateStore {
                 |row| row.get(0),
             )?;
             let verified: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1 AND state='verified'",
+                "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1 AND state IN ('verified','verified_with_exceptions')",
                 [id],
                 |row| row.get(0),
             )?;
@@ -923,10 +1136,13 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let tx = self.connection.unchecked_transaction()?;
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE projects SET phase='attention' WHERE id=?1 AND phase='complete'",
             [id],
         )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_reopened',?2)",
             params![id, reason],
@@ -1011,8 +1227,8 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let changed = self.connection.execute(
-            "UPDATE mailbox_jobs SET state=?, attempt=CASE WHEN ?='running' AND state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?",
-            params![state, state, job_id],
+            "UPDATE mailbox_jobs SET state=?, attention_reason=CASE WHEN ?='attention' THEN COALESCE(attention_reason,'unknown') ELSE NULL END, attempt=CASE WHEN ?='running' AND state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?",
+            params![state, state, state, job_id],
         )?;
         if changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -1027,6 +1243,27 @@ impl StateStore {
                 |row| row.get(0),
             )
             .optional()
+    }
+
+    /// Return the durable reason and operator action for an attention row.
+    /// Unknown legacy values are deliberately surfaced as `Unknown` rather
+    /// than guessed from UI text.
+    pub fn mailbox_attention_reason(
+        &self,
+        job_id: &str,
+    ) -> rusqlite::Result<Option<AttentionReason>> {
+        self.connection
+            .query_row(
+                "SELECT attention_reason FROM mailbox_jobs WHERE id=?1",
+                [job_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(|value| {
+                value.flatten().map(|reason| {
+                    AttentionReason::parse(&reason).unwrap_or(AttentionReason::Unknown)
+                })
+            })
     }
     /// Return the last committed Dovecot stateful-sync checkpoint for a
     /// mailbox. The value is intentionally read separately from credentials;
@@ -1100,7 +1337,16 @@ impl StateStore {
         if plan.len() != 64 || !plan.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let changed = self.connection.execute(
+        let tx = self.connection.unchecked_transaction()?;
+        let phase: String = tx.query_row(
+            "SELECT p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1",
+            [job_id],
+            |row| row.get(0),
+        )?;
+        if phase == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let changed = tx.execute(
             // A Dovecot state token is only meaningful for the plan that
             // produced it. Keep it for a repeated preflight of the same
             // plan, but invalidate it when a new plan is preflighted so a
@@ -1111,7 +1357,7 @@ impl StateStore {
         if changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
-        Ok(())
+        tx.commit()
     }
     pub fn preflight_plan(&self, job_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
@@ -1150,7 +1396,7 @@ impl StateStore {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let tx = self.connection.unchecked_transaction()?;
         let count = tx.execute(
-            "UPDATE mailbox_jobs SET state='attention' WHERE state='running'",
+            "UPDATE mailbox_jobs SET state='attention',attention_reason='process_identity_unverified' WHERE state='running'",
             [],
         )?;
         tx.execute(
@@ -1438,7 +1684,7 @@ impl StateStore {
             params![run_id, project_id, job_id, engine, phase_at_start, plan_snapshot],
         )?;
         tx.execute(
-            "UPDATE mailbox_jobs SET state='running',attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
+            "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
             [job_id],
         )?;
         tx.execute(
@@ -1589,6 +1835,12 @@ impl StateStore {
                     child_snapshot
                 ],
             )?;
+            if let Some(version) = child_plan.and_then(|plan| plan.engine_version.as_deref()) {
+                tx.execute(
+                    "INSERT INTO engine_versions(run_id,version) VALUES(?1,?2)",
+                    params![child_run_id, version],
+                )?;
+            }
             child_run_ids.push(child_run_id);
         }
         tx.execute(
@@ -1622,11 +1874,14 @@ impl StateStore {
         if !parent_is_running {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let current: String = tx.query_row(
-            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+        let (current, phase): (String, String) = tx.query_row(
+            "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
             params![job_id, project_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        if phase == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if current == "running" {
             return tx.commit();
         }
@@ -1634,7 +1889,7 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         tx.execute(
-            "UPDATE mailbox_jobs SET state='running',attempt=attempt+1 WHERE id=?1 AND project_id=?2",
+            "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=attempt+1 WHERE id=?1 AND project_id=?2",
             params![job_id, project_id],
         )?;
         tx.execute(
@@ -1671,11 +1926,14 @@ impl StateStore {
         if !parent_is_running || !matches!(child_status.as_str(), "queued" | "running") {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let current: String = tx.query_row(
-            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+        let (current, phase): (String, String) = tx.query_row(
+            "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
             params![job_id, project_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        if phase == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if current == "running" {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -1683,7 +1941,7 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         tx.execute(
-            "UPDATE mailbox_jobs SET state='running',attempt=attempt+1 WHERE id=?1 AND project_id=?2",
+            "UPDATE mailbox_jobs SET state='running',attention_reason=NULL,attempt=attempt+1 WHERE id=?1 AND project_id=?2",
             params![job_id, project_id],
         )?;
         tx.execute(
@@ -1736,7 +1994,7 @@ impl StateStore {
             params![child_run_id, project_id, job_id, parent_run_id],
         )?;
         tx.execute(
-            "UPDATE mailbox_jobs SET state='ready' WHERE id=?1 AND project_id=?2 AND state='running'",
+            "UPDATE mailbox_jobs SET state='ready',attention_reason=NULL WHERE id=?1 AND project_id=?2 AND state='running'",
             params![job_id, project_id],
         )?;
         tx.execute(
@@ -1889,6 +2147,8 @@ impl StateStore {
         ) {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let attention_reason =
+            attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
         let tx = self.connection.unchecked_transaction()?;
         let current: String = tx.query_row(
             "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
@@ -1928,8 +2188,8 @@ impl StateStore {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
         tx.execute(
-            "UPDATE mailbox_jobs SET state=?1,preflight_plan=COALESCE(?2,preflight_plan),checkpoint=COALESCE(?3,checkpoint) WHERE id=?4 AND project_id=?5",
-            params![mailbox_state, preflight_plan, checkpoint, job_id, project_id],
+            "UPDATE mailbox_jobs SET state=?1,attention_reason=?2,preflight_plan=COALESCE(?3,preflight_plan),checkpoint=COALESCE(?4,checkpoint) WHERE id=?5 AND project_id=?6",
+            params![mailbox_state, attention_reason, preflight_plan, checkpoint, job_id, project_id],
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
@@ -2039,6 +2299,8 @@ impl StateStore {
         if mailbox_state == "verified" && !value.is_exact_match() {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let attention_reason =
+            attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
         let tx = self.connection.unchecked_transaction()?;
         let current: String = tx.query_row(
             "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
@@ -2066,8 +2328,8 @@ impl StateStore {
         tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative])?;
         tx.execute(
-            "UPDATE mailbox_jobs SET state=?1,preflight_plan=COALESCE(?2,preflight_plan),checkpoint=COALESCE(?3,checkpoint) WHERE id=?4 AND project_id=?5",
-            params![mailbox_state, preflight_plan, checkpoint, job_id, project_id],
+            "UPDATE mailbox_jobs SET state=?1,attention_reason=?2,preflight_plan=COALESCE(?3,preflight_plan),checkpoint=COALESCE(?4,checkpoint) WHERE id=?5 AND project_id=?6",
+            params![mailbox_state, attention_reason, preflight_plan, checkpoint, job_id, project_id],
         )?;
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
@@ -2135,6 +2397,31 @@ impl StateStore {
         )?;
         statement
             .query_map(params![project_id, limit], |row| {
+                Ok(RunSummary {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    parent_run_id: row.get(2)?,
+                    engine: row.get(3)?,
+                    phase_at_start: row.get(4)?,
+                    plan_snapshot: row.get(5)?,
+                    status: row.get(6)?,
+                    started_at: row.get(7)?,
+                    finished_at: row.get(8)?,
+                    detail: row.get(9)?,
+                })
+            })?
+            .collect()
+    }
+
+    /// Return the complete project run manifest for audit exports. UI activity
+    /// views should continue using `recent_runs`; proof artifacts must not
+    /// silently omit older mailbox children from a large batch.
+    pub fn all_runs(&self, project_id: &str) -> rusqlite::Result<Vec<RunSummary>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at ASC, rowid ASC",
+        )?;
+        statement
+            .query_map([project_id], |row| {
                 Ok(RunSummary {
                     id: row.get(0)?,
                     job_id: row.get(1)?,
@@ -2236,6 +2523,112 @@ impl StateStore {
             )
             .optional()
     }
+
+    /// Permanently accept a recorded verification difference with an
+    /// operator-owned explanation. This is intentionally separate from the
+    /// evidence terminal path: acceptance is a later human decision, not a
+    /// claim that the source and destination were identical.
+    pub fn accept_verification_difference(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        operator: &str,
+        reason: &str,
+    ) -> rusqlite::Result<()> {
+        let operator = operator.trim();
+        let reason = reason.trim();
+        if operator.is_empty()
+            || operator.len() > 256
+            || reason.is_empty()
+            || reason.len() > 4096
+            || operator.chars().any(|character| character.is_control())
+            || reason.chars().any(|character| character.is_control())
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let (state, phase): (String, String) = tx.query_row(
+            "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
+            params![job_id, project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if state != "verification_difference" || phase == Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let run_id: String = tx.query_row(
+            "SELECT run_id FROM evidence_history WHERE job_id=?1 ORDER BY captured_at DESC, id DESC LIMIT 1",
+            [job_id],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO verification_acceptances(job_id,run_id,operator,reason) VALUES(?1,?2,?3,?4)",
+            params![job_id, run_id, operator, reason],
+        )?;
+        let changed = tx.execute(
+            "UPDATE mailbox_jobs SET state='verified_with_exceptions',attention_reason=NULL WHERE id=?1 AND project_id=?2 AND state='verification_difference'",
+            params![job_id, project_id],
+        )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'verification_exception_accepted',?2)",
+            params![project_id, bounded_event_detail("verification_exception_accepted", &format!("{job_id}: accepted by {operator}: {reason}"))],
+        )?;
+        tx.commit()
+    }
+
+    pub fn latest_verification_acceptance(
+        &self,
+        job_id: &str,
+    ) -> rusqlite::Result<Option<VerificationAcceptance>> {
+        self.connection
+            .query_row(
+                "SELECT job_id,run_id,operator,reason,accepted_at FROM verification_acceptances WHERE job_id=?1 ORDER BY id DESC LIMIT 1",
+                [job_id],
+                |row| {
+                    Ok(VerificationAcceptance {
+                        job_id: row.get(0)?,
+                        run_id: row.get(1)?,
+                        operator: row.get(2)?,
+                        reason: row.get(3)?,
+                        accepted_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// Record the version string reported by the external engine. This is
+    /// metadata only; an unavailable version must remain explicitly absent
+    /// rather than being replaced with an invented value.
+    pub fn record_engine_version(&self, run_id: &str, version: &str) -> rusqlite::Result<()> {
+        let version = version.trim();
+        if version.is_empty()
+            || version.len() > 512
+            || version.chars().any(|character| character.is_control())
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let changed = self.connection.execute(
+            "INSERT INTO engine_versions(run_id,version) SELECT id,?2 FROM runs WHERE id=?1 ON CONFLICT(run_id) DO UPDATE SET version=excluded.version,captured_at=CURRENT_TIMESTAMP",
+            params![run_id, version],
+        )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Ok(())
+    }
+
+    pub fn engine_version(&self, run_id: &str) -> rusqlite::Result<Option<String>> {
+        self.connection
+            .query_row(
+                "SELECT version FROM engine_versions WHERE run_id=?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()
+    }
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects WHERE id=?1", [id], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
     }
@@ -2306,7 +2699,7 @@ impl StateStore {
     }
     pub fn all_mailboxes_verified(&self, project_id: &str) -> rusqlite::Result<bool> {
         let (total, verified): (i64, i64) = self.connection.query_row(
-            "SELECT COUNT(*), SUM(CASE WHEN state='verified' THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            "SELECT COUNT(*), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
             [project_id],
             |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
         )?;
@@ -2320,6 +2713,17 @@ impl StateStore {
         )?;
         Ok(())
     }
+}
+
+fn migration_backup_path(path: &Path, schema_version: i64) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("state.db");
+    path.with_file_name(format!(
+        "{file_name}.pre-migrate-v{schema_version}.{}.db",
+        Uuid::new_v4()
+    ))
 }
 
 #[cfg(unix)]
@@ -2378,14 +2782,19 @@ fn valid_mailbox_transition(current: &str, next: &str) -> bool {
                 | "attention"
         ),
         "delta_required" | "verification_difference" => {
-            matches!(next, "running" | "failed" | "cancelled" | "attention")
+            matches!(
+                next,
+                "running" | "failed" | "cancelled" | "attention" | "verified_with_exceptions"
+            )
         }
         "completed" => matches!(
             next,
             "verified" | "delta_required" | "verification_difference" | "running" | "attention"
         ),
         "failed" | "cancelled" => matches!(next, "running" | "attention"),
-        "verified" => matches!(next, "delta_required" | "running" | "attention"),
+        "verified" | "verified_with_exceptions" => {
+            matches!(next, "delta_required" | "running" | "attention")
+        }
         "attention" => matches!(next, "running"),
         _ => false,
     }
@@ -3005,6 +3414,13 @@ mod tests {
                 .is_err()
         );
         assert!(db.set_mailbox_state(&job, "attention").is_err());
+        assert!(
+            db.set_preflight_plan(
+                &job,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+            .is_err()
+        );
         db.reopen_project(&project.id, "customer requested a post-cutover correction")
             .unwrap();
         assert_eq!(
@@ -3051,6 +3467,10 @@ mod tests {
         assert_eq!(
             db.run_status("run-1").unwrap().as_deref(),
             Some("abandoned")
+        );
+        assert_eq!(
+            db.mailbox_attention_reason(&job).unwrap(),
+            Some(AttentionReason::ProcessIdentityUnverified)
         );
     }
 
@@ -3508,7 +3928,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 6);
         drop(db);
 
         let directory =
@@ -3521,6 +3941,39 @@ mod tests {
             .unwrap();
         drop(connection);
         assert!(StateStore::open(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn backup_is_consistent_private_and_non_overwriting() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("backup", "source", "destination")
+            .unwrap();
+        db.add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-backup-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let destination = directory.join("state-backup.db");
+        db.backup_to(&destination).unwrap();
+        assert!(destination.is_file());
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(db.backup_to(&destination).is_err());
+        let backup = StateStore::open(&destination).unwrap();
+        assert_eq!(backup.latest_project().unwrap().unwrap().name, "backup");
+        drop(backup);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -3554,7 +4007,18 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 6);
+        let migration_backups = std::fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("state.db.pre-migrate-v1.")
+            })
+            .count();
+        assert_eq!(migration_backups, 1);
         let has_identity: bool = store
             .connection
             .query_row(
@@ -3566,6 +4030,77 @@ mod tests {
         assert!(has_identity);
         drop(store);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn verification_difference_requires_durable_exception_acceptance() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("exceptions", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 10,
+            destination_messages: 9,
+            source_bytes: 100,
+            destination_bytes: 90,
+            unmatched_messages: 1,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+        };
+        db.begin_run(&project.id, &job, "exception-run", "imapsync")
+            .unwrap();
+        db.finish_run_for_mailbox_with_evidence_and_checkpoint(
+            &project.id,
+            &job,
+            "exception-run",
+            "completed",
+            "verification_difference",
+            "destination-only message accepted later",
+            &evidence,
+            None,
+        )
+        .unwrap();
+        assert!(!db.all_mailboxes_verified(&project.id).unwrap());
+        db.accept_verification_difference(
+            &project.id,
+            &job,
+            "operator@example",
+            "Approved in change CHG-123; destination account was active before cutover.",
+        )
+        .unwrap();
+        assert_eq!(
+            db.mailbox_state(&job).unwrap().as_deref(),
+            Some("verified_with_exceptions")
+        );
+        let acceptance = db.latest_verification_acceptance(&job).unwrap().unwrap();
+        assert_eq!(acceptance.run_id, "exception-run");
+        assert_eq!(acceptance.operator, "operator@example");
+        assert!(db.all_mailboxes_verified(&project.id).unwrap());
+        db.transition(&project.id, Phase::Preflight).unwrap();
+        db.transition(&project.id, Phase::Pilot).unwrap();
+        db.transition(&project.id, Phase::Seed).unwrap();
+        db.transition(&project.id, Phase::CatchUp).unwrap();
+        db.transition(&project.id, Phase::FinalDelta).unwrap();
+        db.transition(&project.id, Phase::Verification).unwrap();
+        db.transition(&project.id, Phase::Complete).unwrap();
+        assert_eq!(
+            db.project(&project.id).unwrap().unwrap().phase,
+            Phase::Complete
+        );
+        assert!(
+            db.accept_verification_difference(
+                &project.id,
+                &job,
+                "operator@example",
+                "duplicate acceptance",
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -4046,10 +4581,12 @@ destination_port = "143"
                     BatchChildPlan {
                         engine: "imapsync".into(),
                         plan_snapshot: "snapshot one".into(),
+                        engine_version: Some("imapsync 2.300".into()),
                     },
                     BatchChildPlan {
                         engine: "dovecot".into(),
                         plan_snapshot: "snapshot two".into(),
+                        engine_version: None,
                     },
                 ],
             )
@@ -4061,10 +4598,15 @@ destination_port = "143"
         assert_eq!(first.status, "queued");
         assert_eq!(first.engine, "imapsync");
         assert_eq!(first.plan_snapshot, "snapshot one");
+        assert_eq!(
+            db.engine_version(&child_runs[0]).unwrap().as_deref(),
+            Some("imapsync 2.300")
+        );
         assert_eq!(second.job_id.as_deref(), Some(jobs[1].as_str()));
         assert_eq!(second.status, "queued");
         assert_eq!(second.engine, "dovecot");
         assert_eq!(second.plan_snapshot, "snapshot two");
+        assert_eq!(db.engine_version(&child_runs[1]).unwrap(), None);
         db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-parent", &child_runs[0])
             .unwrap();
         assert!(
@@ -4413,9 +4955,46 @@ destination_port = "143"
         db.recover_abandoned_jobs_preserving(std::slice::from_ref(&process))
             .unwrap();
         assert_eq!(db.active_processes().unwrap(), vec![process]);
+        assert_eq!(
+            db.mailbox_attention_reason(&jobs[0]).unwrap(),
+            Some(AttentionReason::ProcessIdentityUnverified)
+        );
 
         db.clear_active_processes_after_review().unwrap();
         assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn attention_reason_is_durable_and_has_safe_operator_guidance() {
+        assert_eq!(
+            AttentionReason::parse("verification_difference"),
+            Some(AttentionReason::VerificationDifference)
+        );
+        assert_eq!(AttentionReason::parse("future_reason"), None);
+        assert!(
+            AttentionReason::VerificationDifference
+                .recommended_action()
+                .contains("Review")
+        );
+
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("attention", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.set_mailbox_state_for_test(&job, "attention").unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET attention_reason='future_reason' WHERE id=?1",
+                [&job],
+            )
+            .unwrap();
+        assert_eq!(
+            db.mailbox_attention_reason(&job).unwrap(),
+            Some(AttentionReason::Unknown)
+        );
     }
 
     #[test]

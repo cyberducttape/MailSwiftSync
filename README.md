@@ -78,7 +78,7 @@ MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its a
 
 ### 2. Download or build MailSwiftSync
 
-For released binaries, see [GitHub Releases](https://github.com/itchyitchy123/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums. Native installers and signed artifacts are not yet published; until then, verify the checksum and use the portable archive appropriate to your platform.
+For released binaries, see [GitHub Releases](https://github.com/itchyitchy123/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, a CycloneDX SBOM, and GitHub build-provenance attestations. Native installers and platform code-signing/notarization are not yet published; until then, verify the checksum and use the portable archive appropriate to your platform.
 
 For contributors or users building from source:
 
@@ -109,13 +109,14 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 - **No saved passwords.** Profiles retain only server, username, and selected options. Password fields begin empty on every launch.
 - **Safe by default.** Dry mode adds `--dry`, which validates connectivity and proposed folder mapping without changing the destination. Runs have durable identities; on Unix, startup reconciliation terminates recorded interrupted process groups before exposing them for retry.
 - **Single-owner state.** An exclusive application lock protects the project database. If another MailSwiftSync window is open, close that window rather than deleting the lock file; the second session cannot start a migration without durable ownership.
-- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through short-lived owner-only `--passfile1/--passfile2` files; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion, while remote Dovecot runs still use a destination-side `imapc_password` override and should be treated accordingly.
+- **Descendant containment.** Linux uses owned sessions/process groups and Windows uses a kill-on-close Job Object for engine descendants. macOS deliberately fails closed when it cannot prove ownership and should use a Unix admin host for high-stakes windows.
+- **Redacted preview.** Passwords are hidden in the preview. imapsync live runs receive credentials through short-lived owner-only `--passfile1/--passfile2` files; local Dovecot runs use `MAILSWIFTSYNC_IMAPC_PASSWORD` through Dovecot's `$ENV:` expansion. Remote Dovecot execution is unavailable until a secret broker can deliver credentials without destination-host process exposure.
 - **Owned engine logging.** imapsync is invoked with `--nolog` by default, so its unmanaged `LOG_imapsync/` files do not become a second uncontrolled record of mailbox metadata. Use MailSwiftSync’s redacted journal and exported reports as the operational record.
 - **Explicit transport policy.** imapsync plans force encrypted source/destination transport (`--ssl1/--ssl2` for IMAPS or `--tls1` for STARTTLS), request certificate verification with `SSL_verify_mode=1`, and reject expert overrides of those settings instead of allowing automatic cleartext fallback. Plain source transport is an explicit insecure warning and requires operator acknowledgement before any authenticated operation, including dry preflight; it is never presented as a verified TLS plan.
 
 ### Current security boundary
 
-The desktop runner does not persist passwords. You may enter a password for the current session or load it through an OS-keyring ID. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion. Remote Dovecot execution is disabled by default because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host; an explicit acknowledgement is required to opt in. Provider-specific OAuth/Modern Auth and unattended secret brokering are not implemented yet. Never put real passwords in a committed CSV.
+The desktop runner does not persist passwords. You may enter a password for the current session or load it through an OS-keyring ID. imapsync credentials are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot credentials use a child environment variable and Dovecot config expansion. Remote Dovecot execution is unavailable because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Provider-specific OAuth/Modern Auth and unattended secret brokering are not implemented yet. Never put real passwords in a committed CSV.
 
 ### Dovecot mode
 
@@ -131,7 +132,67 @@ The structured project report is a portable Migration Proof: it contains a deter
 mailswiftsync verify path/to/mailswiftsync-project-report.json
 ```
 
-This command does not contact either mailbox or require the application database. It verifies report integrity only; it does not upgrade aggregate evidence into message-level reconciliation.
+This command does not contact either mailbox or require the application database. It verifies report integrity only; it does not upgrade aggregate evidence into message-level reconciliation. For authenticity, sign the report with an owner-only Ed25519 PKCS#8 key and verify with the pinned public key:
+
+```text
+mailswiftsync sign path/to/mailswiftsync-project-report.json path/to/operator-key.pk8 migration-change-2026-09
+mailswiftsync verify path/to/mailswiftsync-project-report.json <public-key-hex>
+```
+
+Unsigned reports remain supported as integrity-only artifacts. The public key is embedded for portability, but a trust pin is required to establish that the signer is the expected operator or organization.
+
+Run manifests also retain the engine version reported by `imapsync` or
+`doveadm` when available; older wrappers that do not support `--version` are
+reported as unavailable rather than inferred.
+
+While the GUI is closed, create a consistent, integrity-checked ledger backup:
+
+```text
+mailswiftsync backup /path/to/state.db /path/to/state-backup.db
+```
+
+The command takes the same instance lock as the GUI, refuses to overwrite an existing destination, and verifies SQLite integrity before reporting success. Backups contain durable project metadata and evidence, never mailbox passwords.
+
+For automation and incident response, the same durable ledger can be inspected
+or recovered without opening the GUI:
+
+```text
+mailswiftsync status /path/to/state.db
+mailswiftsync status /path/to/state.db <project-id>
+mailswiftsync recover /path/to/state.db
+mailswiftsync headless /path/to/state.db preflight
+mailswiftsync headless /path/to/state.db live
+mailswiftsync headless /path/to/state.db batch-preflight
+mailswiftsync headless /path/to/state.db batch-live
+```
+
+`status` emits secret-free JSON containing project/mailbox states and recorded
+process identities. `recover` takes the application lock, verifies recorded
+process ownership before signalling anything, preserves identities it cannot
+prove, and applies the same conservative recovery transition as GUI startup.
+These commands are headless control-plane operations; they do not yet replace
+the GUI with a continuously running scheduler. `headless live` is an explicit
+one-shot operation for a single-mailbox project: it runs a fresh dry preflight
+in the same process, then promotes only that exact plan and credential
+fingerprint. It refuses restored batch queues rather than silently selecting
+one row. `batch-preflight` and `batch-live` operate only on a complete durable
+queue previously imported and validated through the GUI; they refuse an
+ambiguous or partially restored queue.
+
+### Real IMAP engine lab
+
+On a Linux host with Dovecot and imapsync installed, run the disposable
+engine-level integration test:
+
+```text
+scripts/imap-integration-smoke.sh
+```
+
+It starts two local, temporary Dovecot servers, authenticates to both with a
+fixture account, performs a real imapsync transfer, and checks the destination
+Maildir. Set `MAILSWIFTSYNC_KEEP_LAB=1` to retain the temporary logs for
+diagnosis. This validates the external engines and authentication path; it is
+not a substitute for the still-planned controller crash/restart chaos lab.
 
 ![Batch migration review](docs/wiki/assets/batch-queue.png)
 

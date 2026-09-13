@@ -27,12 +27,14 @@ pub(crate) fn parts(input: &str, default_port: u16) -> Result<(String, u16), Str
         return Ok((host.to_owned(), port));
     }
     if input.matches(':').count() == 1
-        && let Some((host, port)) = input.rsplit_once(':')
-        && let Ok(port) = port.parse::<u16>()
+        && let Some((host, port_text)) = input.rsplit_once(':')
     {
         if host.trim().is_empty() {
             return Err("endpoint has an empty host".into());
         }
+        let port = port_text
+            .parse::<u16>()
+            .map_err(|_| "invalid endpoint port".to_owned())?;
         if port == 0 {
             return Err("endpoint port must be between 1 and 65535".into());
         }
@@ -70,6 +72,8 @@ mod tests {
         assert!(parts("", 993).is_err());
         assert!(parts("[2001:db8::1", 993).is_err());
         assert!(parts("host:0", 993).is_err());
+        assert!(parts("host:not-a-port", 993).is_err());
+        assert!(parts("host:99999", 993).is_err());
         assert!(parts("[2001:db8::1]garbage", 993).is_err());
     }
 }

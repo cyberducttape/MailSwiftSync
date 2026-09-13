@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -32,7 +34,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --all-features --target ${{ matrix.target }}
+        run: cargo build --locked --release --all-features --target ${{ matrix.target }}
       - name: Package Unix binary
         if: runner.os != 'Windows'
         shell: bash
@@ -40,8 +42,9 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}
           chmod 0755 dist/mailswiftsync-${{ matrix.target }}
-          tar -C dist -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz mailswiftsync-${{ matrix.target }}
-          shasum -a 256 dist/mailswiftsync-${{ matrix.target }}.tar.gz > dist/mailswiftsync-${{ matrix.target }}.tar.gz.sha256
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
+          tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -C dist -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz mailswiftsync-${{ matrix.target }}
+          (cd dist && shasum -a 256 mailswiftsync-${{ matrix.target }}.tar.gz) > dist/mailswiftsync-${{ matrix.target }}.tar.gz.sha256
       - name: Package Windows binary
         if: runner.os == 'Windows'
         shell: pwsh
@@ -50,22 +53,47 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} dist/mailswiftsync-${{ matrix.target }}.exe
           Compress-Archive -Path dist/mailswiftsync-${{ matrix.target }}.exe -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
           (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: mailswiftsync-${{ matrix.target }}
           path: dist/*
 
-  publish:
-    needs: build
+  sbom:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+      - name: Generate SBOM from Cargo.lock
+        run: |
+          scripts/generate-sbom.sh dist/mailswiftsync-sbom.json
+          (cd dist && sha256sum mailswiftsync-sbom.json) > dist/mailswiftsync-sbom.json.sha256
+      - name: Attest SBOM
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/mailswiftsync-sbom.json
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: mailswiftsync-sbom
+          path: dist/mailswiftsync-sbom.json*
+
+  publish:
+    needs: [build, sbom]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           pattern: mailswiftsync-*
           merge-multiple: true
+      - name: Verify release checksums
+        run: scripts/verify-release.sh dist
       - uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           files: dist/*
-          prerelease: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true

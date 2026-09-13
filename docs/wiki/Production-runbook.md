@@ -2,12 +2,44 @@
 
 This runbook is for attended migrations on a dedicated Unix admin workstation or jump host. MailSwiftSync is restart-aware, not unattended automation: keep an operator present for live work and review every `Attention` or `Failed` mailbox.
 
+For supervised automation, the binary also exposes a headless one-shot path:
+
+```text
+mailswiftsync headless /path/to/state.db preflight
+mailswiftsync headless /path/to/state.db live
+mailswiftsync headless /path/to/state.db batch-preflight
+mailswiftsync headless /path/to/state.db batch-live
+```
+
+The live form always runs a fresh preflight in the same process before
+promotion and retains the normal durable plan/credential gates. It is suitable
+for a service wrapper or scheduled job with an external timeout and log
+capture. Batch commands require a complete queue already imported and
+validated in the GUI. These commands are not yet a persistent scheduler or
+independent supervisor.
+
 ## Before the window
 
 - Use one operator session on a locked-down host. Do not run a second MailSwiftSync instance against the same workspace; if the instance-lock message appears, close the existing owner and do not delete the lock file.
 - Confirm `imapsync`, `doveadm`, and `ssh` are installed at the expected versions and paths. Prefer local Dovecot execution or imapsync over remote Dovecot when destination administration is unavailable.
 - Confirm outbound access only to the source, destination, and any approved SSH target. Check NTP, disk space, and the configured process timeout for the actual migration window.
-- Keep plain source transport and remote-Dovecot password-in-argv disabled unless the change ticket explicitly approves them. Never treat either option as a routine convenience.
+- Keep plain source transport disabled. Remote Dovecot execution is unavailable; use local doveadm or imapsync.
+
+Before a high-value wave, create a verified ledger backup while no other
+controller is running:
+
+```text
+mailswiftsync backup /path/to/state.db /path/to/state-20260913.db
+```
+
+The command takes the instance lock, refuses to overwrite an existing file,
+and runs SQLite integrity verification. Preserve the backup with the matching
+exported report. To recover, stop the controller, preserve the current
+database, and validate a copy of the backup before restoring it; never edit a
+live SQLite file or delete the lock to bypass ownership. Opening an older
+schema also creates a unique `state.db.pre-migrate-vN.<id>.db` backup before
+the transactional migration; preserve that artifact until the upgrade is
+validated.
 
 ## Safe execution sequence
 
@@ -18,7 +50,7 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 5. Run the **live pilot** only after the matching preflight succeeds. Confirm the destination again, select Live migration, and accept the live confirmation. If a session password changes or a referenced keyring credential is reloaded, MailSwiftSync requires a new preflight before live promotion.
 6. For a batch, run **bulk preflight checks** first, review every row, then promote only the unchanged queue to live. Keep concurrency conservative (normally 1–2 until the provider pair is proven) and never ignore duplicate destinations or Attention items. On a retry, Verified rows are excluded by default; select **Include already verified mailboxes (explicit re-run)** only when you intentionally want to repeat them.
 7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
-8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof; if residual differences are accepted, record the decision and risk in the change ticket until the application provides a durable acceptance action.
+8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof. Use **Accept residual difference** in Verification only when the exception is approved; this creates `Verified with exceptions` with the operator, timestamp, related evidence run, and acceptance reason in the ledger.
 
 Once every mailbox is evidence-backed, MailSwiftSync may mark the project
 **Complete**. Complete projects are intentionally read-only: adding a mailbox,
@@ -53,7 +85,7 @@ destination is not yet reconciled.
 1. Restart MailSwiftSync and wait for startup recovery to finish. A matching recorded Unix process group is reaped before the interrupted run is made retryable.
 2. Expect interrupted jobs to move to **Attention** and runs to become abandoned. This is conservative recovery, not proof that a transfer failed or succeeded.
 3. Review each Attention item, its classified failure/output, and the destination before retrying. Use the batch queue’s default unresolved-only retry behavior; never enable the explicit Verified re-run option without documenting why.
-4. Confirm no migration engine remains active outside the application. On Windows and macOS, process-recovery guarantees are weaker than the Linux path; prefer a Unix admin host for production windows.
+4. Confirm no migration engine remains active outside the application. Linux uses process-group identity checks and Windows uses Job Object ownership with kill-on-close. macOS remains a weaker platform path; prefer a Unix admin host for production windows there.
 5. Re-enter credentials as required, rerun preflight when the plan or credentials changed, and export the resulting evidence after the retry.
 
 If the application reports **Migration result requires durability review** or a
@@ -78,4 +110,4 @@ The durable ledger retains lifecycle and evidence history. Verbose subprocess ou
 
 ## Policy exceptions
 
-Remote Dovecot password-in-argv exposes the credential to process inspection on the destination. If it is approved, use a trusted destination, a dedicated migration principal, a time-boxed change, and no untrusted users/processes on that host. Plain IMAP similarly requires explicit approval because credentials and mailbox traffic cross the network without transport encryption.
+Plain IMAP requires explicit approval because credentials and mailbox traffic cross the network without transport encryption. Remote Dovecot is not an available policy exception until secret-broker delivery is implemented.
