@@ -1125,7 +1125,9 @@ impl StateStore {
         tx.commit()
     }
 
-    /// Record diagnostic events for several active runs in one transaction.
+    /// Record diagnostic events for several active or queued child runs in
+    /// one transaction. A retry release can move a child back to `queued`
+    /// before this buffered batch is flushed; terminal runs remain rejected.
     /// Each tuple is `(run_id, kind, detail)`; project ownership is resolved
     /// from the durable run rather than trusted from an asynchronous caller.
     pub fn record_events_for_runs_batch(
@@ -1137,7 +1139,7 @@ impl StateStore {
         }
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare_cached(
-            "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND status='running'",
+            "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND status IN ('queued','running')",
         )?;
         let mut projects = BTreeSet::new();
         for (run_id, kind, detail) in events {
@@ -4258,6 +4260,56 @@ destination_port = "143"
             )
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn retry_buffered_output_can_commit_after_child_is_released() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "retry-output",
+                "source",
+                "destination",
+                &[("one".into(), "one".into())],
+            )
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                &jobs,
+                "retry-output-parent",
+                "batch",
+                &[],
+                "snapshot",
+                &[],
+            )
+            .unwrap();
+        db.claim_batch_mailbox_for_child(
+            &project.id,
+            &jobs[0],
+            "retry-output-parent",
+            &child_runs[0],
+        )
+        .unwrap();
+        db.release_batch_mailbox_for_retry(
+            &project.id,
+            &jobs[0],
+            "retry-output-parent",
+            &child_runs[0],
+        )
+        .unwrap();
+
+        db.record_events_for_runs_batch(&[(&child_runs[0], "run_output", "retry detail")])
+            .unwrap();
+        let owner: String = db
+            .connection
+            .query_row(
+                "SELECT run_id FROM events WHERE detail='retry detail'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(owner, child_runs[0]);
     }
 
     #[test]
