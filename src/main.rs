@@ -5336,13 +5336,11 @@ impl App {
             return;
         }
         if let (Some(project_id), Some(job_id)) = (self.project_id.clone(), self.job_id.clone()) {
-            let identity_matches = self
-                .store
-                .project(&project_id)
-                .ok()
-                .flatten()
-                .zip(self.store.mailbox_identity(&job_id).ok().flatten())
-                .is_some_and(|(project, (source, destination, state))| {
+            let identity_matches = match (
+                self.store.project(&project_id),
+                self.store.mailbox_identity(&job_id),
+            ) {
+                (Ok(Some(project)), Ok(Some((source, destination, state)))) => {
                     let mailbox = core::MailboxJob {
                         id: job_id.clone(),
                         source_mailbox: source,
@@ -5351,7 +5349,15 @@ impl App {
                         config: None,
                     };
                     durable_single_identity_matches(&project, &mailbox, &self.form.profile)
-                });
+                }
+                (Err(error), _) | (_, Err(error)) => {
+                    self.status = format!(
+                        "Could not read the durable mailbox identity; migration was not started: {error}"
+                    );
+                    return;
+                }
+                (Ok(None), _) | (_, Ok(None)) => false,
+            };
             if !identity_matches {
                 if self.form.dry_run {
                     // A changed identity is a new durable plan. Keep the
@@ -5435,19 +5441,22 @@ impl App {
             }
         }
         if self.project_id.is_none() {
-            if let Ok((project, job)) = self.store.create_project_with_mailbox(
+            match self.store.create_project_with_mailbox(
                 &self.form.profile.name,
                 &self.form.profile.source_host,
                 &self.form.profile.destination_host,
                 &self.form.profile.source_user,
                 &self.form.profile.destination_user,
             ) {
-                self.project_id = Some(project.id.clone());
-                self.selected_project_id = Some(project.id.clone());
-                self.job_id = Some(job);
-            } else {
-                self.status = "Could not create durable migration project".into();
-                return;
+                Ok((project, job)) => {
+                    self.project_id = Some(project.id.clone());
+                    self.selected_project_id = Some(project.id.clone());
+                    self.job_id = Some(job);
+                }
+                Err(error) => {
+                    self.status = format!("Could not create durable migration project: {error}");
+                    return;
+                }
             }
         }
         let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
