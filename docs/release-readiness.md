@@ -23,6 +23,10 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Durable attention reasons now survive restart and are included in Markdown
   and proof-wrapped JSON reports; `mailswiftsync backup <state.db> <backup.db>`
   creates a locked, non-overwriting, SQLite-integrity-checked ledger backup.
+- Authentication, transport, quota, policy, configuration, interruption, and
+  process-identity failure categories are persisted for failed/cancelled and
+  operator-review mailbox states; ordinary process-exit text is not mistaken
+  for an ownership failure.
 - Opening an existing older on-disk schema now creates a unique,
   integrity-checked `state.db.pre-migrate-vN.<id>.db` backup before migration;
   new and in-memory databases are not copied.

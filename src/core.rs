@@ -145,11 +145,12 @@ fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionRe
     if mailbox_state == "verification_difference" {
         return Some(AttentionReason::VerificationDifference);
     }
-    if mailbox_state != "attention" {
+    if !matches!(mailbox_state, "attention" | "failed" | "cancelled") {
         return None;
     }
     let detail = detail.to_ascii_lowercase();
-    if detail.contains("identity") || detail.contains("process") {
+    if detail.contains("identity") || detail.contains("ownership") || detail.contains("unverified")
+    {
         return Some(AttentionReason::ProcessIdentityUnverified);
     }
     if detail.contains("restart") || detail.contains("interrupt") {
@@ -172,6 +173,12 @@ fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionRe
     }
     if detail.contains("network") || detail.contains("timeout") || detail.contains("connection") {
         return Some(AttentionReason::TransportFailed);
+    }
+    if mailbox_state == "cancelled" {
+        return Some(AttentionReason::Interrupted);
+    }
+    if mailbox_state == "failed" {
+        return Some(AttentionReason::Unknown);
     }
     Some(AttentionReason::Unknown)
 }
@@ -5138,6 +5145,53 @@ destination_port = "143"
         assert_eq!(
             db.mailbox_attention_reason(&job).unwrap(),
             Some(AttentionReason::Unknown)
+        );
+    }
+
+    #[test]
+    fn failed_and_cancelled_runs_retain_structured_attention_reasons() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("failure-reasons", "source", "destination")
+            .unwrap();
+        let auth_job = db
+            .add_mailbox(&project.id, "auth-source", "auth-destination")
+            .unwrap();
+        db.begin_run(&project.id, &auth_job, "auth-run", "imapsync")
+            .unwrap();
+        db.finish_run_for_mailbox_with_checkpoint(
+            &project.id,
+            &auth_job,
+            "auth-run",
+            "failed",
+            "failed",
+            "IMAP authentication failed",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            db.mailbox_attention_reason(&auth_job).unwrap(),
+            Some(AttentionReason::AuthenticationFailed)
+        );
+
+        let cancelled_job = db
+            .add_mailbox(&project.id, "cancel-source", "cancel-destination")
+            .unwrap();
+        db.begin_run(&project.id, &cancelled_job, "cancel-run", "imapsync")
+            .unwrap();
+        db.finish_run_for_mailbox_with_checkpoint(
+            &project.id,
+            &cancelled_job,
+            "cancel-run",
+            "cancelled",
+            "cancelled",
+            "operator cancelled migration",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            db.mailbox_attention_reason(&cancelled_job).unwrap(),
+            Some(AttentionReason::Interrupted)
         );
     }
 
