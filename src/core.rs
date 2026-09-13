@@ -70,6 +70,7 @@ pub enum AttentionReason {
     PolicyBlocked,
     ConfigurationInvalid,
     CapacityLimited,
+    MessageRejected,
     Unknown,
 }
 
@@ -85,6 +86,7 @@ impl AttentionReason {
             Self::PolicyBlocked => "policy_blocked",
             Self::ConfigurationInvalid => "configuration_invalid",
             Self::CapacityLimited => "capacity_limited",
+            Self::MessageRejected => "message_rejected",
             Self::Unknown => "unknown",
         }
     }
@@ -100,6 +102,7 @@ impl AttentionReason {
             "policy_blocked" => Self::PolicyBlocked,
             "configuration_invalid" => Self::ConfigurationInvalid,
             "capacity_limited" => Self::CapacityLimited,
+            "message_rejected" => Self::MessageRejected,
             "unknown" => Self::Unknown,
             _ => return None,
         })
@@ -116,6 +119,7 @@ impl AttentionReason {
             Self::PolicyBlocked => "Blocked by migration policy",
             Self::ConfigurationInvalid => "Configuration is invalid",
             Self::CapacityLimited => "Capacity or rate limit reached",
+            Self::MessageRejected => "A message was rejected by the destination",
             Self::Unknown => "Operator review required",
         }
     }
@@ -136,6 +140,9 @@ impl AttentionReason {
                 "Correct the migration configuration or policy, then rerun preflight"
             }
             Self::CapacityLimited => "Reduce concurrency or rate and retry after capacity recovers",
+            Self::MessageRejected => {
+                "Review rejected-message detail and destination policy before retrying"
+            }
             Self::Unknown => "Inspect the durable run detail before choosing an action",
         }
     }
@@ -214,6 +221,13 @@ fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionRe
     }
     if !matches!(mailbox_state, "attention" | "failed" | "cancelled") {
         return None;
+    }
+    if let Some(reason) = detail
+        .strip_prefix("[attention_reason=")
+        .and_then(|value| value.split_once(']'))
+        .and_then(|(value, _)| AttentionReason::parse(value))
+    {
+        return Some(reason);
     }
     let detail = detail.to_ascii_lowercase();
     if detail.contains("identity") || detail.contains("ownership") || detail.contains("unverified")
@@ -5499,6 +5513,24 @@ destination_port = "143"
         assert_eq!(
             db.mailbox_attention_reason(&job).unwrap(),
             Some(AttentionReason::Unknown)
+        );
+    }
+
+    #[test]
+    fn structured_attention_reason_takes_precedence_over_human_detail() {
+        assert_eq!(
+            attention_reason_for(
+                "failed",
+                "[attention_reason=message_rejected] [class=message] destination refused APPEND",
+            ),
+            Some(AttentionReason::MessageRejected)
+        );
+        assert_eq!(
+            attention_reason_for(
+                "failed",
+                "[attention_reason=not-a-real-reason] [class=transport] connection reset",
+            ),
+            Some(AttentionReason::TransportFailed)
         );
     }
 

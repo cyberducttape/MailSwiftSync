@@ -6133,9 +6133,9 @@ impl App {
                                     job_id: job_id.clone(),
                                     child_run_id: child_run_id.clone(),
                                     state: "failed".into(),
-                                    detail: format!(
+                                    detail: classified_failure_detail(&format!(
                                         "fresh live authentication failed before launch: {error}"
-                                    ),
+                                    )),
                                     credential_fingerprint: None,
                                 });
                                 if let Ok(mut terminal) = terminal_jobs.lock() {
@@ -6190,7 +6190,7 @@ impl App {
                                         job_id: job_id.clone(),
                                         child_run_id: child_run_id.clone(),
                                         state: if cancelled { "cancelled" } else { "failed" }.into(),
-                                        detail: error,
+                                        detail: classified_failure_detail(&error),
                                         credential_fingerprint: None,
                                     });
                                     if let Ok(mut terminal) = terminal_jobs.lock() {
@@ -6409,7 +6409,7 @@ impl App {
                                             "failed"
                                         }
                                         .into(),
-                                        detail: error,
+                                        detail: classified_failure_detail(&error),
                                         credential_fingerprint: None,
                                     });
                                     if let Ok(mut terminal) = terminal_jobs.lock() {
@@ -8673,6 +8673,19 @@ impl FailureClass {
             Self::Unknown => "unknown",
         }
     }
+
+    fn attention_reason(self) -> core::AttentionReason {
+        match self {
+            Self::Cancellation => core::AttentionReason::Interrupted,
+            Self::Authentication => core::AttentionReason::AuthenticationFailed,
+            Self::Quota => core::AttentionReason::CapacityLimited,
+            Self::Transport => core::AttentionReason::TransportFailed,
+            Self::Configuration => core::AttentionReason::ConfigurationInvalid,
+            Self::Message => core::AttentionReason::MessageRejected,
+            Self::Verification => core::AttentionReason::VerificationIncomplete,
+            Self::Unknown => core::AttentionReason::Unknown,
+        }
+    }
 }
 
 fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap<String, usize> {
@@ -8776,7 +8789,12 @@ fn is_transient_batch_error(error: &str) -> bool {
 }
 
 fn classified_failure_detail(error: &str) -> String {
-    format!("[{}] {error}", classify_failure(error).label())
+    let class = classify_failure(error);
+    format!(
+        "[attention_reason={}] [class={}] {error}",
+        class.attention_reason().as_str(),
+        class.label()
+    )
 }
 
 fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
@@ -10952,7 +10970,10 @@ mod tests {
             classify_failure("unknown option --bad"),
             FailureClass::Configuration
         );
-        assert_eq!(classified_failure_detail("OVERQUOTA"), "[quota] OVERQUOTA");
+        assert_eq!(
+            classified_failure_detail("OVERQUOTA"),
+            "[attention_reason=capacity_limited] [class=quota] OVERQUOTA"
+        );
     }
 
     #[test]
