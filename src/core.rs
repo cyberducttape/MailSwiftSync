@@ -1221,6 +1221,14 @@ impl StateStore {
         if has_unfinished_children {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let has_unsuccessful_children: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE parent_run_id=?1 AND status<>'completed')",
+            [run_id],
+            |row| row.get(0),
+        )?;
+        if status == "completed" && has_unsuccessful_children {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let changed = tx.execute(
             "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND status='running'",
             params![status, detail, run_id],
@@ -2719,6 +2727,69 @@ mod tests {
         assert!(db.finish_run("run-status", "invented", "invalid").is_err());
         assert_eq!(
             db.run_status("run-status").unwrap().as_deref(),
+            Some("running")
+        );
+    }
+
+    #[test]
+    fn successful_parent_run_rejects_unsuccessful_child() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-child-failure",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        db.begin_batch_run(&project.id, &jobs, "run-parent-failure", "test", &[])
+            .unwrap();
+        let child = db
+            .recent_runs(&project.id, 10)
+            .unwrap()
+            .into_iter()
+            .find(|run| run.job_id.as_deref() == Some(jobs[0].as_str()))
+            .unwrap();
+        db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-parent-failure", &child.id)
+            .unwrap();
+        db.finish_run_for_mailbox(
+            &project.id,
+            &jobs[0],
+            &child.id,
+            "failed",
+            "failed",
+            "synthetic child failure",
+        )
+        .unwrap();
+        let second_child = db
+            .recent_runs(&project.id, 10)
+            .unwrap()
+            .into_iter()
+            .find(|run| run.job_id.as_deref() == Some(jobs[1].as_str()))
+            .unwrap();
+        db.claim_batch_mailbox_for_child(
+            &project.id,
+            &jobs[1],
+            "run-parent-failure",
+            &second_child.id,
+        )
+        .unwrap();
+        db.finish_run_for_mailbox(
+            &project.id,
+            &jobs[1],
+            &second_child.id,
+            "completed",
+            "completed",
+            "synthetic child completion",
+        )
+        .unwrap();
+
+        assert!(
+            db.finish_run("run-parent-failure", "completed", "incorrect success")
+                .is_err()
+        );
+        assert_eq!(
+            db.run_status("run-parent-failure").unwrap().as_deref(),
             Some("running")
         );
     }
