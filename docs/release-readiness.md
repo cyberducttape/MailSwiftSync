@@ -20,8 +20,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   timestamp are reproducible from `Cargo.lock` and `SOURCE_DATE_EPOCH`.
 - The cross-platform CI matrix runs the full locked test suite on Linux,
   Windows, and macOS targets in addition to compiling release binaries. This
-  is platform runtime coverage for shared behavior; native process-supervision
-  tests still need to be added for Windows Job Objects and the macOS fallback.
+  is platform runtime coverage for shared behavior; the Windows native suite
+  also verifies that closing the Job Object terminates the engine process.
+  macOS retains the documented conservative no-signal fallback.
 - A compatibility-matrix release gate and verification script are checked into
   the repository.
 - Durable attention reasons now survive restart and are included in Markdown

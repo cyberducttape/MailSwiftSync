@@ -336,6 +336,38 @@ mod tests {
         );
         assert!(!process_group_exists(actual_group));
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn job_supervisor_kills_the_engine_tree_when_dropped() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/C", "ping.exe -t 127.0.0.1"]);
+        let mut child = command.spawn().expect("Windows command shell must exist");
+        let supervisor = attach_child_supervisor(&child)
+            .expect("engine child must be assignable to a kill-on-close job");
+
+        thread::sleep(Duration::from_millis(200));
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "test engine should still be running before supervisor close"
+        );
+        drop(supervisor);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut exited = false;
+        while Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                exited = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        if !exited {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(exited, "closing the job must terminate the engine process");
+    }
 }
 
 #[derive(Debug)]
