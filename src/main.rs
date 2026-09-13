@@ -6313,6 +6313,7 @@ impl App {
         let mut durability_errors = Vec::new();
         let mut recovered_durability = false;
         let active_run = self.active_run.clone();
+        let mut ended_processes = HashSet::new();
         if let Some(rx) = &self.receiver {
             let mut processed_events = 0;
             while processed_events < MAX_EVENTS_PER_FRAME {
@@ -6422,7 +6423,8 @@ impl App {
                     } => {
                         let owns_line = active_run
                             .as_ref()
-                            .is_some_and(|run| run.owns_line(&run_id, &job_id));
+                            .is_some_and(|run| run.owns_line(&run_id, &job_id))
+                            && !ended_processes.contains(&(run_id.clone(), job_id.clone()));
                         if !owns_line {
                             // RunLine is an asynchronous presentation event;
                             // never let a delayed or foreign worker append
@@ -6443,6 +6445,7 @@ impl App {
                             .as_ref()
                             .is_some_and(|run| run.owns_process(&run_id, &job_id))
                         {
+                            ended_processes.insert((run_id.clone(), job_id.clone()));
                             if let Err(error) = self.store.clear_processes(&run_id) {
                                 durability_errors.push(format!(
                                     "clear completed process identity for {run_id} failed: {error}"
