@@ -135,6 +135,28 @@ imapsync \
   --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
   --automap --nolog
 
+second_message="$workspace/source/mail/$user/Maildir/new/delta-fixture.eml"
+cat > "$second_message" <<'EOF'
+From: migration-lab@example.test
+To: lab@example.test
+Subject: MailSwiftSync incremental fixture
+Message-ID: <mailswiftsync-incremental-fixture@example.test>
+Date: Tue, 01 Jan 2030 00:01:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+This message proves that a subsequent incremental pass is exercised.
+EOF
+
+if ! imapsync \
+  --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "$password" --notls1 \
+  --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
+  --automap --nolog >"$workspace/incremental-transfer.log" 2>&1; then
+  echo "FAIL: incremental imapsync pass failed" >&2
+  tail -40 "$workspace/incremental-transfer.log" >&2
+  exit 1
+fi
+echo "PASS: incremental IMAP transfer completed"
+
 set +e
 imapsync \
   --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "incorrect-password" --notls1 \
@@ -160,4 +182,11 @@ if ! grep -R -F -l -- "Message-ID: <mailswiftsync-integration-fixture@example.te
   exit 1
 fi
 echo "PASS: destination retained the fixture Message-ID"
+if [[ "$destination_messages" -lt 2 ]] || ! grep -R -F -l -- "Message-ID: <mailswiftsync-incremental-fixture@example.test>" \
+  "$workspace/destination/mail/$user/Maildir/cur" \
+  "$workspace/destination/mail/$user/Maildir/new" >/dev/null 2>&1; then
+  echo "FAIL: destination is missing the incremental fixture Message-ID" >&2
+  exit 1
+fi
+echo "PASS: destination retained both initial and incremental Message-IDs"
 echo "PASS: real Dovecot-to-Dovecot IMAP transfer copied $destination_messages message(s)"
