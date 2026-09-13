@@ -30,10 +30,11 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - `mailswiftsync restore <backup.db> <state.db>` validates a current-schema,
   readable SQLite backup before installation and preserves an existing state
   database as a uniquely named rollback artifact.
-- Authentication, transport, quota, policy, configuration, interruption, and
-  process-identity failure categories are persisted for failed/cancelled and
-  operator-review mailbox states; ordinary process-exit text is not mistaken
-  for an ownership failure.
+- Authentication, transport, quota, policy, configuration, message-rejection,
+  interruption, and process-identity failure categories are persisted for
+  failed/cancelled and operator-review mailbox states; controller-generated
+  failures carry a stable machine-readable attention reason while legacy
+  records retain the compatibility text fallback.
 - Opening an existing older on-disk schema now creates a unique,
   integrity-checked `state.db.pre-migrate-vN.<id>.db` backup before migration;
   new and in-memory databases are not copied.
