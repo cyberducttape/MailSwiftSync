@@ -3,12 +3,11 @@ use crate::imap_protocol::{
     advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
 };
 use crate::oauth::{read_auth_continuation, read_auth_result};
-use rustls::pki_types::ServerName;
+use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use rustls_pemfile::certs;
 use sha2::{Digest, Sha256};
 use std::{
-    io::{BufReader, Read, Write},
+    io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
     time::Duration,
@@ -161,11 +160,10 @@ pub(crate) fn probe_tls_capabilities_with_transport(
         .map_err(|e| e.to_string())?;
     let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if !ca_bundle.trim().is_empty() {
-        let file = std::fs::File::open(ca_bundle.trim())
+        let certificates = CertificateDer::pem_file_iter(ca_bundle.trim())
             .map_err(|error| format!("{host}: could not open additional CA bundle: {error}"))?;
-        let mut reader = BufReader::new(file);
         let mut loaded = 0;
-        for certificate in certs(&mut reader) {
+        for certificate in certificates {
             let certificate = certificate
                 .map_err(|error| format!("{host}: invalid certificate in CA bundle: {error}"))?;
             roots

@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed the direct unmaintained `rustls-pemfile` dependency and now load
+  additional CA bundles through Rustls's maintained PEM certificate API.
 - Replaced the headless module’s wildcard crate import with explicit
   controller, state, recovery, and artifact dependencies to keep the
   GUI-independent path isolated as controller extraction continues.
