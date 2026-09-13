@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Batch `JobState` notifications are now presentation-only for terminal
+  outcomes; mailbox state, child-run status, evidence, checkpoints, and dry
+  preflight data commit together in `JobFinished`, preserving the durability
+  boundary if terminal SQLite persistence fails.
 - Immutable run snapshots now include a digest of the Dovecot checkpoint used
   for launch, preserving resume-point provenance without storing the raw state
   token in reports.

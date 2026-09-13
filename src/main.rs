@@ -1687,7 +1687,6 @@ struct ActiveRunContext {
     project_id: String,
     job_id: Option<String>,
     batch_job_ids: Vec<String>,
-    batch_plan_fingerprints: Vec<String>,
     batch_child_run_ids: Vec<String>,
     kind: RunKind,
     dry_run: bool,
@@ -4039,10 +4038,6 @@ impl App {
             project_id: project_id.clone(),
             job_id: None,
             batch_job_ids: selected_job_ids.clone(),
-            batch_plan_fingerprints: jobs
-                .iter()
-                .map(|job| plan_fingerprint_digest(&job.form.plan_fingerprint()))
-                .collect(),
             batch_child_run_ids: child_run_ids,
             kind: RunKind::Batch,
             dry_run: !live,
@@ -4802,7 +4797,6 @@ impl App {
             project_id: run_project_id,
             job_id: Some(run_job_id.clone()),
             batch_job_ids: Vec::new(),
-            batch_plan_fingerprints: Vec::new(),
             batch_child_run_ids: Vec::new(),
             kind: RunKind::Single,
             dry_run: run_dry_run,
@@ -5100,38 +5094,15 @@ impl App {
                             if let Some(job) = self.bulk_jobs.get_mut(bulk_index) {
                                 job.state = state.clone();
                             }
-                            let durable_state = match state.as_str() {
-                                "Running" => "running",
-                                "Completed" if !self.bulk_live_run => "ready",
-                                "Completed" => "completed",
-                                "DeltaRequired" => "delta_required",
-                                "Failed" => "failed",
-                                "Cancelled" => "cancelled",
-                                "Queued" => "queued",
-                                _ => "attention",
-                            };
-                            // A Running event is informational. The worker has
-                            // already received an acknowledged ClaimBatch
-                            // response before it can launch the process; do
-                            // not perform a second asynchronous claim here.
-                            let result = if durable_state == "running" {
-                                Ok(())
-                            } else {
-                                self.store.set_mailbox_state(&job_id, durable_state)
-                            };
-                            if let Err(error) = result {
-                                durability_errors
-                                    .push(format!("persist batch mailbox state failed: {error}"));
-                            }
-                            if state == "Completed"
-                                && !self.bulk_live_run
-                                && let Some(fingerprint) = run.batch_plan_fingerprints.get(index)
-                                && let Err(error) =
-                                    self.store.set_preflight_plan(&job_id, fingerprint)
-                            {
-                                durability_errors
-                                    .push(format!("persist batch preflight plan failed: {error}"));
-                            }
+                            // JobState is deliberately presentation-only. The
+                            // worker has already received an acknowledged
+                            // ClaimBatch response before it can launch the
+                            // process, and terminal state, evidence,
+                            // checkpoint, and preflight data must commit
+                            // together in the following JobFinished event.
+                            // Persisting a terminal JobState here would leave
+                            // a mailbox terminal while its child run remained
+                            // running if that transaction later failed.
                         } else {
                             durability_errors.push(format!(
                                 "ignored batch state event for unknown child run {child_run_id}"
@@ -7328,7 +7299,6 @@ mod tests {
             project_id: "project".into(),
             job_id: None,
             batch_job_ids: vec!["job-a".into(), "job-b".into()],
-            batch_plan_fingerprints: vec![],
             batch_child_run_ids: vec!["child-a".into(), "child-b".into()],
             kind: RunKind::Batch,
             dry_run: true,
