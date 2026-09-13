@@ -802,6 +802,17 @@ impl StateStore {
     /// are also abandoned so their queued rows cannot wedge future retries.
     /// Only mailboxes that were actually claimed are moved to `attention`.
     pub fn recover_abandoned_jobs(&self) -> rusqlite::Result<usize> {
+        self.recover_abandoned_jobs_preserving(&[])
+    }
+
+    /// Recover interrupted work while retaining process identities that the
+    /// caller could not verify. Those records are intentionally kept until an
+    /// operator confirms that no migration engine remains, so a subsequent
+    /// restart cannot silently forget the ownership uncertainty.
+    pub fn recover_abandoned_jobs_preserving(
+        &self,
+        preserved_processes: &[ActiveProcess],
+    ) -> rusqlite::Result<usize> {
         let projects = self
             .connection
             .prepare(
@@ -823,6 +834,20 @@ impl StateStore {
             [],
         )?;
         tx.execute("DELETE FROM active_processes", [])?;
+        for process in preserved_processes {
+            tx.execute(
+                "INSERT INTO active_processes(run_id,job_id,pid,start_ticks,process_group,session_id,executable) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    process.run_id,
+                    process.job_id,
+                    process.pid,
+                    process.start_ticks,
+                    process.process_group,
+                    process.session_id,
+                    process.executable,
+                ],
+            )?;
+        }
         for project in projects {
             tx.execute(
                 "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_recovered','Interrupted batch runs and claimed mailbox jobs were recovered; unclaimed child runs were abandoned')",
@@ -831,6 +856,14 @@ impl StateStore {
         }
         tx.commit()?;
         Ok(count)
+    }
+
+    /// Clear process identities only after an explicit operator review has
+    /// established that no untracked migration child remains on the host.
+    pub fn clear_active_processes_after_review(&self) -> rusqlite::Result<()> {
+        self.connection
+            .execute("DELETE FROM active_processes", [])?;
+        Ok(())
     }
 
     /// Record the OS process belonging to a durable run. Startup reconciliation
@@ -3201,6 +3234,54 @@ mod tests {
             &[],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn recovery_preserves_unverified_processes_until_explicit_review() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "preserve-unverified-process",
+                "source",
+                "destination",
+                &[("one".into(), "one".into())],
+            )
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                &jobs,
+                "run-preserve-unverified-parent",
+                "test",
+                &[],
+                "batch snapshot",
+                &[],
+            )
+            .unwrap();
+        db.claim_batch_mailbox_for_child(
+            &project.id,
+            &jobs[0],
+            "run-preserve-unverified-parent",
+            &child_runs[0],
+        )
+        .unwrap();
+        let process = ActiveProcess {
+            run_id: child_runs[0].clone(),
+            job_id: jobs[0].clone(),
+            pid: 4242,
+            start_ticks: None,
+            process_group: None,
+            session_id: None,
+            executable: "test".into(),
+        };
+        db.register_process(&process).unwrap();
+
+        db.recover_abandoned_jobs_preserving(std::slice::from_ref(&process))
+            .unwrap();
+        assert_eq!(db.active_processes().unwrap(), vec![process]);
+
+        db.clear_active_processes_after_review().unwrap();
+        assert!(db.active_processes().unwrap().is_empty());
     }
 
     #[test]

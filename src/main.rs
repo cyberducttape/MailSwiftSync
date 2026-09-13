@@ -1676,28 +1676,30 @@ impl Default for App {
         };
         let (recovered, orphaned, unverified_processes) = if persistence_warning.is_none() {
             let processes = store.active_processes().unwrap_or_default();
-            let mut unverified = 0;
+            let mut unverified = Vec::new();
             for process in &processes {
                 if process.pid > 0 && recorded_process_matches(process) {
                     terminate_recorded_process_group(process);
                 } else {
-                    unverified += 1;
+                    unverified.push(process.clone());
                 }
             }
             (
-                store.recover_abandoned_jobs().unwrap_or(0),
+                store
+                    .recover_abandoned_jobs_preserving(&unverified)
+                    .unwrap_or(0),
                 processes.len(),
                 unverified,
             )
         } else {
-            (0, 0, 0)
+            (0, 0, Vec::new())
         };
         // Only the lock owner may reconcile stale runtime secrets. If any
         // recorded child identity could not be verified, fail closed and
         // preserve age-only secret directories: an unverified process may
         // still depend on its passfile. The operator can review and clean it
         // up after confirming the process is gone.
-        if persistence_warning.is_none() && unverified_processes == 0 {
+        if persistence_warning.is_none() && unverified_processes.is_empty() {
             cleanup_stale_secret_directories(&secret_runtime_base());
         }
         let mut initial_output = persistence_warning.clone().map_or_else(
@@ -1714,9 +1716,10 @@ impl Default for App {
                 "Startup found {orphaned} recorded migration process(es); verified identities were terminated before recovery."
             ));
         }
-        if unverified_processes > 0 {
+        let unverified_process_count = unverified_processes.len();
+        if unverified_process_count > 0 {
             initial_output.push(format!(
-                "{unverified_processes} recorded process identity(ies) could not be verified and were not signalled; review the affected jobs before retrying."
+                "{unverified_process_count} recorded process identity(ies) could not be verified and were not signalled; review the affected jobs before retrying."
             ));
             initial_output.push(
                 "Stale secret cleanup was deferred because an unverified process may still need its passfile."
@@ -1816,7 +1819,7 @@ impl Default for App {
             engine_open: true,
             store,
             _instance_lock: instance_lock.ok(),
-            process_review_required: unverified_processes > 0,
+            process_review_required: unverified_process_count > 0,
             persistence_available: persistence_warning.is_none(),
             project_id,
             job_id,
@@ -2559,8 +2562,17 @@ impl App {
                 ui.label(RichText::new("PROCESS OWNERSHIP REVIEW REQUIRED").strong().color(ALERT));
                 ui.label("MailSwiftSync could not prove that a previously recorded migration process is gone. Do not start another migration until you have checked the host process list and confirmed no MailSwiftSync engine remains.");
                 if ui.button("I confirmed no unverified migration process remains").clicked() {
-                    self.process_review_required = false;
-                    self.status = "Process review acknowledged; execution gates are available again.".into();
+                    match self.store.clear_active_processes_after_review() {
+                        Ok(()) => {
+                            self.process_review_required = false;
+                            self.status = "Process review acknowledged; execution gates are available again.".into();
+                        }
+                        Err(error) => {
+                            self.status = format!(
+                                "Could not clear reviewed process identities: {error}"
+                            );
+                        }
+                    }
                 }
             });
         }
