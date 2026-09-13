@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Fixed header label refresh after selecting a project outside the initial
+  switcher view. Project selection now invalidates the throttled workspace
+  snapshot immediately and falls back to the selected durable project record,
+  so the header no longer misleadingly says “Select project”.
 - Removed the project switcher's hidden eight-project limit. The header now
   keeps every project loaded in the cached workspace snapshot selectable;
   search and the dedicated Projects browser remain available for large

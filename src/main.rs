@@ -2535,6 +2535,10 @@ impl App {
         self.workspace_read_only = editable_id.as_deref() != Some(project_id.as_str());
         self.selected_project_id = Some(project_id);
         self.active_view = WorkspaceView::Overview;
+        // Selection changes must invalidate the throttled read-model refresh
+        // immediately. Otherwise the header can render the new selection
+        // while still holding the previous project's cached rows.
+        self.refresh_ui_snapshot_now();
         if self.workspace_read_only {
             self.preflight.clear();
             self.source_capabilities = None;
@@ -8236,7 +8240,15 @@ impl eframe::App for App {
                             .as_deref()
                             .and_then(|id| projects.iter().find(|project| project.id == id))
                             .map(|project| project.name.clone())
-                            .unwrap_or_else(|| "Select project".into());
+                            .or_else(|| {
+                                self.ui_project.as_ref().and_then(|project| {
+                                    self.selected_project_id
+                                        .as_deref()
+                                        .filter(|id| *id == project.id)
+                                        .map(|_| project.name.clone())
+                                })
+                            })
+                            .unwrap_or_else(|| "Selected project".into());
                         ui.add_enabled_ui(!self.running(), |ui| {
                             egui::ComboBox::from_id_salt("project_switcher")
                                 .selected_text(selected_name)
