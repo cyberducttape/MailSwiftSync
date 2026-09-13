@@ -16,8 +16,9 @@ All notable changes to MailSwiftSync are documented here.
   and avoid mailbox-name false positives.
 - IMAP readiness now requests RFC 6154 `RETURN (SPECIAL-USE)` LIST attributes
   when the authenticated server advertises the `SPECIAL-USE` capability.
-- Dovecot checkpoint recognition now requires a bounded standard-base64 state
-  token, rejecting arbitrary printable diagnostic lines before persistence;
+- Dovecot checkpoint recognition now validates the documented decoded state
+  format (legacy empty state or v1 header, mailbox-record sizing, and CRC32),
+  rejecting arbitrary printable or merely Base64-shaped diagnostic lines;
   surrounding whitespace is rejected rather than normalized into a checkpoint.
 - Customer and operator report exports now read project, mailbox, run, and
   evidence data from one SQLite snapshot, preventing mixed-commit artifacts

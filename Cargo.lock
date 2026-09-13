@@ -2188,6 +2188,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "calamine",
+ "crc32fast",
  "crossbeam-channel",
  "csv",
  "dirs-next",

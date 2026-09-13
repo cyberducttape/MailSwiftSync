@@ -8670,6 +8670,9 @@ mod tests {
         assert!(dovecot_state_candidate(" short ").is_none());
         assert!(dovecot_state_candidate(" AQAAAHm4+Jk=").is_none());
         assert!(dovecot_state_candidate("AQAAAHm4+Jk= ").is_none());
+        assert!(dovecot_state_candidate("deadbeef").is_none());
+        assert!(dovecot_state_candidate("AQAAAA==").is_none());
+        assert_eq!(dovecot_state_candidate("AAAAAA=="), Some("AAAAAA==".into()));
     }
 
     #[test]

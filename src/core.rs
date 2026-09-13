@@ -4,6 +4,7 @@
 //! portable SQLite data. No credentials or message content belong in this store.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use crc32fast::Hasher as Crc32Hasher;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, backup, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -287,7 +288,36 @@ pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
     while !padded.len().is_multiple_of(4) {
         padded.push('=');
     }
-    BASE64_STANDARD.decode(padded).is_ok()
+    let Ok(decoded) = BASE64_STANDARD.decode(padded) else {
+        return false;
+    };
+
+    // This mirrors Dovecot's documented dsync state format rather than
+    // treating every syntactically valid Base64 string as a checkpoint:
+    // v0's empty state is four zero bytes; v1 is a four-byte header followed
+    // by fixed-size mailbox records and a little-endian CRC32.
+    if decoded == [0, 0, 0, 0] {
+        return true;
+    }
+    const HEADER_SIZE: usize = 4;
+    const CRC_SIZE: usize = 4;
+    const MAILBOX_STATE_SIZE: usize = 44;
+    if decoded.len() < HEADER_SIZE + CRC_SIZE
+        || decoded[..HEADER_SIZE] != [1, 0, 0, 0]
+        || !(decoded.len() - HEADER_SIZE - CRC_SIZE).is_multiple_of(MAILBOX_STATE_SIZE)
+    {
+        return false;
+    }
+    let checksum_offset = decoded.len() - CRC_SIZE;
+    let expected = u32::from_le_bytes([
+        decoded[checksum_offset],
+        decoded[checksum_offset + 1],
+        decoded[checksum_offset + 2],
+        decoded[checksum_offset + 3],
+    ]);
+    let mut hasher = Crc32Hasher::new();
+    hasher.update(&decoded[..checksum_offset]);
+    hasher.finalize() == expected
 }
 
 /// The transfer engine is a policy decision, not an implementation detail.
