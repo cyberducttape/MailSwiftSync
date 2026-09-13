@@ -1054,6 +1054,10 @@ enum Event {
         String,
         mpsc::SyncSender<Result<(), String>>,
     ),
+    ProcessEnded {
+        run_id: String,
+        job_id: String,
+    },
     ClaimBatch {
         project_id: String,
         job_id: String,
@@ -1323,6 +1327,13 @@ fn run_streaming(
             ),
         });
     }
+    // The process identity is only valid for this attempt. Clear it before
+    // returning so a transient retry (or a crash during its backoff) cannot
+    // leave an exited PID looking like an active orphan.
+    let _ = tx.send(Event::ProcessEnded {
+        run_id: run_id.to_owned(),
+        job_id: job_id.to_owned(),
+    });
     match result {
         Ok(outcome) if reader_error.is_none() => {
             let imapsync_evidence = evidence_lines
@@ -5120,6 +5131,22 @@ impl App {
                             ));
                         }
                         push_visible_output(&mut self.output, text);
+                    }
+                    Event::ProcessEnded { run_id, job_id } => {
+                        if active_run
+                            .as_ref()
+                            .is_some_and(|run| run.owns_process(&run_id, &job_id))
+                        {
+                            if let Err(error) = self.store.clear_processes(&run_id) {
+                                durability_errors.push(format!(
+                                    "clear completed process identity for {run_id} failed: {error}"
+                                ));
+                            }
+                        } else {
+                            durability_errors.push(format!(
+                                "ignored process-ended event for unknown run {run_id}"
+                            ));
+                        }
                     }
                     Event::Line(s) => {
                         // Runner threads redact secrets before publishing events.
