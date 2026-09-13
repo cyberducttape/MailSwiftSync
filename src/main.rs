@@ -1966,6 +1966,26 @@ struct BulkJob {
     state: String,
 }
 
+#[derive(Clone, Copy)]
+enum BulkStateSet {
+    Failed,
+    Attention,
+    Unresolved,
+}
+
+impl BulkStateSet {
+    fn matches(self, state: &str) -> bool {
+        match self {
+            Self::Failed => state == "failed",
+            Self::Attention => state == "attention",
+            Self::Unresolved => matches!(
+                state,
+                "failed" | "attention" | "cancelled" | "delta_required" | "verification_difference"
+            ),
+        }
+    }
+}
+
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
 type PendingDbEvent = (String, String, String, String);
 
@@ -4498,6 +4518,21 @@ impl App {
                 .bulk_job_ids
                 .get(index)
                 .is_some_and(|job_id| self.bulk_selected_ids.contains(job_id))
+    }
+
+    fn select_bulk_state_set(&mut self, set: BulkStateSet) {
+        self.bulk_selected_ids = self
+            .bulk_jobs
+            .iter()
+            .enumerate()
+            .filter(|(_, job)| set.matches(&display_state_key(&job.state)))
+            .filter_map(|(index, _)| self.bulk_job_ids.get(index).cloned())
+            .collect();
+        self.bulk_state_filter = "all".into();
+        self.bulk_message = format!(
+            "Selected {} mailbox row(s) for focused review.",
+            self.bulk_selected_ids.len()
+        );
     }
 
     fn activity_view(&mut self, ui: &mut egui::Ui) {
@@ -7934,6 +7969,30 @@ impl App {
         egui::Window::new("Batch migration queue").open(&mut open).default_width(850.0).default_height(540.0).show(ctx, |ui| {
             ui.heading("Import → review → validate");
             ui.label(RichText::new(&self.bulk_message).color(MUTED));
+            ui.add_space(8.0);
+            let mut state_counts = HashMap::new();
+            for job in &self.bulk_jobs {
+                *state_counts.entry(display_state_key(&job.state)).or_insert(0_usize) += 1;
+            }
+            let count_state = |state: &str| state_counts.get(state).copied().unwrap_or(0);
+            let unresolved_count = ["failed", "attention", "cancelled", "delta_required", "verification_difference"]
+                .iter()
+                .map(|state| count_state(state))
+                .sum::<usize>();
+            ui.group(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(format!("{} total", self.bulk_jobs.len()));
+                    ui.label(format!("{} ready", count_state("ready")));
+                    ui.label(format!("{} running", count_state("running")));
+                    ui.label(format!("{} verified", count_state("verified") + count_state("verified_with_exceptions")));
+                    ui.label(RichText::new(format!("{} unresolved", unresolved_count)).color(if unresolved_count > 0 { ALERT } else { TEAL }));
+                    if ui.button("Select unresolved").clicked() { self.select_bulk_state_set(BulkStateSet::Unresolved); }
+                    if ui.button("Select failed").clicked() { self.select_bulk_state_set(BulkStateSet::Failed); }
+                    if ui.button("Select attention").clicked() { self.select_bulk_state_set(BulkStateSet::Attention); }
+                    if !self.bulk_selected_ids.is_empty() && ui.button("Clear selection").clicked() { self.bulk_selected_ids.clear(); }
+                });
+                ui.label(RichText::new("Focused selections apply to preflight and live scope controls below; live execution still requires matching preflight and confirmation.").size(11.0).color(MUTED));
+            });
             ui.add_space(8.0);
             let previous_bulk_dry_run = self.bulk_dry_run;
             ui.horizontal(|ui| {

@@ -22,6 +22,11 @@ All notable changes to MailSwiftSync are documented here.
 - Moved execution ownership and live-authentication proof types into
   `src/controller/`, reducing the controller domain embedded directly in the
   egui application without changing admission or recovery behavior.
+- Batch migration now opens with an at-a-glance cockpit summary for total,
+  ready, running, verified, and unresolved rows, with explicit failed,
+  attention, unresolved, and clear-selection actions. These actions only
+  select durable rows; existing preflight and live-confirmation gates remain
+  mandatory.
 
 - Added separate dark and light semantic UI palettes with high-contrast
   primary, secondary, informational, success, warning, danger, link, border,
