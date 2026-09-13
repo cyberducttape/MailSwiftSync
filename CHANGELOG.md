@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Durable process registration now has a bounded five-second acknowledgement window; an unresponsive controller causes the child to be cancelled and reaped rather than waiting indefinitely.
 - A parent batch cannot be marked `completed` when any terminal child is failed, cancelled, abandoned, or otherwise unsuccessful; successful waves now require successful completion of every child.
 - Process-registration rejection now has an integration-style runner test that proves a long-lived child is cancelled before the runner returns.
 - Process startup now waits for an explicit durable-registration acknowledgement before supervising the child; lost or rejected registration cancels and reaps the process instead of allowing an untracked engine to continue.

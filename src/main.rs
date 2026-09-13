@@ -56,6 +56,7 @@ const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const DOVECOT_SYNC_LOCK_WAIT_SECONDS: u64 = 300;
 const MAX_PENDING_EVENTS: usize = 4_096;
+const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Profile {
@@ -1162,11 +1163,17 @@ fn run_streaming(
         ))
         .is_ok();
     let result = if process_started {
+        let registration_deadline = std::time::Instant::now() + PROCESS_REGISTRATION_ACK_TIMEOUT;
         let registration = loop {
             if cancel.load(Ordering::Relaxed) {
                 break Err("cancelled before durable process registration".to_owned());
             }
-            match registration_rx.recv_timeout(Duration::from_millis(100)) {
+            let remaining =
+                registration_deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break Err("durable process registration acknowledgement timed out".to_owned());
+            }
+            match registration_rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
                 Ok(result) => break result,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
