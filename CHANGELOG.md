@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Generic terminal run completion can no longer promote a mailbox to `verified`; only the evidence-aware transaction may make that transition, preventing reuse of evidence from an earlier run.
 - Dual-IMAPS imapsync live runs now perform a fresh certificate-validated authentication probe immediately before mutation. The proof is bound to the current plan and process-local credential digest, so edits during the probe require renewed admission.
 - Batch retry-scope selection now has direct coverage for every durable state category, protecting the default Verified exclusion and explicit all-row re-run behavior.
 - Live batch execution now has explicit retry scopes for unresolved rows, failed/Attention rows, delta-required rows, or an all-row re-run. The default skips verified mailboxes, and live plan/fingerprint validation is performed only for the selected durable rows.

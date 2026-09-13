@@ -1256,15 +1256,12 @@ impl StateStore {
             params![job_id, project_id],
             |row| row.get(0),
         )?;
+        // Verification must be committed together with the evidence that
+        // proves this run.  Merely finding an older evidence row is not
+        // sufficient: otherwise a later run could reuse stale evidence and
+        // manufacture `verified` through this generic terminal path.
         if mailbox_state == "verified" {
-            let evidence_exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM evidence WHERE job_id=?1)",
-                [job_id],
-                |row| row.get(0),
-            )?;
-            if !evidence_exists {
-                return Err(rusqlite::Error::InvalidQuery);
-            }
+            return Err(rusqlite::Error::InvalidQuery);
         }
         if current != mailbox_state && !valid_mailbox_transition(&current, mailbox_state) {
             return Err(rusqlite::Error::InvalidQuery);
@@ -1924,6 +1921,59 @@ mod tests {
         )
         .unwrap();
         assert!(db.set_mailbox_state(&job, "verified").is_err());
+    }
+
+    #[test]
+    fn generic_terminal_completion_cannot_reuse_stale_evidence_for_verified() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("stale-terminal-evidence", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 10,
+            destination_bytes: 10,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+        };
+        db.begin_run(&project.id, &job, "run-old-evidence", "imapsync")
+            .unwrap();
+        db.finish_run_for_mailbox_with_evidence(
+            &project.id,
+            &job,
+            "run-old-evidence",
+            "completed",
+            "verified",
+            "",
+            &evidence,
+        )
+        .unwrap();
+
+        db.begin_run(&project.id, &job, "run-no-evidence", "imapsync")
+            .unwrap();
+        assert!(
+            db.finish_run_for_mailbox(
+                &project.id,
+                &job,
+                "run-no-evidence",
+                "completed",
+                "verified",
+                "stale evidence must not be reused",
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.run_status("run-no-evidence").unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
     }
 
     #[test]
