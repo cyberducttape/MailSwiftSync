@@ -5186,6 +5186,7 @@ impl App {
             ui.heading("Import → review → validate");
             ui.label(RichText::new(&self.bulk_message).color(MUTED));
             ui.add_space(8.0);
+            let queue_editable = !self.running();
             ui.horizontal(|ui| {
                 if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
@@ -5217,31 +5218,39 @@ impl App {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.label("Concurrent validations");
-                ui.add(egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16));
+                ui.add_enabled(
+                    queue_editable,
+                    egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16),
+                );
                 ui.label(RichText::new("bounded 1–16 workers").size(11.0).color(MUTED));
             });
             ui.horizontal(|ui| {
                 ui.label("Transient retries");
-                ui.add(egui::Slider::new(&mut self.form.profile.batch_retry_count, 0..=3));
+                ui.add_enabled(
+                    queue_editable,
+                    egui::Slider::new(&mut self.form.profile.batch_retry_count, 0..=3),
+                );
                 ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(MUTED));
             });
             if !self.form.dry_run {
-                egui::ComboBox::from_id_salt("bulk_retry_scope")
-                    .selected_text(self.bulk_retry_scope.label())
-                    .show_ui(ui, |ui| {
-                        for scope in [
-                            BulkRetryScope::Unresolved,
-                            BulkRetryScope::FailedAttention,
-                            BulkRetryScope::DeltaRequired,
-                            BulkRetryScope::All,
-                        ] {
-                            ui.selectable_value(
-                                &mut self.bulk_retry_scope,
-                                scope,
-                                scope.label(),
-                            );
-                        }
-                    });
+                ui.add_enabled_ui(queue_editable, |ui| {
+                    egui::ComboBox::from_id_salt("bulk_retry_scope")
+                        .selected_text(self.bulk_retry_scope.label())
+                        .show_ui(ui, |ui| {
+                            for scope in [
+                                BulkRetryScope::Unresolved,
+                                BulkRetryScope::FailedAttention,
+                                BulkRetryScope::DeltaRequired,
+                                BulkRetryScope::All,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.bulk_retry_scope,
+                                    scope,
+                                    scope.label(),
+                                );
+                            }
+                        });
+                });
                 ui.label(
                     RichText::new(format!(
                         "Live scope: {}. Verified rows run only with the explicit all-rows scope.",
@@ -5253,7 +5262,6 @@ impl App {
             }
             ui.label(RichText::new("Passwordless queue credentials").strong());
             ui.label(RichText::new("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue.").size(11.0).color(MUTED));
-            let queue_editable = !self.running();
             let mut apply_source = false;
             let mut apply_destination = false;
             ui.horizontal(|ui| {
@@ -5303,8 +5311,8 @@ impl App {
                         ui.label(&job.label);
                         ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user));
                         ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user));
-                        ui.add(egui::TextEdit::singleline(&mut *job.form.source_password).password(true).desired_width(120.0));
-                        if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add(egui::TextEdit::singleline(&mut *job.form.destination_password).password(true).desired_width(120.0)); }
+                        ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.source_password).password(true).desired_width(120.0));
+                        if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut *job.form.destination_password).password(true).desired_width(120.0)); }
                         ui.label(RichText::new(&job.state).color(TEAL));
                         ui.end_row();
                     }
