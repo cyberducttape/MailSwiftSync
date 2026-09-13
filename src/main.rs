@@ -1534,7 +1534,7 @@ fn preferred_project_id<'a>(
     single_project: Option<&'a str>,
     batch_project: Option<&'a str>,
 ) -> Option<&'a str> {
-    active_run_project.or(single_project).or(batch_project)
+    active_run_project.or(batch_project).or(single_project)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2193,8 +2193,8 @@ impl App {
     fn active_project_id(&self) -> Option<&str> {
         preferred_project_id(
             self.active_run.as_ref().map(|run| run.project_id.as_str()),
-            self.project_id.as_deref(),
             self.bulk_project_id.as_deref(),
+            self.project_id.as_deref(),
         )
     }
 
@@ -2422,9 +2422,9 @@ impl App {
             ui.heading("Operator view"); ui.label(RichText::new("A durable migration project records phases and evidence independently of the desktop session.").color(MUTED)); ui.add_space(10.0);
             if ui.add_enabled(self.capability_receiver.is_none() && self.form.engine() != core::Engine::Dovecot, egui::Button::new("Run authenticated IMAPS readiness probe")).clicked() { self.start_capability_probe(); }
             if self.form.engine() == core::Engine::Dovecot { ui.label(RichText::new("Dovecot dry preflight checks the remote imapc source; destination readiness still requires administrative review.").size(11.0).color(MUTED)); }
-            if self.project_id.is_none() && ui.button("Create project from current migration plan").clicked() { self.create_project(); }
-            if let Some(id) = &self.project_id {
-                match self.store.project(id) {
+            if self.active_project_id().is_none() && ui.button("Create project from current migration plan").clicked() { self.create_project(); }
+            if let Some(id) = self.active_project_id().map(str::to_owned) {
+                match self.store.project(&id) {
                     Ok(Some(project)) => {
                         ui.group(|ui| { ui.horizontal(|ui| { ui.heading(&project.name); ui.label(RichText::new(format!("ID {}", &project.id[..8])).monospace().color(MUTED)); }); ui.label(format!("{}  →  {}", project.source_endpoint, project.destination_endpoint)); });
                         ui.add_space(10.0); ui.label(RichText::new("MIGRATION PHASE").size(11.0).color(MUTED));
@@ -2443,7 +2443,14 @@ impl App {
                             }
                         }
                     }
-                    Ok(None) => { self.project_id = None; }, Err(e) => self.status = format!("Could not read project: {e}"),
+                    Ok(None) => {
+                        if self.project_id.as_deref() == Some(id.as_str()) {
+                            self.project_id = None;
+                        }
+                        if self.bulk_project_id.as_deref() == Some(id.as_str()) {
+                            self.bulk_project_id = None;
+                        }
+                    }, Err(e) => self.status = format!("Could not read project: {e}"),
                 }
             }
             ui.add_space(12.0); ui.separator(); ui.heading("Preflight assessment"); if ui.button("Refresh assessment").clicked() { self.assess_plan(); }
@@ -2630,8 +2637,7 @@ impl App {
         );
         ui.add_space(16.0);
         let project = self
-            .project_id
-            .as_deref()
+            .active_project_id()
             .and_then(|id| self.store.project(id).ok().flatten());
         let phase = project
             .as_ref()
@@ -2705,12 +2711,12 @@ impl App {
         ui.horizontal(|ui| {
             ui.group(|ui| {
                 ui.label(RichText::new("PROJECT STATUS").size(11.0).color(MUTED));
-                ui.heading(if self.project_id.is_some() {
+                ui.heading(if project.is_some() {
                     "Project created"
                 } else {
                     "No project yet"
                 });
-                ui.label(if self.project_id.is_some() {
+                ui.label(if project.is_some() {
                     "State is durable and ready for review."
                 } else {
                     "Start by configuring endpoints or importing a mailbox list."
@@ -6808,7 +6814,7 @@ mod tests {
         );
         assert_eq!(
             preferred_project_id(None, Some("single"), Some("batch")),
-            Some("single")
+            Some("batch")
         );
         assert_eq!(
             preferred_project_id(None, None, Some("batch")),
