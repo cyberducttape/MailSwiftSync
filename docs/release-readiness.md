@@ -39,6 +39,10 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Proof artifacts support Ed25519 signatures with owner-only PKCS#8 key files
   and verifier trust pins; unsigned exports are explicitly labeled
   integrity-only.
+- The Verification workspace exports a separate customer-safe JSON proof that
+  omits endpoints, credential references, plan snapshots, executable paths,
+  and diagnostic detail while retaining the complete run metadata and evidence
+  digests. The operator project report remains the forensic artifact.
 - Run metadata records the version string returned by each engine when its
   executable supports `--version`; unavailable versions remain explicit in
   exports rather than being guessed.

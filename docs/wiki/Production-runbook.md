@@ -51,6 +51,7 @@ validated.
 6. For a batch, run **bulk preflight checks** first, review every row, then promote only the unchanged queue to live. Keep concurrency conservative (normally 1–2 until the provider pair is proven) and never ignore duplicate destinations or Attention items. On a retry, Verified rows are excluded by default; select **Include already verified mailboxes (explicit re-run)** only when you intentionally want to repeat them.
 7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
 8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof. Use **Accept residual difference** in Verification only when the exception is approved; this creates `Verified with exceptions` with the operator, timestamp, related evidence run, and acceptance reason in the ledger.
+9. Export **Customer proof JSON** for the change record and retain the separate project JSON/Markdown report for operator forensics. Customer proof omits internal endpoints, credential references, plan snapshots, executable paths, and diagnostic detail. Sign the customer proof with the approved Ed25519 key before distributing it.
 
 Once every mailbox is evidence-backed, MailSwiftSync may mark the project
 **Complete**. Complete projects are intentionally read-only: adding a mailbox,

@@ -403,9 +403,10 @@ fn verify_proof_file_with_trust(
     let object = value
         .as_object_mut()
         .ok_or("Migration proof must be a JSON object.")?;
-    if object.get("format").and_then(serde_json::Value::as_str)
-        != Some("mailswiftsync-project-report")
-    {
+    if !matches!(
+        object.get("format").and_then(serde_json::Value::as_str),
+        Some("mailswiftsync-project-report" | "mailswiftsync-customer-proof")
+    ) {
         return Err("Unsupported migration proof format.".into());
     }
     let signature = object.get("proof_signature").cloned();
@@ -4517,6 +4518,117 @@ impl App {
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
+    /// Export the customer-safe proof artifact. Unlike the operator JSON
+    /// report, this intentionally omits project IDs, endpoints, plan
+    /// snapshots, credential references, executable paths, and diagnostic
+    /// details that may reveal internal topology. It retains every run's
+    /// execution metadata and each mailbox's evidence digest so a customer
+    /// or change record can verify what was established without receiving the
+    /// forensic report.
+    fn export_customer_proof(&self) -> Result<(), String> {
+        let project_id = self
+            .active_project_id()
+            .ok_or("No durable migration project is available yet.")?;
+        let project = self
+            .store
+            .project(project_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("The durable migration project no longer exists.")?;
+        let jobs = self
+            .store
+            .mailboxes(project_id)
+            .map_err(|e| e.to_string())?;
+        if jobs.is_empty() {
+            return Err("The project has no mailbox jobs to report.".into());
+        }
+        let runs = self.store.all_runs(project_id).map_err(|e| e.to_string())?;
+        let mailboxes = jobs
+            .into_iter()
+            .map(|job| {
+                let acceptance = self
+                    .store
+                    .latest_verification_acceptance(&job.id)
+                    .map_err(|e| e.to_string())?;
+                let evidence = self
+                    .store
+                    .latest_evidence_for_run(&job.id)
+                    .map_err(|e| e.to_string())?;
+                let evidence = match evidence {
+                    Some((run_id, value)) => {
+                        let run = self
+                            .store
+                            .run(&run_id)
+                            .map_err(|e| e.to_string())?
+                            .ok_or("The customer proof refers to a missing evidence run.")?;
+                        Some(serde_json::json!({
+                            "run_id": run_id,
+                            "scope": value.evidence_scope().label(),
+                            "evidence_level": value.evidence_level(),
+                            "evidence_digest": evidence_digest(&run.id, &run.plan_snapshot, &value),
+                            "source_folders": value.source_folders,
+                            "destination_folders": value.destination_folders,
+                            "source_messages": value.source_messages,
+                            "destination_messages": value.destination_messages,
+                            "source_bytes": value.source_bytes,
+                            "destination_bytes": value.destination_bytes,
+                            "unmatched_messages": value.unmatched_messages,
+                            "failed_messages": value.failed_messages,
+                        }))
+                    }
+                    None => None,
+                };
+                Ok(serde_json::json!({
+                    "source_mailbox": job.source_mailbox,
+                    "destination_mailbox": job.destination_mailbox,
+                    "state": job.state,
+                    "verification_acceptance": acceptance.map(|value| serde_json::json!({
+                        "run_id": value.run_id,
+                        "operator": value.operator,
+                        "reason": value.reason,
+                        "accepted_at": value.accepted_at,
+                    })),
+                    "evidence": evidence,
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let run_manifest = runs
+            .into_iter()
+            .map(|run| {
+                let engine_version = self
+                    .store
+                    .engine_version(&run.id)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "run_id": run.id,
+                    "engine": run.engine,
+                    "engine_version": engine_version,
+                    "phase_at_start": run.phase_at_start,
+                    "status": run.status,
+                    "started_at": run.started_at,
+                    "finished_at": run.finished_at,
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let value = with_proof_digest(serde_json::json!({
+            "format": "mailswiftsync-customer-proof",
+            "format_version": 1,
+            "application_version": env!("CARGO_PKG_VERSION"),
+            "project": {
+                "name": project.name,
+                "phase": format!("{:?}", project.phase),
+            },
+            "mailboxes": mailboxes,
+            "runs": run_manifest,
+            "note": "This customer proof contains no passwords, credential references, endpoints, plan snapshots, executable paths, or diagnostic details. Aggregate and engine-confirmed evidence are not independent message-level reconciliation. Verify the proof digest, and add an Ed25519 signature before treating it as an authenticated artifact."
+        }))?;
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-customer-proof.json")
+            .save_file()
+            .ok_or("Customer proof export cancelled.")?;
+        let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+        write_private_atomic(&path, &report).map_err(|e| e.to_string())
+    }
+
     fn export_project_health(&self) -> Result<(), String> {
         let project_id = self
             .active_project_id()
@@ -4603,6 +4715,10 @@ impl App {
                 if ui.button("Export project JSON…").clicked() {
                     let result = self.export_project_json();
                     self.report_export_result("Project JSON", result);
+                }
+                if ui.button("Export customer proof JSON…").clicked() {
+                    let result = self.export_customer_proof();
+                    self.report_export_result("Customer proof", result);
                 }
                 if ui.button("Export project health…").clicked() {
                     let result = self.export_project_health();
@@ -8976,6 +9092,28 @@ mod tests {
         tampered["project"]["name"] = "Altered migration".into();
         std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
         assert!(verify_proof_file(&path).is_err());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn customer_proof_format_is_digest_verifiable() {
+        let proof = with_proof_digest(serde_json::json!({
+            "format": "mailswiftsync-customer-proof",
+            "format_version": 1,
+            "project": { "name": "Customer migration", "phase": "Verification" },
+            "mailboxes": [],
+            "runs": [],
+            "note": "customer-safe"
+        }))
+        .unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-customer-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("proof.json");
+        std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
+        assert!(verify_proof_file(&path).unwrap().contains("verified"));
         let _ = std::fs::remove_dir_all(directory);
     }
 
