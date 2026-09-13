@@ -14,7 +14,8 @@ mod ui;
 mod verification;
 
 use controller::{
-    ActiveRunContext, BatchExecutionMode, LiveAuthProof, RunKind, is_verified_terminal_state,
+    ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkRetryScope, BulkStateSet,
+    LiveAuthProof, RunKind, is_verified_terminal_state,
 };
 use credentials::{
     CleanupGuard, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
@@ -1475,26 +1476,6 @@ enum BulkImportResult {
     },
 }
 
-#[derive(Clone, Copy)]
-enum BulkStateSet {
-    Failed,
-    Attention,
-    Unresolved,
-}
-
-impl BulkStateSet {
-    fn matches(self, state: &str) -> bool {
-        match self {
-            Self::Failed => state == "failed",
-            Self::Attention => state == "attention",
-            Self::Unresolved => matches!(
-                state,
-                "failed" | "attention" | "cancelled" | "delta_required" | "verification_difference"
-            ),
-        }
-    }
-}
-
 fn bulk_selection_value(
     jobs: &[BulkJob],
     selected_ids: &HashSet<String>,
@@ -1530,94 +1511,6 @@ fn bulk_selection_value(
 
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
 type PendingDbEvent = (String, String, String, String);
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum BulkRetryScope {
-    #[default]
-    Unresolved,
-    FailedAttention,
-    DeltaRequired,
-    VerificationDifference,
-    Automation,
-    All,
-}
-
-#[derive(Debug, Clone)]
-struct BulkConfirmationSummary {
-    eligible_count: usize,
-    deletion_enabled: bool,
-    durable_state_error: Option<String>,
-    concurrency: usize,
-    scope: BulkRetryScope,
-}
-
-impl BulkRetryScope {
-    fn includes(self, state: &str) -> bool {
-        let Some(state) = core::MailboxState::parse(state) else {
-            return false;
-        };
-        match self {
-            // Operator-review states must never be pulled into unattended
-            // retry by the default scope. They require an explicit choice
-            // after the durable reason has been reviewed.
-            Self::Unresolved => {
-                !state.is_verified()
-                    && !matches!(
-                        state,
-                        core::MailboxState::Attention | core::MailboxState::VerificationDifference
-                    )
-            }
-            Self::FailedAttention => matches!(
-                state,
-                core::MailboxState::Failed | core::MailboxState::Attention
-            ),
-            Self::DeltaRequired => state == core::MailboxState::DeltaRequired,
-            Self::VerificationDifference => state == core::MailboxState::VerificationDifference,
-            Self::Automation => matches!(
-                state,
-                core::MailboxState::Queued
-                    | core::MailboxState::Ready
-                    | core::MailboxState::Completed
-                    | core::MailboxState::DeltaRequired
-                    | core::MailboxState::Cancelled
-                    | core::MailboxState::Failed
-            ),
-            Self::All => true,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Unresolved => "Unresolved (skip verified and accepted exceptions)",
-            Self::FailedAttention => "Failed or Attention only",
-            Self::DeltaRequired => "Delta required only",
-            Self::VerificationDifference => "Verification differences only",
-            Self::Automation => "Automation-safe retryable work",
-            Self::All => "All rows (explicit re-run)",
-        }
-    }
-
-    fn includes_automation(self, state: &str, reason: Option<core::AttentionReason>) -> bool {
-        if self != Self::Automation {
-            return self.includes(state);
-        }
-        match core::MailboxState::parse(state) {
-            Some(
-                core::MailboxState::Queued
-                | core::MailboxState::Ready
-                | core::MailboxState::Completed
-                | core::MailboxState::DeltaRequired
-                | core::MailboxState::Cancelled,
-            ) => true,
-            Some(core::MailboxState::Failed) => matches!(
-                reason,
-                Some(core::AttentionReason::TransportFailed)
-                    | Some(core::AttentionReason::CapacityLimited)
-            ),
-            _ => false,
-        }
-    }
-}
 
 fn canonical_destination_identity(profile: &Profile) -> Result<String, String> {
     endpoint::canonical_destination_identity(
