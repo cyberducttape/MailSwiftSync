@@ -195,6 +195,25 @@ mod tests {
         assert!(!outcome.cancelled);
         assert!(outcome.timed_out);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn leader_exit_does_not_hide_a_live_descendant() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 & exit 0"]);
+        configure_process_group(&mut command);
+        let mut child = command.spawn().unwrap();
+        let actual_group = child.id();
+        let cancel = AtomicBool::new(false);
+
+        let result = wait_with_timeout(&mut child, Duration::from_secs(5), &cancel);
+
+        assert!(
+            result.is_err(),
+            "a live descendant must not look like success"
+        );
+        assert!(!process_group_exists(actual_group));
+    }
 }
 
 #[derive(Debug)]
@@ -267,9 +286,30 @@ pub(crate) fn wait_with_timeout(
     timeout: Duration,
     cancel: &AtomicBool,
 ) -> std::io::Result<ProcessOutcome> {
+    #[cfg(unix)]
+    let process_group = child.id();
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
+            #[cfg(unix)]
+            if process_group_exists(process_group) {
+                terminate_process_group_id(process_group);
+                if !wait_for_process_group_exit(process_group, Duration::from_secs(5)) {
+                    return Err(std::io::Error::other(
+                        "migration leader exited while a descendant process group remained",
+                    ));
+                }
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(ProcessOutcome {
+                        exit_code: None,
+                        cancelled: true,
+                        timed_out: false,
+                    });
+                }
+                return Err(std::io::Error::other(
+                    "migration leader exited while a descendant process remained",
+                ));
+            }
             return Ok(ProcessOutcome {
                 exit_code: status.code(),
                 cancelled: false,
@@ -328,9 +368,45 @@ fn wait_for_graceful_exit(child: &mut Child, grace: Duration) {
 }
 
 #[cfg(unix)]
-fn process_group_exists(pid: u32) -> bool {
-    let result = unsafe { libc::kill(-(pid as libc::pid_t), 0) };
+fn process_group_exists(process_group: u32) -> bool {
+    let result = unsafe { libc::kill(-(process_group as libc::pid_t), 0) };
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
+fn terminate_process_group_id(process_group: u32) {
+    unsafe {
+        let _ = libc::kill(-(process_group as libc::pid_t), libc::SIGTERM);
+    }
+}
+
+#[cfg(unix)]
+fn force_kill_process_group_id(process_group: u32) {
+    unsafe {
+        let _ = libc::kill(-(process_group as libc::pid_t), libc::SIGKILL);
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_process_group_exit(process_group: u32, grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        if !process_group_exists(process_group) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    if process_group_exists(process_group) {
+        force_kill_process_group_id(process_group);
+    }
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if !process_group_exists(process_group) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    !process_group_exists(process_group)
 }
 
 pub(crate) fn configure_process_group(command: &mut Command) {
@@ -356,24 +432,14 @@ pub(crate) fn configure_process_group(command: &mut Command) {
 
 pub(crate) fn terminate_process_group(child: &mut Child) {
     #[cfg(unix)]
-    {
-        let process_group = -(child.id() as libc::pid_t);
-        unsafe {
-            let _ = libc::kill(process_group, libc::SIGTERM);
-        }
-    }
+    terminate_process_group_id(child.id());
     #[cfg(not(unix))]
     let _ = child.kill();
 }
 
 fn force_kill_process_group(child: &mut Child) {
     #[cfg(unix)]
-    {
-        let process_group = -(child.id() as libc::pid_t);
-        unsafe {
-            let _ = libc::kill(process_group, libc::SIGKILL);
-        }
-    }
+    force_kill_process_group_id(child.id());
     #[cfg(not(unix))]
     let _ = child.kill();
 }
@@ -387,10 +453,8 @@ pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
         if !recorded_process_matches(process) {
             return;
         }
-        let process_group = -(process.pid as libc::pid_t);
-        unsafe {
-            let _ = libc::kill(process_group, libc::SIGTERM);
-        }
+        let process_group = process.process_group.unwrap_or(process.pid);
+        terminate_process_group_id(process_group);
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
             if !recorded_process_matches(process) {
@@ -399,9 +463,7 @@ pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
             thread::sleep(Duration::from_millis(100));
         }
         if recorded_process_matches(process) {
-            unsafe {
-                let _ = libc::kill(process_group, libc::SIGKILL);
-            }
+            force_kill_process_group_id(process_group);
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -415,14 +477,9 @@ pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
 pub(crate) fn terminate_process_group_by_pid(pid: u32) {
     #[cfg(unix)]
     {
-        let process_group = -(pid as libc::pid_t);
-        unsafe {
-            let _ = libc::kill(process_group, libc::SIGTERM);
-        }
+        terminate_process_group_id(pid);
         thread::sleep(Duration::from_secs(2));
-        unsafe {
-            let _ = libc::kill(process_group, libc::SIGKILL);
-        }
+        force_kill_process_group_id(pid);
     }
     #[cfg(not(unix))]
     let _ = pid;
