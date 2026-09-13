@@ -6,6 +6,17 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Terminal SQLite commit failures now leave the durable run available for
+  recovery instead of emitting a misleading completion event or advancing the
+  project phase; the production runbook documents the operator response.
+- Multi-run diagnostic event persistence now has regression coverage proving a
+  partially invalid batch rolls back all earlier inserts atomically.
+- The legacy generic batch-claim helper is test-only; production code must use
+  the mailbox-specific child-run claim path.
+- imapsync verification parsing now accepts only explicit `Detected N errors`
+  summary lines, preventing unrelated diagnostic wording from changing failure
+  evidence.
+
 - Run-scoped diagnostic and verification events are now writable only while the run is active; terminal audit records cannot be appended later.
 - Preflight persistence now reports missing mailbox IDs as errors instead of silently succeeding with no durable update.
 - Evidence insertion is now test-only; production callers can only create durable evidence through run-owned terminal completion transactions.

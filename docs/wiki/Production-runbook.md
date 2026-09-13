@@ -35,6 +35,15 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 4. Confirm no migration engine remains active outside the application. On Windows and macOS, process-recovery guarantees are weaker than the Linux path; prefer a Unix admin host for production windows.
 5. Re-enter credentials as required, rerun dry validation when the plan or credentials changed, and export the resulting evidence after the retry.
 
+If the application reports **Migration result requires durability review** or a
+`[durability]` error, do not retry the mailbox and do not advance the project
+manually. The external process has ended, but the terminal run commit was not
+confirmed. Preserve the workspace, restore disk space or SQLite availability,
+then restart MailSwiftSync and let startup recovery reconcile the still-active
+durable run. If the database remains unavailable, stop and copy the diagnostic
+information through the normal incident process; never delete the database or
+lock file to make a retry possible.
+
 If startup cannot verify a recorded process identity, MailSwiftSync fails closed and keeps that identity in the ledger across restarts. Check the host process list and use **I confirmed no unverified migration process remains** only after confirming that no MailSwiftSync engine is still active; do not delete the state or lock files to bypass this review.
 
 ## Closeout
