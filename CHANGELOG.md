@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Lifecycle phase advancement now requires a clean durability cycle in
+  addition to a successful external engine result; persistence uncertainty
+  leaves the project in place for recovery review.
 - Configuration and credential dialogs are now read-only while an execution
   is active, so the visible plan cannot be changed through a modal while live
   output is being produced.

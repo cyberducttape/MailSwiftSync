@@ -1973,6 +1973,14 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     }
 }
 
+fn terminal_phase_advance_allowed(
+    external_succeeded: bool,
+    terminal_write_ok: bool,
+    durability_error: bool,
+) -> bool {
+    external_succeeded && terminal_write_ok && !durability_error
+}
+
 fn recommended_next_action(
     phase: core::Phase,
     has_preflight: bool,
@@ -5299,7 +5307,16 @@ impl App {
                     );
                     self.report_store_error("record batch run completion", result);
                 }
-                if terminal_write_ok && succeeded {
+                // A successful engine result is not enough to advance the
+                // lifecycle. Any earlier persistence failure in this event
+                // cycle (for example, the preflight digest or evidence
+                // event) leaves the durable result incomplete and must keep
+                // the project in its current phase for recovery/review.
+                if terminal_phase_advance_allowed(
+                    succeeded,
+                    terminal_write_ok,
+                    self.durability_error,
+                ) {
                     if run_context.dry_run {
                         let result = self.store.transition(project, core::Phase::Preflight);
                         self.report_store_error("advance project phase", result);
@@ -5334,7 +5351,7 @@ impl App {
                             ),
                         }
                     }
-                } else if terminal_write_ok {
+                } else if terminal_write_ok && !succeeded && !self.durability_error {
                     let result = self.store.transition(project, core::Phase::Attention);
                     self.report_store_error("move project to Attention", result);
                 }
@@ -7498,6 +7515,14 @@ mod tests {
             recommended_next_action(core::Phase::Preflight, true, 0, true),
             "A migration is running — monitor Activity; press Escape to request cancellation."
         );
+    }
+
+    #[test]
+    fn lifecycle_cannot_advance_when_terminal_durability_is_uncertain() {
+        assert!(terminal_phase_advance_allowed(true, true, false));
+        assert!(!terminal_phase_advance_allowed(true, false, false));
+        assert!(!terminal_phase_advance_allowed(true, true, true));
+        assert!(!terminal_phase_advance_allowed(false, true, false));
     }
 
     #[test]
