@@ -6227,7 +6227,7 @@ impl App {
             let was_bulk_run = matches!(run_context.kind, RunKind::Batch);
             let mut direct_final_state = None;
             let terminal_evidence = if succeeded && !run_context.dry_run {
-                self.pending_evidence.take().or_else(|| {
+                self.pending_evidence.clone().or_else(|| {
                     (run_context.engine == core::Engine::ImapSync)
                         .then(|| {
                             let output = self.output.iter().cloned().collect::<Vec<_>>();
@@ -6236,12 +6236,11 @@ impl App {
                         .flatten()
                 })
             } else {
-                self.pending_evidence.take()
+                self.pending_evidence.clone()
             };
             let terminal_checkpoint = if !was_bulk_run && succeeded {
-                self.pending_checkpoint.take()
+                self.pending_checkpoint.clone()
             } else {
-                self.pending_checkpoint = None;
                 None
             };
             if succeeded && !run_context.dry_run && terminal_evidence.is_none() {
@@ -6291,6 +6290,7 @@ impl App {
                 };
                 direct_final_state = Some(final_state);
             }
+            let mut retry_terminal_commit = false;
             {
                 let project = &run_context.project_id;
                 let run_id = &run_context.run_id;
@@ -6365,12 +6365,22 @@ impl App {
                             &mut self.output,
                             format!("[durability] Could not persist terminal state: {error}"),
                         );
+                        retry_terminal_commit = true;
                         false
                     }
                 };
                 if terminal_write_ok && !was_bulk_run && run_context.dry_run {
                     self.preflight_credential_fingerprint =
                         Some(run_context.credential_fingerprint.clone());
+                }
+                if terminal_write_ok {
+                    // These inputs belong to this terminal commit. Do not
+                    // consume them before SQLite acknowledges the commit, or
+                    // a retry would be unable to reproduce the same durable
+                    // result.
+                    self.pending_evidence = None;
+                    self.pending_checkpoint = None;
+                    self.durability_error = false;
                 }
                 // A terminal run commit is the boundary between an external
                 // process result and durable control-plane state.  If that
@@ -6434,6 +6444,16 @@ impl App {
                     let result = self.store.transition(project, core::Phase::Attention);
                     self.report_store_error("move project to Attention", result);
                 }
+            }
+            if retry_terminal_commit {
+                // The external process is already gone, but the durable run
+                // is still active. Keep ownership and retry the exact
+                // terminal event on the next poll instead of forcing startup
+                // recovery for a transient SQLite failure.
+                self.deferred_events.push_front(Event::Finished(r));
+                self.status =
+                    "Migration result requires durable storage; retrying terminal commit".into();
+                return;
             }
             self.status = if self.durability_error {
                 "Migration result requires durability review".into()
