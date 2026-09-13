@@ -73,22 +73,26 @@ pub(crate) struct DovecotStatusAccumulator {
 
 impl DovecotStatusAccumulator {
     pub(crate) fn observe(&mut self, line: &str) {
-        let has_messages_field = line
-            .split_whitespace()
-            .any(|token| token.starts_with("messages="));
-        let has_vsize_field = line
-            .split_whitespace()
-            .any(|token| token.starts_with("vsize="));
-        if !has_messages_field && !has_vsize_field {
+        let mut message_count = None;
+        let mut virtual_size = None;
+        let mut saw_status_field = false;
+        for token in line.split_whitespace() {
+            if let Some(value) = token.strip_prefix("messages=") {
+                saw_status_field = true;
+                if message_count.is_none() {
+                    message_count = Some(value.parse::<u64>());
+                }
+            } else if let Some(value) = token.strip_prefix("vsize=") {
+                saw_status_field = true;
+                if virtual_size.is_none() {
+                    virtual_size = Some(value.parse::<u64>());
+                }
+            }
+        }
+        if !saw_status_field {
             return;
         }
-        let message_count = line
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("messages=")?.parse::<u64>().ok());
-        let virtual_size = line
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("vsize=")?.parse::<u64>().ok());
-        if let (Some(message_count), Some(virtual_size)) = (message_count, virtual_size) {
+        if let (Some(Ok(message_count)), Some(Ok(virtual_size))) = (message_count, virtual_size) {
             self.folders = self.folders.saturating_add(1);
             self.messages = self.messages.saturating_add(message_count);
             self.bytes = self.bytes.saturating_add(virtual_size);
