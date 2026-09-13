@@ -2846,6 +2846,50 @@ mod tests {
     }
 
     #[test]
+    fn legacy_schema_migrates_destination_identity_column() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-schema-v1-{}", Uuid::new_v4()));
+        let path = directory.join("state.db");
+        std::fs::create_dir_all(&directory).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE mailbox_jobs (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    source_mailbox TEXT NOT NULL,
+                    destination_mailbox TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    attempt INTEGER NOT NULL DEFAULT 0,
+                    checkpoint TEXT,
+                    preflight_plan TEXT,
+                    config TEXT
+                );
+                PRAGMA user_version=1;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = StateStore::open(&path).unwrap();
+        let version: i64 = store
+            .connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+        let has_identity: bool = store
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('mailbox_jobs') WHERE name='destination_identity')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(has_identity);
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn migration_clears_legacy_raw_preflight_plans() {
         let db = StateStore::in_memory().unwrap();
         let project = db
