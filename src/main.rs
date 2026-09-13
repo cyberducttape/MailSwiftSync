@@ -1061,6 +1061,13 @@ enum Event {
         child_run_id: String,
         reply: mpsc::SyncSender<Result<(), String>>,
     },
+    ReleaseBatchRetry {
+        project_id: String,
+        job_id: String,
+        parent_run_id: String,
+        child_run_id: String,
+        reply: mpsc::SyncSender<Result<(), String>>,
+    },
     JobState {
         job_id: String,
         child_run_id: String,
@@ -4380,6 +4387,68 @@ impl App {
                                         child_run_id: child_run_id.clone(),
                                         state: "Failed".into(),
                                     });
+                                    // The failed child currently owns a
+                                    // running mailbox. Release that durable
+                                    // claim before retrying so the next loop
+                                    // iteration can reacquire it through the
+                                    // same ownership handshake. Without this
+                                    // step, the retry's claim is correctly
+                                    // rejected as a duplicate active run.
+                                    let (retry_tx, retry_rx) = mpsc::sync_channel(1);
+                                    if tx
+                                        .send(Event::ReleaseBatchRetry {
+                                            project_id: batch_project_id.clone(),
+                                            job_id: job_id.clone(),
+                                            parent_run_id: batch_run_id.clone(),
+                                            child_run_id: child_run_id.clone(),
+                                            reply: retry_tx,
+                                        })
+                                        .is_err()
+                                    {
+                                        failed.store(true, Ordering::Relaxed);
+                                        break;
+                                    }
+                                    let release_result = loop {
+                                        if cancel.load(Ordering::Relaxed) {
+                                            break Err("cancelled by operator before retry release".to_owned());
+                                        }
+                                        match retry_rx.recv_timeout(Duration::from_millis(100)) {
+                                            Ok(result) => break result,
+                                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                                break Err("durable retry release response was lost".to_owned())
+                                            }
+                                        }
+                                    };
+                                    if let Err(release_error) = release_result {
+                                        failed.store(true, Ordering::Relaxed);
+                                        let _ = tx.send(Event::RunLine {
+                                            run_id: child_run_id.clone(),
+                                            job_id: job_id.clone(),
+                                            text: format!(
+                                                "[{}] could not release the failed claim for retry: {release_error}",
+                                                index + 1
+                                            ),
+                                        });
+                                        let _ = tx.send(Event::JobState {
+                                            job_id: job_id.clone(),
+                                            child_run_id: child_run_id.clone(),
+                                            state: "Failed".into(),
+                                        });
+                                        let _ = tx.send(Event::JobFinished {
+                                            job_id: job_id.clone(),
+                                            child_run_id: child_run_id.clone(),
+                                            state: "failed".into(),
+                                            detail: format!(
+                                                "transient failure could not be safely retried: {release_error}"
+                                            ),
+                                            credential_fingerprint: None,
+                                        });
+                                        if let Ok(mut terminal) = terminal_jobs.lock() {
+                                            terminal.insert(index);
+                                        }
+                                        break;
+                                    }
                                     let delay = Duration::from_secs(1_u64 << attempt.min(5));
                                     let started = std::time::Instant::now();
                                     while started.elapsed() < delay {
@@ -4988,6 +5057,38 @@ impl App {
                         if let Err(error) = &result {
                             durability_errors.push(format!(
                                 "durable claim for child run {child_run_id} failed: {error}"
+                            ));
+                        }
+                        let _ = reply.send(result);
+                    }
+                    Event::ReleaseBatchRetry {
+                        project_id,
+                        job_id,
+                        parent_run_id,
+                        child_run_id,
+                        reply,
+                    } => {
+                        let result = if active_run.as_ref().is_some_and(|run| {
+                            run.project_id == project_id
+                                && run.owns_batch_child(&parent_run_id, &child_run_id, &job_id)
+                        }) {
+                            self.store
+                                .release_batch_mailbox_for_retry(
+                                    &project_id,
+                                    &job_id,
+                                    &parent_run_id,
+                                    &child_run_id,
+                                )
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Err(
+                                "batch retry release does not belong to the active run context"
+                                    .to_owned(),
+                            )
+                        };
+                        if let Err(error) = &result {
+                            durability_errors.push(format!(
+                                "durable retry release for child run {child_run_id} failed: {error}"
                             ));
                         }
                         let _ = reply.send(result);

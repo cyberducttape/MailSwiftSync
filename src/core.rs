@@ -1480,6 +1480,52 @@ impl StateStore {
         )?;
         tx.commit()
     }
+
+    /// Release a claimed child after a transient engine failure so the same
+    /// worker can retry it through the normal durable claim path. Keeping the
+    /// child queued and the mailbox ready makes ownership truthful between
+    /// attempts and ensures a restart cannot mistake an exhausted claim for
+    /// an active process.
+    pub fn release_batch_mailbox_for_retry(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        parent_run_id: &str,
+        child_run_id: &str,
+    ) -> rusqlite::Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        let parent_is_running: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id IS NULL AND status='running')",
+            params![parent_run_id, project_id],
+            |row| row.get(0),
+        )?;
+        let child_is_running: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND project_id=?2 AND job_id=?3 AND parent_run_id=?4 AND status='running')",
+            params![child_run_id, project_id, job_id, parent_run_id],
+            |row| row.get(0),
+        )?;
+        let mailbox_is_running: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE id=?1 AND project_id=?2 AND state='running')",
+            params![job_id, project_id],
+            |row| row.get(0),
+        )?;
+        if !parent_is_running || !child_is_running || !mailbox_is_running {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "UPDATE runs SET status='queued',detail='released for transient retry' WHERE id=?1 AND project_id=?2 AND job_id=?3 AND parent_run_id=?4 AND status='running'",
+            params![child_run_id, project_id, job_id, parent_run_id],
+        )?;
+        tx.execute(
+            "UPDATE mailbox_jobs SET state='ready' WHERE id=?1 AND project_id=?2 AND state='running'",
+            params![job_id, project_id],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'mailbox_retry_released',?3)",
+            params![project_id, child_run_id, format!("{job_id} released for transient retry")],
+        )?;
+        tx.commit()
+    }
     pub fn finish_run(&self, run_id: &str, status: &str, detail: &str) -> rusqlite::Result<()> {
         if !matches!(
             status,
@@ -3569,6 +3615,58 @@ destination_port = "143"
             Some("completed")
         );
         assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn transient_batch_failure_releases_child_for_a_fresh_claim() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-retry-claim",
+                "source",
+                "destination",
+                &[("one".into(), "one".into())],
+            )
+            .unwrap();
+        let child_runs = db
+            .begin_batch_run_with_children(
+                &project.id,
+                &jobs,
+                "run-retry-parent",
+                "batch",
+                &[],
+                "snapshot",
+                &[],
+            )
+            .unwrap();
+        db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-retry-parent", &child_runs[0])
+            .unwrap();
+        db.release_batch_mailbox_for_retry(
+            &project.id,
+            &jobs[0],
+            "run-retry-parent",
+            &child_runs[0],
+        )
+        .unwrap();
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
+            Some("ready")
+        );
+        assert_eq!(
+            db.run_status(&child_runs[0]).unwrap().as_deref(),
+            Some("queued")
+        );
+
+        db.claim_batch_mailbox_for_child(&project.id, &jobs[0], "run-retry-parent", &child_runs[0])
+            .unwrap();
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            db.run_status(&child_runs[0]).unwrap().as_deref(),
+            Some("running")
+        );
     }
 
     #[test]

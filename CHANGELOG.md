@@ -28,6 +28,9 @@ All notable changes to MailSwiftSync are documented here.
 - A changed preflight digest now invalidates the previously committed Dovecot
   checkpoint, preventing stateful resume from crossing endpoint or policy drift;
   repeated preflight of the same plan preserves the resume point.
+- Transient batch failures now release the child run and mailbox claim before
+  retrying, so retries reacquire durable ownership instead of being rejected as
+  duplicate active executions.
 - Live Dovecot syncs now pass the mailbox's last committed `-s` state string
   and atomically commit a newly emitted checkpoint with the terminal child
   result; dry preflight remains non-stateful and failed runs preserve the
