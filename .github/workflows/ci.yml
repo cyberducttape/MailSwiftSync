@@ -89,7 +89,16 @@ jobs:
         if: matrix.os == 'macos-latest'
         env:
           RUST_BACKTRACE: full
-        run: cargo test --locked --all-targets --all-features 'tests::' -- --test-threads=1
+        shell: bash
+        run: |
+          set +e
+          cargo test --locked --all-targets --all-features 'tests::' -- --test-threads=1 2>&1 | tee macos-controller-tests.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            failed_tests=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' macos-controller-tests.log | paste -sd ', ' -)
+            echo "::error title=macOS controller test failure::${failed_tests:-Cargo test failed; inspect the job log}"
+          fi
+          exit "$status"
 
   container-build:
     name: Build headless container
