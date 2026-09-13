@@ -6,6 +6,17 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted shared theme and contrast primitives into `src/ui/`, reducing the
+  presentation surface owned directly by `main.rs` while preserving the
+  existing egui workflow.
+- Overview project and mailbox summaries now consume the cached workspace
+  snapshot instead of querying SQLite during repaint.
+
+### Added
+
+- Added a guided first-run empty state with a clear **Connect → Assess →
+  Prove** path and a direct action to configure the first mailbox.
+
 - Added separate dark and light semantic UI palettes with high-contrast
   primary, secondary, informational, success, warning, danger, link, border,
   and selection colors. Contrast regression tests enforce a 4.5:1 target for
@@ -16,8 +27,6 @@ All notable changes to MailSwiftSync are documented here.
 - Projects, activity history, and verification views now render from a
   throttled cached workspace snapshot rather than querying SQLite during every
   egui repaint. Selected-mailbox retry guidance also consumes that snapshot.
-
-### Added
 
 - Failed or cancelled mailbox runs can no longer commit a newly captured
   Dovecot checkpoint; resume state advances only with a successful terminal

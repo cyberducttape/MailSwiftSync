@@ -4,6 +4,7 @@ mod endpoint;
 mod engine;
 mod process;
 mod reports;
+mod ui;
 mod verification;
 
 use credentials::{
@@ -48,6 +49,9 @@ use std::{
     thread,
     time::Duration,
 };
+use ui::ThemeColors;
+#[cfg(test)]
+use ui::contrast_ratio;
 use zeroize::Zeroizing;
 
 const BLUE: Color32 = Color32::from_rgb(45, 113, 205);
@@ -55,75 +59,6 @@ const TEAL: Color32 = Color32::from_rgb(24, 158, 166);
 const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 
-#[derive(Clone, Copy)]
-struct ThemeColors {
-    background: Color32,
-    panel: Color32,
-    window: Color32,
-    text_primary: Color32,
-    text_secondary: Color32,
-    info: Color32,
-    success: Color32,
-    warning: Color32,
-    danger: Color32,
-    link: Color32,
-    selection: Color32,
-    border: Color32,
-}
-
-impl ThemeColors {
-    fn dark() -> Self {
-        Self {
-            background: Color32::from_rgb(10, 17, 28),
-            panel: Color32::from_rgb(15, 23, 36),
-            window: Color32::from_rgb(24, 35, 51),
-            text_primary: Color32::from_rgb(238, 244, 251),
-            text_secondary: Color32::from_rgb(184, 197, 214),
-            info: Color32::from_rgb(117, 184, 255),
-            success: Color32::from_rgb(88, 213, 192),
-            warning: Color32::from_rgb(245, 193, 92),
-            danger: Color32::from_rgb(255, 142, 130),
-            link: Color32::from_rgb(140, 200, 255),
-            selection: Color32::from_rgb(43, 62, 88),
-            border: Color32::from_rgb(116, 139, 169),
-        }
-    }
-
-    fn light() -> Self {
-        Self {
-            background: Color32::from_rgb(235, 243, 252),
-            panel: Color32::WHITE,
-            window: Color32::WHITE,
-            text_primary: Color32::from_rgb(17, 26, 43),
-            text_secondary: Color32::from_rgb(66, 84, 106),
-            info: Color32::from_rgb(7, 89, 166),
-            success: Color32::from_rgb(0, 105, 92),
-            warning: Color32::from_rgb(128, 91, 0),
-            danger: Color32::from_rgb(161, 38, 26),
-            link: Color32::from_rgb(7, 94, 175),
-            selection: Color32::from_rgb(215, 230, 248),
-            border: Color32::from_rgb(111, 132, 157),
-        }
-    }
-}
-
-#[cfg(test)]
-fn contrast_ratio(foreground: Color32, background: Color32) -> f32 {
-    fn luminance(color: Color32) -> f32 {
-        let channel = |value: u8| {
-            let value = f32::from(value) / 255.0;
-            if value <= 0.03928 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
-    }
-    let foreground = luminance(foreground);
-    let background = luminance(background);
-    (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
-}
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const MAX_VISIBLE_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROCESS_TAIL_LINES: usize = 200;
@@ -2406,6 +2341,8 @@ struct App {
     ui_projects: Vec<core::ProjectListItem>,
     ui_runs: Vec<core::RunListItem>,
     ui_report: Option<core::ProjectReportSnapshot>,
+    ui_project: Option<core::Project>,
+    ui_jobs: Vec<core::MailboxJob>,
     ui_snapshot_project_id: Option<String>,
     ui_snapshot_refreshed_at: Option<std::time::Instant>,
 }
@@ -2767,6 +2704,8 @@ impl Default for App {
             ui_projects: Vec::new(),
             ui_runs: Vec::new(),
             ui_report: None,
+            ui_project: None,
+            ui_jobs: Vec::new(),
             ui_snapshot_project_id: None,
             ui_snapshot_refreshed_at: None,
         }
@@ -3391,8 +3330,16 @@ impl App {
             self.ui_snapshot_project_id = project_id.clone();
             self.ui_report = None;
             self.ui_runs.clear();
+            self.ui_project = None;
+            self.ui_jobs.clear();
         }
         if let Some(project_id) = project_id {
+            if let Ok(project) = self.store.project(&project_id) {
+                self.ui_project = project;
+            }
+            if let Ok(jobs) = self.store.mailboxes(&project_id) {
+                self.ui_jobs = jobs;
+            }
             if let Ok(Some(report)) = self.store.project_report_snapshot(&project_id) {
                 self.ui_report = Some(report);
             }
@@ -4114,34 +4061,12 @@ impl App {
                 .color(MUTED),
         );
         ui.add_space(16.0);
-        let mut view_error = None;
-        let project = self
-            .active_project_id()
-            .and_then(|id| match self.store.project(id) {
-                Ok(project) => project,
-                Err(error) => {
-                    view_error = Some(format!(
-                        "Could not read the selected project from durable storage: {error}"
-                    ));
-                    None
-                }
-            });
+        let project = self.ui_project.clone();
         let phase = project
             .as_ref()
             .map(|value| value.phase)
             .unwrap_or(core::Phase::Discovery);
-        let durable_jobs =
-            project
-                .as_ref()
-                .map_or_else(Vec::new, |value| match self.store.mailboxes(&value.id) {
-                    Ok(jobs) => jobs,
-                    Err(error) => {
-                        view_error = Some(format!(
-                            "Could not read mailbox state from durable storage: {error}"
-                        ));
-                        Vec::new()
-                    }
-                });
+        let durable_jobs = self.ui_jobs.clone();
         let attention_count = durable_jobs
             .iter()
             .filter(|job| needs_operator_review(&job.state))
@@ -4152,16 +4077,32 @@ impl App {
             attention_count,
             self.running(),
         );
-        if let Some(error) = view_error {
-            ui.group(|ui| {
-                ui.label(RichText::new("DURABLE STORAGE UNAVAILABLE").strong().color(ALERT));
-                ui.label(error);
-                ui.label("The displayed project state may be incomplete. Do not start or retry a migration until storage is available again.");
-            });
-            ui.add_space(10.0);
-        }
         self.overview_readiness_controls(ui);
         ui.add_space(14.0);
+        if project.is_none() && self.bulk_jobs.is_empty() {
+            ui.group(|ui| {
+                ui.heading("Start your first migration");
+                ui.label("MailSwiftSync guides every migration through a reviewable preflight before any destination changes are allowed.");
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (number, title, detail) in [
+                        ("1", "Connect", "Enter source and destination endpoints."),
+                        ("2", "Assess", "Run a dry preflight and review the plan."),
+                        ("3", "Prove", "Migrate, verify, and export customer evidence."),
+                    ] {
+                        ui.group(|ui| {
+                            ui.label(RichText::new(format!("{number}  {title}")).strong());
+                            ui.label(RichText::new(detail).color(MUTED));
+                        });
+                    }
+                });
+                if ui.button("Configure first mailbox  →").clicked() {
+                    self.active_view = WorkspaceView::Plan;
+                }
+                ui.label(RichText::new("For multiple mailboxes, use Batch after reviewing one representative pilot.").color(MUTED));
+            });
+            ui.add_space(14.0);
+        }
         ui.group(|ui| {
             ui.label(
                 RichText::new("CURRENT PHASE")
