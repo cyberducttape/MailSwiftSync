@@ -2118,11 +2118,15 @@ fn canonical_destination_identity(profile: &Profile) -> Result<String, String> {
     if port == 0 {
         return Err("Destination IMAP port must be a number between 1 and 65535.".into());
     }
+    let canonical_host = match host.parse::<std::net::IpAddr>() {
+        Ok(address) => address.to_string(),
+        Err(_) => host.trim_end_matches('.').to_ascii_lowercase(),
+    };
     Ok(format!(
         "{}:{}:{}",
-        host.to_ascii_lowercase(),
+        canonical_host,
         port,
-        profile.destination_user.trim().to_ascii_lowercase()
+        profile.destination_user.trim()
     ))
 }
 
@@ -2281,6 +2285,7 @@ struct App {
     /// the operator confirms the host has been checked.
     process_review_required: bool,
     persistence_available: bool,
+    profile_available: bool,
     /// The project currently selected by the operator for views and exports.
     /// This is deliberately separate from `active_run`, which is execution
     /// ownership and must never be inferred from UI selection.
@@ -2485,15 +2490,21 @@ impl Default for App {
             ));
         }
         let mut initial_output: VecDeque<String> = initial_output.into_iter().collect();
-        let mut form = match Form::load() {
-            Ok(form) => form,
-            Err(error) => {
-                persistence_warning.get_or_insert_with(|| {
-                    format!("Saved migration profile is unavailable; execution is blocked: {error}")
-                });
-                Form::default()
-            }
+        let (mut form, profile_warning) = match Form::load() {
+            Ok(form) => (form, None),
+            Err(error) => (
+                Form::default(),
+                Some(format!(
+                    "Saved migration profile is unavailable; execution is blocked: {error}"
+                )),
+            ),
         };
+        if let Some(warning) = profile_warning.as_ref() {
+            initial_output.push_back(warning.clone());
+            initial_output.push_back(
+                "History and reports remain available; repair the profile before execution.".into(),
+            );
+        }
         if let Some(warning) = persistence_warning.as_ref()
             && !initial_output.iter().any(|line| line == warning)
         {
@@ -2623,7 +2634,10 @@ impl Default for App {
             form,
             output: initial_output,
             receiver: None,
-            status: persistence_warning.clone().unwrap_or_else(|| "Idle".into()),
+            status: persistence_warning
+                .clone()
+                .or_else(|| profile_warning.clone())
+                .unwrap_or_else(|| "Idle".into()),
             preview: false,
             bulk_jobs: restored_bulk_jobs,
             bulk_open: false,
@@ -2646,6 +2660,7 @@ impl Default for App {
             _instance_lock: instance_lock.and_then(Result::ok),
             process_review_required: unverified_process_count > 0,
             persistence_available: persistence_warning.is_none(),
+            profile_available: profile_warning.is_none(),
             selected_project_id: restored_bulk_project_id
                 .clone()
                 .or_else(|| project_id.clone()),
@@ -5026,8 +5041,15 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        let snapshot = self
-            .store
+        Self::export_customer_proof_from_store(&self.store, project_id, path)
+    }
+
+    fn export_customer_proof_from_store(
+        store: &core::StateStore,
+        project_id: &str,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        let snapshot = store
             .project_report_snapshot(project_id)
             .map_err(|e| e.to_string())?
             .ok_or("The durable migration project no longer exists.")?;
@@ -5659,6 +5681,12 @@ impl App {
         }
     }
     fn start_bulk(&mut self) {
+        if !self.profile_available {
+            self.bulk_message =
+                "Batch execution is blocked because the saved migration profile is unavailable; repair it before starting a queue."
+                    .into();
+            return;
+        }
         if self.workspace_read_only {
             self.bulk_message =
                 "This project is being viewed read-only. Start a new migration to execute a batch."
@@ -6617,6 +6645,12 @@ impl App {
     }
 
     fn start(&mut self) {
+        if !self.profile_available {
+            self.status =
+                "Execution is blocked because the saved migration profile is unavailable; repair it before starting a migration."
+                    .into();
+            return;
+        }
         if self.workspace_read_only {
             self.status =
                 "This project is being viewed read-only. Start a new migration to execute a plan."
@@ -9451,25 +9485,45 @@ fn main() -> eframe::Result<()> {
             eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json>");
             std::process::exit(2);
         };
+        let project_id = arguments.next();
         if arguments.next().is_some() {
-            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json>");
+            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id]");
             std::process::exit(2);
         }
         let state = std::path::PathBuf::from(state);
         let output = std::path::PathBuf::from(output);
-        unsafe { std::env::set_var("MAILSWIFTSYNC_STATE_PATH", &state) };
-        let app = App::default();
-        if !app.persistence_available {
-            eprintln!("Customer-proof export refused: durable SQLite state is unavailable");
+        let store = match core::StateStore::open_readonly(&state) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!(
+                    "Customer-proof export refused: durable SQLite state is unavailable: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let project_id = match project_id {
+            Some(project_id) => match project_id.to_str() {
+                Some(project_id) => Some(project_id.to_owned()),
+                None => {
+                    eprintln!("Customer-proof export refused: project ID must be valid UTF-8");
+                    std::process::exit(2);
+                }
+            },
+            None => match store.latest_project() {
+                Ok(project) => project.map(|project| project.id),
+                Err(error) => {
+                    eprintln!(
+                        "Customer-proof export refused: could not select latest project: {error}"
+                    );
+                    std::process::exit(1);
+                }
+            },
+        };
+        let Some(project_id) = project_id else {
+            eprintln!("Customer-proof export refused: no durable migration project is available");
             std::process::exit(1);
-        }
-        if app.process_review_required {
-            eprintln!(
-                "Customer-proof export refused: recorded process ownership requires recovery review"
-            );
-            std::process::exit(1);
-        }
-        match app.export_customer_proof_to(&output) {
+        };
+        match App::export_customer_proof_from_store(&store, &project_id, &output) {
             Ok(()) => {
                 println!("Created customer migration proof: {}", output.display());
                 return Ok(());
@@ -9801,6 +9855,9 @@ fn headless_execute(state_path: &std::path::Path, live: bool) -> Result<String, 
     let mut app = App::default();
     if !app.persistence_available {
         return Err("durable SQLite state is unavailable; execution is blocked".into());
+    }
+    if !app.profile_available {
+        return Err("saved migration profile is unavailable; repair it before execution".into());
     }
     if app.process_review_required {
         return Err(
@@ -11170,6 +11227,24 @@ mod tests {
             state: "Ready".into(),
         }];
         assert!(duplicate_bulk_destination(&jobs).is_err());
+    }
+
+    #[test]
+    fn duplicate_destination_identity_canonicalizes_hosts_but_preserves_mailbox_case() {
+        let mut first = Form::default();
+        first.profile.destination_host = "MAIL.EXAMPLE.".into();
+        first.profile.destination_user = "User@example".into();
+        let mut second = first.clone();
+        second.profile.destination_host = "mail.example".into();
+        second.profile.destination_user = "user@example".into();
+        assert_ne!(
+            canonical_destination_identity(&first.profile).unwrap(),
+            canonical_destination_identity(&second.profile).unwrap()
+        );
+        assert_eq!(
+            canonical_destination_identity(&first.profile).unwrap(),
+            "mail.example:993:User@example"
+        );
     }
 
     #[test]

@@ -12,10 +12,11 @@ if ! command -v dovecot >/dev/null 2>&1 || ! command -v imapsync >/dev/null 2>&1
 fi
 
 dovecot_version="$(dovecot --version 2>/dev/null || true)"
-if [[ "$dovecot_version" != 2.4.* ]]; then
-  echo "SKIP: this fixture currently targets Dovecot 2.4.x (found: ${dovecot_version:-unknown})" >&2
-  exit 77
+if [[ -z "$dovecot_version" ]]; then
+  echo "FAIL: unable to determine the installed Dovecot version" >&2
+  exit 1
 fi
+echo "Using Dovecot ${dovecot_version} and imapsync $(imapsync --version 2>/dev/null || true)"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
 cleanup() {
@@ -59,8 +60,6 @@ start_server() {
     chmod 0644 "$root/passwd"
   fi
   cat > "$config" <<EOF
-dovecot_config_version = 2.4.5
-dovecot_storage_version = 2.4.5
 base_dir = $root/run/
 state_dir = $root/run/
 protocols = imap

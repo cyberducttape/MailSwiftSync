@@ -40,6 +40,9 @@ pub(crate) fn parts(input: &str, default_port: u16) -> Result<(String, u16), Str
         }
         return Ok((host.trim().to_owned(), port));
     }
+    if input.matches(':').count() > 1 && input.parse::<std::net::Ipv6Addr>().is_err() {
+        return Err("invalid IPv6 endpoint".into());
+    }
     Ok((input.to_owned(), default_port))
 }
 
@@ -75,5 +78,6 @@ mod tests {
         assert!(parts("host:not-a-port", 993).is_err());
         assert!(parts("host:99999", 993).is_err());
         assert!(parts("[2001:db8::1]garbage", 993).is_err());
+        assert!(parts("mail.example.com:993:garbage", 993).is_err());
     }
 }

@@ -30,7 +30,8 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates dovecot-core \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin mailswiftsync \
-    && install -d -o mailswiftsync -g mailswiftsync -m 0700 /var/lib/mailswiftsync /run/user/10001
+    && install -d -o mailswiftsync -g mailswiftsync -m 0700 /var/lib/mailswiftsync /run/user/10001 \
+    && install -d -m 0755 /usr/local/lib/mailswiftsync
 
 COPY --from=imapsync-package /tmp/imapsync.deb /tmp/imapsync.deb
 RUN apt-get update \
@@ -39,7 +40,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/mailswiftsync /usr/local/bin/mailswiftsync
+COPY scripts/imap-integration-smoke.sh /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
 RUN chmod 0755 /usr/local/bin/mailswiftsync
+RUN chmod 0755 /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
 
 ENV MAILSWIFTSYNC_STATE_PATH=/var/lib/mailswiftsync/state.db \
     XDG_RUNTIME_DIR=/run/user/10001
