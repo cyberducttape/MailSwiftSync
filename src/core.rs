@@ -141,6 +141,73 @@ impl AttentionReason {
     }
 }
 
+/// Stable durable mailbox states. SQLite stores their wire representation,
+/// while controller and UI policy should use this enum so a new terminal
+/// state cannot be accidentally omitted from one execution path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum MailboxState {
+    Queued,
+    Preflight,
+    Ready,
+    Running,
+    Completed,
+    Verified,
+    VerifiedWithExceptions,
+    Failed,
+    Cancelled,
+    Attention,
+    DeltaRequired,
+    VerificationDifference,
+}
+
+impl MailboxState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Preflight => "preflight",
+            Self::Ready => "ready",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Verified => "verified",
+            Self::VerifiedWithExceptions => "verified_with_exceptions",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Attention => "attention",
+            Self::DeltaRequired => "delta_required",
+            Self::VerificationDifference => "verification_difference",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "queued" => Self::Queued,
+            "preflight" => Self::Preflight,
+            "ready" => Self::Ready,
+            "running" => Self::Running,
+            "completed" => Self::Completed,
+            "verified" => Self::Verified,
+            "verified_with_exceptions" => Self::VerifiedWithExceptions,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            "attention" => Self::Attention,
+            "delta_required" => Self::DeltaRequired,
+            "verification_difference" => Self::VerificationDifference,
+            _ => return None,
+        })
+    }
+
+    pub fn is_verified(self) -> bool {
+        matches!(self, Self::Verified | Self::VerifiedWithExceptions)
+    }
+
+    pub fn needs_operator_review(self) -> bool {
+        matches!(
+            self,
+            Self::Attention | Self::Failed | Self::Cancelled | Self::VerificationDifference
+        )
+    }
+}
+
 fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionReason> {
     if mailbox_state == "verification_difference" {
         return Some(AttentionReason::VerificationDifference);
@@ -3034,45 +3101,100 @@ fn phase_rank(phase: Phase) -> u8 {
 }
 
 fn valid_mailbox_transition(current: &str, next: &str) -> bool {
+    let (Some(current), Some(next)) = (MailboxState::parse(current), MailboxState::parse(next))
+    else {
+        return false;
+    };
     match current {
-        "queued" => matches!(
+        MailboxState::Queued => matches!(
             next,
-            "preflight" | "ready" | "running" | "failed" | "cancelled" | "attention"
+            MailboxState::Preflight
+                | MailboxState::Ready
+                | MailboxState::Running
+                | MailboxState::Failed
+                | MailboxState::Cancelled
+                | MailboxState::Attention
         ),
-        "preflight" => matches!(next, "ready" | "running" | "failed" | "cancelled"),
-        "ready" => matches!(next, "running" | "failed" | "cancelled"),
-        "running" => matches!(
+        MailboxState::Preflight => matches!(
             next,
-            "ready"
-                | "completed"
-                | "delta_required"
-                | "verification_difference"
-                | "failed"
-                | "cancelled"
-                | "attention"
+            MailboxState::Ready
+                | MailboxState::Running
+                | MailboxState::Failed
+                | MailboxState::Cancelled
         ),
-        "delta_required" | "verification_difference" => {
+        MailboxState::Ready => {
             matches!(
                 next,
-                "running" | "failed" | "cancelled" | "attention" | "verified_with_exceptions"
+                MailboxState::Running | MailboxState::Failed | MailboxState::Cancelled
             )
         }
-        "completed" => matches!(
+        MailboxState::Running => matches!(
             next,
-            "verified" | "delta_required" | "verification_difference" | "running" | "attention"
+            MailboxState::Ready
+                | MailboxState::Completed
+                | MailboxState::DeltaRequired
+                | MailboxState::VerificationDifference
+                | MailboxState::Failed
+                | MailboxState::Cancelled
+                | MailboxState::Attention
         ),
-        "failed" | "cancelled" => matches!(next, "running" | "attention"),
-        "verified" | "verified_with_exceptions" => {
-            matches!(next, "delta_required" | "running" | "attention")
+        MailboxState::DeltaRequired | MailboxState::VerificationDifference => matches!(
+            next,
+            MailboxState::Running
+                | MailboxState::Failed
+                | MailboxState::Cancelled
+                | MailboxState::Attention
+                | MailboxState::VerifiedWithExceptions
+        ),
+        MailboxState::Completed => matches!(
+            next,
+            MailboxState::Verified
+                | MailboxState::DeltaRequired
+                | MailboxState::VerificationDifference
+                | MailboxState::Running
+                | MailboxState::Attention
+        ),
+        MailboxState::Failed | MailboxState::Cancelled => {
+            matches!(next, MailboxState::Running | MailboxState::Attention)
         }
-        "attention" => matches!(next, "running"),
-        _ => false,
+        MailboxState::Verified | MailboxState::VerifiedWithExceptions => matches!(
+            next,
+            MailboxState::DeltaRequired | MailboxState::Running | MailboxState::Attention
+        ),
+        MailboxState::Attention => matches!(next, MailboxState::Running),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mailbox_state_wire_values_and_policy_are_centralized() {
+        let states = [
+            MailboxState::Queued,
+            MailboxState::Preflight,
+            MailboxState::Ready,
+            MailboxState::Running,
+            MailboxState::Completed,
+            MailboxState::Verified,
+            MailboxState::VerifiedWithExceptions,
+            MailboxState::Failed,
+            MailboxState::Cancelled,
+            MailboxState::Attention,
+            MailboxState::DeltaRequired,
+            MailboxState::VerificationDifference,
+        ];
+        for state in states {
+            assert_eq!(MailboxState::parse(state.as_str()), Some(state));
+        }
+        assert!(MailboxState::Verified.is_verified());
+        assert!(MailboxState::VerifiedWithExceptions.is_verified());
+        assert!(MailboxState::VerificationDifference.needs_operator_review());
+        assert!(!MailboxState::Ready.needs_operator_review());
+        assert_eq!(MailboxState::parse("unknown"), None);
+    }
+
     #[test]
     fn capability_parser_selects_modern_strategy() {
         let caps = ServerCapabilities::parse(

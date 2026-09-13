@@ -2034,20 +2034,34 @@ struct BulkConfirmationSummary {
 
 impl BulkRetryScope {
     fn includes(self, state: &str) -> bool {
+        let Some(state) = core::MailboxState::parse(state) else {
+            return false;
+        };
         match self {
             // Operator-review states must never be pulled into unattended
             // retry by the default scope. They require an explicit choice
             // after the durable reason has been reviewed.
-            Self::Unresolved => !matches!(
+            Self::Unresolved => {
+                !state.is_verified()
+                    && !matches!(
+                        state,
+                        core::MailboxState::Attention | core::MailboxState::VerificationDifference
+                    )
+            }
+            Self::FailedAttention => matches!(
                 state,
-                "verified" | "verified_with_exceptions" | "attention" | "verification_difference"
+                core::MailboxState::Failed | core::MailboxState::Attention
             ),
-            Self::FailedAttention => matches!(state, "failed" | "attention"),
-            Self::DeltaRequired => state == "delta_required",
-            Self::VerificationDifference => state == "verification_difference",
+            Self::DeltaRequired => state == core::MailboxState::DeltaRequired,
+            Self::VerificationDifference => state == core::MailboxState::VerificationDifference,
             Self::Automation => matches!(
                 state,
-                "queued" | "ready" | "completed" | "delta_required" | "cancelled" | "failed"
+                core::MailboxState::Queued
+                    | core::MailboxState::Ready
+                    | core::MailboxState::Completed
+                    | core::MailboxState::DeltaRequired
+                    | core::MailboxState::Cancelled
+                    | core::MailboxState::Failed
             ),
             Self::All => true,
         }
@@ -2068,9 +2082,15 @@ impl BulkRetryScope {
         if self != Self::Automation {
             return self.includes(state);
         }
-        match state {
-            "queued" | "ready" | "completed" | "delta_required" | "cancelled" => true,
-            "failed" => matches!(
+        match core::MailboxState::parse(state) {
+            Some(
+                core::MailboxState::Queued
+                | core::MailboxState::Ready
+                | core::MailboxState::Completed
+                | core::MailboxState::DeltaRequired
+                | core::MailboxState::Cancelled,
+            ) => true,
+            Some(core::MailboxState::Failed) => matches!(
                 reason,
                 Some(core::AttentionReason::TransportFailed)
                     | Some(core::AttentionReason::CapacityLimited)
@@ -8252,7 +8272,8 @@ fn display_job_state(state: &str) -> &'static str {
 }
 
 fn display_state_key(state: &str) -> String {
-    state.to_ascii_lowercase().replace(' ', "_")
+    let normalized = state.to_ascii_lowercase().replace(' ', "_");
+    core::MailboxState::parse(&normalized).map_or(normalized, |state| state.as_str().to_owned())
 }
 
 fn job_state_badge(state: &str) -> (&'static str, Color32) {
@@ -8278,10 +8299,7 @@ fn job_state_badge(state: &str) -> (&'static str, Color32) {
 }
 
 fn needs_operator_review(state: &str) -> bool {
-    matches!(
-        state,
-        "attention" | "failed" | "cancelled" | "verification_difference"
-    )
+    core::MailboxState::parse(state).is_some_and(core::MailboxState::needs_operator_review)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
