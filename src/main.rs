@@ -1743,6 +1743,8 @@ struct BulkJob {
     state: String,
 }
 
+type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum BulkRetryScope {
     #[default]
@@ -4795,31 +4797,28 @@ impl App {
         self.output.clear();
         let retry_count = self.form.profile.batch_retry_count.min(3);
         let job_count = jobs.len();
-        let (job_tx, job_rx) = crossbeam_channel::unbounded();
         let queue_job_ids = selected_job_ids;
         let child_run_ids = self
             .active_run
             .as_ref()
             .map(|run| run.batch_child_run_ids.clone())
             .unwrap_or_default();
-        for (index, job) in jobs.into_iter().enumerate() {
-            job_tx
-                .send((
-                    index,
-                    queue_job_ids[index].clone(),
-                    child_run_ids[index].clone(),
-                    queue_checkpoints[index].clone(),
-                    job,
-                ))
-                .expect("batch workers are created immediately after queue setup");
-        }
-        drop(job_tx);
         let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
         let batch_project_id = project_id.clone();
         let batch_run_id = run_id.clone();
         thread::spawn(move || {
             let failed = Arc::new(AtomicBool::new(false));
             let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
+            // Keep only a small number of full job plans in flight.  In
+            // particular, do not eagerly enqueue hundreds of Forms (which
+            // may contain credential material) before workers have even
+            // started.  The producer runs in this coordinator thread, so a
+            // bounded queue applies backpressure without blocking the UI.
+            let queue_capacity = concurrency.saturating_mul(2).max(1);
+            let (job_tx, job_rx): (
+                crossbeam_channel::Sender<BatchWorkItem>,
+                crossbeam_channel::Receiver<BatchWorkItem>,
+            ) = crossbeam_channel::bounded(queue_capacity);
             let mut workers = Vec::with_capacity(concurrency);
             for _ in 0..concurrency {
                 let job_rx = job_rx.clone();
@@ -5223,12 +5222,49 @@ impl App {
                     }
                 }));
             }
+            drop(job_rx);
+
+            let mut enqueue_failed = false;
+            for (index, job) in jobs.into_iter().enumerate() {
+                let Some(job_id) = queue_job_ids.get(index).cloned() else {
+                    failed.store(true, Ordering::Relaxed);
+                    enqueue_failed = true;
+                    break;
+                };
+                let Some(child_run_id) = child_run_ids.get(index).cloned() else {
+                    failed.store(true, Ordering::Relaxed);
+                    enqueue_failed = true;
+                    break;
+                };
+                if job_tx
+                    .send((
+                        index,
+                        job_id,
+                        child_run_id,
+                        queue_checkpoints.get(index).cloned().unwrap_or_default(),
+                        job,
+                    ))
+                    .is_err()
+                {
+                    failed.store(true, Ordering::Relaxed);
+                    enqueue_failed = true;
+                    break;
+                }
+            }
+            drop(job_tx);
+
             let mut worker_panicked = false;
             for worker in workers {
                 if worker.join().is_err() {
                     worker_panicked = true;
                     failed.store(true, Ordering::Relaxed);
                 }
+            }
+            if enqueue_failed {
+                let _ = tx.send(Event::Line(
+                    "Batch work queue disconnected before all jobs were admitted; unresolved jobs require review before retrying."
+                        .into(),
+                ));
             }
             if worker_panicked {
                 let unresolved = terminal_jobs
