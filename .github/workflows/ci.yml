@@ -114,4 +114,4 @@ jobs:
       - name: Smoke-test bundled Dovecot engine
         run: docker run --rm --entrypoint dovecot mailswiftsync:ci --version
       - name: Smoke-test bundled doveadm
-        run: docker run --rm --entrypoint doveadm mailswiftsync:ci -O help
+        run: docker run --rm --entrypoint doveadm mailswiftsync:ci --version

@@ -27,7 +27,7 @@ RUN cargo build --locked --release
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates dovecot-core \
+    && apt-get install --no-install-recommends -y ca-certificates dovecot-core dovecot-imapd \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 --shell /usr/sbin/nologin mailswiftsync \
     && install -d -o mailswiftsync -g mailswiftsync -m 0700 /var/lib/mailswiftsync /run/user/10001 \
