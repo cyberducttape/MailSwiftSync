@@ -1405,14 +1405,17 @@ fn run_dovecot_destination_preflight(
     cancel: &AtomicBool,
     timeout: Duration,
     prefix: &str,
+    run_id: &str,
+    job_id: &str,
 ) -> Result<(), String> {
     for (index, (executable, args)) in commands.iter().enumerate() {
         let (status, lines) = run_capture_lines(executable, args, &[], cancel, &[], timeout)?;
         for line in lines {
-            let _ = tx.send(Event::Line(format!(
-                "{prefix}[destination preflight/{}] {line}",
-                index + 1
-            )));
+            let _ = tx.send(Event::RunLine {
+                run_id: run_id.to_owned(),
+                job_id: job_id.to_owned(),
+                text: format!("{prefix}[destination preflight/{}] {line}", index + 1),
+            });
         }
         if status.exit_code != Some(0) {
             return Err(format!(
@@ -1425,6 +1428,7 @@ fn run_dovecot_destination_preflight(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_dovecot_verification(
     commands: &[(String, Vec<String>)],
     verification_env: &[(String, String)],
@@ -1433,6 +1437,8 @@ fn run_dovecot_verification(
     cancel: &AtomicBool,
     timeout: Duration,
     prefix: &str,
+    run_id: &str,
+    job_id: &str,
 ) -> Result<core::MailboxEvidence, String> {
     let mut reports = Vec::with_capacity(commands.len());
     for (index, (verify_exe, verify_args)) in commands.iter().enumerate() {
@@ -1445,10 +1451,11 @@ fn run_dovecot_verification(
             timeout,
         )?;
         for line in &report {
-            let _ = tx.send(Event::Line(format!(
-                "{prefix}[verification/{}] {line}",
-                index + 1
-            )));
+            let _ = tx.send(Event::RunLine {
+                run_id: run_id.to_owned(),
+                job_id: job_id.to_owned(),
+                text: format!("{prefix}[verification/{}] {line}", index + 1),
+            });
         }
         if status.exit_code != Some(0) {
             return Err(format!(
@@ -4092,6 +4099,8 @@ impl App {
                                                     job.form.profile.migration_timeout_hours * 60 * 60,
                                                 ),
                                                 &format!("[{}] ", index + 1),
+                                                &child_run_id,
+                                                &job_id,
                                             )
                                             .map(|_| outcome)
                                         })
@@ -4127,6 +4136,8 @@ impl App {
                                                         * 60,
                                                 ),
                                                 &format!("[{}] ", index + 1),
+                                                &child_run_id,
+                                                &job_id,
                                             )
                                             .map(|evidence| {
                                                 let _ = tx.send(Event::BatchEvidence {
@@ -4638,6 +4649,8 @@ impl App {
                             &cancel,
                             migration_timeout,
                             "",
+                            &run_id,
+                            &process_job_id,
                         )
                         .map(|_| outcome)
                     });
@@ -4652,6 +4665,8 @@ impl App {
                             &cancel,
                             migration_timeout,
                             "",
+                            &run_id,
+                            &process_job_id,
                         )
                         .map(|evidence| {
                             let _ = tx.send(Event::Evidence(evidence));
