@@ -426,7 +426,10 @@ impl StateStore {
         Ok(store)
     }
     fn migrate(&self) -> rusqlite::Result<()> {
-        const CURRENT_SCHEMA_VERSION: i64 = 1;
+        // Version 2 adds the durable endpoint-qualified destination identity.
+        // Keep the compatibility column checks below for pre-versioned alpha
+        // databases, then stamp the completed layout explicitly.
+        const CURRENT_SCHEMA_VERSION: i64 = 2;
         let stored_schema_version: i64 =
             self.connection
                 .query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -2826,7 +2829,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         drop(db);
 
         let directory =
