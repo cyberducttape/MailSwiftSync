@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Configuration and credential dialogs are now read-only while an execution
+  is active, so the visible plan cannot be changed through a modal while live
+  output is being produced.
 - Batch retry, authentication, claim, and failure diagnostics now use the
   mailbox child run identity instead of the parent batch run; parent-level
   output is reserved for wave summaries.

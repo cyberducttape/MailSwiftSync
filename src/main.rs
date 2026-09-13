@@ -5672,38 +5672,46 @@ impl App {
         if !self.advanced_open {
             return;
         }
-        egui::Window::new("Advanced migration options").open(&mut self.advanced_open).default_width(620.0).show(ctx, |ui| {
+        let mut open = self.advanced_open;
+        egui::Window::new("Advanced migration options").open(&mut open).default_width(620.0).show(ctx, |ui| {
             ui.label(RichText::new("These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules.").color(MUTED));
             ui.add_space(8.0);
-            ui.group(|ui| { ui.heading("Reliability and metadata"); ui.checkbox(&mut self.form.profile.sync_internaldates, "Sync internal dates  (--syncinternaldates)"); ui.checkbox(&mut self.form.profile.useuid, "Use message UIDs when available  (--useuid)"); ui.checkbox(&mut self.form.profile.usecache, "Use imapsync cache  (--usecache)"); ui.checkbox(&mut self.form.profile.allowsizemismatch, "Allow message-size mismatch  (--allowsizemismatch)"); });
-            ui.add_space(8.0);
-            ui.group(|ui| {
-                ui.heading("Performance");
-                ui.checkbox(&mut self.form.profile.fastio1, "Fast I/O for source  (--fastio1)")
-                    .on_hover_text("Uses imapsync's faster source I/O path; test this with the provider before a production cutover.");
-                ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)")
-                    .on_hover_text("Uses imapsync's faster destination I/O path; provider behavior varies.");
-                ui.horizontal(|ui| {
-                    ui.label("Messages/second target (0 = unlimited)")
-                        .on_hover_text("For a batch this is an aggregate target: MailSwiftSync divides it across concurrent imapsync workers. A single run uses the value unchanged.");
-                    ui.add(egui::DragValue::new(&mut self.form.profile.max_messages_per_second).range(0..=100_000));
+            let editable = !self.running();
+            ui.add_enabled_ui(editable, |ui| {
+                ui.group(|ui| { ui.heading("Reliability and metadata"); ui.checkbox(&mut self.form.profile.sync_internaldates, "Sync internal dates  (--syncinternaldates)"); ui.checkbox(&mut self.form.profile.useuid, "Use message UIDs when available  (--useuid)"); ui.checkbox(&mut self.form.profile.usecache, "Use imapsync cache  (--usecache)"); ui.checkbox(&mut self.form.profile.allowsizemismatch, "Allow message-size mismatch  (--allowsizemismatch)"); });
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.heading("Performance");
+                    ui.checkbox(&mut self.form.profile.fastio1, "Fast I/O for source  (--fastio1)")
+                        .on_hover_text("Uses imapsync's faster source I/O path; test this with the provider before a production cutover.");
+                    ui.checkbox(&mut self.form.profile.fastio2, "Fast I/O for destination  (--fastio2)")
+                        .on_hover_text("Uses imapsync's faster destination I/O path; provider behavior varies.");
+                    ui.horizontal(|ui| {
+                        ui.label("Messages/second target (0 = unlimited)")
+                            .on_hover_text("For a batch this is an aggregate target: MailSwiftSync divides it across concurrent imapsync workers. A single run uses the value unchanged.");
+                        ui.add(egui::DragValue::new(&mut self.form.profile.max_messages_per_second).range(0..=100_000));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Bytes/second target (0 = unlimited)")
+                            .on_hover_text("For a batch this is an aggregate target: MailSwiftSync divides it across concurrent imapsync workers. A single run uses the value unchanged.");
+                        ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Process timeout (hours)")
+                            .on_hover_text("Maximum wall-clock time for one engine process. It is a safety bound, not an estimate of completion time.");
+                        ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
+                    });
+                    ui.label(RichText::new("Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count.").size(11.0).color(MUTED));
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Bytes/second target (0 = unlimited)")
-                        .on_hover_text("For a batch this is an aggregate target: MailSwiftSync divides it across concurrent imapsync workers. A single run uses the value unchanged.");
-                    ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX));
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Process timeout (hours)")
-                        .on_hover_text("Maximum wall-clock time for one engine process. It is a safety bound, not an estimate of completion time.");
-                    ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
-                });
-                ui.label(RichText::new("Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count.").size(11.0).color(MUTED));
+                ui.add_space(8.0);
+                ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
             });
-            ui.add_space(8.0);
-            ui.group(|ui| { ui.heading(RichText::new("Destructive destination option").color(ALERT)); ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)"); ui.label(RichText::new("Use only for an intentionally exact backup after a tested dry run. This can remove destination mail.").size(11.0).color(ALERT)); });
+            if !editable {
+                ui.label(RichText::new("Advanced plan settings are locked while a migration is running.").color(MUTED));
+            }
                 ui.add_space(8.0); ui.label("The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.");
         });
+        self.advanced_open = open;
     }
     fn keyring_dialog(&mut self, ctx: &egui::Context) {
         if !self.keyring_open {
@@ -5721,55 +5729,61 @@ impl App {
                     .color(MUTED),
                 );
                 ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label("Source ID");
-                    ui.text_edit_singleline(&mut self.form.profile.source_credential_id);
+                let editable = !self.running();
+                ui.add_enabled_ui(editable, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Source ID");
+                        ui.text_edit_singleline(&mut self.form.profile.source_credential_id);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Destination ID");
+                        ui.text_edit_singleline(&mut self.form.profile.destination_credential_id);
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Store source password").clicked() {
+                            self.status = match self.form.store_keyring_password(true) {
+                                Ok(()) => "Source password stored in OS keyring".into(),
+                                Err(error) => error,
+                            };
+                        }
+                        if ui.button("Load source").clicked() {
+                            self.status = match self.form.load_keyring_password(true) {
+                                Ok(()) => "Source credential loaded".into(),
+                                Err(error) => error,
+                            };
+                        }
+                        if ui.button("Delete source").clicked() {
+                            self.status = match self.form.delete_keyring_password(true) {
+                                Ok(()) => "Source credential deleted from OS keyring".into(),
+                                Err(error) => error,
+                            };
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Store destination password").clicked() {
+                            self.status = match self.form.store_keyring_password(false) {
+                                Ok(()) => "Destination password stored in OS keyring".into(),
+                                Err(error) => error,
+                            };
+                        }
+                        if ui.button("Load destination").clicked() {
+                            self.status = match self.form.load_keyring_password(false) {
+                                Ok(()) => "Destination credential loaded".into(),
+                                Err(error) => error,
+                            };
+                        }
+                        if ui.button("Delete destination").clicked() {
+                            self.status = match self.form.delete_keyring_password(false) {
+                                Ok(()) => "Destination credential deleted from OS keyring".into(),
+                                Err(error) => error,
+                            };
+                        }
+                    });
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Destination ID");
-                    ui.text_edit_singleline(&mut self.form.profile.destination_credential_id);
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Store source password").clicked() {
-                        self.status = match self.form.store_keyring_password(true) {
-                            Ok(()) => "Source password stored in OS keyring".into(),
-                            Err(error) => error,
-                        };
-                    }
-                    if ui.button("Load source").clicked() {
-                        self.status = match self.form.load_keyring_password(true) {
-                            Ok(()) => "Source credential loaded".into(),
-                            Err(error) => error,
-                        };
-                    }
-                    if ui.button("Delete source").clicked() {
-                        self.status = match self.form.delete_keyring_password(true) {
-                            Ok(()) => "Source credential deleted from OS keyring".into(),
-                            Err(error) => error,
-                        };
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Store destination password").clicked() {
-                        self.status = match self.form.store_keyring_password(false) {
-                            Ok(()) => "Destination password stored in OS keyring".into(),
-                            Err(error) => error,
-                        };
-                    }
-                    if ui.button("Load destination").clicked() {
-                        self.status = match self.form.load_keyring_password(false) {
-                            Ok(()) => "Destination credential loaded".into(),
-                            Err(error) => error,
-                        };
-                    }
-                    if ui.button("Delete destination").clicked() {
-                        self.status = match self.form.delete_keyring_password(false) {
-                            Ok(()) => "Destination credential deleted from OS keyring".into(),
-                            Err(error) => error,
-                        };
-                    }
-                });
+                if !editable {
+                    ui.label(RichText::new("Credential settings are locked while a migration is running.").color(MUTED));
+                }
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(
@@ -5791,13 +5805,15 @@ impl App {
             ui.heading("How should this migration run?");
             ui.label(RichText::new("Select the execution engine that fits the destination. MailSwiftSync owns planning, safety gates, orchestration, and verification; the selected engine owns message transfer.").color(MUTED));
             ui.add_space(8.0);
-            for engine in [core::Engine::Auto, core::Engine::Dovecot, core::Engine::ImapSync] {
-                ui.radio_value(&mut self.form.profile.engine, engine, engine.label());
-                if self.form.profile.engine == engine {
-                    ui.label(RichText::new(engine.description()).size(11.0).color(MUTED));
+            let editable = !self.running();
+            ui.add_enabled_ui(editable, |ui| {
+                for engine in [core::Engine::Auto, core::Engine::Dovecot, core::Engine::ImapSync] {
+                    ui.radio_value(&mut self.form.profile.engine, engine, engine.label());
+                    if self.form.profile.engine == engine {
+                        ui.label(RichText::new(engine.description()).size(11.0).color(MUTED));
+                    }
                 }
-            }
-            if self.form.profile.engine == core::Engine::Dovecot {
+                if self.form.profile.engine == core::Engine::Dovecot {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label("doveadm execution").on_hover_text(
@@ -5834,6 +5850,10 @@ impl App {
                 ui.checkbox(&mut self.form.profile.allow_remote_password_in_argv, "I understand the remote Dovecot password may be visible in process arguments");
                 ui.label(RichText::new("Required only for remote execution until keyring/secret-broker delivery is available. Never enable this on an untrusted destination.").size(11.0).color(ALERT));
                 ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(MUTED));
+                }
+            });
+            if !editable {
+                ui.label(RichText::new("Engine and execution settings are locked while a migration is running.").color(MUTED));
             }
             ui.add_space(8.0);
             if ui.button("Continue to migration plan").clicked() { close_requested = true; }
