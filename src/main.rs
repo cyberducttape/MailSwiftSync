@@ -2237,8 +2237,8 @@ fn imap_quote(value: &str) -> Result<String, String> {
     ))
 }
 
-fn read_imap_tagged(
-    stream: &mut StreamOwned<ClientConnection, TcpStream>,
+fn read_imap_tagged<S: Read>(
+    stream: &mut S,
     tag: &str,
     response: &mut String,
     buffer: &mut [u8; 4096],
@@ -2261,6 +2261,26 @@ fn read_imap_tagged(
     }
 }
 
+fn read_imap_greeting<S: Read>(stream: &mut S, host: &str) -> Result<String, String> {
+    let mut response = String::new();
+    let mut buffer = [0; 4096];
+    loop {
+        let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        if response.contains("\r\n") || response.len() > 65_536 {
+            break;
+        }
+    }
+    let greeting = response.to_ascii_uppercase();
+    if !greeting.contains("* OK") && !greeting.contains("* PREAUTH") {
+        return Err(format!("{host}: server greeting was missing or invalid"));
+    }
+    Ok(greeting)
+}
+
 fn imap_command_succeeded(response: &str, tag: &str) -> bool {
     response
         .lines()
@@ -2272,8 +2292,17 @@ fn probe_tls_capabilities(
     user: &str,
     password: &str,
 ) -> Result<core::ServerCapabilities, String> {
-    let (server_name, port) =
-        endpoint_parts(host, 993).map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
+    probe_tls_capabilities_with_transport(host, user, password, "imaps")
+}
+
+fn probe_tls_capabilities_with_transport(
+    host: &str,
+    user: &str,
+    password: &str,
+    transport: &str,
+) -> Result<core::ServerCapabilities, String> {
+    let (server_name, port) = endpoint_parts(host, default_imap_port(transport))
+        .map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
     let address = if server_name.contains(':') {
         format!("[{server_name}]:{port}")
     } else {
@@ -2297,7 +2326,7 @@ fn probe_tls_capabilities(
             Err(error) => last_error = Some(error),
         }
     }
-    let tcp = tcp.ok_or_else(|| {
+    let mut tcp = tcp.ok_or_else(|| {
         format!(
             "{host}: could not connect to any resolved address: {}",
             last_error
@@ -2313,28 +2342,52 @@ fn probe_tls_capabilities(
         .with_no_client_auth();
     let name = ServerName::try_from(server_name.to_owned())
         .map_err(|e| format!("{host}: invalid TLS server name: {e}"))?;
+
+    if transport == "starttls" {
+        let mut response = String::new();
+        let mut buffer = [0; 4096];
+        let greeting = read_imap_greeting(&mut tcp, host)?;
+        tcp.write_all(b"s001 CAPABILITY\r\n")
+            .map_err(|e| e.to_string())?;
+        read_imap_tagged(&mut tcp, "s001", &mut response, &mut buffer)?;
+        if !imap_command_succeeded(&response, "s001")
+            || !response.to_ascii_uppercase().contains("STARTTLS")
+        {
+            return Err(format!("{host}: server does not advertise STARTTLS"));
+        }
+        tcp.write_all(b"s002 STARTTLS\r\n")
+            .map_err(|e| e.to_string())?;
+        read_imap_tagged(&mut tcp, "s002", &mut response, &mut buffer)?;
+        if !imap_command_succeeded(&response, "s002") {
+            return Err(format!("{host}: STARTTLS negotiation failed"));
+        }
+        let connection = ClientConnection::new(Arc::new(config), name)
+            .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
+        return complete_authenticated_imap_probe(
+            StreamOwned::new(connection, tcp),
+            host,
+            user,
+            password,
+            greeting,
+        );
+    }
+
     let connection = ClientConnection::new(Arc::new(config), name)
         .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
     let mut stream = StreamOwned::new(connection, tcp);
-    // IMAP requires the server greeting before the client sends a command.
-    // Keep the greeting in the response so capability parsing can also use a
-    // PREAUTH greeting when a provider advertises capabilities there.
+    let greeting = read_imap_greeting(&mut stream, host)?;
+    complete_authenticated_imap_probe(stream, host, user, password, greeting)
+}
+
+fn complete_authenticated_imap_probe<S: Read + Write>(
+    mut stream: S,
+    host: &str,
+    user: &str,
+    password: &str,
+    greeting: String,
+) -> Result<core::ServerCapabilities, String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
-    loop {
-        let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
-        if count == 0 {
-            break;
-        }
-        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
-        if response.contains("\r\n") || response.len() > 65_536 {
-            break;
-        }
-    }
-    let greeting = response.to_ascii_uppercase();
-    if !greeting.contains("* OK") && !greeting.contains("* PREAUTH") {
-        return Err(format!("{host}: server greeting was missing or invalid"));
-    }
     stream
         .write_all(b"a001 CAPABILITY\r\n")
         .map_err(|e| e.to_string())?;
@@ -2393,16 +2446,12 @@ fn probe_tls_capabilities(
     Ok(caps)
 }
 
-/// Re-authenticate both endpoints immediately before a live imapsync child is
-/// launched.  This is deliberately limited to dual-IMAPS plans: the existing
-/// engine preflight remains the authority for STARTTLS/plain and Dovecot
-/// execution paths until equivalent transport-specific probes exist.
+/// Re-authenticate both encrypted endpoints immediately before a live imapsync
+/// child is launched. Plain transport remains excluded because it has no TLS
+/// boundary to validate and is already protected by the explicit transport
+/// acknowledgement gate.
 fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
-    if form.dry_run
-        || form.engine() != core::Engine::ImapSync
-        || form.profile.source_tls != "imaps"
-        || form.profile.destination_tls != "imaps"
-    {
+    if !fresh_imap_authentication_applies(form) {
         return Ok(());
     }
     let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)?;
@@ -2410,17 +2459,26 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
         &form.profile.destination_host,
         &form.profile.destination_port,
     )?;
-    probe_tls_capabilities(
+    probe_tls_capabilities_with_transport(
         &source,
         &form.profile.source_user,
         form.source_password.as_str(),
+        &form.profile.source_tls,
     )?;
-    probe_tls_capabilities(
+    probe_tls_capabilities_with_transport(
         &destination,
         &form.profile.destination_user,
         form.destination_password.as_str(),
+        &form.profile.destination_tls,
     )?;
     Ok(())
+}
+
+fn fresh_imap_authentication_applies(form: &Form) -> bool {
+    !form.dry_run
+        && form.engine() == core::Engine::ImapSync
+        && form.profile.source_tls != "plain"
+        && form.profile.destination_tls != "plain"
 }
 
 impl App {
@@ -2494,10 +2552,7 @@ impl App {
     }
 
     fn requires_live_imaps_auth_probe(&self) -> bool {
-        !self.form.dry_run
-            && self.form.engine() == core::Engine::ImapSync
-            && self.form.profile.source_tls == "imaps"
-            && self.form.profile.destination_tls == "imaps"
+        fresh_imap_authentication_applies(&self.form)
     }
 
     fn start_live_imaps_auth_probe(
@@ -2532,22 +2587,30 @@ impl App {
         let source_password = self.form.source_password.clone();
         let destination_user = self.form.profile.destination_user.clone();
         let destination_password = self.form.destination_password.clone();
+        let source_tls = self.form.profile.source_tls.clone();
+        let destination_tls = self.form.profile.destination_tls.clone();
         let (tx, rx) = mpsc::channel();
         self.live_auth_receiver = Some(rx);
-        self.status = "Re-authenticating both IMAPS endpoints before live execution…".into();
+        self.status = "Re-authenticating encrypted IMAP endpoints before live execution…".into();
         thread::spawn(move || {
-            let result = probe_tls_capabilities(&source, &source_user, source_password.as_str())
-                .and_then(|_| {
-                    probe_tls_capabilities(
-                        &destination,
-                        &destination_user,
-                        destination_password.as_str(),
-                    )
-                    .map(|_| LiveAuthProof {
-                        plan_fingerprint,
-                        credential_fingerprint,
-                    })
-                });
+            let result = probe_tls_capabilities_with_transport(
+                &source,
+                &source_user,
+                source_password.as_str(),
+                &source_tls,
+            )
+            .and_then(|_| {
+                probe_tls_capabilities_with_transport(
+                    &destination,
+                    &destination_user,
+                    destination_password.as_str(),
+                    &destination_tls,
+                )
+                .map(|_| LiveAuthProof {
+                    plan_fingerprint,
+                    credential_fingerprint,
+                })
+            });
             let _ = tx.send(result);
         });
     }
@@ -8095,14 +8158,18 @@ mod tests {
     }
 
     #[test]
-    fn fresh_dual_imaps_authentication_skips_non_imaps_paths() {
+    fn fresh_imap_authentication_applies_to_encrypted_transports() {
         let form = dovecot_form();
-        assert!(fresh_dual_imaps_authentication(&form).is_ok());
+        assert!(!fresh_imap_authentication_applies(&form));
 
         let mut form = Form::default();
         form.profile.source_tls = "starttls".into();
         form.profile.destination_tls = "imaps".into();
         form.dry_run = false;
-        assert!(fresh_dual_imaps_authentication(&form).is_ok());
+        assert!(fresh_imap_authentication_applies(&form));
+        form.profile.destination_tls = "starttls".into();
+        assert!(fresh_imap_authentication_applies(&form));
+        form.profile.source_tls = "plain".into();
+        assert!(!fresh_imap_authentication_applies(&form));
     }
 }
