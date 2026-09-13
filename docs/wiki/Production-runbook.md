@@ -20,6 +20,14 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
 8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof; if residual differences are accepted, record the decision and risk in the change ticket until the application provides a durable acceptance action.
 
+Once every mailbox is evidence-backed, MailSwiftSync may mark the project
+**Complete**. Complete projects are intentionally read-only: adding a mailbox,
+starting a run, or changing mailbox state is rejected by the durable core. If a
+post-cutover correction is required, open the Project Cockpit, enter the
+change reason, and use **Reopen project**. This records a `project_reopened`
+audit event and returns the project to Attention before further work is
+allowed.
+
 The Dovecot path uses the durable `checkpoint` field as a conservative
 stateful-resume token. Live `sync`/`backup` passes provide the last committed
 value to `doveadm -s`; the initial pass uses an empty state, and a newly
@@ -32,6 +40,10 @@ destination is not yet reconciled.
 ## During execution
 
 - Watch the Activity journal, but remember that the durable SQLite ledger and exported reports are the source of truth; the visible journal is bounded and redacted.
+- A transient batch retry keeps the same mailbox child run and durable claim
+  across attempts. The worker may back off without making the mailbox appear
+  unowned; a restart during that interval is therefore recovered as active
+  interrupted work rather than as a new, unrelated run.
 - Keep concurrency and provider throttling below the tenant’s tested limits. Per-process throttles are not a tenant-wide rate limit.
 - Use Cancel when the migration window must stop. Do not kill the application as a normal cancellation method.
 - Do not edit plan or batch identity fields, import a new queue, or clear the queue while execution is active.
