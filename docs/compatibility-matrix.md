@@ -7,7 +7,7 @@ fully backed-up mailboxes.
 
 | Source | Destination | Engine | TLS/auth | Folder namespace | Dovecot/provider version | Dry pilot | Live pilot | Recovery | Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Disposable local Dovecot | Disposable local Dovecot | imapsync | IMAP cleartext fixture credentials | Maildir default / automap | Dovecot 2.4.5, imapsync 2.229 | Not exercised by fixture | Pass: one message copied | Not tested | Engine transfer and invalid-auth rejection | Engine-only smoke evidence; not a supported provider row and does not satisfy the release gate. |
+| Disposable local Dovecot | Disposable local Dovecot | imapsync | IMAP cleartext fixture credentials | Maildir default / automap | Dovecot 2.4.5, imapsync 2.229 | Pass: non-mutating dry transfer | Pass: one message copied | Not tested | Engine transfer and invalid-auth rejection | Engine-only smoke evidence; not a supported provider row and does not satisfy the release gate. |
 
 ## Verified engine fixture
 

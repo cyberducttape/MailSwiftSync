@@ -127,6 +127,12 @@ EOF
 imapsync \
   --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "$password" --notls1 \
   --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
+  --automap --dry --nolog
+echo "PASS: real IMAP preflight/dry transfer completed without changing the destination"
+
+imapsync \
+  --host1 127.0.0.1 --port1 "$source_port" --user1 "$user" --password1 "$password" --notls1 \
+  --host2 127.0.0.1 --port2 "$destination_port" --user2 "$user" --password2 "$password" --notls2 \
   --automap --nolog
 
 set +e
