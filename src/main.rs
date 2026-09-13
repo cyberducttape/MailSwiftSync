@@ -58,6 +58,8 @@ const DOVECOT_SYNC_LOCK_WAIT_SECONDS: u64 = 300;
 const MAX_PENDING_EVENTS: usize = 4_096;
 const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_UI_SCALE: f32 = 1.10;
+const MIN_UI_SCALE: f32 = 0.90;
+const MAX_UI_SCALE: f32 = 1.50;
 
 type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -128,6 +130,55 @@ struct Profile {
     allowsizemismatch: bool,
     delete2: bool,
     extra_options: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AppearancePreferences {
+    dark_mode: bool,
+    ui_scale: f32,
+}
+
+impl Default for AppearancePreferences {
+    fn default() -> Self {
+        Self {
+            dark_mode: true,
+            ui_scale: DEFAULT_UI_SCALE,
+        }
+    }
+}
+
+impl AppearancePreferences {
+    fn path() -> PathBuf {
+        dirs_next::config_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("mailswiftsync/appearance.toml")
+    }
+
+    fn load() -> Self {
+        let preferences = std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|text| toml::from_str::<Self>(&text).ok())
+            .unwrap_or_default();
+        let ui_scale = if preferences.ui_scale.is_finite() {
+            preferences.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE)
+        } else {
+            DEFAULT_UI_SCALE
+        };
+        Self {
+            dark_mode: preferences.dark_mode,
+            ui_scale,
+        }
+    }
+
+    fn save(&self) -> Result<(), String> {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            restrict_directory_permissions(parent).map_err(|error| error.to_string())?;
+        }
+        let content = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
+        write_private_atomic(&path, &content).map_err(|error| error.to_string())
+    }
 }
 
 /// The durable run snapshot deliberately does not serialize `Profile`.
@@ -1862,6 +1913,7 @@ struct App {
     pending_batch_checkpoints: HashMap<String, String>,
     run_started_at: Option<std::time::Instant>,
     dark_mode: bool,
+    ui_scale: f32,
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_live_run: bool,
@@ -1874,6 +1926,7 @@ struct App {
 }
 impl Default for App {
     fn default() -> Self {
+        let appearance = AppearancePreferences::load();
         let state_path = dirs_next::data_local_dir()
             .unwrap_or_else(std::env::temp_dir)
             .join("mailswiftsync/state.db");
@@ -2079,7 +2132,8 @@ impl Default for App {
             run_started_at: None,
             // Migration windows are log-heavy and commonly run in dark,
             // low-glare operator environments.
-            dark_mode: true,
+            dark_mode: appearance.dark_mode,
+            ui_scale: appearance.ui_scale,
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_live_run: false,
@@ -2115,6 +2169,15 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     } else {
         format!("{minutes:02}:{seconds:02}")
     }
+}
+
+fn next_ui_scale(current: f32) -> f32 {
+    const SCALES: [f32; 5] = [0.90, 1.00, 1.10, 1.25, 1.50];
+    SCALES
+        .iter()
+        .copied()
+        .find(|scale| *scale > current + f32::EPSILON)
+        .unwrap_or(SCALES[0])
 }
 
 fn terminal_phase_advance_allowed(
@@ -6522,7 +6585,7 @@ impl eframe::App for App {
         // Keep operator-facing tables, status text, and logs readable on a
         // migration workstation. This is a default scale, not a substitute
         // for a future persisted Appearance preference.
-        ctx.set_zoom_factor(DEFAULT_UI_SCALE);
+        ctx.set_zoom_factor(self.ui_scale);
         self.poll();
         if self.running() {
             if let Some(profile) = &self.locked_profile {
@@ -6606,13 +6669,36 @@ impl eframe::App for App {
                     }
                     if ui
                         .button(if self.dark_mode {
-                            "Light theme"
+                            "Appearance: Dark"
                         } else {
-                            "Dark theme"
+                            "Appearance: Light"
                         })
                         .clicked()
                     {
                         self.dark_mode = !self.dark_mode;
+                        if let Err(error) = (AppearancePreferences {
+                            dark_mode: self.dark_mode,
+                            ui_scale: self.ui_scale,
+                        })
+                        .save()
+                        {
+                            self.status = format!("Could not save appearance preference: {error}");
+                        }
+                    }
+                    if ui
+                        .button(format!("UI {:.0}%", self.ui_scale * 100.0))
+                        .on_hover_text("Cycle the operator interface scale between 90%, 100%, 110%, 125%, and 150%.")
+                        .clicked()
+                    {
+                        self.ui_scale = next_ui_scale(self.ui_scale);
+                        if let Err(error) = (AppearancePreferences {
+                            dark_mode: self.dark_mode,
+                            ui_scale: self.ui_scale,
+                        })
+                        .save()
+                        {
+                            self.status = format!("Could not save appearance preference: {error}");
+                        }
                     }
                     if ui
                         .button(format!("Engine: {}", self.form.engine().label()))
@@ -8289,5 +8375,12 @@ mod tests {
         assert!(fresh_imap_authentication_applies(&form));
         form.profile.source_tls = "plain".into();
         assert!(!fresh_imap_authentication_applies(&form));
+    }
+
+    #[test]
+    fn ui_scale_cycles_through_readable_operator_presets() {
+        assert_eq!(next_ui_scale(0.90), 1.00);
+        assert_eq!(next_ui_scale(1.10), 1.25);
+        assert_eq!(next_ui_scale(1.50), 0.90);
     }
 }
