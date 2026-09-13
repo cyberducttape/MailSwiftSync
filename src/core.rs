@@ -1003,6 +1003,43 @@ impl StateStore {
         )?;
         tx.commit()
     }
+
+    /// Record diagnostic events for several active runs in one transaction.
+    /// Each tuple is `(run_id, kind, detail)`; project ownership is resolved
+    /// from the durable run rather than trusted from an asynchronous caller.
+    pub fn record_events_for_runs_batch(
+        &self,
+        events: &[(&str, &str, &str)],
+    ) -> rusqlite::Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let mut statement = tx.prepare_cached(
+            "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND status='running'",
+        )?;
+        let mut projects = BTreeSet::new();
+        for (run_id, kind, detail) in events {
+            let changed =
+                statement.execute(params![run_id, kind, bounded_event_detail(kind, detail)])?;
+            if changed != 1 {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            let project_id: String =
+                tx.query_row("SELECT project_id FROM runs WHERE id=?1", [run_id], |row| {
+                    row.get(0)
+                })?;
+            projects.insert(project_id);
+        }
+        drop(statement);
+        for project_id in projects {
+            tx.execute(
+                "DELETE FROM events WHERE project_id=?1 AND kind='run_output' AND id NOT IN (SELECT id FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id DESC LIMIT ?2)",
+                params![project_id, MAX_DURABLE_RUN_OUTPUT_EVENTS],
+            )?;
+        }
+        tx.commit()
+    }
     #[cfg(test)]
     fn insert_run_for_test(
         &self,
@@ -3467,6 +3504,49 @@ mod tests {
             db.record_run_events_batch("run-events-1", &[("run_output", "late output")])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn multi_run_events_keep_child_diagnostic_ownership() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("multi-run-events", "source", "destination")
+            .unwrap();
+        let first = db
+            .add_mailbox(&project.id, "source-one", "destination-one")
+            .unwrap();
+        let second = db
+            .add_mailbox(&project.id, "source-two", "destination-two")
+            .unwrap();
+        db.begin_run(&project.id, &first, "child-run-one", "test")
+            .unwrap();
+        db.begin_run(&project.id, &second, "child-run-two", "test")
+            .unwrap();
+
+        db.record_events_for_runs_batch(&[
+            ("child-run-one", "run_output", "one output"),
+            ("child-run-two", "run_output", "two output"),
+        ])
+        .unwrap();
+
+        let first_owner: String = db
+            .connection
+            .query_row(
+                "SELECT run_id FROM events WHERE detail='one output'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let second_owner: String = db
+            .connection
+            .query_row(
+                "SELECT run_id FROM events WHERE detail='two output'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(first_owner, "child-run-one");
+        assert_eq!(second_owner, "child-run-two");
     }
 
     #[test]

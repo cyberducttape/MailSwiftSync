@@ -5039,11 +5039,11 @@ impl App {
         if !pending_db_events.is_empty() {
             let batch = pending_db_events
                 .iter()
-                .map(|(_, _, kind, detail)| (kind.as_str(), detail.as_str()))
+                .map(|(_, run_id, kind, detail)| (run_id.as_str(), kind.as_str(), detail.as_str()))
                 .collect::<Vec<_>>();
             let result = active_run.as_ref().map_or_else(
                 || Err(rusqlite::Error::InvalidQuery),
-                |run| self.store.record_run_events_batch(&run.run_id, &batch),
+                |_| self.store.record_events_for_runs_batch(&batch),
             );
             self.report_store_error("record execution events", result);
         }
