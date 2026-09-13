@@ -5182,7 +5182,13 @@ impl App {
                     self.preflight_credential_fingerprint =
                         Some(run_context.credential_fingerprint.clone());
                 }
-                if was_bulk_run {
+                // A terminal run commit is the boundary between an external
+                // process result and durable control-plane state.  If that
+                // commit failed, the database still owns a running run (or a
+                // queued child), so do not append a terminal success/failure
+                // event or advance the project phase.  Startup recovery must
+                // reconcile it after the operator has restored the database.
+                if was_bulk_run && terminal_write_ok {
                     let result = self.store.record_event(
                         project,
                         "run_finished",
@@ -5190,7 +5196,7 @@ impl App {
                     );
                     self.report_store_error("record batch run completion", result);
                 }
-                if succeeded && terminal_write_ok {
+                if terminal_write_ok && succeeded {
                     if run_context.dry_run {
                         let result = self.store.transition(project, core::Phase::Preflight);
                         self.report_store_error("advance project phase", result);
@@ -5225,7 +5231,7 @@ impl App {
                             ),
                         }
                     }
-                } else {
+                } else if terminal_write_ok {
                     let result = self.store.transition(project, core::Phase::Attention);
                     self.report_store_error("move project to Attention", result);
                 }
