@@ -34,6 +34,7 @@ use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    ffi::OsString,
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
@@ -2371,25 +2372,48 @@ struct App {
 impl Default for App {
     fn default() -> Self {
         let appearance = AppearancePreferences::load();
-        let state_path = persistent_state_path();
-        let state_directory_error = state_path.parent().and_then(|parent| {
-            std::fs::create_dir_all(parent)
-                .and_then(|_| restrict_directory_permissions(parent))
-                .err()
-                .map(|error| format!("Could not secure persistent state directory: {error}"))
-        });
-        let instance_lock = acquire_instance_lock(&state_path);
-        let (store, mut persistence_warning) = match &instance_lock {
-            Ok(_) => match core::StateStore::open(&state_path) {
+        let state_path_result = persistent_state_path();
+        let path_error = state_path_result.as_ref().err().cloned();
+        let state_path = state_path_result.ok();
+        let state_directory_error =
+            state_path
+                .as_ref()
+                .and_then(|path| path.parent())
+                .and_then(|parent| {
+                    std::fs::create_dir_all(parent)
+                        .and_then(|_| restrict_directory_permissions(parent))
+                        .err()
+                        .map(|error| {
+                            format!("Could not secure persistent state directory: {error}")
+                        })
+                });
+        let instance_lock = state_path
+            .as_ref()
+            .map(|path| acquire_instance_lock(path.as_path()));
+        let (store, mut persistence_warning) = match instance_lock.as_ref() {
+            Some(Ok(_)) => match core::StateStore::open(
+                state_path
+                    .as_ref()
+                    .expect("instance lock cannot exist without a state path"),
+            ) {
                 Ok(store) => (store, None),
                 Err(error) => (
                     core::StateStore::in_memory().expect("SQLite memory store must be available"),
                     Some(format!("Persistent SQLite state unavailable: {error}")),
                 ),
             },
-            Err(error) => (
+            Some(Err(error)) => (
                 core::StateStore::in_memory().expect("SQLite memory store must be available"),
                 Some(format!("Persistent SQLite state unavailable: {error}")),
+            ),
+            None => (
+                core::StateStore::in_memory().expect("SQLite memory store must be available"),
+                Some(format!(
+                    "Persistent SQLite state unavailable: {}",
+                    path_error
+                        .as_deref()
+                        .unwrap_or("no durable state path is available")
+                )),
             ),
         };
         if let Some(error) = state_directory_error {
@@ -2625,7 +2649,7 @@ impl Default for App {
             // changed from the migration plan when the endpoints are known.
             engine_open: false,
             store,
-            _instance_lock: instance_lock.ok(),
+            _instance_lock: instance_lock.and_then(Result::ok),
             process_review_required: unverified_process_count > 0,
             persistence_available: persistence_warning.is_none(),
             selected_project_id: restored_bulk_project_id
@@ -2692,14 +2716,28 @@ impl Default for App {
     }
 }
 
-fn persistent_state_path() -> PathBuf {
-    std::env::var_os("MAILSWIFTSYNC_STATE_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs_next::data_local_dir()
-                .unwrap_or_else(std::env::temp_dir)
-                .join("mailswiftsync/state.db")
-        })
+fn persistent_state_path() -> Result<PathBuf, String> {
+    persistent_state_path_from(
+        std::env::var_os("MAILSWIFTSYNC_STATE_PATH"),
+        dirs_next::data_local_dir(),
+    )
+}
+
+fn persistent_state_path_from(
+    state_override: Option<OsString>,
+    data_directory: Option<PathBuf>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = state_override {
+        let path = PathBuf::from(path);
+        if path.as_os_str().is_empty() {
+            return Err("MAILSWIFTSYNC_STATE_PATH is set but empty.".into());
+        }
+        return Ok(path);
+    }
+    let data_directory = data_directory.ok_or_else(|| {
+        "Cannot determine a durable state directory; set MAILSWIFTSYNC_STATE_PATH to an explicit ledger path.".to_owned()
+    })?;
+    Ok(data_directory.join("mailswiftsync/state.db"))
 }
 
 /// Restore a verified SQLite ledger without ever replacing the destination
@@ -5063,7 +5101,8 @@ impl App {
             .set_file_name("mailswiftsync-support-bundle.json")
             .save_file()
             .ok_or("Support-bundle export cancelled.")?;
-        export_support_bundle(&persistent_state_path(), &path)
+        let state_path = persistent_state_path()?;
+        export_support_bundle(&state_path, &path)
     }
 
     fn export_project_health(&self) -> Result<(), String> {
@@ -11820,5 +11859,26 @@ mod tests {
         let serialized = serde_json::to_string(&status).unwrap();
         assert!(!serialized.contains("password"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn durable_state_path_never_falls_back_to_temporary_storage() {
+        assert_eq!(
+            persistent_state_path_from(
+                Some(OsString::from("/var/lib/mailswiftsync/state.db")),
+                None,
+            )
+            .unwrap(),
+            PathBuf::from("/var/lib/mailswiftsync/state.db")
+        );
+        assert_eq!(
+            persistent_state_path_from(None, Some(PathBuf::from("/home/operator/.local/share")))
+                .unwrap(),
+            PathBuf::from("/home/operator/.local/share/mailswiftsync/state.db")
+        );
+        let missing_directory = persistent_state_path_from(None, None).unwrap_err();
+        assert!(missing_directory.contains("durable state directory"));
+        let empty_override = persistent_state_path_from(Some(OsString::new()), None).unwrap_err();
+        assert!(empty_override.contains("set but empty"));
     }
 }
