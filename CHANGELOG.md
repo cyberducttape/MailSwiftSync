@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Replaced report signing/verification and process-registration invariant
+  panics with explicit error paths, keeping malformed artifacts and unusual
+  controller queue states from aborting the application.
 - Moved batch admission policy—destination identity checks, queue matching,
   keyring application, and sanitized selection export—into
   `controller::batch_admission` for reuse outside the egui shell.

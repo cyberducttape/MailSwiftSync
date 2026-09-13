@@ -185,11 +185,10 @@ pub(crate) fn run_streaming(
         if remaining.is_zero() {
             break false;
         }
-        match tx.try_send(
-            process_started_event
-                .take()
-                .expect("registration event exists"),
-        ) {
+        let Some(event) = process_started_event.take() else {
+            break false;
+        };
+        match tx.try_send(event) {
             Ok(()) => break true,
             Err(mpsc::TrySendError::Full(event)) => {
                 process_started_event = Some(event);

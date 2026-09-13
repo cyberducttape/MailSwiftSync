@@ -394,24 +394,20 @@ fn evidence_digest(run_id: &str, plan_snapshot: &str, evidence: &core::MailboxEv
 /// without the digest field itself, so whitespace changes do not invalidate a
 /// proof while any semantic report change does.
 fn with_proof_digest(mut value: serde_json::Value) -> Result<serde_json::Value, String> {
-    if !value.is_object() {
-        return Err("Migration proof must be a JSON object.".into());
+    {
+        let object = value
+            .as_object_mut()
+            .ok_or("Migration proof must be a JSON object.")?;
+        object.remove("proof_digest");
+        // Re-signing must produce the same digest as signing an unsigned report.
+        // The prior signature is metadata, not part of the signed report payload.
+        object.remove("proof_signature");
     }
-    value
-        .as_object_mut()
-        .expect("object checked above")
-        .remove("proof_digest");
-    // Re-signing must produce the same digest as signing an unsigned report.
-    // The prior signature is metadata, not part of the signed report payload.
-    value
-        .as_object_mut()
-        .expect("object checked above")
-        .remove("proof_signature");
     let canonical = serde_json::to_string(&value).map_err(|error| error.to_string())?;
     let digest = plan_snapshot_sha256(&canonical);
     value
         .as_object_mut()
-        .expect("object checked above")
+        .ok_or("Migration proof must be a JSON object.")?
         .insert("proof_digest".into(), serde_json::Value::String(digest));
     Ok(value)
 }

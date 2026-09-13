@@ -162,18 +162,18 @@ pub(crate) fn sign_file(
     let mut value = with_proof_digest(value)?;
     let payload = canonical_signed_proof_payload(&value)?;
     let signature = key_pair.sign(payload.as_bytes());
-    value
+    let object = value
         .as_object_mut()
-        .expect("proof object checked by with_proof_digest")
-        .insert(
-            "proof_signature".into(),
-            serde_json::json!({
-                "algorithm": "Ed25519",
-                "key_id": key_id,
-                "public_key": hex_encode(key_pair.public_key().as_ref()),
-                "signature": hex_encode(signature.as_ref()),
-            }),
-        );
+        .ok_or("Migration proof must be a JSON object.")?;
+    object.insert(
+        "proof_signature".into(),
+        serde_json::json!({
+            "algorithm": "Ed25519",
+            "key_id": key_id,
+            "public_key": hex_encode(key_pair.public_key().as_ref()),
+            "signature": hex_encode(signature.as_ref()),
+        }),
+    );
     let output = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
     write_private_atomic(path, &output).map_err(|error| error.to_string())?;
     Ok(format!("Signed migration proof with key {key_id}"))
@@ -197,14 +197,14 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
     let signature = value.get("proof_signature").cloned();
     let expected = value
         .as_object_mut()
-        .expect("proof object checked above")
+        .ok_or("Migration proof must be a JSON object.")?
         .remove("proof_digest")
         .and_then(|digest| digest.as_str().map(str::to_owned))
         .ok_or("Migration proof is missing proof_digest.")?;
     let mut digest_value = value.clone();
     digest_value
         .as_object_mut()
-        .expect("proof object checked above")
+        .ok_or("Migration proof must be a JSON object.")?
         .remove("proof_signature");
     let canonical = serde_json::to_string(&digest_value).map_err(|error| error.to_string())?;
     let actual = plan_snapshot_sha256(&canonical);
@@ -215,7 +215,7 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
     }
     value
         .as_object_mut()
-        .expect("proof object checked above")
+        .ok_or("Migration proof must be a JSON object.")?
         .insert("proof_digest".into(), serde_json::Value::String(expected));
     if let Some(signature_value) = signature {
         let signature_object = signature_value
