@@ -1467,6 +1467,31 @@ impl StateStore {
                 })
             })
     }
+
+    /// Load all durable attention reasons for a project in one read. Missing
+    /// reasons are intentionally absent from the map; callers can distinguish
+    /// a normal row from an explicitly classified operator-review row without
+    /// issuing one query per mailbox.
+    pub fn mailbox_attention_reasons(
+        &self,
+        project_id: &str,
+    ) -> rusqlite::Result<HashMap<String, AttentionReason>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,attention_reason FROM mailbox_jobs WHERE project_id=?1 AND attention_reason IS NOT NULL",
+        )?;
+        let mut reasons = HashMap::new();
+        for row in statement.query_map([project_id], |row| {
+            let reason: String = row.get(1)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                AttentionReason::parse(&reason).unwrap_or(AttentionReason::Unknown),
+            ))
+        })? {
+            let (job_id, reason) = row?;
+            reasons.insert(job_id, reason);
+        }
+        Ok(reasons)
+    }
     /// Return the last committed Dovecot stateful-sync checkpoint for a
     /// mailbox. The value is intentionally read separately from credentials;
     /// it contains engine state, not authentication material.
@@ -5474,6 +5499,44 @@ destination_port = "143"
         assert_eq!(
             db.mailbox_attention_reason(&job).unwrap(),
             Some(AttentionReason::Unknown)
+        );
+    }
+
+    #[test]
+    fn project_attention_reasons_are_loaded_as_one_read_model() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("attention-map", "source", "destination")
+            .unwrap();
+        let first = db
+            .add_mailbox(&project.id, "source-a", "destination-a")
+            .unwrap();
+        let second = db
+            .add_mailbox(&project.id, "source-b", "destination-b")
+            .unwrap();
+        db.set_mailbox_state_for_test(&first, "attention").unwrap();
+        db.set_mailbox_state_for_test(&second, "failed").unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET attention_reason='authentication_failed' WHERE id=?1",
+                [&first],
+            )
+            .unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET attention_reason='capacity_limited' WHERE id=?1",
+                [&second],
+            )
+            .unwrap();
+
+        let reasons = db.mailbox_attention_reasons(&project.id).unwrap();
+        assert_eq!(
+            reasons.get(&first),
+            Some(&AttentionReason::AuthenticationFailed)
+        );
+        assert_eq!(
+            reasons.get(&second),
+            Some(&AttentionReason::CapacityLimited)
         );
     }
 

@@ -9281,15 +9281,16 @@ fn export_support_bundle(
         let jobs = store
             .mailboxes(&project.id)
             .map_err(|error| error.to_string())?;
+        let attention_reasons = store
+            .mailbox_attention_reasons(&project.id)
+            .map_err(|error| error.to_string())?;
         let mailbox_values = jobs
             .iter()
             .map(|job| {
                 Ok(serde_json::json!({
                     "id": job.id,
                     "state": job.state,
-                    "attention_reason": store.mailbox_attention_reason(&job.id)
-                        .map_err(|error| error.to_string())?
-                        .map(|reason| reason.as_str()),
+                    "attention_reason": attention_reasons.get(&job.id).map(|reason| reason.as_str()),
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -9393,15 +9394,17 @@ fn headless_status(
     };
     let mut result = Vec::with_capacity(projects.len());
     for project in projects {
+        let attention_reasons = store
+            .mailbox_attention_reasons(&project.id)
+            .map_err(|error| error.to_string())?;
         let mut mailboxes = Vec::new();
         for mailbox in store
             .mailboxes(&project.id)
             .map_err(|error| error.to_string())?
         {
             mailboxes.push(HeadlessMailboxStatus {
-                attention_reason: store
-                    .mailbox_attention_reason(&mailbox.id)
-                    .map_err(|error| error.to_string())?
+                attention_reason: attention_reasons
+                    .get(&mailbox.id)
                     .map(|reason| reason.as_str().to_owned()),
                 id: mailbox.id,
                 source_mailbox: mailbox.source_mailbox,
