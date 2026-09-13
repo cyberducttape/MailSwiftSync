@@ -10982,6 +10982,20 @@ mod tests {
     }
 
     #[test]
+    fn bulk_import_rejects_oversized_files_before_parsing() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-limit-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_BULK_IMPORT_BYTES + 1).unwrap();
+        let error = validate_bulk_import_file(&path).unwrap_err();
+        assert!(error.contains("import file"));
+        assert!(error.contains("limit"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn corrupt_or_missing_persisted_batch_plan_fails_closed() {
         let missing = match decode_persisted_batch_profile(None, "job-1") {
             Ok(_) => panic!("missing persisted plan must be rejected"),
