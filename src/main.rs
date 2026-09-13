@@ -41,6 +41,7 @@ use std::{
     ffi::OsString,
     io::{BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
+    ops::Deref,
     path::PathBuf,
     process::{Command, Stdio},
     sync::{
@@ -1419,7 +1420,7 @@ fn run_streaming(
     let out_tx = tx.clone();
     let out_prefix = prefix.to_owned();
     let out_secrets = secrets.to_vec();
-    let tail = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
+    let tail = Arc::new(Mutex::new(BoundedLineBuffer::new()));
     let evidence = Arc::new(Mutex::new(
         verification::ImapsyncEvidenceAccumulator::default(),
     ));
@@ -1704,20 +1705,14 @@ fn dovecot_state_candidate(line: &str) -> Option<String> {
     }
 }
 
-fn record_process_tail(tail: &Mutex<VecDeque<String>>, line: &str) {
+fn record_process_tail(tail: &Mutex<BoundedLineBuffer>, line: &str) {
     if let Ok(mut tail) = tail.lock() {
         let line = truncate_utf8(line, MAX_DIAGNOSTIC_LINE_BYTES);
-        let line_bytes = line.len();
-        while tail.len() >= MAX_PROCESS_TAIL_LINES
-            || tail.iter().map(String::len).sum::<usize>() + line_bytes > MAX_PROCESS_TAIL_BYTES
-        {
-            tail.pop_front();
-        }
-        tail.push_back(line);
+        tail.push_bounded(line, MAX_PROCESS_TAIL_LINES, MAX_PROCESS_TAIL_BYTES);
     }
 }
 
-fn process_tail_text(tail: &Mutex<VecDeque<String>>) -> String {
+fn process_tail_text(tail: &Mutex<BoundedLineBuffer>) -> String {
     tail.lock()
         .map(|lines| lines.iter().cloned().collect::<Vec<_>>().join(" | "))
         .unwrap_or_default()
@@ -2255,7 +2250,7 @@ enum WorkspaceView {
 }
 struct App {
     form: Form,
-    output: VecDeque<String>,
+    output: BoundedLineBuffer,
     receiver: Option<Receiver<Event>>,
     status: String,
     preview: bool,
@@ -2466,7 +2461,7 @@ impl Default for App {
         if persistence_warning.is_none() && unverified_processes.is_empty() {
             cleanup_stale_secret_directories(&secret_runtime_base());
         }
-        let mut initial_output = persistence_warning.clone().map_or_else(
+        let mut initial_output_lines = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with Preflight against a test destination mailbox.".into()],
             |warning| {
                 vec![
@@ -2476,26 +2471,29 @@ impl Default for App {
             },
         );
         if orphaned > 0 {
-            initial_output.push(format!(
+            initial_output_lines.push(format!(
                 "Startup found {orphaned} recorded migration process(es); verified identities were terminated before recovery."
             ));
         }
         let unverified_process_count = unverified_processes.len();
         if unverified_process_count > 0 {
-            initial_output.push(format!(
+            initial_output_lines.push(format!(
                 "{unverified_process_count} recorded process identity(ies) could not be verified and were not signalled; review the affected jobs before retrying."
             ));
-            initial_output.push(
+            initial_output_lines.push(
                 "Stale secret cleanup was deferred because an unverified process may still need its passfile."
                     .into(),
             );
         }
         if recovered > 0 {
-            initial_output.push(format!(
+            initial_output_lines.push(format!(
                 "Recovered {recovered} interrupted job(s) into Attention for review."
             ));
         }
-        let mut initial_output: VecDeque<String> = initial_output.into_iter().collect();
+        let mut initial_output: BoundedLineBuffer = BoundedLineBuffer::new();
+        for line in initial_output_lines {
+            push_visible_output(&mut initial_output, line);
+        }
         let (mut form, profile_warning) = match Form::load() {
             Ok(form) => (form, None),
             Err(error) => (
@@ -2506,16 +2504,22 @@ impl Default for App {
             ),
         };
         if let Some(warning) = profile_warning.as_ref() {
-            initial_output.push_back(warning.clone());
-            initial_output.push_back(
+            push_visible_output(&mut initial_output, warning.clone());
+            push_visible_output(
+                &mut initial_output,
                 "History and reports remain available; repair the profile before execution.".into(),
             );
         }
         if let Some(warning) = persistence_warning.as_ref()
             && !initial_output.iter().any(|line| line == warning)
         {
-            initial_output.push_front(warning.clone());
-            initial_output.push_back(
+            initial_output.push_front_bounded(
+                truncate_utf8(warning, MAX_DIAGNOSTIC_LINE_BYTES),
+                MAX_VISIBLE_OUTPUT_LINES,
+                MAX_VISIBLE_OUTPUT_BYTES,
+            );
+            push_visible_output(
+                &mut initial_output,
                 "WARNING: saved configuration must be repaired before execution.".into(),
             );
         }
@@ -2624,8 +2628,13 @@ impl Default for App {
         if let Some(warning) = persistence_warning.as_ref()
             && !initial_output.iter().any(|line| line == warning)
         {
-            initial_output.push_front(warning.clone());
-            initial_output.push_back(
+            initial_output.push_front_bounded(
+                truncate_utf8(warning, MAX_DIAGNOSTIC_LINE_BYTES),
+                MAX_VISIBLE_OUTPUT_LINES,
+                MAX_VISIBLE_OUTPUT_BYTES,
+            );
+            push_visible_output(
+                &mut initial_output,
                 "WARNING: durable state could not be restored; repair the ledger before execution."
                     .into(),
             );
@@ -7057,7 +7066,7 @@ impl App {
         } else {
             "Sync in progress".into()
         };
-        self.output = VecDeque::from([format!(
+        self.output = BoundedLineBuffer::from_one(format!(
             "Starting {} with {}…",
             if self.form.dry_run {
                 "preflight"
@@ -7065,7 +7074,7 @@ impl App {
                 "synchronization"
             },
             self.form.engine().label()
-        )]);
+        ));
         let verification = if !self.form.dry_run && self.form.engine() == core::Engine::Dovecot {
             self.form.dovecot_verification_commands(false)
         } else {
@@ -8814,14 +8823,9 @@ fn markdown_escape(value: &str) -> String {
         .replace('\n', " ")
 }
 
-fn push_visible_output(output: &mut VecDeque<String>, line: String) {
+fn push_visible_output(output: &mut BoundedLineBuffer, line: String) {
     let line = truncate_utf8(&line, MAX_DIAGNOSTIC_LINE_BYTES);
-    while output.len() >= MAX_VISIBLE_OUTPUT_LINES
-        || output.iter().map(String::len).sum::<usize>() + line.len() > MAX_VISIBLE_OUTPUT_BYTES
-    {
-        output.pop_front();
-    }
-    output.push_back(line);
+    output.push_bounded(line, MAX_VISIBLE_OUTPUT_LINES, MAX_VISIBLE_OUTPUT_BYTES);
 }
 
 fn truncate_utf8(value: &str, limit: usize) -> String {
@@ -9158,6 +9162,66 @@ fn password_reveal_allowed(editable: bool, requested: bool) -> bool {
 
 fn password_visibility_id(title: &str) -> egui::Id {
     egui::Id::new(("password_visibility", title))
+}
+
+struct BoundedLineBuffer {
+    lines: VecDeque<String>,
+    bytes: usize,
+}
+
+impl BoundedLineBuffer {
+    fn new() -> Self {
+        Self {
+            lines: VecDeque::new(),
+            bytes: 0,
+        }
+    }
+
+    fn push_bounded(&mut self, line: String, max_lines: usize, max_bytes: usize) {
+        while self.lines.len() >= max_lines || self.bytes.saturating_add(line.len()) > max_bytes {
+            let Some(removed) = self.lines.pop_front() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(removed.len());
+        }
+        self.bytes = self.bytes.saturating_add(line.len());
+        self.lines.push_back(line);
+    }
+
+    fn push_front_bounded(&mut self, line: String, max_lines: usize, max_bytes: usize) {
+        while self.lines.len() >= max_lines || self.bytes.saturating_add(line.len()) > max_bytes {
+            let Some(removed) = self.lines.pop_back() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(removed.len());
+        }
+        self.bytes = self.bytes.saturating_add(line.len());
+        self.lines.push_front(line);
+    }
+
+    fn from_one(line: String) -> Self {
+        let mut buffer = Self::new();
+        buffer.push_bounded(line, MAX_VISIBLE_OUTPUT_LINES, MAX_VISIBLE_OUTPUT_BYTES);
+        buffer
+    }
+
+    fn clear(&mut self) {
+        self.lines.clear();
+        self.bytes = 0;
+    }
+
+    #[cfg(test)]
+    fn bytes(&self) -> usize {
+        self.bytes
+    }
+}
+
+impl Deref for BoundedLineBuffer {
+    type Target = VecDeque<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.lines
+    }
 }
 
 fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
@@ -11721,7 +11785,7 @@ mod tests {
 
     #[test]
     fn visible_output_retention_is_bounded_without_shifting() {
-        let mut output = VecDeque::new();
+        let mut output = BoundedLineBuffer::new();
         for index in 0..=MAX_VISIBLE_OUTPUT_LINES {
             push_visible_output(&mut output, index.to_string());
         }
@@ -11736,7 +11800,7 @@ mod tests {
 
     #[test]
     fn diagnostic_buffers_truncate_utf8_and_bound_bytes() {
-        let mut output = VecDeque::new();
+        let mut output = BoundedLineBuffer::new();
         push_visible_output(&mut output, "é".repeat(MAX_DIAGNOSTIC_LINE_BYTES + 1));
         assert!(output.front().unwrap().len() <= MAX_DIAGNOSTIC_LINE_BYTES);
         assert!(
@@ -11746,12 +11810,13 @@ mod tests {
                 .is_char_boundary(output.front().unwrap().len())
         );
 
-        let tail = Mutex::new(VecDeque::new());
+        let tail = Mutex::new(BoundedLineBuffer::new());
         for _ in 0..100 {
             record_process_tail(&tail, &"x".repeat(MAX_DIAGNOSTIC_LINE_BYTES));
         }
         let tail = tail.lock().unwrap();
-        assert!(tail.iter().map(String::len).sum::<usize>() <= MAX_PROCESS_TAIL_BYTES);
+        assert!(tail.bytes() <= MAX_PROCESS_TAIL_BYTES);
+        assert_eq!(tail.bytes(), tail.iter().map(String::len).sum::<usize>());
         assert!(tail.len() <= MAX_PROCESS_TAIL_LINES);
     }
 
