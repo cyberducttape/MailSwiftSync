@@ -9,11 +9,25 @@ pub(crate) fn export_from_store(
     project_id: &str,
     path: &Path,
 ) -> Result<(), String> {
+    export_from_store_with_options(store, project_id, path, false)
+}
+
+pub(crate) fn export_from_store_with_options(
+    store: &core::StateStore,
+    project_id: &str,
+    path: &Path,
+    allow_incomplete: bool,
+) -> Result<(), String> {
     let snapshot = store
         .project_report_snapshot(project_id)
         .map_err(|e| e.to_string())?
         .ok_or("The durable migration project no longer exists.")?;
-    ensure_exportable(&snapshot)?;
+    if !allow_incomplete {
+        ensure_exportable(&snapshot)?;
+    } else if snapshot.mailboxes.is_empty() {
+        return Err("The project has no mailbox jobs to report.".into());
+    }
+    let durably_complete = is_durably_complete(&snapshot);
     let project = snapshot.project;
     let mailboxes = snapshot
         .mailboxes
@@ -77,9 +91,14 @@ pub(crate) fn export_from_store(
         "application_version": env!("CARGO_PKG_VERSION"),
         "artifact_role": "customer_evidence",
         "completion_claim": {
-            "durable_project_phase": "Complete",
+            "status": if durably_complete { "durably_complete" } else { "incomplete" },
+            "durable_project_phase": format!("{:?}", project.phase),
             "independent_certificate": false,
-            "note": "This artifact records the completed state of the MailSwiftSync durable ledger at export time. Digest or signature validation proves artifact integrity or signer authenticity; it does not independently certify message-level completion."
+            "note": if durably_complete {
+                "This artifact records the completed state of the MailSwiftSync durable ledger at export time. Digest or signature validation proves artifact integrity or signer authenticity; it does not independently certify message-level completion."
+            } else {
+                "This is an explicitly requested incomplete progress artifact. It is not a completion certificate; digest or signature validation proves artifact integrity or signer authenticity only."
+            }
         },
         "project": {
             "name": project.name,
@@ -99,12 +118,9 @@ pub(crate) fn export_from_store(
 fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), String> {
     if snapshot.project.phase != core::Phase::Complete {
         return Err(
-            "Customer proof is available only after the project reaches durable Complete state."
+            "Customer proof is available only after the project reaches durable Complete state; use the CLI --allow-incomplete flag only for an explicitly labeled progress artifact."
                 .into(),
         );
-    }
-    if snapshot.mailboxes.is_empty() {
-        return Err("The project has no mailbox jobs to report.".into());
     }
     if let Some(mailbox) = snapshot.mailboxes.iter().find(|mailbox| {
         !matches!(
@@ -125,6 +141,21 @@ fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), Strin
         return Err("Customer proof is blocked while migration work is still running.".into());
     }
     Ok(())
+}
+
+fn is_durably_complete(snapshot: &core::ProjectReportSnapshot) -> bool {
+    snapshot.project.phase == core::Phase::Complete
+        && !snapshot.mailboxes.is_empty()
+        && snapshot.mailboxes.iter().all(|mailbox| {
+            matches!(
+                mailbox.job.state.as_str(),
+                "verified" | "verified_with_exceptions"
+            ) && mailbox.evidence.is_some()
+        })
+        && snapshot
+            .runs
+            .iter()
+            .all(|run| !matches!(run.run.status.as_str(), "queued" | "running"))
 }
 
 #[cfg(test)]
@@ -190,5 +221,30 @@ mod tests {
             ))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn incomplete_customer_proof_requires_explicit_opt_in_and_is_labeled() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("progress", "source", "destination")
+            .unwrap();
+        store
+            .add_mailbox(&project.id, "source@example.com", "destination@example.com")
+            .unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-incomplete-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("proof.json");
+
+        assert!(export_from_store(&store, &project.id, &path).is_err());
+        export_from_store_with_options(&store, &project.id, &path, true).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["completion_claim"]["status"], "incomplete");
+        assert_eq!(value["completion_claim"]["independent_certificate"], false);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

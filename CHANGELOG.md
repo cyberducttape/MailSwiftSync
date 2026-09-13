@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Kept customer-proof export completion-gated by default and added an explicit
+  CLI `--allow-incomplete` opt-in for progress evidence only. Incomplete
+  artifacts are labeled in JSON and documented as non-certificates.
 - Clarified customer-proof semantics: exported artifacts identify their
   durable-completion claim as ledger evidence, not an independent completion
   certificate, and the verifier now distinguishes artifact integrity/signer

@@ -258,13 +258,24 @@ pub(crate) fn run() -> eframe::Result<()> {
     }
     if command == std::ffi::OsStr::new("customer-proof") {
         let (Some(state), Some(output)) = (arguments.next(), arguments.next()) else {
-            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json>");
+            eprintln!(
+                "Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id] [--allow-incomplete]"
+            );
             std::process::exit(2);
         };
-        let project_id = arguments.next();
-        if arguments.next().is_some() {
-            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id]");
-            std::process::exit(2);
+        let mut project_id = None;
+        let mut allow_incomplete = false;
+        for argument in arguments {
+            if argument == std::ffi::OsStr::new("--allow-incomplete") && !allow_incomplete {
+                allow_incomplete = true;
+            } else if project_id.is_none() {
+                project_id = Some(argument);
+            } else {
+                eprintln!(
+                    "Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id] [--allow-incomplete]"
+                );
+                std::process::exit(2);
+            }
         }
         let state = std::path::PathBuf::from(state);
         let output = std::path::PathBuf::from(output);
@@ -299,7 +310,12 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Customer-proof export refused: no durable migration project is available");
             std::process::exit(1);
         };
-        match reports::customer::export_from_store(&store, &project_id, &output) {
+        match reports::customer::export_from_store_with_options(
+            &store,
+            &project_id,
+            &output,
+            allow_incomplete,
+        ) {
             Ok(()) => {
                 println!("Created customer migration proof: {}", output.display());
                 return Ok(());
@@ -451,7 +467,7 @@ fn print_cli_help() {
     println!(
         "MailSwiftSync — durable, evidence-first mailbox migration control plane\n\n\
 Usage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation\n\n\
-Commands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit secret-free JSON status\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export customer-safe migration evidence\n  supervise <state> [poll] [n]   Run automation-safe supervision\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n\n\
+Commands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit secret-free JSON status\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  supervise <state> [poll] [n]   Run automation-safe supervision\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n\n\
 Options:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\n\
 Headless live operations fail nonzero for unresolved verification, delta,\noperator-attention, or durability states."
     );

@@ -198,8 +198,11 @@ it excludes endpoints, credentials, plan snapshots, command paths, mailbox
 content, and diagnostic text while retaining schema, platform, health, and
 bounded run metadata.
 `customer-proof` emits the same customer-safe proof artifact available from the
-GUI. It excludes internal topology and forensic detail; sign it separately
-with `mailswiftsync sign` before treating it as an authenticated deliverable.
+GUI and refuses to export until the selected project is durably complete with
+verified mailbox evidence. For an explicitly labeled progress artifact only,
+pass `--allow-incomplete`; that artifact is never a completion certificate.
+It excludes internal topology and forensic detail; sign it separately with
+`mailswiftsync sign` before treating it as an authenticated deliverable.
 `supervise` is a foreground, GUI-independent batch controller. It processes
 only automation-safe queued/retryable work, waits through GUI lock ownership,
 and leaves Attention and verification-difference rows untouched. The optional
