@@ -278,6 +278,13 @@ fn dovecot_ssl_mode(mode: &str) -> &str {
         other => other,
     }
 }
+
+fn append_dovecot_source_tls_policy(args: &mut Vec<String>, mode: &str) {
+    if mode != "plain" {
+        args.extend(["-o".into(), "ssl_client_require_valid_cert=yes".into()]);
+    }
+}
+
 #[derive(Clone)]
 struct Form {
     profile: Profile,
@@ -750,6 +757,7 @@ impl Form {
             "-o".into(),
             format!("imapc_password={password}"),
         ]);
+        append_dovecot_source_tls_policy(&mut args, &self.profile.source_tls);
         if !self.profile.source_port.trim().is_empty() {
             args.extend([
                 "-o".into(),
@@ -874,6 +882,7 @@ impl Form {
             "messages,vsize".into(),
             "*".into(),
         ]);
+        append_dovecot_source_tls_policy(&mut source, &self.profile.source_tls);
         if !self.profile.source_port.trim().is_empty() {
             source.extend([
                 "-o".into(),
@@ -7289,6 +7298,23 @@ mod tests {
         form.profile.source_tls = "plain".into();
         let (_, args) = form.command(true);
         assert!(args.iter().any(|arg| arg == "imapc_ssl=no"));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "ssl_client_require_valid_cert=yes")
+        );
+    }
+
+    #[test]
+    fn dovecot_encrypted_source_forces_certificate_validation() {
+        let mut form = dovecot_form();
+        form.profile.source_tls = "starttls".into();
+        form.profile.dovecot_config = "/etc/dovecot/custom.conf".into();
+        let (_, args) = form.command(true);
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-o", "ssl_client_require_valid_cert=yes"])
+        );
     }
 
     #[test]
