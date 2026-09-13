@@ -3669,16 +3669,24 @@ impl App {
         ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(MUTED));
         ui.add_space(12.0);
         if let Some(job) = self.job_id.as_deref() {
-            let state = self.store.mailbox_state(job).ok().flatten();
-            if state.as_deref().is_some_and(needs_operator_review)
-                && ui.button("Prepare safe retry  →").clicked()
-            {
-                self.form.dry_run = true;
-                self.live_confirmed = false;
-                self.active_view = WorkspaceView::Plan;
-                self.status =
-                    "Retry prepared as a dry preflight. Review the exact plan before any live run."
-                        .into();
+            match self.store.mailbox_state(job) {
+                Ok(Some(state)) if needs_operator_review(&state) => {
+                    if ui.button("Prepare safe retry  →").clicked() {
+                        self.form.dry_run = true;
+                        self.live_confirmed = false;
+                        self.active_view = WorkspaceView::Plan;
+                        self.status = "Retry prepared as a dry preflight. Review the exact plan before any live run.".into();
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "Durable mailbox state is unavailable; retry actions are disabled: {error}"
+                        ))
+                        .color(ALERT),
+                    );
+                }
             }
         }
         ui.group(|ui| {
@@ -4171,58 +4179,80 @@ impl App {
                 }
             }
             let selected_project = self.active_project_id().map(str::to_owned);
-            if let Some(project_id) = selected_project.as_deref()
-                && let Ok(jobs) = self.store.mailboxes(project_id)
-            {
-                let verified = jobs.iter().filter(|job| job.state == "verified").count();
-                let review = jobs.iter().filter(|job| needs_operator_review(&job.state)).count();
-                ui.separator();
-                ui.heading("Mailbox evidence");
-                ui.label(format!(
-                    "{verified} of {} verified · {review} require review",
-                    jobs.len()
-                ));
-                egui::ScrollArea::vertical()
-                    .id_salt("verification_mailbox_list")
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("verification_mailboxes")
-                            .striped(true)
-                            .min_col_width(140.0)
+            if let Some(project_id) = selected_project.as_deref() {
+                match self.store.mailboxes(project_id) {
+                    Ok(jobs) => {
+                        let verified = jobs.iter().filter(|job| job.state == "verified").count();
+                        let review = jobs.iter().filter(|job| needs_operator_review(&job.state)).count();
+                        ui.separator();
+                        ui.heading("Mailbox evidence");
+                        ui.label(format!(
+                            "{verified} of {} verified · {review} require review",
+                            jobs.len()
+                        ));
+                        egui::ScrollArea::vertical()
+                            .id_salt("verification_mailbox_list")
+                            .max_height(300.0)
                             .show(ui, |ui| {
-                                ui.strong("Mailbox");
-                                ui.strong("Evidence");
-                                ui.strong("Result");
-                                ui.end_row();
-                                for job in jobs {
-                                    let evidence = self.store.evidence(&job.id).ok().flatten();
-                                    let evidence_label = evidence
-                                        .as_ref()
-                                        .map(|value| value.evidence_level())
-                                        .unwrap_or("No evidence");
-                                    let (badge, color) = job_state_badge(&job.state);
-                                    if ui
-                                        .selectable_label(
-                                            self.job_id.as_deref() == Some(job.id.as_str()),
-                                            &job.destination_mailbox,
-                                        )
-                                        .clicked()
-                                    {
-                                        self.job_id = Some(job.id.clone());
-                                    }
-                                    ui.label(evidence_label);
-                                    ui.label(RichText::new(badge).color(color));
-                                    ui.end_row();
-                                }
+                                egui::Grid::new("verification_mailboxes")
+                                    .striped(true)
+                                    .min_col_width(140.0)
+                                    .show(ui, |ui| {
+                                        ui.strong("Mailbox");
+                                        ui.strong("Evidence");
+                                        ui.strong("Result");
+                                        ui.end_row();
+                                        for job in jobs {
+                                            let evidence = self.store.evidence(&job.id);
+                                            let evidence_label = match &evidence {
+                                                Ok(Some(value)) => value.evidence_level(),
+                                                Ok(None) => "No evidence",
+                                                Err(_) => "Unavailable",
+                                            };
+                                            let (badge, color) = job_state_badge(&job.state);
+                                            if ui
+                                                .selectable_label(
+                                                    self.job_id.as_deref() == Some(job.id.as_str()),
+                                                    &job.destination_mailbox,
+                                                )
+                                                .clicked()
+                                            {
+                                                self.job_id = Some(job.id.clone());
+                                            }
+                                            if let Err(error) = evidence {
+                                                ui.label(
+                                                    RichText::new(evidence_label).color(ALERT),
+                                                )
+                                                .on_hover_text(format!("Could not read evidence: {error}"));
+                                            } else {
+                                                ui.label(evidence_label);
+                                            }
+                                            ui.label(RichText::new(badge).color(color));
+                                            ui.end_row();
+                                        }
+                                    });
                             });
-                    });
+                    }
+                    Err(error) => {
+                        ui.separator();
+                        ui.label(
+                            RichText::new(format!(
+                                "Mailbox evidence is unavailable because durable state could not be read: {error}"
+                            ))
+                            .color(ALERT),
+                        );
+                    }
+                }
             }
+            let mut selection_error = None;
             let selected_job = self.job_id.clone().filter(|job| {
-                self.store
-                    .project_id_for_mailbox(job)
-                    .ok()
-                    .flatten()
-                    == selected_project
+                match self.store.project_id_for_mailbox(job) {
+                    Ok(project_id) => project_id == selected_project,
+                    Err(error) => {
+                        selection_error = Some(error.to_string());
+                        false
+                    }
+                }
             });
             if let Some(job) = selected_job.as_deref() {
                 match self.store.evidence(job) {
@@ -4244,6 +4274,13 @@ impl App {
                     Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(ALERT)); }
                     Err(error) => { ui.label(RichText::new(format!("Could not read evidence: {error}")).color(ALERT)); }
                 }
+            } else if let Some(error) = selection_error {
+                ui.label(
+                    RichText::new(format!(
+                        "The selected mailbox cannot be resolved in durable state: {error}"
+                    ))
+                    .color(ALERT),
+                );
             } else if self.job_id.is_some() && selected_project.is_some() {
                 ui.label(
                     RichText::new(
