@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Corrected imapsync debug option validation: `debug`, `debugimap1`, and
+  `debugimap2` are boolean switches and no longer consume or accept values.
 - Removed execution-capable imapsync `pipemess` from the extra-option
   allowlist; it is now rejected as unsafe rather than presented as a tuning
   option.

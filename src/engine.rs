@@ -171,9 +171,6 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
         "errorsmax",
         "maxsleep",
         "sleep",
-        "debug",
-        "debugimap1",
-        "debugimap2",
     ];
     let mut index = 0;
     while index < options.len() {

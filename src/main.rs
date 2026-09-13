@@ -10824,6 +10824,14 @@ mod tests {
         assert!(form.validate().is_ok());
         form.profile.extra_options = "--nofoldersizes --timeout 30".into();
         assert!(form.validate().is_ok());
+        form.profile.extra_options = "--debug --debugimap1 --debugimap2".into();
+        assert!(form.validate().is_ok());
+        form.profile.extra_options = "--debugimap1=1".into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("does not accept a value")
+        );
         form.profile.extra_options = "--custom-helper /tmp/helper".into();
         let error = form.validate().unwrap_err();
         assert!(error.contains("safe imapsync option allowlist"));
