@@ -342,7 +342,18 @@ pub(crate) fn wait_with_timeout(
     let process_group = child.id();
     let started = Instant::now();
     loop {
-        if let Some(status) = child.try_wait()? {
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                // A wait error must not leave an owned migration process
+                // running without a controller.  Clean up before returning
+                // the original error so callers can safely join pipe readers.
+                terminate_process_group(child);
+                wait_for_graceful_exit(child, Duration::from_secs(5));
+                return Err(error);
+            }
+        };
+        if let Some(status) = status {
             #[cfg(unix)]
             if process_group_exists(process_group) {
                 terminate_process_group_id(process_group);

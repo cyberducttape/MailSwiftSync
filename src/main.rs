@@ -1,6 +1,6 @@
-#[allow(dead_code)] // The control-plane API is consumed by the next orchestration UI layer.
 mod core;
 mod credentials;
+mod endpoint;
 mod engine;
 mod process;
 mod verification;
@@ -396,18 +396,7 @@ impl Form {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let content = toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?;
-        let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&temporary, content).map_err(|e| e.to_string())?;
-        restrict_file_permissions(&temporary).map_err(|e| e.to_string())?;
-        std::fs::File::open(&temporary)
-            .and_then(|file| file.sync_all())
-            .map_err(|e| e.to_string())?;
-        if let Err(error) = std::fs::rename(&temporary, &path) {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(error.to_string());
-        }
-        sync_directory(path.parent()).map_err(|e| e.to_string())?;
-        Ok(())
+        write_private_atomic(&path, &content).map_err(|e| e.to_string())
     }
     fn keyring_entry(&self, source: bool) -> Result<Option<Entry>, String> {
         let id = if source {
@@ -817,7 +806,7 @@ impl Form {
         };
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
-            endpoint_parts(&self.profile.source_host, source_default_port)
+            endpoint::parts(&self.profile.source_host, source_default_port)
                 .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
         let source_port = self
             .profile
@@ -935,7 +924,7 @@ impl Form {
         };
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
-            endpoint_parts(&self.profile.source_host, source_default_port)
+            endpoint::parts(&self.profile.source_host, source_default_port)
                 .unwrap_or_else(|_| (self.profile.source_host.clone(), source_default_port));
         let source_port = self
             .profile
@@ -1696,7 +1685,7 @@ impl BulkRetryScope {
 fn canonical_destination_identity(profile: &Profile) -> String {
     let destination_tls = effective_destination_tls(&profile.destination_tls);
     let default_port = default_imap_port(destination_tls);
-    let (host, endpoint_port) = endpoint_parts(&profile.destination_host, default_port)
+    let (host, endpoint_port) = endpoint::parts(&profile.destination_host, default_port)
         .unwrap_or_else(|_| (profile.destination_host.trim().to_owned(), default_port));
     let port = profile
         .destination_port
@@ -2237,47 +2226,6 @@ fn durable_single_identity_matches(
         && mailbox.destination_mailbox == profile.destination_user
 }
 
-fn endpoint_parts(input: &str, default_port: u16) -> Result<(String, u16), String> {
-    let input = input.trim();
-    if input.is_empty() {
-        return Err("empty endpoint".into());
-    }
-    if let Some(rest) = input.strip_prefix('[') {
-        let end = rest.find(']').ok_or("IPv6 endpoint is missing ]")?;
-        let host = rest[..end].to_owned();
-        if host.is_empty() {
-            return Err("IPv6 endpoint has an empty host".into());
-        }
-        let suffix = &rest[end + 1..];
-        if !suffix.is_empty() && !suffix.starts_with(':') {
-            return Err("invalid characters after IPv6 endpoint".into());
-        }
-        let port = suffix
-            .strip_prefix(':')
-            .map(|value| value.parse::<u16>())
-            .transpose()
-            .map_err(|_| "invalid endpoint port".to_owned())?
-            .unwrap_or(default_port);
-        if port == 0 {
-            return Err("endpoint port must be between 1 and 65535".into());
-        }
-        return Ok((host, port));
-    }
-    if input.matches(':').count() == 1
-        && let Some((host, port)) = input.rsplit_once(':')
-        && let Ok(port) = port.parse::<u16>()
-    {
-        if host.is_empty() {
-            return Err("endpoint has an empty host".into());
-        }
-        if port == 0 {
-            return Err("endpoint port must be between 1 and 65535".into());
-        }
-        return Ok((host.to_owned(), port));
-    }
-    Ok((input.to_owned(), default_port))
-}
-
 fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
     let host = host.trim();
     if configured_port.trim().is_empty() {
@@ -2290,7 +2238,7 @@ fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, Strin
     if port == 0 {
         return Err("endpoint port must be between 1 and 65535".into());
     }
-    let (host, _) = endpoint_parts(host, 993)?;
+    let (host, _) = endpoint::parts(host, 993)?;
     if host.contains(':') {
         Ok(format!("[{host}]:{port}"))
     } else {
@@ -2372,7 +2320,7 @@ fn probe_tls_capabilities_with_transport(
     password: &str,
     transport: &str,
 ) -> Result<core::ServerCapabilities, String> {
-    let (server_name, port) = endpoint_parts(host, default_imap_port(transport))
+    let (server_name, port) = endpoint::parts(host, default_imap_port(transport))
         .map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
     let address = if server_name.contains(':') {
         format!("[{server_name}]:{port}")
@@ -2586,7 +2534,7 @@ impl App {
         }
         let source = if self.form.profile.source_port.trim().is_empty() {
             self.form.profile.source_host.trim().to_owned()
-        } else if let Ok((host, _)) = endpoint_parts(self.form.profile.source_host.trim(), 993) {
+        } else if let Ok((host, _)) = endpoint::parts(self.form.profile.source_host.trim(), 993) {
             let port = self.form.profile.source_port.trim();
             if host.contains(':') {
                 format!("[{host}]:{port}")
@@ -5474,13 +5422,6 @@ impl App {
                             } else {
                                 None
                             };
-                            if run.batch_job_ids.iter().any(|id| id == &job_id)
-                                && let Some(bulk_index) =
-                                    self.bulk_job_ids.iter().position(|id| id == &job_id)
-                                && let Some(job) = self.bulk_jobs.get_mut(bulk_index)
-                            {
-                                job.state = display_job_state(&final_state).into();
-                            }
                             let result = if let Some(value) = evidence.as_ref() {
                                 self.store
                                     .finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
@@ -5508,6 +5449,16 @@ impl App {
                                     )
                             };
                             let completion_persisted = result.is_ok();
+                            // Durable state is authoritative. Do not show a
+                            // terminal child state in the editable queue until
+                            // the run/mailbox transaction has committed.
+                            if completion_persisted
+                                && let Some(bulk_index) =
+                                    self.bulk_job_ids.iter().position(|id| id == &job_id)
+                                && let Some(job) = self.bulk_jobs.get_mut(bulk_index)
+                            {
+                                job.state = display_job_state(&final_state).into();
+                            }
                             if let Err(error) = result {
                                 durability_errors.push(format!(
                                     "persist child run {} completion failed: {error}",
@@ -8093,15 +8044,15 @@ mod tests {
     #[test]
     fn endpoint_parser_handles_ports_and_ipv6() {
         assert_eq!(
-            endpoint_parts("mail.example:8143", 993).unwrap(),
+            endpoint::parts("mail.example:8143", 993).unwrap(),
             ("mail.example".into(), 8143)
         );
         assert_eq!(
-            endpoint_parts("[2001:db8::1]:993", 143).unwrap(),
+            endpoint::parts("[2001:db8::1]:993", 143).unwrap(),
             ("2001:db8::1".into(), 993)
         );
-        assert!(endpoint_parts("mail.example:0", 993).is_err());
-        assert!(endpoint_parts("[2001:db8::1]garbage", 993).is_err());
+        assert!(endpoint::parts("mail.example:0", 993).is_err());
+        assert!(endpoint::parts("[2001:db8::1]garbage", 993).is_err());
     }
 
     #[test]

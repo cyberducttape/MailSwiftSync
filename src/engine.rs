@@ -23,12 +23,12 @@ pub(crate) fn imapsync_args(
     };
     let source_default_port = super::default_imap_port(&profile.source_tls);
     let (source_host, source_endpoint_port) =
-        super::endpoint_parts(&profile.source_host, source_default_port)
+        crate::endpoint::parts(&profile.source_host, source_default_port)
             .unwrap_or_else(|_| (profile.source_host.clone(), source_default_port));
     let destination_tls = super::effective_destination_tls(&profile.destination_tls);
     let destination_default_port = super::default_imap_port(destination_tls);
     let (destination_host, endpoint_port) =
-        super::endpoint_parts(&profile.destination_host, destination_default_port)
+        crate::endpoint::parts(&profile.destination_host, destination_default_port)
             .unwrap_or_else(|_| (profile.destination_host.clone(), destination_default_port));
     let destination_port = profile.destination_port.trim();
     let destination_port = if destination_port.is_empty() {

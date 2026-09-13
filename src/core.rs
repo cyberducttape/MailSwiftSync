@@ -28,7 +28,8 @@ fn normalized_destination_identity(destination_mailbox: &str, config: Option<&st
                 .and_then(toml::Value::as_str)
                 .unwrap_or("imaps");
             let default_port = if tls == "starttls" { 143 } else { 993 };
-            let (host, embedded_port) = destination_host_port(host, default_port);
+            let (host, embedded_port) = crate::endpoint::parts(host, default_port)
+                .unwrap_or_else(|_| (host.to_owned(), default_port));
             let port = value
                 .get("destination_port")
                 .and_then(toml::Value::as_str)
@@ -47,29 +48,6 @@ fn normalized_destination_identity(destination_mailbox: &str, config: Option<&st
         "mailbox:{}",
         destination_mailbox.trim().to_ascii_lowercase()
     )
-}
-
-fn destination_host_port(value: &str, default_port: u16) -> (String, u16) {
-    let value = value.trim();
-    if let Some(rest) = value.strip_prefix('[')
-        && let Some(end) = rest.find(']')
-    {
-        let host = rest[..end].trim();
-        let port = rest[end + 1..]
-            .strip_prefix(':')
-            .and_then(|port| port.parse::<u16>().ok())
-            .filter(|port| *port != 0)
-            .unwrap_or(default_port);
-        return (host.to_owned(), port);
-    }
-    if value.matches(':').count() == 1
-        && let Some((host, port)) = value.rsplit_once(':')
-        && let Ok(port) = port.parse::<u16>()
-        && port != 0
-    {
-        return (host.trim().to_owned(), port);
-    }
-    (value.to_owned(), default_port)
 }
 
 const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;
@@ -294,6 +272,7 @@ impl MailboxEvidence {
         }
     }
 
+    #[allow(dead_code)]
     pub fn confidence_percent(&self) -> u8 {
         let exact = self.source_messages == self.destination_messages
             && self.source_bytes == self.destination_bytes
@@ -418,6 +397,9 @@ fn bounded_event_detail(_kind: &str, detail: &str) -> String {
     format!("{}{}", &detail[..end], DURABLE_EVENT_TRUNCATION_SUFFIX)
 }
 
+// Keep the storage API broad enough for controller and integration-test
+// consumers without suppressing dead-code diagnostics for the whole module.
+#[allow(dead_code)]
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
