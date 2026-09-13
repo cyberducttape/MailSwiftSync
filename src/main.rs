@@ -10,7 +10,9 @@ mod reports;
 mod ui;
 mod verification;
 
-use controller::{ActiveRunContext, LiveAuthProof, RunKind};
+use controller::{
+    ActiveRunContext, BatchExecutionMode, LiveAuthProof, RunKind, is_verified_terminal_state,
+};
 use credentials::{
     CleanupGuard, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
     restrict_directory_permissions, restrict_file_permissions, secret_runtime_base,
@@ -2423,7 +2425,7 @@ struct App {
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_confirmation_summary: Option<BulkConfirmationSummary>,
-    bulk_dry_run: bool,
+    bulk_mode: BatchExecutionMode,
     bulk_clear_confirm_open: bool,
     pending_bulk_import: Option<std::path::PathBuf>,
     pending_sheet_import: Option<PendingSheetImport>,
@@ -2806,7 +2808,7 @@ impl Default for App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
-            bulk_dry_run: true,
+            bulk_mode: BatchExecutionMode::Preflight,
             bulk_clear_confirm_open: false,
             pending_bulk_import: None,
             pending_sheet_import: None,
@@ -4243,17 +4245,17 @@ impl App {
             });
             if run_preflight {
                 self.form.dry_run = true;
-                self.bulk_dry_run = true;
+                self.bulk_mode = BatchExecutionMode::Preflight;
                 self.bulk_retry_scope = BulkRetryScope::All;
                 self.start_bulk();
             } else if run_live {
                 self.form.dry_run = false;
-                self.bulk_dry_run = false;
+                self.bulk_mode = BatchExecutionMode::Live;
                 self.bulk_retry_scope = BulkRetryScope::All;
                 self.start_bulk();
             } else if run_delta {
                 self.form.dry_run = false;
-                self.bulk_dry_run = false;
+                self.bulk_mode = BatchExecutionMode::Live;
                 self.bulk_retry_scope = BulkRetryScope::DeltaRequired;
                 self.start_bulk();
             } else if review_selected
@@ -5611,7 +5613,7 @@ impl App {
             self.bulk_message = "Import a file before starting the queue.".into();
             return;
         }
-        let live = !self.bulk_dry_run;
+        let live = self.bulk_mode.is_live();
         if live && !self.bulk_live_confirmed {
             // Capture the durable admission facts before opening the dialog;
             // the dialog itself is presentation-only and must not query
@@ -7965,13 +7967,21 @@ impl App {
                 ui.label(RichText::new("Focused selections apply to preflight and live scope controls below; live execution still requires matching preflight and confirmation.").size(11.0).color(self.theme_colors().text_secondary));
             });
             ui.add_space(8.0);
-            let previous_bulk_dry_run = self.bulk_dry_run;
+            let previous_bulk_mode = self.bulk_mode;
             ui.horizontal(|ui| {
                 ui.label("Batch mode");
-                ui.selectable_value(&mut self.bulk_dry_run, true, "Preflight");
-                ui.selectable_value(&mut self.bulk_dry_run, false, "Live migration");
+                ui.selectable_value(
+                    &mut self.bulk_mode,
+                    BatchExecutionMode::Preflight,
+                    "Preflight",
+                );
+                ui.selectable_value(
+                    &mut self.bulk_mode,
+                    BatchExecutionMode::Live,
+                    "Live migration",
+                );
             });
-            if self.bulk_dry_run != previous_bulk_dry_run {
+            if self.bulk_mode != previous_bulk_mode {
                 self.bulk_live_confirmed = false;
                 self.bulk_confirmation_summary = None;
             }
@@ -7996,15 +8006,15 @@ impl App {
                     .iter()
                     .filter(|job| self.bulk_retry_scope.includes(&display_state_key(&job.state)))
                     .count();
-                let label = if self.bulk_dry_run {
+                let label = if self.bulk_mode.is_preflight() {
                     format!("Run {} preflight checks", self.bulk_jobs.len())
                 } else {
                     format!("Start {live_count} live migrations")
                 };
                 let can_start = !self.running()
                     && !self.bulk_jobs.is_empty()
-                    && (self.bulk_dry_run || live_count > 0);
-                if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.bulk_dry_run { self.theme_colors().info } else { self.theme_colors().danger })).clicked() { self.start_bulk(); }
+                    && (self.bulk_mode.is_preflight() || live_count > 0);
+                if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.bulk_mode.is_preflight() { self.theme_colors().info } else { self.theme_colors().danger })).clicked() { self.start_bulk(); }
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -8023,7 +8033,7 @@ impl App {
                 );
                 ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(self.theme_colors().text_secondary));
             });
-            if !self.bulk_dry_run {
+            if self.bulk_mode.is_live() {
                 ui.add_enabled_ui(queue_editable, |ui| {
                     egui::ComboBox::from_id_salt("bulk_retry_scope")
                         .selected_text(self.bulk_retry_scope.label())
@@ -10156,9 +10166,8 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
                 .into(),
         );
     }
-    let (form_dry_run, bulk_dry_run) = headless_batch_mode(false);
-    app.form.dry_run = form_dry_run;
-    app.bulk_dry_run = bulk_dry_run;
+    app.form.dry_run = true;
+    app.bulk_mode = BatchExecutionMode::Preflight;
     app.start_bulk();
     wait_for_headless_controller(&mut app)?;
     let project_id = app
@@ -10198,9 +10207,8 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         ));
     }
 
-    let (form_dry_run, bulk_dry_run) = headless_batch_mode(true);
-    app.form.dry_run = form_dry_run;
-    app.bulk_dry_run = bulk_dry_run;
+    app.form.dry_run = false;
+    app.bulk_mode = BatchExecutionMode::Live;
     app.bulk_live_confirmed = true;
     app.start_bulk();
     wait_for_headless_controller(&mut app)?;
@@ -10221,7 +10229,7 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
     }
     let unresolved = final_selected
         .iter()
-        .filter(|mailbox| !is_verified_batch_terminal_state(&mailbox.state))
+        .filter(|mailbox| !is_verified_terminal_state(&mailbox.state))
         .map(|mailbox| format!("{}={}", mailbox.id, mailbox.state))
         .collect::<Vec<_>>();
     if !unresolved.is_empty() {
@@ -10234,19 +10242,6 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         "Headless batch live migration completed for project {project_id}; {} mailbox(es) reached verified terminal states.",
         job_ids.len()
     ))
-}
-
-/// Keep the legacy single-mailbox form flag and the batch controller mode in
-/// sync at the headless boundary. Batch execution is governed by
-/// `bulk_dry_run`; changing only `form.dry_run` can rerun preflight and make a
-/// requested live invocation report ready rows as successfully migrated.
-fn headless_batch_mode(live: bool) -> (bool, bool) {
-    let dry_run = !live;
-    (dry_run, dry_run)
-}
-
-fn is_verified_batch_terminal_state(state: &str) -> bool {
-    matches!(state, "verified" | "verified_with_exceptions")
 }
 
 /// Foreground supervisor for an already admitted durable batch. The loop is
@@ -12491,18 +12486,12 @@ mod tests {
     }
 
     #[test]
-    fn headless_batch_mode_binds_form_and_controller_modes() {
-        assert_eq!(headless_batch_mode(false), (true, true));
-        assert_eq!(headless_batch_mode(true), (false, false));
-    }
-
-    #[test]
     fn headless_batch_success_requires_verified_terminal_states() {
-        assert!(is_verified_batch_terminal_state("verified"));
-        assert!(is_verified_batch_terminal_state("verified_with_exceptions"));
-        assert!(!is_verified_batch_terminal_state("ready"));
-        assert!(!is_verified_batch_terminal_state("completed"));
-        assert!(!is_verified_batch_terminal_state("delta_required"));
+        assert!(is_verified_terminal_state("verified"));
+        assert!(is_verified_terminal_state("verified_with_exceptions"));
+        assert!(!is_verified_terminal_state("ready"));
+        assert!(!is_verified_terminal_state("completed"));
+        assert!(!is_verified_terminal_state("delta_required"));
     }
 
     #[test]

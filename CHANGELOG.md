@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Batch execution now uses an explicit controller-owned `BatchExecutionMode`
+  instead of a second boolean dry-run flag, keeping GUI and headless admission
+  on one source of truth.
 - Isolated XOAUTH2 payload construction and IMAP challenge handling in the
   dedicated OAuth module so provider authentication work can evolve outside
   the main application controller.
