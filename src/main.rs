@@ -1905,6 +1905,7 @@ struct App {
     live_confirmed: bool,
     live_confirmation_plan: Option<String>,
     durability_error: bool,
+    stop_confirm_open: bool,
     keyring_open: bool,
     active_view: WorkspaceView,
     pending_evidence: Option<core::MailboxEvidence>,
@@ -2123,6 +2124,7 @@ impl Default for App {
             live_confirmed: false,
             live_confirmation_plan: None,
             durability_error: false,
+            stop_confirm_open: false,
             keyring_open: false,
             active_view: WorkspaceView::Overview,
             pending_evidence: None,
@@ -2195,7 +2197,7 @@ fn recommended_next_action(
     running: bool,
 ) -> &'static str {
     if running {
-        return "A migration is running — monitor Activity; press Escape to request cancellation.";
+        return "A migration is running — monitor Activity or use Stop migration if you need to halt it.";
     }
     if attention_count > 0 {
         return "Review Attention items before starting another migration.";
@@ -6387,6 +6389,39 @@ impl App {
         });
         self.live_confirm_open = open && !close_requested;
     }
+
+    fn stop_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.stop_confirm_open || !self.running() {
+            return;
+        }
+        let mut open = self.stop_confirm_open;
+        let mut close_requested = false;
+        egui::Window::new("Stop migration?")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(RichText::new("The migration will stop where it is").color(ALERT));
+                ui.label("The destination may be partially migrated. A later preflight, delta, or verification pass may be required before continuing.");
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Keep running").clicked() {
+                        close_requested = true;
+                    }
+                    if ui
+                        .add(egui::Button::new(RichText::new("Stop migration").color(Color32::WHITE)).fill(ALERT))
+                        .clicked()
+                    {
+                        if let Some(cancel) = &self.cancel_requested {
+                            cancel.store(true, Ordering::Relaxed);
+                        }
+                        self.status = "Cancellation requested…".into();
+                        close_requested = true;
+                    }
+                });
+            });
+        self.stop_confirm_open = open && !close_requested;
+    }
 }
 
 fn markdown_escape(value: &str) -> String {
@@ -6659,12 +6694,6 @@ impl eframe::App for App {
                 plan_controls_enabled,
             );
         });
-        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) && self.running() {
-            if let Some(cancel) = &self.cancel_requested {
-                cancel.store(true, Ordering::Relaxed);
-                self.status = "Cancellation requested (Escape)…".into();
-            }
-        }
         let mut v = if self.dark_mode {
             egui::Visuals::dark()
         } else {
@@ -6898,7 +6927,7 @@ impl eframe::App for App {
                         ui.horizontal(|ui| {
                             if ui.button("Preview safe command").clicked() { self.preview = true; }
                             if self.running() {
-                                if ui.button("Cancel running process").clicked() { if let Some(cancel) = &self.cancel_requested { cancel.store(true, Ordering::Relaxed); self.status = "Cancellation requested…".into(); } }
+                                if ui.button("Stop migration").clicked() { self.stop_confirm_open = true; }
                             } else {
                                 let label = if self.form.dry_run { "Run preflight  →" } else { "Start live migration  →" };
                                 if ui.add_enabled(true, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start(); }
@@ -6922,6 +6951,7 @@ impl eframe::App for App {
         self.engine_dialog(ctx);
         self.cockpit(ctx);
         self.live_confirmation(ctx);
+        self.stop_confirmation(ctx);
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
@@ -8227,7 +8257,7 @@ mod tests {
         );
         assert_eq!(
             recommended_next_action(core::Phase::Preflight, true, 0, true),
-            "A migration is running — monitor Activity; press Escape to request cancellation."
+            "A migration is running — monitor Activity or use Stop migration if you need to halt it."
         );
     }
 
