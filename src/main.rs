@@ -1997,7 +1997,7 @@ struct App {
     live_confirmed: bool,
     live_confirmation_plan: Option<String>,
     durability_error: bool,
-    terminal_commit_retry_pending: bool,
+    durability_recovery_pending: bool,
     stop_confirm_open: bool,
     keyring_open: bool,
     active_view: WorkspaceView,
@@ -2304,7 +2304,7 @@ impl Default for App {
             live_confirmed: false,
             live_confirmation_plan: None,
             durability_error: false,
-            terminal_commit_retry_pending: false,
+            durability_recovery_pending: false,
             stop_confirm_open: false,
             keyring_open: false,
             active_view: WorkspaceView::Overview,
@@ -4637,7 +4637,7 @@ impl App {
             return;
         }
         self.durability_error = false;
-        self.terminal_commit_retry_pending = false;
+        self.durability_recovery_pending = false;
         self.pending_batch_evidence.clear();
         self.pending_batch_checkpoints.clear();
         let mailboxes = jobs
@@ -5465,7 +5465,7 @@ impl App {
             }
         }
         self.durability_error = false;
-        self.terminal_commit_retry_pending = false;
+        self.durability_recovery_pending = false;
         if !self.form.dry_run {
             if !self.persistence_available {
                 self.status =
@@ -5769,6 +5769,7 @@ impl App {
         let mut pending_db_events = std::mem::take(&mut self.pending_db_events);
         let mut deferred_events = std::mem::take(&mut self.deferred_events);
         let mut durability_errors = Vec::new();
+        let mut recovered_durability = false;
         let active_run = self.active_run.clone();
         if let Some(rx) = &self.receiver {
             let mut processed_events = 0;
@@ -5985,8 +5986,14 @@ impl App {
                                 })
                                 .collect::<Vec<_>>();
                             match self.store.record_events_for_runs_batch(&batch) {
-                                Ok(()) => pending_db_events.clear(),
+                                Ok(()) => {
+                                    pending_db_events.clear();
+                                    if self.durability_recovery_pending {
+                                        recovered_durability = true;
+                                    }
+                                }
                                 Err(error) => {
+                                    self.durability_recovery_pending = true;
                                     durability_errors.push(format!(
                                         "persist child diagnostics before completion failed: {error}"
                                     ));
@@ -6077,6 +6084,7 @@ impl App {
                                 job.state = display_job_state(&final_state).into();
                             }
                             if let Err(error) = result {
+                                self.durability_recovery_pending = true;
                                 durability_errors.push(format!(
                                     "persist child run {} completion failed: {error}",
                                     index + 1
@@ -6095,6 +6103,9 @@ impl App {
                                 });
                                 break;
                             } else {
+                                if self.durability_recovery_pending {
+                                    recovered_durability = true;
+                                }
                                 self.pending_batch_evidence.remove(&child_run_id);
                                 self.pending_batch_checkpoints.remove(&child_run_id);
                             }
@@ -6200,12 +6211,16 @@ impl App {
                 |_| self.store.record_events_for_runs_batch(&batch),
             );
             if let Err(error) = result {
+                self.durability_recovery_pending = true;
                 durability_errors.push(format!(
                     "record execution events failed; diagnostics remain queued for retry: {error}"
                 ));
                 self.pending_db_events = pending_db_events.clone();
             } else {
                 pending_db_events.clear();
+                if self.durability_recovery_pending {
+                    recovered_durability = true;
+                }
             }
         }
         let cycle_had_durability_errors = !durability_errors.is_empty();
@@ -6213,6 +6228,15 @@ impl App {
             self.report_store_error("batch event persistence", Err(error));
         }
         self.deferred_events = deferred_events;
+        if recovered_durability
+            && self.durability_recovery_pending
+            && !cycle_had_durability_errors
+            && pending_db_events.is_empty()
+            && self.deferred_events.is_empty()
+        {
+            self.durability_error = false;
+            self.durability_recovery_pending = false;
+        }
         if !pending_db_events.is_empty() || !self.deferred_events.is_empty() {
             // A parent Finished event must not finalize the batch while a
             // child completion or its audit trail is waiting on durable
@@ -6366,7 +6390,7 @@ impl App {
                     Ok(()) => true,
                     Err(error) => {
                         self.durability_error = true;
-                        self.terminal_commit_retry_pending = true;
+                        self.durability_recovery_pending = true;
                         push_visible_output(
                             &mut self.output,
                             format!("[durability] Could not persist terminal state: {error}"),
@@ -6379,18 +6403,11 @@ impl App {
                     self.preflight_credential_fingerprint =
                         Some(run_context.credential_fingerprint.clone());
                 }
-                if terminal_write_ok
-                    && self.terminal_commit_retry_pending
-                    && !cycle_had_durability_errors
-                {
-                    // These inputs belong to this terminal commit. Do not
-                    // consume them before SQLite acknowledges the commit, or
-                    // a retry would be unable to reproduce the same durable
-                    // result.
-                    self.durability_error = false;
-                    self.terminal_commit_retry_pending = false;
-                }
                 if terminal_write_ok {
+                    if self.durability_recovery_pending && !cycle_had_durability_errors {
+                        self.durability_error = false;
+                        self.durability_recovery_pending = false;
+                    }
                     // These inputs belong to this terminal commit. Do not
                     // consume them before SQLite acknowledges the commit, or
                     // a retry would be unable to reproduce the same durable
