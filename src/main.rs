@@ -453,6 +453,7 @@ fn verify_proof_file_with_trust(
                 .and_then(serde_json::Value::as_str)
                 .ok_or("Migration proof signature is missing public_key.")?,
         )?;
+        let trust_pinned = trusted_public_key.is_some();
         if let Some(trusted) = trusted_public_key {
             let trusted = hex_decode::<32>(trusted.trim())?;
             if trusted != public_key {
@@ -473,8 +474,13 @@ fn verify_proof_file_with_trust(
             .get("key_id")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unidentified");
+        let trust_message = if trust_pinned {
+            "trusted public key matched"
+        } else {
+            "signer identity is not trust-pinned"
+        };
         return Ok(format!(
-            "Migration proof verified: {actual}; Ed25519 signature valid for key {key_id}"
+            "Migration proof verified: {actual}; Ed25519 signature valid for key {key_id}; {trust_message}"
         ));
     }
     Ok(format!(
