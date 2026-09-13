@@ -21,8 +21,22 @@ command -v jq >/dev/null 2>&1 || {
 
 mkdir -p -- "$(dirname -- "$output")"
 (cd "$project_root" && cargo metadata --locked --format-version 1 > "$metadata")
-serial="$(uuidgen | tr '[:upper:]' '[:lower:]')"
-timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if command -v sha256sum >/dev/null 2>&1; then
+  lock_digest="$(sha256sum "$project_root/Cargo.lock" | awk '{print $1}')"
+else
+  lock_digest="$(shasum -a 256 "$project_root/Cargo.lock" | awk '{print $1}')"
+fi
+# CycloneDX requires a UUID-shaped serial number. Derive it from the locked
+# dependency graph instead of uuidgen so identical source inputs produce the
+# same SBOM. SOURCE_DATE_EPOCH is the release timestamp contract; fall back to
+# the repository's latest commit for local invocations.
+serial="${lock_digest:0:8}-${lock_digest:8:4}-${lock_digest:12:4}-${lock_digest:16:4}-${lock_digest:20:12}"
+source_date_epoch="${SOURCE_DATE_EPOCH:-$(git -C "$project_root" log -1 --format=%ct HEAD)}"
+if timestamp="$(date -u -d "@${source_date_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"; then
+  :
+else
+  timestamp="$(date -u -r "$source_date_epoch" +%Y-%m-%dT%H:%M:%SZ)"
+fi
 
 jq --arg serial "$serial" --arg timestamp "$timestamp" '
   . as $metadata

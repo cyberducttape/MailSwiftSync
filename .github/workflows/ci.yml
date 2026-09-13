@@ -29,7 +29,10 @@ jobs:
       - name: Generate and validate SBOM
         run: |
           mkdir -p dist
-          scripts/generate-sbom.sh dist/mailswiftsync-sbom.json
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)" scripts/generate-sbom.sh dist/mailswiftsync-sbom.json
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)" scripts/generate-sbom.sh dist/mailswiftsync-sbom-repeat.json
+          cmp --silent dist/mailswiftsync-sbom.json dist/mailswiftsync-sbom-repeat.json
+          rm dist/mailswiftsync-sbom-repeat.json
           jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' dist/mailswiftsync-sbom.json
 
   cross-platform-build:

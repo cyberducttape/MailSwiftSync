@@ -16,7 +16,8 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   kill-on-close semantics, so controller exit does not leave an unowned
   descendant tree. macOS still uses the conservative no-signal fallback.
 - CI and tagged releases generate a CycloneDX 1.5 SBOM from the locked Cargo
-  dependency graph and publish it with its own checksum.
+  dependency graph and publish it with its own checksum. The SBOM serial and
+  timestamp are reproducible from `Cargo.lock` and `SOURCE_DATE_EPOCH`.
 - A compatibility-matrix release gate and verification script are checked into
   the repository.
 - Durable attention reasons now survive restart and are included in Markdown
