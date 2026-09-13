@@ -72,7 +72,8 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   executable supports `--version`; unavailable versions remain explicit in
   exports rather than being guessed.
 - A reproducible Linux engine lab starts two disposable Dovecot servers,
-  performs a real imapsync transfer, and checks the destination fixture. This
+  performs a real imapsync transfer, checks the destination message count and
+  fixture Message-ID, and rejects invalid credentials. This
   is engine-level coverage. It also asserts that invalid source credentials
   fail. The lab runs on pull requests as well as through the scheduled/manual
   CI workflow; runners without the pinned Dovecot 2.4.x fixture skip

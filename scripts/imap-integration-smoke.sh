@@ -153,4 +153,11 @@ if [[ "$destination_messages" -lt 1 ]]; then
   echo "FAIL: imapsync reported success but destination Maildir has no fixture message" >&2
   exit 1
 fi
+if ! grep -R -F -l -- "Message-ID: <mailswiftsync-integration-fixture@example.test>" \
+  "$workspace/destination/mail/$user/Maildir/cur" \
+  "$workspace/destination/mail/$user/Maildir/new" >/dev/null 2>&1; then
+  echo "FAIL: destination Maildir is missing the fixture Message-ID" >&2
+  exit 1
+fi
+echo "PASS: destination retained the fixture Message-ID"
 echo "PASS: real Dovecot-to-Dovecot IMAP transfer copied $destination_messages message(s)"
