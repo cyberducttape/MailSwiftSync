@@ -2779,14 +2779,6 @@ fn imap_command_succeeded(response: &str, tag: &str) -> bool {
         .any(|line| line.starts_with(&format!("{tag} OK")))
 }
 
-fn probe_tls_capabilities(
-    host: &str,
-    user: &str,
-    password: &str,
-) -> Result<core::ServerCapabilities, String> {
-    probe_tls_capabilities_with_transport(host, user, password, "imaps")
-}
-
 fn probe_tls_capabilities_with_transport(
     host: &str,
     user: &str,
@@ -3009,27 +3001,30 @@ impl App {
             self.status = "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight.".into();
             return;
         }
-        if self.form.profile.source_tls != "imaps" {
-            self.status = "Capability discovery currently supports IMAPS only; use the configured engine preflight for plain or STARTTLS sources.".into();
+        if self.form.profile.source_tls == "plain" || self.form.profile.destination_tls == "plain" {
+            self.status = "Authenticated capability discovery requires encrypted IMAP; plain transport remains blocked by the explicit cleartext acknowledgement gate.".into();
             return;
         }
-        let source = if self.form.profile.source_port.trim().is_empty() {
-            self.form.profile.source_host.trim().to_owned()
-        } else if let Ok((host, _)) = endpoint::parts(self.form.profile.source_host.trim(), 993) {
-            let port = self.form.profile.source_port.trim();
-            if host.contains(':') {
-                format!("[{host}]:{port}")
-            } else {
-                format!("{host}:{port}")
+        let source = match endpoint_for_probe(
+            &self.form.profile.source_host,
+            &self.form.profile.source_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.status = format!("Source readiness probe blocked: {error}");
+                return;
             }
-        } else {
-            self.form.profile.source_host.trim().to_owned()
         };
-        let destination = self.form.profile.destination_host.trim().to_owned();
-        if source.is_empty() || destination.is_empty() {
-            self.status = "Enter both IMAP hosts before capability discovery.".into();
-            return;
-        }
+        let destination = match endpoint_for_probe(
+            &self.form.profile.destination_host,
+            &self.form.profile.destination_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.status = format!("Destination readiness probe blocked: {error}");
+                return;
+            }
+        };
         let (tx, rx) = mpsc::channel();
         self.capability_receiver = Some(rx);
         self.status = "Authenticating and inspecting IMAPS readiness…".into();
@@ -3037,16 +3032,24 @@ impl App {
         let source_password = self.form.source_password.clone();
         let destination_user = self.form.profile.destination_user.clone();
         let destination_password = self.form.destination_password.clone();
+        let source_tls = self.form.profile.source_tls.clone();
+        let destination_tls = self.form.profile.destination_tls.clone();
         thread::spawn(move || {
-            let result = probe_tls_capabilities(&source, &source_user, source_password.as_str())
-                .and_then(|left| {
-                    probe_tls_capabilities(
-                        &destination,
-                        &destination_user,
-                        destination_password.as_str(),
-                    )
-                    .map(|right| (left, right))
-                });
+            let result = probe_tls_capabilities_with_transport(
+                &source,
+                &source_user,
+                source_password.as_str(),
+                &source_tls,
+            )
+            .and_then(|left| {
+                probe_tls_capabilities_with_transport(
+                    &destination,
+                    &destination_user,
+                    destination_password.as_str(),
+                    &destination_tls,
+                )
+                .map(|right| (left, right))
+            });
             let _ = tx.send(result);
         });
     }
