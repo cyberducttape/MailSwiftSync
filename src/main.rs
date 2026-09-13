@@ -1465,10 +1465,12 @@ fn run_streaming(
     let out_prefix = prefix.to_owned();
     let out_secrets = secrets.to_vec();
     let tail = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
-    let evidence_lines = Arc::new(Mutex::new(Vec::new()));
+    let evidence = Arc::new(Mutex::new(
+        verification::ImapsyncEvidenceAccumulator::default(),
+    ));
     let dropped_diagnostics = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let out_tail = Arc::clone(&tail);
-    let out_evidence_lines = Arc::clone(&evidence_lines);
+    let out_evidence = Arc::clone(&evidence);
     let dovecot_checkpoint = Arc::new(Mutex::new(None::<String>));
     let out_dovecot_checkpoint = Arc::clone(&dovecot_checkpoint);
     let out_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
@@ -1483,7 +1485,9 @@ fn run_streaming(
                 }
             }
             record_process_tail(&out_tail, &safe);
-            record_evidence_line(&out_evidence_lines, &safe);
+            if let Ok(mut evidence) = out_evidence.lock() {
+                evidence.observe(&safe);
+            }
             if dovecot_exit_two_is_delta
                 && let Some(candidate) = dovecot_state_candidate(&safe)
                 && let Ok(mut checkpoint) = out_dovecot_checkpoint.lock()
@@ -1506,7 +1510,7 @@ fn run_streaming(
     let err_prefix = prefix.to_owned();
     let err_secrets = secrets.to_vec();
     let err_tail = Arc::clone(&tail);
-    let err_evidence_lines = Arc::clone(&evidence_lines);
+    let err_evidence = Arc::clone(&evidence);
     let err_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
     let err_run_id = run_id.to_owned();
     let err_job_id = job_id.to_owned();
@@ -1519,7 +1523,9 @@ fn run_streaming(
                 }
             }
             record_process_tail(&err_tail, &safe);
-            record_evidence_line(&err_evidence_lines, &safe);
+            if let Ok(mut evidence) = err_evidence.lock() {
+                evidence.observe(&safe);
+            }
             if err_tx
                 .try_send(Event::RunLine {
                     run_id: err_run_id.clone(),
@@ -1670,10 +1676,10 @@ fn run_streaming(
             if let Some(error) = process_end_error {
                 return Err(error);
             }
-            let imapsync_lines = evidence_lines
+            let imapsync_evidence = evidence
                 .lock()
                 .map_err(|_| "imapsync evidence collector was poisoned".to_owned())?;
-            let imapsync_evidence = verification::parse_imapsync_evidence(&imapsync_lines);
+            let imapsync_evidence = imapsync_evidence.evidence();
             let checkpoint = dovecot_checkpoint
                 .lock()
                 .map_err(|_| "Dovecot checkpoint collector was poisoned".to_owned())?
@@ -1715,24 +1721,6 @@ fn run_streaming(
                 Err(format!("{error}; recent output: {recent}"))
             }
         }
-    }
-}
-
-fn record_evidence_line(lines: &Mutex<Vec<String>>, line: &str) {
-    const EVIDENCE_MARKERS: [&str; 7] = [
-        "Host1 Nb folders:",
-        "Host2 Nb folders:",
-        "Host1 Nb messages:",
-        "Host2 Nb messages:",
-        "Host1 Total size:",
-        "Host2 Total size:",
-        "Detected ",
-    ];
-    if (line.contains("The sync looks good") || EVIDENCE_MARKERS.iter().any(|m| line.contains(m)))
-        && let Ok(mut lines) = lines.lock()
-        && lines.len() < 64
-    {
-        lines.push(line.to_owned());
     }
 }
 

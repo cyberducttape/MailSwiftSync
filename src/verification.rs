@@ -23,41 +23,67 @@ fn detected_error_count(line: &str) -> Option<u64> {
         .then_some(count)
 }
 
-/// Extract the stable summary fields emitted by imapsync.  The parser only
-/// receives summary markers; the process runner keeps the complete journal
-/// streaming and bounded separately.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ImapsyncEvidenceAccumulator {
+    source_folders: Option<u64>,
+    destination_folders: Option<u64>,
+    source_messages: Option<u64>,
+    destination_messages: Option<u64>,
+    source_bytes: Option<u64>,
+    destination_bytes: Option<u64>,
+    failed_messages: Option<u64>,
+    sync_good: bool,
+}
+
+impl ImapsyncEvidenceAccumulator {
+    pub(crate) fn observe(&mut self, line: &str) {
+        if let Some(value) = number_after(line, "Host1 Nb folders:") {
+            self.source_folders = Some(value);
+        }
+        if let Some(value) = number_after(line, "Host2 Nb folders:") {
+            self.destination_folders = Some(value);
+        }
+        if let Some(value) = number_after(line, "Host1 Nb messages:") {
+            self.source_messages = Some(value);
+        }
+        if let Some(value) = number_after(line, "Host2 Nb messages:") {
+            self.destination_messages = Some(value);
+        }
+        if let Some(value) = number_after(line, "Host1 Total size:") {
+            self.source_bytes = Some(value);
+        }
+        if let Some(value) = number_after(line, "Host2 Total size:") {
+            self.destination_bytes = Some(value);
+        }
+        if let Some(value) = detected_error_count(line) {
+            self.failed_messages = Some(value);
+        }
+        self.sync_good |= line.contains("The sync looks good");
+    }
+
+    pub(crate) fn evidence(&self) -> Option<core::MailboxEvidence> {
+        Some(core::MailboxEvidence {
+            source_messages: self.source_messages?,
+            destination_messages: self.destination_messages?,
+            source_bytes: self.source_bytes?,
+            destination_bytes: self.destination_bytes?,
+            unmatched_messages: if self.sync_good { 0 } else { 1 },
+            failed_messages: self.failed_messages.unwrap_or(0),
+            source_folders: self.source_folders?,
+            destination_folders: self.destination_folders?,
+            authoritative: self.sync_good,
+        })
+    }
+}
+
+/// Extract the stable summary fields emitted by imapsync. The accumulator is
+/// constant-memory and always keeps the latest value from a noisy run.
 pub(crate) fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxEvidence> {
-    let last = |marker: &str| {
-        lines
-            .iter()
-            .rev()
-            .find_map(|line| number_after(line, marker))
-    };
-    let source_folders = last("Host1 Nb folders:")?;
-    let destination_folders = last("Host2 Nb folders:")?;
-    let source_messages = last("Host1 Nb messages:")?;
-    let destination_messages = last("Host2 Nb messages:")?;
-    let source_bytes = last("Host1 Total size:")?;
-    let destination_bytes = last("Host2 Total size:")?;
-    let failed_messages = lines
-        .iter()
-        .rev()
-        .find_map(|line| detected_error_count(line))
-        .unwrap_or(0);
-    let matched = lines
-        .iter()
-        .any(|line| line.contains("The sync looks good"));
-    Some(core::MailboxEvidence {
-        source_messages,
-        destination_messages,
-        source_bytes,
-        destination_bytes,
-        unmatched_messages: if matched { 0 } else { 1 },
-        failed_messages,
-        source_folders,
-        destination_folders,
-        authoritative: matched,
-    })
+    let mut accumulator = ImapsyncEvidenceAccumulator::default();
+    for line in lines {
+        accumulator.observe(line);
+    }
+    accumulator.evidence()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -140,6 +166,40 @@ pub(crate) fn parse_dovecot_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imapsync_accumulator_keeps_latest_summary_after_noisy_output() {
+        let mut accumulator = ImapsyncEvidenceAccumulator::default();
+        for line in [
+            "Host1 Nb folders: 1 folders",
+            "Host2 Nb folders: 1 folders",
+            "Host1 Nb messages: 2 messages",
+            "Host2 Nb messages: 2 messages",
+            "Host1 Total size: 100 bytes",
+            "Host2 Total size: 100 bytes",
+            "The sync looks good",
+        ] {
+            accumulator.observe(line);
+        }
+        for _ in 0..10_000 {
+            accumulator.observe("verbose diagnostic output");
+        }
+        for line in [
+            "Host1 Nb folders: 3 folders",
+            "Host2 Nb folders: 3 folders",
+            "Host1 Nb messages: 42 messages",
+            "Host2 Nb messages: 42 messages",
+            "Host1 Total size: 1000 bytes",
+            "Host2 Total size: 1000 bytes",
+        ] {
+            accumulator.observe(line);
+        }
+        let evidence = accumulator.evidence().unwrap();
+        assert_eq!(evidence.source_folders, 3);
+        assert_eq!(evidence.source_messages, 42);
+        assert_eq!(evidence.destination_messages, 42);
+        assert!(evidence.authoritative);
+    }
 
     #[test]
     fn dovecot_accumulator_reduces_large_reports_without_retaining_lines() {
