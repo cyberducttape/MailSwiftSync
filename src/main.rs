@@ -10081,7 +10081,9 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
                 .into(),
         );
     }
-    app.form.dry_run = true;
+    let (form_dry_run, bulk_dry_run) = headless_batch_mode(false);
+    app.form.dry_run = form_dry_run;
+    app.bulk_dry_run = bulk_dry_run;
     app.start_bulk();
     wait_for_headless_controller(&mut app)?;
     let project_id = app
@@ -10121,7 +10123,9 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         ));
     }
 
-    app.form.dry_run = false;
+    let (form_dry_run, bulk_dry_run) = headless_batch_mode(true);
+    app.form.dry_run = form_dry_run;
+    app.bulk_dry_run = bulk_dry_run;
     app.bulk_live_confirmed = true;
     app.start_bulk();
     wait_for_headless_controller(&mut app)?;
@@ -10157,6 +10161,15 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         "Headless batch live migration completed for project {project_id}; {} mailbox(es) reached verified terminal states.",
         job_ids.len()
     ))
+}
+
+/// Keep the legacy single-mailbox form flag and the batch controller mode in
+/// sync at the headless boundary. Batch execution is governed by
+/// `bulk_dry_run`; changing only `form.dry_run` can rerun preflight and make a
+/// requested live invocation report ready rows as successfully migrated.
+fn headless_batch_mode(live: bool) -> (bool, bool) {
+    let dry_run = !live;
+    (dry_run, dry_run)
 }
 
 /// Foreground supervisor for an already admitted durable batch. The loop is
@@ -12245,6 +12258,12 @@ mod tests {
             display_state_key("Verification difference"),
             "verification_difference"
         );
+    }
+
+    #[test]
+    fn headless_batch_mode_binds_form_and_controller_modes() {
+        assert_eq!(headless_batch_mode(false), (true, true));
+        assert_eq!(headless_batch_mode(true), (false, false));
     }
 
     #[test]

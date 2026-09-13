@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Fixed headless `batch-live` admission to switch both the form and batch
+  controller to live mode. It can no longer rerun dry preflight and report
+  ready mailboxes as successfully migrated.
 - Extracted shared theme and contrast primitives into `src/ui/`, reducing the
   presentation surface owned directly by `main.rs` while preserving the
   existing egui workflow.
