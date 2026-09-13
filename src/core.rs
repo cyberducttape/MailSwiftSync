@@ -857,10 +857,12 @@ impl StateStore {
         Ok((project, ids))
     }
     pub fn transition(&self, id: &str, phase: Phase) -> rusqlite::Result<()> {
-        let current = self
-            .project(id)?
-            .ok_or(rusqlite::Error::QueryReturnedNoRows)?
-            .phase;
+        let tx = self.connection.unchecked_transaction()?;
+        let current_name: String =
+            tx.query_row("SELECT phase FROM projects WHERE id=?1", [id], |row| {
+                row.get(0)
+            })?;
+        let current = Phase::parse(&current_name)?;
         let backwards_transition = current != Phase::Attention
             && phase != Phase::Attention
             && phase_rank(phase) < phase_rank(current);
@@ -876,12 +878,12 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         if phase == Phase::Complete && current != phase {
-            let total: i64 = self.connection.query_row(
+            let total: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1",
                 [id],
                 |row| row.get(0),
             )?;
-            let verified: i64 = self.connection.query_row(
+            let verified: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1 AND state='verified'",
                 [id],
                 |row| row.get(0),
@@ -890,11 +892,13 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
-        let tx = self.connection.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE projects SET phase=?1 WHERE id=?2",
-            params![phase.as_str(), id],
+        let changed = tx.execute(
+            "UPDATE projects SET phase=?1 WHERE id=?2 AND phase=?3",
+            params![phase.as_str(), id, current.as_str()],
         )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed',?2)",
             params![id, phase.as_str()],
