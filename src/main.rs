@@ -3216,12 +3216,13 @@ impl App {
                 ));
             }
         }
-        report.push_str("\n## Recent runs\n\n| Run | Engine | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|\n");
+        report.push_str("\n## Recent runs\n\n| Run | Engine | Phase at start | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|---|\n");
         for run in runs {
             report.push_str(&format!(
-                "| `{}` | {} | `{}` | `{}` | {} | {} | {} |\n",
+                "| `{}` | {} | `{}` | `{}` | `{}` | {} | {} | {} |\n",
                 run.id,
                 markdown_escape(&run.engine),
+                markdown_escape(&run.phase_at_start),
                 run.status,
                 plan_snapshot_sha256(&run.plan_snapshot),
                 run.started_at,
@@ -3316,6 +3317,7 @@ impl App {
                     "job_id": run.job_id,
                     "parent_run_id": run.parent_run_id,
                     "engine": run.engine,
+                    "phase_at_start": run.phase_at_start,
                     "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                     "status": run.status,
                     "started_at": run.started_at,
@@ -3383,6 +3385,7 @@ impl App {
                     "job_id": run.job_id,
                     "parent_run_id": run.parent_run_id,
                     "engine": run.engine,
+                    "phase_at_start": run.phase_at_start,
                     "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                     "status": run.status,
                     "started_at": run.started_at,

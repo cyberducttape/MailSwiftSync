@@ -32,6 +32,9 @@ All notable changes to MailSwiftSync are documented here.
   it, while legacy rows retain conservative mailbox-only fallback behavior.
 - Schema version advanced to 2 for the durable destination-identity column;
   older alpha databases are migrated and future versions remain rejected.
+- Runs now retain the project phase observed at admission as provenance
+  metadata, and the schema advances to version 3 with legacy rows marked
+  `legacy_unknown` rather than being assigned a fabricated stage.
 
 - Run-scoped diagnostic and verification events are now writable only while the run is active; terminal audit records cannot be appended later.
 - Preflight persistence now reports missing mailbox IDs as errors instead of silently succeeding with no durable update.

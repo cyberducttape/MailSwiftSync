@@ -173,6 +173,10 @@ pub struct RunSummary {
     pub job_id: Option<String>,
     pub parent_run_id: Option<String>,
     pub engine: String,
+    /// Project lifecycle phase captured when this run was admitted. This is
+    /// provenance metadata; it does not by itself claim stage-specific engine
+    /// behavior.
+    pub phase_at_start: String,
     /// Serialized execution plan captured when the run started. Session
     /// passwords and raw operator-supplied extra-option values are excluded;
     /// the application may retain a digest of those options for identity.
@@ -192,6 +196,7 @@ pub struct RunListItem {
     pub job_id: Option<String>,
     pub parent_run_id: Option<String>,
     pub engine: String,
+    pub phase_at_start: String,
     pub status: String,
     pub started_at: String,
     pub finished_at: Option<String>,
@@ -426,10 +431,11 @@ impl StateStore {
         Ok(store)
     }
     fn migrate(&self) -> rusqlite::Result<()> {
-        // Version 2 adds the durable endpoint-qualified destination identity.
+        // Version 2 adds the durable endpoint-qualified destination identity;
+        // version 3 records lifecycle provenance for each admitted run.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
-        const CURRENT_SCHEMA_VERSION: i64 = 2;
+        const CURRENT_SCHEMA_VERSION: i64 = 3;
         let stored_schema_version: i64 =
             self.connection
                 .query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -441,7 +447,7 @@ impl StateStore {
           CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT);
           CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-          CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
+          CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
           CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, start_ticks INTEGER, process_group INTEGER, session_id INTEGER, executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
           CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
           CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
@@ -522,6 +528,12 @@ impl StateStore {
         if !run_columns.iter().any(|column| column == "parent_run_id") {
             self.connection.execute(
                 "ALTER TABLE runs ADD COLUMN parent_run_id TEXT REFERENCES runs(id)",
+                [],
+            )?;
+        }
+        if !run_columns.iter().any(|column| column == "phase_at_start") {
+            self.connection.execute(
+                "ALTER TABLE runs ADD COLUMN phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown'",
                 [],
             )?;
         }
@@ -1133,7 +1145,7 @@ impl StateStore {
         engine: &str,
     ) -> rusqlite::Result<()> {
         self.connection.execute(
-            "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,'','running')",
+            "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,?4,'discovery','','running')",
             params![run_id, project_id, job_id, engine],
         )?;
         Ok(())
@@ -1169,10 +1181,10 @@ impl StateStore {
         plan_snapshot: &str,
     ) -> rusqlite::Result<()> {
         let tx = self.connection.unchecked_transaction()?;
-        let current: String = tx.query_row(
-            "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+        let (current, phase_at_start): (String, String) = tx.query_row(
+            "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
             params![job_id, project_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         // A mailbox may never have two active runs. Recovery must first move
         // the previous run to an operator-review state before retrying it.
@@ -1188,8 +1200,8 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         tx.execute(
-            "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,'running')",
-            params![run_id, project_id, job_id, engine, plan_snapshot],
+            "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,'running')",
+            params![run_id, project_id, job_id, engine, phase_at_start, plan_snapshot],
         )?;
         tx.execute(
             "UPDATE mailbox_jobs SET state='running',attempt=CASE WHEN state<>'running' THEN attempt+1 ELSE attempt END WHERE id=?1",
@@ -1261,6 +1273,11 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let tx = self.connection.unchecked_transaction()?;
+        let phase_at_start: String = tx.query_row(
+            "SELECT phase FROM projects WHERE id=?1",
+            [project_id],
+            |row| row.get(0),
+        )?;
         let mut destinations = BTreeSet::new();
         for (index, job_id) in job_ids.iter().enumerate() {
             let (current, destination, destination_identity): (String, String, String) = tx.query_row(
@@ -1302,8 +1319,8 @@ impl StateStore {
             }
         }
         tx.execute(
-            "INSERT INTO runs(id,project_id,job_id,engine,plan_snapshot,status) VALUES(?1,?2,NULL,?3,?4,'running')",
-            params![run_id, project_id, engine, plan_snapshot],
+            "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,NULL,?3,?4,?5,'running')",
+            params![run_id, project_id, engine, phase_at_start, plan_snapshot],
         )?;
         let mut child_run_ids = Vec::with_capacity(job_ids.len());
         for (index, job_id) in job_ids.iter().enumerate() {
@@ -1316,13 +1333,14 @@ impl StateStore {
                 .map(|plan| plan.plan_snapshot.as_str())
                 .unwrap_or("");
             tx.execute(
-                "INSERT INTO runs(id,project_id,job_id,parent_run_id,engine,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,'queued')",
+                "INSERT INTO runs(id,project_id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,?7,'queued')",
                 params![
                     child_run_id,
                     project_id,
                     job_id,
                     run_id,
                     child_engine,
+                    phase_at_start,
                     child_snapshot
                 ],
             )?;
@@ -1649,7 +1667,7 @@ impl StateStore {
     pub fn latest_run(&self, job_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,parent_run_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
                 [job_id],
                 |row| {
                     Ok(RunSummary {
@@ -1657,11 +1675,12 @@ impl StateStore {
                         job_id: row.get(1)?,
                         parent_run_id: row.get(2)?,
                         engine: row.get(3)?,
-                        plan_snapshot: row.get(4)?,
-                        status: row.get(5)?,
-                        started_at: row.get(6)?,
-                        finished_at: row.get(7)?,
-                        detail: row.get(8)?,
+                        phase_at_start: row.get(4)?,
+                        plan_snapshot: row.get(5)?,
+                        status: row.get(6)?,
+                        started_at: row.get(7)?,
+                        finished_at: row.get(8)?,
+                        detail: row.get(9)?,
                     })
                 },
             )
@@ -1670,7 +1689,7 @@ impl StateStore {
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
-                "SELECT id,job_id,parent_run_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1",
+                "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE id=?1",
                 [run_id],
                 |row| {
                     Ok(RunSummary {
@@ -1678,11 +1697,12 @@ impl StateStore {
                         job_id: row.get(1)?,
                         parent_run_id: row.get(2)?,
                         engine: row.get(3)?,
-                        plan_snapshot: row.get(4)?,
-                        status: row.get(5)?,
-                        started_at: row.get(6)?,
-                        finished_at: row.get(7)?,
-                        detail: row.get(8)?,
+                        phase_at_start: row.get(4)?,
+                        plan_snapshot: row.get(5)?,
+                        status: row.get(6)?,
+                        started_at: row.get(7)?,
+                        finished_at: row.get(8)?,
+                        detail: row.get(9)?,
                     })
                 },
             )
@@ -1690,7 +1710,7 @@ impl StateStore {
     }
     pub fn recent_runs(&self, project_id: &str, limit: u32) -> rusqlite::Result<Vec<RunSummary>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,parent_run_id,engine,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+            "SELECT id,job_id,parent_run_id,engine,phase_at_start,plan_snapshot,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
         )?;
         statement
             .query_map(params![project_id, limit], |row| {
@@ -1699,11 +1719,12 @@ impl StateStore {
                     job_id: row.get(1)?,
                     parent_run_id: row.get(2)?,
                     engine: row.get(3)?,
-                    plan_snapshot: row.get(4)?,
-                    status: row.get(5)?,
-                    started_at: row.get(6)?,
-                    finished_at: row.get(7)?,
-                    detail: row.get(8)?,
+                    phase_at_start: row.get(4)?,
+                    plan_snapshot: row.get(5)?,
+                    status: row.get(6)?,
+                    started_at: row.get(7)?,
+                    finished_at: row.get(8)?,
+                    detail: row.get(9)?,
                 })
             })?
             .collect()
@@ -1715,7 +1736,7 @@ impl StateStore {
         limit: u32,
     ) -> rusqlite::Result<Vec<RunListItem>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,job_id,parent_run_id,engine,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+            "SELECT id,job_id,parent_run_id,engine,phase_at_start,status,started_at,finished_at,detail FROM runs WHERE project_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT ?2",
         )?;
         statement
             .query_map(params![project_id, limit], |row| {
@@ -1724,10 +1745,11 @@ impl StateStore {
                     job_id: row.get(1)?,
                     parent_run_id: row.get(2)?,
                     engine: row.get(3)?,
-                    status: row.get(4)?,
-                    started_at: row.get(5)?,
-                    finished_at: row.get(6)?,
-                    detail: row.get(7)?,
+                    phase_at_start: row.get(4)?,
+                    status: row.get(5)?,
+                    started_at: row.get(6)?,
+                    finished_at: row.get(7)?,
+                    detail: row.get(8)?,
                 })
             })?
             .collect()
@@ -2829,7 +2851,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         drop(db);
 
         let directory =
@@ -2875,7 +2897,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
         let has_identity: bool = store
             .connection
             .query_row(
@@ -2943,6 +2965,29 @@ mod tests {
         assert_eq!(run.id, "run-audit");
         assert_eq!(run.status, "completed");
         assert!(run.finished_at.is_some());
+    }
+
+    #[test]
+    fn run_captures_project_phase_at_admission() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("phase-provenance", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.transition(&project.id, Phase::Preflight).unwrap();
+        db.begin_run_with_snapshot(
+            &project.id,
+            &job,
+            "run-phase-provenance",
+            "imapsync",
+            "snapshot",
+        )
+        .unwrap();
+
+        let run = db.run("run-phase-provenance").unwrap().unwrap();
+        assert_eq!(run.phase_at_start, "preflight");
     }
 
     #[test]

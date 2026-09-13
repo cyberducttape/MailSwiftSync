@@ -41,6 +41,10 @@ The evidence schema can hold source/destination folder and message counts, byte 
 
 The ledger records project lifecycle, redacted run output, and reconciliation evidence. The Dovecot adapter obtains aggregate folder/message/virtual-size status from both the remote `imapc` source and the destination after a live run. The imapsync adapter consumes its final summary. Verification exports include the durable run identifier and timestamps, so an audit artifact can be traced to one execution. Unix migrations run in their own process group; cancellation allows graceful shutdown before escalation, and Linux children receive a parent-death signal as an additional crash-safety measure. The runner records each started process together with Linux start-time, process-group, and session identity. Startup terminates a recorded Unix group only when those identity values still match; otherwise it refuses to signal the PID and leaves the job for operator review. The process record is best-effort during the short interval before the UI receives the child-start event; Windows Job Object supervision remains a future milestone. UIDVALIDITY-aware checkpoints and explainable message-level mismatch records remain future milestones.
 
+Each run also stores the project phase observed at admission. This is immutable
+provenance for reports and incident review, not a claim that the current engine
+has distinct implementation semantics for every lifecycle phase.
+
 Dovecot's stateful `-s` mode is intentionally not implied by the existing
 `mailbox_jobs.checkpoint` column. A safe implementation must capture the state
 string emitted by the exact supported `doveadm` version, bind it to the
