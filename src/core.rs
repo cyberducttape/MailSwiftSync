@@ -1285,17 +1285,23 @@ impl StateStore {
             "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))) ",
         )?;
         let mut projects = BTreeSet::new();
+        let mut project_by_run = HashMap::new();
         for (run_id, kind, detail) in events {
             let changed =
                 statement.execute(params![run_id, kind, bounded_event_detail(kind, detail)])?;
             if changed != 1 {
                 return Err(rusqlite::Error::InvalidQuery);
             }
-            let project_id: String =
-                tx.query_row("SELECT project_id FROM runs WHERE id=?1", [run_id], |row| {
-                    row.get(0)
-                })?;
-            projects.insert(project_id);
+            if !project_by_run.contains_key(*run_id) {
+                let project_id: String =
+                    tx.query_row("SELECT project_id FROM runs WHERE id=?1", [run_id], |row| {
+                        row.get(0)
+                    })?;
+                project_by_run.insert((*run_id).to_owned(), project_id);
+            }
+            if let Some(project_id) = project_by_run.get(*run_id) {
+                projects.insert(project_id.clone());
+            }
         }
         drop(statement);
         for project_id in projects {
