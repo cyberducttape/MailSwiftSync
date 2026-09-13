@@ -7,7 +7,7 @@ fully backed-up mailboxes.
 
 | Source | Destination | Engine | TLS/auth | Folder namespace | Dovecot/provider version | Dry pilot | Live pilot | Recovery | Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Disposable local Dovecot | Disposable local Dovecot | imapsync | IMAP cleartext fixture credentials | Maildir default / automap | Dovecot 2.3.x (Debian Bookworm package), imapsync 2.314 | Pending rerun on packaged versions | Pending rerun on packaged versions | Not tested | Message-ID assertions and invalid-auth rejection | Engine-only smoke evidence; not a supported provider row and does not satisfy the release gate. |
+| Disposable local Dovecot | Disposable local Dovecot | imapsync | STARTTLS with fixture CA bundles and password files | Maildir default / automap | Pinned Debian Bookworm Dovecot 2.3.x, imapsync 2.314 | Automated product lab | Automated product lab, including incremental pass | Controller crash/recovery lab is separate; engine interruption remains pending | Durable state, destination Message-ID, customer-proof export and verifier checks | Reproducible CI fixture; evidence for the generic IMAP path, not a hosted-provider compatibility claim. |
 
 ## Verified engine fixture
 
@@ -15,9 +15,12 @@ The release integration job builds the distributed runtime image, which uses
 Debian Bookworm's Dovecot package and pinned imapsync `2.314`, and runs the
 disposable transfer fixture inside that image. The fixture prints the actual
 engine versions and fails rather than silently skipping when the engines are
-unavailable. This is evidence for the external IMAP engine path only; it does
-not mark the row above as generally supported and does not replace controller
-crash/restart, storage-fault, or provider-specific tests.
+unavailable. It drives the packaged MailSwiftSync binary through its profile,
+secret-file, preflight, live, incremental, durable-evidence, customer-proof,
+and verification paths. A separate recovery fixture covers controller crash
+and restart ownership. This remains evidence for a reproducible generic-IMAP
+lab, not a hosted-provider support claim, and engine interruption,
+storage-fault, and provider-specific tests remain separate gates.
 
 Minimum test cases for every row:
 

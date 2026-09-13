@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Updated the compatibility matrix to reflect the current packaged
+  MailSwiftSync integration lab and its exact tested scope, while keeping
+  engine-interruption, storage-fault, and provider-specific coverage explicit.
 - Added a service-manager deployment guide with a least-privilege systemd
   example and a Windows wrapper pattern, including the current unattended
   automation and credential-broker boundaries.
