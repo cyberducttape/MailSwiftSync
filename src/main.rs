@@ -3367,38 +3367,40 @@ impl App {
                     self.bulk_selected_ids.clear();
                 }
             });
-            let visible_count = self
+            let visible_indices = self
                 .bulk_jobs
                 .iter()
                 .enumerate()
                 .filter(|(_, job)| self.mailbox_matches_filter(job))
-                .count();
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
             ui.label(
                 RichText::new(format!(
-                    "{visible_count} visible · {} selected",
+                    "{} visible · {} selected",
+                    visible_indices.len(),
                     self.bulk_selected_ids.len()
                 ))
                 .color(MUTED),
             );
             ui.add_space(8.0);
+            ui.strong("");
+            ui.strong("Mailbox");
+            ui.strong("Source");
+            ui.strong("Destination");
+            ui.strong("State");
+            ui.end_row();
             egui::ScrollArea::vertical()
-                .id_salt("mailbox_overview_scroll")
+                .id_salt("mailbox_overview_rows")
                 .max_height(520.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("mailbox_overview")
+                .auto_shrink([false, false])
+                .show_rows(ui, 42.0, visible_indices.len(), |ui, rows| {
+                    egui::Grid::new("mailbox_overview_rows_grid")
                         .striped(true)
                         .min_col_width(150.0)
                         .show(ui, |ui| {
-                            ui.strong("");
-                            ui.strong("Mailbox");
-                            ui.strong("Source");
-                            ui.strong("Destination");
-                            ui.strong("State");
-                            ui.end_row();
-                            for (index, job) in self.bulk_jobs.iter().enumerate() {
-                                if !self.mailbox_matches_filter(job) {
-                                    continue;
-                                }
+                            for row in rows {
+                                let index = visible_indices[row];
+                                let job = &self.bulk_jobs[index];
                                 let Some(job_id) = self.bulk_job_ids.get(index) else {
                                     continue;
                                 };
