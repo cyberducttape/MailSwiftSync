@@ -1618,6 +1618,22 @@ struct ActiveRunContext {
     credential_fingerprint: String,
 }
 
+impl ActiveRunContext {
+    fn owns_process(&self, process_run_id: &str, job_id: &str) -> bool {
+        if self.run_id == process_run_id {
+            return matches!(self.kind, RunKind::Single) && self.job_id.as_deref() == Some(job_id);
+        }
+        matches!(self.kind, RunKind::Batch)
+            && self
+                .batch_job_ids
+                .iter()
+                .zip(&self.batch_child_run_ids)
+                .any(|(owned_job_id, owned_run_id)| {
+                    owned_job_id == job_id && owned_run_id == process_run_id
+                })
+    }
+}
+
 /// Proof that the credentials were freshly authenticated for the exact plan
 /// that is about to be executed.  Keeping this named (rather than as a tuple)
 /// makes it harder to accidentally compare the two digests in the wrong
@@ -4789,7 +4805,10 @@ impl App {
                         executable,
                         reply,
                     ) => {
-                        let result = if active_run.is_some() {
+                        let result = if active_run
+                            .as_ref()
+                            .is_some_and(|run| run.owns_process(&process_run_id, &job_id))
+                        {
                             self.store
                                 .register_process(&core::ActiveProcess {
                                     run_id: process_run_id,
@@ -4802,7 +4821,10 @@ impl App {
                                 })
                                 .map_err(|error| error.to_string())
                         } else {
-                            Err("execution has no active durable run context".to_owned())
+                            Err(
+                                "process-start event does not belong to the active run context"
+                                    .to_owned(),
+                            )
                         };
                         let _ = reply.send(result.clone());
                         if let Err(error) = result {
@@ -6967,6 +6989,28 @@ mod tests {
             preferred_project_id(None, None, Some("single"), Some("batch")),
             Some("batch")
         );
+    }
+
+    #[test]
+    fn active_run_context_rejects_foreign_process_events() {
+        let context = ActiveRunContext {
+            run_id: "parent".into(),
+            project_id: "project".into(),
+            job_id: None,
+            batch_job_ids: vec!["job-a".into(), "job-b".into()],
+            batch_plan_fingerprints: vec![],
+            batch_child_run_ids: vec!["child-a".into(), "child-b".into()],
+            kind: RunKind::Batch,
+            dry_run: true,
+            engine: core::Engine::ImapSync,
+            plan_fingerprint: String::new(),
+            credential_fingerprint: String::new(),
+        };
+        assert!(context.owns_process("child-a", "job-a"));
+        assert!(context.owns_process("child-b", "job-b"));
+        assert!(!context.owns_process("child-a", "job-b"));
+        assert!(!context.owns_process("foreign-child", "job-a"));
+        assert!(!context.owns_process("parent", "job-a"));
     }
 
     #[test]
