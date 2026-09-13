@@ -16,7 +16,7 @@ use std::os::windows::io::AsRawHandle;
 
 use fs2::FileExt;
 
-use crate::core;
+use crate::{core, credentials::SecretString};
 
 const MAX_SUBPROCESS_LINE_BYTES: usize = 64 * 1024;
 const MAX_CAPTURED_OUTPUT_LINES: usize = 8 * 1024;
@@ -129,7 +129,7 @@ pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, S
 #[cfg(test)]
 pub(crate) fn collect_redacted_lines<R: Read>(
     reader: R,
-    secrets: &[String],
+    secrets: &[SecretString],
 ) -> std::io::Result<CapturedOutput> {
     collect_redacted_lines_with_callback(reader, secrets, |_| {})
 }
@@ -140,7 +140,7 @@ pub(crate) fn collect_redacted_lines<R: Read>(
 /// reports in constant memory.
 pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
     reader: R,
-    secrets: &[String],
+    secrets: &[SecretString],
     mut callback: F,
 ) -> std::io::Result<CapturedOutput> {
     let mut lines = Vec::new();
@@ -149,7 +149,7 @@ pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
     for_each_lossy_line(reader, |mut line| {
         for secret in secrets {
             if !secret.is_empty() {
-                line = line.replace(secret, "[REDACTED]");
+                line = line.replace(secret.as_str(), "[REDACTED]");
             }
         }
         callback(&line);

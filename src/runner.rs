@@ -12,6 +12,7 @@ use std::{
 use crate::{
     BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES,
     MAX_PROCESS_TAIL_LINES, OutputObserver, PROCESS_REGISTRATION_ACK_TIMEOUT, StreamOutcome, core,
+    credentials::SecretString,
     process::{
         ProcessOutcome, attach_child_supervisor, collect_redacted_lines_with_callback,
         configure_process_group, for_each_lossy_line, process_identity, terminate_process_group,
@@ -33,20 +34,20 @@ pub(crate) struct StreamResult {
 pub(crate) fn run_streaming(
     executable: &str,
     args: &[String],
-    env: &[(String, String)],
+    env: &[(String, SecretString)],
     tx: &mpsc::SyncSender<crate::Event>,
     run_id: &str,
     job_id: &str,
     prefix: &str,
     cancel: &AtomicBool,
-    secrets: &[String],
+    secrets: &[SecretString],
     timeout: Duration,
     dovecot_exit_two_is_delta: bool,
 ) -> Result<StreamResult, String> {
     let mut command = Command::new(executable);
     command
         .args(args)
-        .envs(env.iter().map(|(key, value)| (key, value)))
+        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -104,7 +105,7 @@ pub(crate) fn run_streaming(
             let mut safe = line;
             for secret in &out_secrets {
                 if !secret.is_empty() {
-                    safe = safe.replace(secret, "[REDACTED]");
+                    safe = safe.replace(secret.as_str(), "[REDACTED]");
                 }
             }
             record_process_tail(&out_tail, &safe);
@@ -142,7 +143,7 @@ pub(crate) fn run_streaming(
             let mut safe = line;
             for secret in &err_secrets {
                 if !secret.is_empty() {
-                    safe = safe.replace(secret, "[REDACTED]");
+                    safe = safe.replace(secret.as_str(), "[REDACTED]");
                 }
             }
             record_process_tail(&err_tail, &safe);
@@ -378,16 +379,16 @@ fn process_tail_text(tail: &Mutex<BoundedLineBuffer>) -> String {
 pub(crate) fn run_capture_lines(
     executable: &str,
     args: &[String],
-    env: &[(String, String)],
+    env: &[(String, SecretString)],
     cancel: &AtomicBool,
-    secrets: &[String],
+    secrets: &[SecretString],
     timeout: Duration,
     observer: Option<OutputObserver>,
 ) -> Result<(ProcessOutcome, Vec<String>, bool), String> {
     let mut command = Command::new(executable);
     command
         .args(args)
-        .envs(env.iter().map(|(key, value)| (key, value)))
+        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -544,8 +545,8 @@ pub(crate) fn run_dovecot_destination_preflight(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_dovecot_verification(
     commands: &[(String, Vec<String>)],
-    verification_env: &[(String, String)],
-    secrets: &[String],
+    verification_env: &[(String, SecretString)],
+    secrets: &[SecretString],
     tx: &mpsc::SyncSender<crate::Event>,
     cancel: &AtomicBool,
     timeout: Duration,

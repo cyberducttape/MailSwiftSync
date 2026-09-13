@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Kept password and OAuth-token copies in zeroizing containers throughout
+  process redaction, Dovecot verification environments, and worker handoff;
+  imapsync argument construction now always uses placeholders and never
+  materializes real credentials in an ordinary `Vec<String>`.
 - Plan fingerprints and immutable run snapshots now bind the SHA-256 content
   identity of the selected engine executable, configured trust bundles, and
   Dovecot configuration, so replacing a file at the same path invalidates a

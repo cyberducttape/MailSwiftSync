@@ -971,7 +971,7 @@ impl Form {
             let env = if self.local_doveadm() {
                 vec![(
                     "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                    self.source_password.to_string(),
+                    self.source_password.clone(),
                 )]
             } else {
                 Vec::new()
@@ -1402,7 +1402,7 @@ struct PreparedCommand {
     executable: String,
     args: Vec<String>,
     cleanup: Vec<PathBuf>,
-    env: Vec<(String, String)>,
+    env: Vec<(String, credentials::SecretString)>,
 }
 
 fn remove_option(args: &mut Vec<String>, option: &str) {
@@ -4630,10 +4630,15 @@ impl App {
         });
     }
     fn job_from_values(
-        values: &HashMap<String, String>,
+        values: &mut HashMap<String, String>,
         base: &Form,
         row: usize,
     ) -> Result<BulkJob, String> {
+        // Remove credentials from the ordinary row map before processing the
+        // remaining fields. They are moved directly into zeroizing storage so
+        // the map does not retain a second live copy for the rest of the row.
+        let source_password = values.remove("source_password").unwrap_or_default();
+        let destination_password = values.remove("destination_password").unwrap_or_default();
         let get = |key: &str| {
             values
                 .get(key)
@@ -4650,19 +4655,13 @@ impl App {
         }
         // Whitespace is meaningful in passwords. Trim only semantic fields;
         // otherwise a valid credential such as ` Secret ` is silently changed.
-        form.source_password =
-            Zeroizing::new(values.get("source_password").cloned().unwrap_or_default());
+        form.source_password = Zeroizing::new(source_password);
         form.profile.destination_host = get("destination_host");
         form.profile.destination_user = get("destination_user");
         if let Some(value) = values.get("destination_credential_id") {
             form.profile.destination_credential_id = value.trim().to_owned();
         }
-        form.destination_password = Zeroizing::new(
-            values
-                .get("destination_password")
-                .cloned()
-                .unwrap_or_default(),
-        );
+        form.destination_password = Zeroizing::new(destination_password);
         form.validate_for_import()
             .map_err(|e| format!("Row {row}: {e}"))?;
         let label = values
@@ -4846,7 +4845,7 @@ impl App {
                     headers.len()
                 ));
             }
-            let values = headers
+            let mut values = headers
                 .iter()
                 .zip(record.iter())
                 .map(|(h, v)| {
@@ -4860,7 +4859,7 @@ impl App {
                     Ok((h.clone(), v.to_owned()))
                 })
                 .collect::<Result<HashMap<_, _>, String>>()?;
-            jobs.push(Self::job_from_values(&values, base, index + 2)?);
+            jobs.push(Self::job_from_values(&mut values, base, index + 2)?);
         }
         if jobs.is_empty() {
             return Err("The file has no migration rows.".into());
@@ -4922,7 +4921,7 @@ impl App {
                     headers.len()
                 ));
             }
-            let values = headers
+            let mut values = headers
                 .iter()
                 .zip(row.iter())
                 .map(|(h, v)| {
@@ -4937,7 +4936,7 @@ impl App {
                     Ok((h.clone(), value))
                 })
                 .collect::<Result<HashMap<_, _>, String>>()?;
-            jobs.push(Self::job_from_values(&values, base, index + 2)?);
+            jobs.push(Self::job_from_values(&mut values, base, index + 2)?);
         }
         if jobs.is_empty() {
             return Err("The worksheet has no migration rows.".into());
@@ -5575,8 +5574,8 @@ impl App {
                                         &format!("[{}] ", index + 1),
                                         &cancel,
                                         &[
-                                            job.form.source_password.to_string(),
-                                            job.form.destination_password.to_string(),
+                                            job.form.source_password.clone(),
+                                            job.form.destination_password.clone(),
                                         ],
                                         Duration::from_secs(
                                             job.form.profile.migration_timeout_hours * 60 * 60,
@@ -5623,8 +5622,7 @@ impl App {
                                         && job.form.engine() == core::Engine::Dovecot
                                     {
                                         let verification = job.form.dovecot_verification_commands(false);
-                                        let verification_secret =
-                                            job.form.source_password.to_string();
+                                        let verification_secret = job.form.source_password.clone();
                                         let verification_env = if job.form.local_doveadm() {
                                             vec![(
                                                 "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
@@ -6256,18 +6254,18 @@ impl App {
             } else {
                 Vec::new()
             };
-        let verification_secret = self.form.source_password.to_string();
+        let verification_secret = self.form.source_password.clone();
         let verification_env = if self.form.local_doveadm() {
             vec![(
                 "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                self.form.source_password.to_string(),
+                self.form.source_password.clone(),
             )]
         } else {
             Vec::new()
         };
         let output_secrets = vec![
-            self.form.source_password.to_string(),
-            self.form.destination_password.to_string(),
+            self.form.source_password.clone(),
+            self.form.destination_password.clone(),
         ];
         let migration_timeout =
             Duration::from_secs(self.form.profile.migration_timeout_hours * 60 * 60);
@@ -8940,7 +8938,10 @@ mod tests {
         assert!(!prepared.args.iter().any(|arg| arg.contains("secret")));
         assert_eq!(
             prepared.env,
-            vec![("MAILSWIFTSYNC_IMAPC_PASSWORD".into(), "secret".into())]
+            vec![(
+                "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
+                credentials::SecretString::new("secret".into()),
+            ),]
         );
     }
 
@@ -9385,7 +9386,7 @@ mod tests {
         values.insert("source_user".into(), "old@example".into());
         values.insert("destination_host".into(), "new.example".into());
         values.insert("destination_user".into(), "new@example".into());
-        let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
+        let job = App::job_from_values(&mut values, &Form::default(), 2).unwrap();
         assert_eq!(job.state, "imported");
         assert_eq!(
             job_state_badge(&job.state, ThemeColors::dark()).0,
@@ -9404,7 +9405,7 @@ mod tests {
         values.insert("destination_host".into(), "new.example".into());
         values.insert("destination_user".into(), "new@example".into());
         values.insert("destination_password".into(), " Destination! ".into());
-        let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
+        let job = App::job_from_values(&mut values, &Form::default(), 2).unwrap();
         assert_eq!(job.form.source_password.as_str(), " Secret123 ");
         assert_eq!(job.form.destination_password.as_str(), " Destination! ");
     }
@@ -9500,7 +9501,7 @@ mod tests {
             "destination_credential_id".into(),
             "destination-alice".into(),
         );
-        let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
+        let job = App::job_from_values(&mut values, &Form::default(), 2).unwrap();
         assert_eq!(job.form.profile.source_credential_id, "source-alice");
         assert_eq!(
             job.form.profile.destination_credential_id,
@@ -9512,17 +9513,11 @@ mod tests {
         let mut base = Form::default();
         base.profile.source_credential_id = "shared-source".into();
         base.profile.destination_credential_id = "shared-destination".into();
-        let inherited = App::job_from_values(
-            &values
-                .into_iter()
-                .filter(|(key, _)| {
-                    key != "source_credential_id" && key != "destination_credential_id"
-                })
-                .collect(),
-            &base,
-            3,
-        )
-        .unwrap();
+        let mut inherited_values = values
+            .into_iter()
+            .filter(|(key, _)| key != "source_credential_id" && key != "destination_credential_id")
+            .collect();
+        let inherited = App::job_from_values(&mut inherited_values, &base, 3).unwrap();
         assert_eq!(inherited.form.profile.source_credential_id, "shared-source");
         assert_eq!(
             inherited.form.profile.destination_credential_id,
@@ -10705,6 +10700,30 @@ mod tests {
             !args
                 .iter()
                 .any(|arg| arg == "--password1" || arg == "--password2")
+        );
+    }
+
+    #[test]
+    fn imapsync_argument_builder_never_materializes_runtime_credentials() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        let args = engine::imapsync_args(
+            &form.profile,
+            "source-secret",
+            "destination-secret",
+            false,
+            false,
+            1,
+        );
+        assert!(!args.iter().any(|arg| arg.contains("source-secret")));
+        assert!(!args.iter().any(|arg| arg.contains("destination-secret")));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--password1", "••••••••"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--password2", "••••••••"])
         );
     }
 

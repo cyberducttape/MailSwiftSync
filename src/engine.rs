@@ -1,26 +1,19 @@
 use super::Profile;
 
 /// Build the imapsync argument vector from the validated migration profile.
-/// Passwords are included only for command construction; callers must redact
-/// or replace them before persisting or displaying a plan.
+/// Credential arguments are always placeholders. Runtime callers must use
+/// passfiles or token files; no ordinary argument vector may materialize a
+/// password or OAuth token.
 pub(crate) fn imapsync_args(
     profile: &Profile,
-    source_password: &str,
-    destination_password: &str,
+    _source_password: &str,
+    _destination_password: &str,
     dry_run: bool,
-    redact: bool,
+    _redact: bool,
     throttle_divisor: usize,
 ) -> Vec<String> {
-    let p1 = if redact {
-        "••••••••"
-    } else {
-        source_password
-    };
-    let p2 = if redact {
-        "••••••••"
-    } else {
-        destination_password
-    };
+    let p1 = "••••••••";
+    let p2 = "••••••••";
     let source_default_port = super::default_imap_port(&profile.source_tls);
     let (source_host, source_endpoint_port) =
         command_endpoint_parts(&profile.source_host, source_default_port);

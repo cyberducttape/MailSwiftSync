@@ -5,6 +5,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use zeroize::Zeroizing;
+
+pub(crate) type SecretString = Zeroizing<String>;
+
 pub struct CleanupGuard {
     paths: Vec<PathBuf>,
 }
