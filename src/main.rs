@@ -1529,6 +1529,14 @@ fn apply_keyring_id_to_jobs(jobs: &mut [BulkJob], id: &str, source: bool) -> usi
     applied
 }
 
+fn preferred_project_id<'a>(
+    active_run_project: Option<&'a str>,
+    single_project: Option<&'a str>,
+    batch_project: Option<&'a str>,
+) -> Option<&'a str> {
+    active_run_project.or(single_project).or(batch_project)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WorkspaceView {
     Overview,
@@ -2168,11 +2176,11 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
 
 impl App {
     fn active_project_id(&self) -> Option<&str> {
-        self.active_run
-            .as_ref()
-            .map(|run| run.project_id.as_str())
-            .or(self.project_id.as_deref())
-            .or(self.bulk_project_id.as_deref())
+        preferred_project_id(
+            self.active_run.as_ref().map(|run| run.project_id.as_str()),
+            self.project_id.as_deref(),
+            self.bulk_project_id.as_deref(),
+        )
     }
 
     fn start_capability_probe(&mut self) {
@@ -6712,6 +6720,22 @@ mod tests {
         assert_eq!(counts.get("attention"), Some(&1));
         assert!(!needs_operator_review("verified"));
         assert!(needs_operator_review("verification_difference"));
+    }
+
+    #[test]
+    fn active_run_project_takes_precedence_over_loaded_projects() {
+        assert_eq!(
+            preferred_project_id(Some("active-batch"), Some("single"), Some("batch")),
+            Some("active-batch")
+        );
+        assert_eq!(
+            preferred_project_id(None, Some("single"), Some("batch")),
+            Some("single")
+        );
+        assert_eq!(
+            preferred_project_id(None, None, Some("batch")),
+            Some("batch")
+        );
     }
 
     #[test]
