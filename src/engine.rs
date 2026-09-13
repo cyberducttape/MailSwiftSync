@@ -61,7 +61,10 @@ pub(crate) fn imapsync_args(
     } else if profile.source_tls == "starttls" {
         args.extend([
             "--tls1".into(),
-            "--tlsargs1".into(),
+            // imapsync uses --sslargsN for SSL parameters on both implicit
+            // TLS and IMAP STARTTLS connections. There is no --tlsargsN
+            // option in the supported imapsync CLI.
+            "--sslargs1".into(),
             ssl_args(&profile.source_ca_bundle),
         ]);
     } else {
@@ -75,7 +78,7 @@ pub(crate) fn imapsync_args(
     if destination_tls == "starttls" {
         args.extend([
             "--tls2".into(),
-            "--tlsargs2".into(),
+            "--sslargs2".into(),
             ssl_args(&profile.destination_ca_bundle),
         ]);
     } else {

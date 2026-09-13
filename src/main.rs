@@ -11851,14 +11851,21 @@ mod tests {
         form.profile.destination_user = "destination-user".into();
         form.source_password = String::from("source-secret").into();
         form.destination_password = String::from("destination-secret").into();
+        form.profile.source_tls = "starttls".into();
         form.profile.destination_tls = "starttls".into();
         let args = form.args(true);
+        assert!(args.contains(&"--tls1".into()));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--sslargs1", "SSL_verify_mode=1"])
+        );
         assert!(args.windows(2).any(|pair| pair == ["--port2", "143"]));
         assert!(args.contains(&"--tls2".into()));
         assert!(
             args.windows(2)
-                .any(|pair| pair == ["--tlsargs2", "SSL_verify_mode=1"])
+                .any(|pair| pair == ["--sslargs2", "SSL_verify_mode=1"])
         );
+        assert!(!args.iter().any(|arg| arg.starts_with("--tlsargs")));
         assert!(!args.iter().any(|arg| arg == "--ssl2"));
         form.profile.destination_port = "8143".into();
         let args = form.args(true);

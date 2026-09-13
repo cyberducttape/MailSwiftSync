@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Fixed imapsync STARTTLS command generation to use its supported
+  `--sslargs1`/`--sslargs2` parameters; nonexistent `--tlsargs1` and
+  `--tlsargs2` options are no longer emitted.
 - Fixed batch admission paths to switch both the form and batch controller to
   the requested mode. Headless `batch-live` and GUI selected-row actions can
   no longer rerun dry preflight and report ready mailboxes as successfully
