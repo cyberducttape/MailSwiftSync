@@ -4354,35 +4354,47 @@ impl App {
                         ui.strong("Finished");
                         ui.strong("Detail");
                         ui.end_row();
-                        for run in runs {
-                            ui.label(RichText::new(&run.id[..8.min(run.id.len())]).monospace());
-                            ui.label(
-                                run.destination_mailbox
-                                    .as_deref()
-                                    .or(run.source_mailbox.as_deref())
-                                    .unwrap_or("Batch")
-                                    .to_owned(),
-                            );
-                            ui.label(&run.phase_at_start);
-                            ui.label(run.engine);
-                            ui.label(RichText::new(&run.status).color(
-                                if run.status == "completed" {
-                                    TEAL
-                                } else if run.status == "running" {
-                                    BLUE
-                                } else {
-                                    ALERT
-                                },
-                            ));
-                            ui.label(run.started_at);
-                            ui.label(run.finished_at.unwrap_or_else(|| "in progress".into()));
-                            ui.label(if run.detail.is_empty() {
-                                "—".into()
-                            } else {
-                                run.detail
+                    });
+                egui::ScrollArea::vertical()
+                    .id_salt("durable_run_history_rows")
+                    .max_height(420.0)
+                    .show_rows(ui, 32.0, runs.len(), |ui, rows| {
+                        egui::Grid::new("durable_run_history_rows_grid")
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for index in rows {
+                                    let run = &runs[index];
+                                    ui.label(
+                                        RichText::new(&run.id[..8.min(run.id.len())]).monospace(),
+                                    );
+                                    ui.label(
+                                        run.destination_mailbox
+                                            .as_deref()
+                                            .or(run.source_mailbox.as_deref())
+                                            .unwrap_or("Batch")
+                                            .to_owned(),
+                                    );
+                                    ui.label(&run.phase_at_start);
+                                    ui.label(&run.engine);
+                                    ui.label(RichText::new(&run.status).color(
+                                        if run.status == "completed" {
+                                            TEAL
+                                        } else if run.status == "running" {
+                                            BLUE
+                                        } else {
+                                            ALERT
+                                        },
+                                    ));
+                                    ui.label(&run.started_at);
+                                    ui.label(run.finished_at.as_deref().unwrap_or("in progress"));
+                                    ui.label(if run.detail.is_empty() {
+                                        "—"
+                                    } else {
+                                        &run.detail
+                                    });
+                                    ui.end_row();
+                                }
                             });
-                            ui.end_row();
-                        }
                     });
             }
             Err(error) => {
