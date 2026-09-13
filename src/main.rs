@@ -4064,6 +4064,76 @@ impl App {
                 ))
                 .color(MUTED),
             );
+            let has_selection = !self.bulk_selected_ids.is_empty();
+            let mut run_preflight = false;
+            let mut run_live = false;
+            let mut run_delta = false;
+            let mut review_selected = false;
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Selected mailbox actions").strong());
+                if ui
+                    .add_enabled(
+                        has_selection && !self.running(),
+                        egui::Button::new("Run preflight"),
+                    )
+                    .clicked()
+                {
+                    run_preflight = true;
+                }
+                if ui
+                    .add_enabled(
+                        has_selection && !self.running(),
+                        egui::Button::new(
+                            RichText::new("Run live migration").color(Color32::WHITE),
+                        )
+                        .fill(ALERT),
+                    )
+                    .clicked()
+                {
+                    run_live = true;
+                }
+                if ui
+                    .add_enabled(
+                        has_selection && !self.running(),
+                        egui::Button::new("Run final delta"),
+                    )
+                    .clicked()
+                {
+                    run_delta = true;
+                }
+                if ui
+                    .add_enabled(has_selection, egui::Button::new("Review verification"))
+                    .clicked()
+                {
+                    review_selected = true;
+                }
+                if !has_selection {
+                    ui.label(
+                        RichText::new("Select one or more rows to enable actions.").color(MUTED),
+                    );
+                }
+            });
+            if run_preflight {
+                self.form.dry_run = true;
+                self.bulk_retry_scope = BulkRetryScope::All;
+                self.start_bulk();
+            } else if run_live {
+                self.form.dry_run = false;
+                self.bulk_retry_scope = BulkRetryScope::All;
+                self.start_bulk();
+            } else if run_delta {
+                self.form.dry_run = false;
+                self.bulk_retry_scope = BulkRetryScope::DeltaRequired;
+                self.start_bulk();
+            } else if review_selected
+                && let Some(job_id) = self
+                    .bulk_job_ids
+                    .iter()
+                    .find(|id| self.bulk_selected_ids.contains(*id))
+            {
+                self.job_id = Some(job_id.clone());
+                self.active_view = WorkspaceView::Verification;
+            }
             ui.add_space(8.0);
             ui.strong("");
             ui.strong("Mailbox");
