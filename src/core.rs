@@ -1006,30 +1006,37 @@ impl StateStore {
         if job_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let placeholders = std::iter::repeat_n("?", job_ids.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT id,state,preflight_plan,checkpoint FROM mailbox_jobs WHERE project_id=?1 AND id IN ({placeholders})"
-        );
-        let mut values = Vec::with_capacity(job_ids.len() + 1);
-        values.push(project_id.to_owned());
-        values.extend(job_ids.iter().cloned());
-        let mut statement = self.connection.prepare(&sql)?;
-        let rows = statement
-            .query_map(rusqlite::params_from_iter(values.iter()), |row| {
-                Ok(BatchAdmissionState {
-                    job_id: row.get(0)?,
-                    state: row.get(1)?,
-                    preflight_plan: row.get(2)?,
-                    checkpoint: row.get(3)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut by_id = rows
-            .into_iter()
-            .map(|row| (row.job_id.clone(), row))
-            .collect::<HashMap<_, _>>();
+        // Keep the number of host parameters comfortably below SQLite's
+        // commonly configured limit. This matters for large MSP batches,
+        // while retaining the single-query-per-chunk behavior that avoids an
+        // N+1 admission scan.
+        const MAX_IDS_PER_QUERY: usize = 500;
+        let mut by_id = HashMap::with_capacity(job_ids.len());
+        for chunk in job_ids.chunks(MAX_IDS_PER_QUERY) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id,state,preflight_plan,checkpoint FROM mailbox_jobs WHERE project_id=?1 AND id IN ({placeholders})"
+            );
+            let mut values = Vec::with_capacity(chunk.len() + 1);
+            values.push(project_id.to_owned());
+            values.extend(chunk.iter().cloned());
+            let mut statement = self.connection.prepare(&sql)?;
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(values.iter()), |row| {
+                    Ok(BatchAdmissionState {
+                        job_id: row.get(0)?,
+                        state: row.get(1)?,
+                        preflight_plan: row.get(2)?,
+                        checkpoint: row.get(3)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for row in rows {
+                by_id.insert(row.job_id.clone(), row);
+            }
+        }
         job_ids
             .iter()
             .map(|job_id| {
@@ -2442,6 +2449,36 @@ mod tests {
         assert!(
             db.batch_admission_states(&project.id, &["missing".into()])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn batch_admission_state_handles_more_ids_than_one_sqlite_query_chunk() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("large batch", "old.example", "new.example")
+            .unwrap();
+        let mut job_ids = Vec::with_capacity(501);
+        for index in 0..501 {
+            job_ids.push(
+                db.add_mailbox(
+                    &project.id,
+                    &format!("source-{index}@example.com"),
+                    &format!("destination-{index}@example.com"),
+                )
+                .unwrap(),
+            );
+        }
+
+        let rows = db.batch_admission_states(&project.id, &job_ids).unwrap();
+        assert_eq!(rows.len(), job_ids.len());
+        assert_eq!(
+            rows.first().map(|row| row.job_id.as_str()),
+            job_ids.first().map(String::as_str)
+        );
+        assert_eq!(
+            rows.last().map(|row| row.job_id.as_str()),
+            job_ids.last().map(String::as_str)
         );
     }
 
