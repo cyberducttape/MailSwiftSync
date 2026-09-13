@@ -4200,12 +4200,16 @@ impl App {
         }
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.heading(if self.running() {
+                let running = self.running();
+                ui.heading(if running {
                     "Run in progress"
                 } else {
                     "No active run"
                 });
                 ui.label(RichText::new(&self.status).color(status_color(&self.status)));
+                if running && ui.button("Stop migration").clicked() {
+                    self.stop_confirm_open = true;
+                }
             });
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
