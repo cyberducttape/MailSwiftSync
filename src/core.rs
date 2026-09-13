@@ -1519,10 +1519,26 @@ impl StateStore {
         }
         let mut destinations = BTreeSet::new();
         for (index, job_id) in job_ids.iter().enumerate() {
-            let (current, destination, destination_identity): (String, String, String) = tx.query_row(
-                "SELECT state,destination_mailbox,destination_identity FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            let (current, destination, destination_identity, actual_plan, active_run_exists): (
+                String,
+                String,
+                String,
+                Option<String>,
+                bool,
+            ) = tx.query_row(
+                "SELECT j.state,j.destination_mailbox,j.destination_identity,j.preflight_plan,
+                        EXISTS(SELECT 1 FROM runs r WHERE r.project_id=j.project_id AND r.job_id=j.id AND r.status IN ('queued','running'))
+                 FROM mailbox_jobs j WHERE j.id=?1 AND j.project_id=?2",
                 params![job_id, project_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )?;
             let identity = if destination_identity.is_empty() {
                 normalized_destination_identity(&destination, None)
@@ -1538,23 +1554,13 @@ impl StateStore {
             if current == "running" || !valid_mailbox_transition(&current, "running") {
                 return Err(rusqlite::Error::InvalidQuery);
             }
-            let active_run_exists: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND job_id=?2 AND status IN ('queued','running'))",
-                params![project_id, job_id],
-                |row| row.get(0),
-            )?;
             if active_run_exists {
                 return Err(rusqlite::Error::InvalidQuery);
             }
-            if let Some(expected_plan) = expected_plans.get(index) {
-                let actual: Option<String> = tx.query_row(
-                    "SELECT preflight_plan FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
-                    params![job_id, project_id],
-                    |row| row.get(0),
-                )?;
-                if actual.as_deref() != Some(expected_plan.as_str()) {
-                    return Err(rusqlite::Error::InvalidQuery);
-                }
+            if let Some(expected_plan) = expected_plans.get(index)
+                && actual_plan.as_deref() != Some(expected_plan.as_str())
+            {
+                return Err(rusqlite::Error::InvalidQuery);
             }
         }
         tx.execute(
