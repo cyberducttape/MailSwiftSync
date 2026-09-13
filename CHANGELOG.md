@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- The durable store now refuses to finish a parent batch while any queued or running child remains, preventing incomplete waves from being recorded as terminal.
 - Live dual-IMAPS batch children now re-authenticate both endpoints immediately before each launch attempt, so credential rotation cannot bypass the successful dry-preflight gate.
 - Generic terminal run completion can no longer promote a mailbox to `verified`; only the evidence-aware transaction may make that transition, preventing reuse of evidence from an earlier run.
 - Dual-IMAPS imapsync live runs now perform a fresh certificate-validated authentication probe immediately before mutation. The proof is bound to the current plan and process-local credential digest, so edits during the probe require renewed admission.

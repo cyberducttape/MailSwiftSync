@@ -1204,6 +1204,17 @@ impl StateStore {
             [run_id],
             |row| row.get(0),
         )?;
+        // A parent batch is not complete while any child is still queued or
+        // running.  Keep this invariant in the store so a controller bug or
+        // partial event stream cannot produce a deceptively terminal batch.
+        let has_unfinished_children: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE parent_run_id=?1 AND status IN ('queued','running'))",
+            [run_id],
+            |row| row.get(0),
+        )?;
+        if has_unfinished_children {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let changed = tx.execute(
             "UPDATE runs SET status=?1,finished_at=CURRENT_TIMESTAMP,detail=?2 WHERE id=?3 AND status='running'",
             params![status, detail, run_id],
@@ -2655,6 +2666,38 @@ mod tests {
         assert!(
             db.begin_batch_run(&project.id, &jobs, "run-batch-duplicate", "test", &[])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn batch_parent_cannot_finish_with_unresolved_children() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "batch-parent-terminal",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        db.begin_batch_run(&project.id, &jobs, "run-batch-parent", "test", &[])
+            .unwrap();
+
+        assert!(
+            db.finish_run("run-batch-parent", "completed", "premature completion")
+                .is_err()
+        );
+        assert_eq!(
+            db.run_status("run-batch-parent").unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
+            Some("queued")
+        );
+        assert_eq!(
+            db.mailbox_state(&jobs[1]).unwrap().as_deref(),
+            Some("queued")
         );
     }
 
