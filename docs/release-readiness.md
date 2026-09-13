@@ -79,11 +79,11 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   exports rather than being guessed.
 - A reproducible Linux engine lab starts two disposable Dovecot servers,
   performs a real imapsync transfer, checks the destination message count and
-  fixture Message-ID, and rejects invalid credentials. This
-  is engine-level coverage. It also asserts that invalid source credentials
-  fail. The lab runs on pull requests as well as through the scheduled/manual
-  CI workflow; runners without the pinned Dovecot 2.4.x fixture skip
-  explicitly. Controller crash/restart
+  fixture Message-ID, and rejects invalid credentials. This is engine-level
+  coverage. It also asserts that invalid source credentials fail. The lab
+  runs against the same pinned Debian Bookworm Dovecot and imapsync packages
+  used by the distributed container, and tagged release publication depends
+  on this packaged integration gate. Controller crash/restart
   and storage-fault chaos coverage is still required before unattended
   production use.
 - Headless `status` and `recover` commands expose secret-free durable state and
@@ -95,9 +95,11 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   long-lived scheduler/supervisor is still required for overnight unattended
   operation.
 - A Linux headless `Dockerfile` provides explicit durable-state and per-user
-  runtime volumes, non-root execution, and packaged `imapsync`/`doveadm`
-  dependencies. CI builds the image and smoke-tests its version command;
-  official registry publication and image signing remain release gates.
+  runtime volumes, non-root execution, pinned packaged
+  `imapsync`/`dovecot`/`doveadm` dependencies, and the real IMAP transfer
+  fixture. CI builds and smoke-tests the image; tagged release publication
+  also depends on the packaged integration run. Official registry
+  publication and image signing remain release gates.
 - Tagged binary publication now depends on a dedicated release quality gate
   covering formatting, shell syntax, strict Clippy, the locked test suite, and
   RustSec auditing in addition to cross-platform compilation.
