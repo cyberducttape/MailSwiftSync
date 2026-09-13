@@ -6420,21 +6420,23 @@ impl App {
                         job_id,
                         text,
                     } => {
-                        let owns_line = active_run.as_ref().is_some_and(|run| {
-                            if matches!(run.kind, RunKind::Batch) {
-                                run.owns_batch_child(&run.run_id, &run_id, &job_id)
-                            } else {
-                                run.run_id == run_id
-                                    && run.job_id.as_deref() == Some(job_id.as_str())
-                            }
-                        });
-                        if owns_line {
+                        let owns_line = active_run
+                            .as_ref()
+                            .is_some_and(|run| run.owns_line(&run_id, &job_id));
+                        if !owns_line {
+                            // RunLine is an asynchronous presentation event;
+                            // never let a delayed or foreign worker append
+                            // output to the active migration's journal.
+                            durability_errors.push(format!(
+                                "ignored run-line event for unknown run {run_id} and job {job_id}"
+                            ));
+                        } else {
                             // Engine output is presentation-only. It may
                             // contain subjects, folder metadata, or other
                             // message-derived text, so retain it only in the
                             // bounded process-local journal.
+                            push_visible_output(&mut self.output, text);
                         }
-                        push_visible_output(&mut self.output, text);
                     }
                     Event::ProcessEnded { run_id, job_id } => {
                         if active_run
@@ -9888,9 +9890,13 @@ mod tests {
         };
         assert!(context.owns_process("child-a", "job-a"));
         assert!(context.owns_process("child-b", "job-b"));
+        assert!(context.owns_line("child-a", "job-a"));
+        assert!(context.owns_line("child-b", "job-b"));
         assert!(context.owns_batch_child("parent", "child-a", "job-a"));
         assert!(!context.owns_process("child-a", "job-b"));
+        assert!(!context.owns_line("child-a", "job-b"));
         assert!(!context.owns_process("foreign-child", "job-a"));
+        assert!(!context.owns_line("foreign-child", "job-a"));
         assert!(!context.owns_process("parent", "job-a"));
         assert!(!context.owns_batch_child("other-parent", "child-a", "job-a"));
         assert!(!context.owns_batch_child("parent", "child-a", "job-b"));

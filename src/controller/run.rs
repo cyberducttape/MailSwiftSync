@@ -49,6 +49,14 @@ impl ActiveRunContext {
         matches!(self.kind, RunKind::Batch)
             && self.batch_child_index(job_id, process_run_id).is_some()
     }
+
+    pub(crate) fn owns_line(&self, run_id: &str, job_id: &str) -> bool {
+        if matches!(self.kind, RunKind::Batch) {
+            self.owns_batch_child(&self.run_id, run_id, job_id)
+        } else {
+            self.run_id == run_id && self.job_id.as_deref() == Some(job_id)
+        }
+    }
 }
 
 /// Proof that credentials were freshly authenticated for the exact plan about

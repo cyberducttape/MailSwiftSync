@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Enforced `RunLine` ownership checks so delayed or foreign worker output is
+  rejected instead of being appended to the active migration journal, with
+  the ownership rule centralized alongside the other run-controller checks.
 - Completed the XOAUTH2 error handshake: IMAP error continuations are now
   acknowledged with the required empty SASL response before the tagged result
   is read, preventing failed OAuth probes from hanging or being misclassified.
