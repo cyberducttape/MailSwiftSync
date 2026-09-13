@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Made project, mailbox, activity, and verification search matching
+  allocation-free per row by using ASCII case-insensitive window matching
+  instead of lowercasing every candidate during each egui frame.
 - Preserved the selected project in the workspace index even when it falls
   outside the compact recent-project window. Added an explicit searchable
   “All projects…” action to the header switcher; it loads the complete durable

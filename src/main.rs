@@ -2904,14 +2904,14 @@ impl App {
                         .desired_width(320.0));
                 });
                 ui.add_space(8.0);
-                let search = self.project_search.trim().to_ascii_lowercase();
+                let search = self.project_search.trim();
                 {
                     let projects = self.ui_projects.clone();
                         let visible = projects.into_iter().filter(|project| {
                             search.is_empty()
-                                || project.name.to_ascii_lowercase().contains(&search)
-                                || project.source_endpoint.to_ascii_lowercase().contains(&search)
-                                || project.destination_endpoint.to_ascii_lowercase().contains(&search)
+                                || contains_ascii_case_insensitive(&project.name, search)
+                                || contains_ascii_case_insensitive(&project.source_endpoint, search)
+                                || contains_ascii_case_insensitive(&project.destination_endpoint, search)
                         }).collect::<Vec<_>>();
                         ui.label(RichText::new(format!("{} project(s)", visible.len())).color(self.theme_colors().text_secondary));
                         egui::ScrollArea::vertical()
@@ -3774,7 +3774,7 @@ impl App {
         {
             return false;
         }
-        let search = self.bulk_search.trim().to_ascii_lowercase();
+        let search = self.bulk_search.trim();
         search.is_empty()
             || [
                 job.label.as_str(),
@@ -3784,7 +3784,7 @@ impl App {
                 job.form.profile.destination_user.as_str(),
             ]
             .iter()
-            .any(|value| value.to_ascii_lowercase().contains(&search))
+            .any(|value| contains_ascii_case_insensitive(value, search))
     }
 
     fn bulk_row_is_selected(&self, index: usize) -> bool {
@@ -3948,7 +3948,7 @@ impl App {
                 );
             }
             runs => {
-                let search = self.activity_search.trim().to_ascii_lowercase();
+                let search = self.activity_search.trim();
                 let visible = runs
                     .iter()
                     .enumerate()
@@ -3974,7 +3974,7 @@ impl App {
                                 run.detail.as_str(),
                             ]
                             .iter()
-                            .any(|value| value.to_ascii_lowercase().contains(&search));
+                            .any(|value| contains_ascii_case_insensitive(value, search));
                         status_match && text_match
                     })
                     .map(|(index, _)| index)
@@ -4503,7 +4503,7 @@ impl App {
                                     }
                                 });
                         });
-                        let search = self.verification_search.trim().to_ascii_lowercase();
+                        let search = self.verification_search.trim();
                         let visible = snapshot
                             .mailboxes
                             .iter()
@@ -4517,8 +4517,8 @@ impl App {
                                     _ => true,
                                 };
                                 let text_match = search.is_empty()
-                                    || mailbox.job.source_mailbox.to_ascii_lowercase().contains(&search)
-                                    || mailbox.job.destination_mailbox.to_ascii_lowercase().contains(&search);
+                                    || contains_ascii_case_insensitive(&mailbox.job.source_mailbox, search)
+                                    || contains_ascii_case_insensitive(&mailbox.job.destination_mailbox, search);
                                 result_match && text_match
                             })
                             .map(|(index, _)| index)
@@ -7908,6 +7908,20 @@ fn truncate_utf8(value: &str, limit: usize) -> String {
     value[..end].to_owned()
 }
 
+/// Case-insensitive matching for the ASCII identifiers used by project,
+/// mailbox, endpoint, and run filters. This avoids allocating a lowercase
+/// string for every candidate during each egui frame.
+fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let needle = needle.as_bytes();
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FailureClass {
     Cancellation,
@@ -8543,6 +8557,16 @@ mod tests {
         form.source_password = String::from("secret").into();
         form.destination_password = String::from("unused").into();
         form
+    }
+
+    #[test]
+    fn filter_matching_is_case_insensitive_without_changing_input() {
+        let value = "Customer-09@Example.Test";
+        assert!(contains_ascii_case_insensitive(value, "customer-09"));
+        assert!(contains_ascii_case_insensitive(value, "EXAMPLE.TEST"));
+        assert!(!contains_ascii_case_insensitive(value, "customer-10"));
+        assert!(contains_ascii_case_insensitive(value, ""));
+        assert_eq!(value, "Customer-09@Example.Test");
     }
 
     #[test]
