@@ -28,9 +28,39 @@ pub(crate) fn advertises_capability(response: &str, capability: &str) -> bool {
     })
 }
 
+/// Check a LIST response's parenthesized attribute list without searching
+/// mailbox names or other free-form response text.
+pub(crate) fn list_has_attribute(line: &str, attribute: &str) -> bool {
+    if !is_untagged_response(line, "LIST") {
+        return false;
+    }
+    let mut fields = line.split_whitespace();
+    fields.next();
+    fields.next();
+    let mut in_attributes = false;
+    for field in fields {
+        if !in_attributes {
+            if !field.starts_with('(') {
+                continue;
+            }
+            in_attributes = true;
+        }
+        if atom_eq(field.trim_matches(['(', ')']), attribute) {
+            return true;
+        }
+        if field.ends_with(')') {
+            break;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{advertises_capability, atom_eq, is_tagged_response, is_untagged_response};
+    use super::{
+        advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
+        list_has_attribute,
+    };
 
     #[test]
     fn protocol_atoms_compare_without_case_or_substring_false_positives() {
@@ -44,6 +74,14 @@ mod tests {
         assert!(!advertises_capability(
             "* OK STARTTLS is unavailable",
             "STARTTLS"
+        ));
+        assert!(list_has_attribute(
+            r#"* LIST (\HasNoChildren \aRcHiVe) "/" "Archive""#,
+            r"\ARCHIVE"
+        ));
+        assert!(!list_has_attribute(
+            r#"* LIST (\HasNoChildren) "/" "\Sent""#,
+            r"\SENT"
         ));
     }
 }

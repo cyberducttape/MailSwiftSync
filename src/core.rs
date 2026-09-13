@@ -632,12 +632,18 @@ impl ServerCapabilities {
         let special_use_mailboxes = inventory_lines
             .iter()
             .filter(|line| {
-                let upper = line.to_ascii_uppercase();
                 [
-                    "\\INBOX", "\\SENT", "\\DRAFTS", "\\TRASH", "\\JUNK", "\\ALL",
+                    r"\INBOX",
+                    r"\ALL",
+                    r"\ARCHIVE",
+                    r"\DRAFTS",
+                    r"\FLAGGED",
+                    r"\JUNK",
+                    r"\SENT",
+                    r"\TRASH",
                 ]
                 .iter()
-                .any(|marker| upper.contains(marker))
+                .any(|attribute| crate::imap_protocol::list_has_attribute(line, attribute))
             })
             .count();
         Self {
@@ -3315,11 +3321,11 @@ mod tests {
     fn capability_parser_requires_and_counts_authenticated_inventory() {
         let caps = ServerCapabilities::parse_with_inventory(
             "* CAPABILITY IMAP4rev1 SPECIAL-USE\r\na1 OK",
-            "* LIST (\\HasNoChildren \\Inbox) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren) \"/\" \"Archive\"\r\na2 OK LIST completed",
+            "* LIST (\\HasNoChildren \\iNbOx) \"/\" \"INBOX\"\r\n* LIST (\\HasNoChildren \\aRcHiVe) \"/\" \"Archive\"\r\n* LIST (\\HasNoChildren \\fLaGgEd) \"/\" \"Flagged\"\r\n* LIST (\\HasNoChildren) \"/\" \"\\Sent\"\r\na2 OK LIST completed",
         );
         assert!(caps.inventory_complete);
-        assert_eq!(caps.mailbox_count, 2);
-        assert_eq!(caps.special_use_mailboxes, 1);
+        assert_eq!(caps.mailbox_count, 4);
+        assert_eq!(caps.special_use_mailboxes, 3);
     }
 
     #[test]
