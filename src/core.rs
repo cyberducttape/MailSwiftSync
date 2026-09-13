@@ -322,6 +322,23 @@ pub struct StateStore {
 /// grow the ledger without limit; lifecycle, run, evidence, and phase events
 /// remain retained.
 const MAX_DURABLE_RUN_OUTPUT_EVENTS: i64 = 10_000;
+const MAX_DURABLE_EVENT_DETAIL_BYTES: usize = 16 * 1024;
+const DURABLE_EVENT_TRUNCATION_SUFFIX: &str = " [diagnostic detail truncated by MailSwiftSync]";
+
+fn bounded_event_detail(kind: &str, detail: &str) -> String {
+    if kind != "run_output" || detail.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES {
+        return detail.to_owned();
+    }
+
+    let content_limit =
+        MAX_DURABLE_EVENT_DETAIL_BYTES.saturating_sub(DURABLE_EVENT_TRUNCATION_SUFFIX.len());
+    let mut end = content_limit.min(detail.len());
+    while !detail.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    format!("{}{}", &detail[..end], DURABLE_EVENT_TRUNCATION_SUFFIX)
+}
 
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
@@ -899,6 +916,7 @@ impl StateStore {
             let mut statement =
                 tx.prepare_cached("INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)")?;
             for (project_id, kind, detail) in events {
+                let detail = bounded_event_detail(kind, detail);
                 statement.execute(params![project_id, kind, detail])?;
             }
         }
@@ -941,6 +959,7 @@ impl StateStore {
                 "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,?3,?4)",
             )?;
             for (kind, detail) in events {
+                let detail = bounded_event_detail(kind, detail);
                 statement.execute(params![project_id, run_id, kind, detail])?;
             }
         }
@@ -3410,6 +3429,34 @@ mod tests {
         assert_eq!(count, MAX_DURABLE_RUN_OUTPUT_EVENTS);
         assert_eq!(oldest, "line-1");
         assert_eq!(audit_count, 1);
+    }
+
+    #[test]
+    fn durable_diagnostic_event_detail_is_bounded() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("detail-limit", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source-user", "destination-user")
+            .unwrap();
+        let run_id = "run-detail-limit";
+        db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
+        let oversized = "é".repeat(MAX_DURABLE_EVENT_DETAIL_BYTES * 2);
+
+        db.record_run_events_batch(run_id, &[("run_output", oversized.as_str())])
+            .unwrap();
+
+        let stored: String = db
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE run_id=?1 AND kind='run_output'",
+                [run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
+        assert!(stored.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
     }
 
     #[test]
