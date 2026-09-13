@@ -71,9 +71,25 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Run native test suite
+        if: matrix.os != 'macos-latest'
         env:
           RUST_BACKTRACE: full
         run: cargo test --locked --all-targets --all-features -- --test-threads=1
+      - name: Run macOS core tests
+        if: matrix.os == 'macos-latest'
+        env:
+          RUST_BACKTRACE: full
+        run: cargo test --locked --all-targets --all-features core::tests -- --test-threads=1
+      - name: Run macOS process tests
+        if: matrix.os == 'macos-latest'
+        env:
+          RUST_BACKTRACE: full
+        run: cargo test --locked --all-targets --all-features process::tests -- --test-threads=1
+      - name: Run macOS controller tests
+        if: matrix.os == 'macos-latest'
+        env:
+          RUST_BACKTRACE: full
+        run: cargo test --locked --all-targets --all-features 'tests::' -- --test-threads=1
 
   container-build:
     name: Build headless container
