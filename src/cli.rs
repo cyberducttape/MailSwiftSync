@@ -1,3 +1,7 @@
+use crate::headless::{
+    export_support_bundle, headless_batch_execute, headless_execute, headless_recover,
+    headless_status, headless_supervise,
+};
 use crate::*;
 use eframe::egui;
 use std::time::Duration;

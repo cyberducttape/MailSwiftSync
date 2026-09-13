@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved status, recovery, support-bundle, headless execution, batch
+  supervision, and controller-wait logic into `src/headless.rs`; CLI and GUI
+  now share the same headless service boundary.
 - Moved CLI command parsing, help text, and headless command dispatch into
   `src/cli.rs`, leaving the desktop entrypoint as a thin wrapper shared with
   the automation surface.
