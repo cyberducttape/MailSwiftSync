@@ -5827,9 +5827,14 @@ fn classified_failure_detail(error: &str) -> String {
 fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
-        std::fs::write(&temporary, content)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(&temporary)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
         restrict_file_permissions(&temporary)?;
-        std::fs::File::open(&temporary)?.sync_all()?;
         std::fs::rename(&temporary, path)?;
         sync_directory(path.parent())
     })();
