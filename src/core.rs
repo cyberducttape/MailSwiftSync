@@ -801,6 +801,34 @@ impl StateStore {
         )?;
         tx.commit()
     }
+
+    /// Reopen a completed project only through an explicit, reason-bearing
+    /// operation. This preserves the meaning of Complete while allowing an
+    /// operator to document a legitimate post-cutover correction.
+    pub fn reopen_project(&self, id: &str, reason: &str) -> rusqlite::Result<()> {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > 4096 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let current: String =
+            self.connection
+                .query_row("SELECT phase FROM projects WHERE id=?1", [id], |row| {
+                    row.get(0)
+                })?;
+        if current != Phase::Complete.as_str() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE projects SET phase='attention' WHERE id=?1 AND phase='complete'",
+            [id],
+        )?;
+        tx.execute(
+            "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_reopened',?2)",
+            params![id, reason],
+        )?;
+        tx.commit()
+    }
     pub fn add_mailbox(
         &self,
         project_id: &str,
@@ -2686,6 +2714,20 @@ mod tests {
                 .is_err()
         );
         assert!(db.set_mailbox_state(&job, "attention").is_err());
+        db.reopen_project(&project.id, "customer requested a post-cutover correction")
+            .unwrap();
+        assert_eq!(
+            db.project(&project.id).unwrap().unwrap().phase,
+            Phase::Attention
+        );
+        let reopened_job = db
+            .add_mailbox(&project.id, "new-source", "new-destination")
+            .unwrap();
+        assert_eq!(
+            db.mailbox_state(&reopened_job).unwrap().as_deref(),
+            Some("queued")
+        );
+        assert!(db.reopen_project(&project.id, "").is_err());
     }
 
     #[test]

@@ -1839,6 +1839,7 @@ struct App {
     bulk_retry_scope: BulkRetryScope,
     bulk_source_keyring_apply: String,
     bulk_destination_keyring_apply: String,
+    reopen_reason: String,
 }
 impl Default for App {
     fn default() -> Self {
@@ -2049,6 +2050,7 @@ impl Default for App {
             bulk_retry_scope: BulkRetryScope::default(),
             bulk_source_keyring_apply: String::new(),
             bulk_destination_keyring_apply: String::new(),
+            reopen_reason: String::new(),
         }
     }
 }
@@ -2645,6 +2647,37 @@ impl App {
                                     );
                                 }
                             }
+                        }
+                        if project.phase == core::Phase::Complete {
+                            ui.separator();
+                            ui.label(
+                                RichText::new("This project is complete and read-only. Reopening requires an audit reason and returns it to Attention.")
+                                    .color(ALERT),
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label("Reason");
+                                ui.text_edit_singleline(&mut self.reopen_reason);
+                                if ui
+                                    .add_enabled(
+                                        !self.running() && !self.reopen_reason.trim().is_empty(),
+                                        egui::Button::new("Reopen project"),
+                                    )
+                                    .clicked()
+                                {
+                                    match self
+                                        .store
+                                        .reopen_project(&project.id, &self.reopen_reason)
+                                    {
+                                        Ok(()) => {
+                                            self.status = "Project reopened for documented review".into();
+                                            self.reopen_reason.clear();
+                                        }
+                                        Err(error) => {
+                                            self.status = format!("Could not reopen project: {error}");
+                                        }
+                                    }
+                                }
+                            });
                         }
                     }
                     Ok(None) => {
