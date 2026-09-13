@@ -1044,7 +1044,10 @@ impl StateStore {
         plan_snapshot: &str,
         child_plans: &[BatchChildPlan],
     ) -> rusqlite::Result<Vec<String>> {
+        let mut unique_job_ids = BTreeSet::new();
+        let duplicate_job_id = job_ids.iter().any(|job_id| !unique_job_ids.insert(job_id));
         if job_ids.is_empty()
+            || duplicate_job_id
             || (!expected_plans.is_empty() && expected_plans.len() != job_ids.len())
             || (!child_plans.is_empty() && child_plans.len() != job_ids.len())
         {
@@ -2941,6 +2944,37 @@ mod tests {
             Some("completed")
         );
         assert!(db.active_processes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn batch_start_rejects_duplicate_mailbox_ids_atomically() {
+        let db = StateStore::in_memory().unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailboxes(
+                "duplicate-selection",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+
+        assert!(
+            db.begin_batch_run_with_children(
+                &project.id,
+                &[jobs[0].clone(), jobs[0].clone()],
+                "run-duplicate-selection",
+                "batch",
+                &[],
+                "snapshot",
+                &[],
+            )
+            .is_err()
+        );
+        assert_eq!(db.run_status("run-duplicate-selection").unwrap(), None);
+        assert_eq!(
+            db.mailbox_state(&jobs[0]).unwrap().as_deref(),
+            Some("queued")
+        );
     }
 
     #[test]
