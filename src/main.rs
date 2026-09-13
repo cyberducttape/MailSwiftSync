@@ -2005,6 +2005,7 @@ enum BulkRetryScope {
     Unresolved,
     FailedAttention,
     DeltaRequired,
+    VerificationDifference,
     All,
 }
 
@@ -2020,9 +2021,16 @@ struct BulkConfirmationSummary {
 impl BulkRetryScope {
     fn includes(self, state: &str) -> bool {
         match self {
-            Self::Unresolved => !matches!(state, "verified" | "verified_with_exceptions"),
+            // Operator-review states must never be pulled into unattended
+            // retry by the default scope. They require an explicit choice
+            // after the durable reason has been reviewed.
+            Self::Unresolved => !matches!(
+                state,
+                "verified" | "verified_with_exceptions" | "attention" | "verification_difference"
+            ),
             Self::FailedAttention => matches!(state, "failed" | "attention"),
             Self::DeltaRequired => state == "delta_required",
+            Self::VerificationDifference => state == "verification_difference",
             Self::All => true,
         }
     }
@@ -2032,6 +2040,7 @@ impl BulkRetryScope {
             Self::Unresolved => "Unresolved (skip verified and accepted exceptions)",
             Self::FailedAttention => "Failed or Attention only",
             Self::DeltaRequired => "Delta required only",
+            Self::VerificationDifference => "Verification differences only",
             Self::All => "All rows (explicit re-run)",
         }
     }
@@ -7257,6 +7266,7 @@ impl App {
                                 BulkRetryScope::Unresolved,
                                 BulkRetryScope::FailedAttention,
                                 BulkRetryScope::DeltaRequired,
+                                BulkRetryScope::VerificationDifference,
                                 BulkRetryScope::All,
                             ] {
                                 ui.selectable_value(
@@ -9595,14 +9605,7 @@ mod tests {
                 .filter(|state| BulkRetryScope::Unresolved.includes(state))
                 .copied()
                 .collect::<Vec<_>>(),
-            vec![
-                "ready",
-                "failed",
-                "attention",
-                "delta_required",
-                "verification_difference",
-                "completed",
-            ]
+            vec!["ready", "failed", "delta_required", "completed",]
         );
         assert_eq!(
             states
@@ -9619,6 +9622,14 @@ mod tests {
                 .copied()
                 .collect::<Vec<_>>(),
             vec!["delta_required"]
+        );
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| BulkRetryScope::VerificationDifference.includes(state))
+                .copied()
+                .collect::<Vec<_>>(),
+            vec!["verification_difference"]
         );
         assert_eq!(
             states
