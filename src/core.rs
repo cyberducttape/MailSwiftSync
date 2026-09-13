@@ -565,24 +565,25 @@ impl ServerCapabilities {
             {
                 continue;
             }
-            self.quota_observed = true;
+            let mut saw_valid_resource = false;
             let mut index = 2;
             while index + 2 < tokens.len() {
                 let resource = tokens[index].trim_matches(['(', ')']).to_ascii_uppercase();
                 if matches!(resource.as_str(), "STORAGE" | "MESSAGE" | "MESSAGES") {
                     let usage = tokens[index + 1].parse::<u64>();
                     let limit = tokens[index + 2].parse::<u64>();
-                    if let (Ok(usage), Ok(limit)) = (usage, limit)
-                        && limit > 0
-                        && usage >= limit
-                    {
-                        self.quota_exceeded = true;
+                    if let (Ok(usage), Ok(limit)) = (usage, limit) {
+                        saw_valid_resource = true;
+                        if limit > 0 && usage >= limit {
+                            self.quota_exceeded = true;
+                        }
                     }
                     index += 3;
                 } else {
                     index += 1;
                 }
             }
+            self.quota_observed |= saw_valid_resource;
         }
     }
     pub fn supports(&self, capability: &str) -> bool {
@@ -2941,6 +2942,17 @@ mod tests {
         );
         caps.record_quota_response("* QUOTA \"\" (STORAGE 999 0 MESSAGE 999 0)");
         assert!(caps.quota_observed);
+        assert!(!caps.quota_exceeded);
+    }
+
+    #[test]
+    fn quota_parser_keeps_malformed_usage_unknown() {
+        let mut caps = ServerCapabilities::parse_with_inventory(
+            "* CAPABILITY IMAP4rev1 QUOTA\r\na1 OK",
+            "* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na2 OK",
+        );
+        caps.record_quota_response("* QUOTA \"\" (STORAGE unknown 100)");
+        assert!(!caps.quota_observed);
         assert!(!caps.quota_exceeded);
     }
     #[test]
