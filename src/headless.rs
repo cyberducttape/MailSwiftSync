@@ -234,10 +234,9 @@ pub(crate) fn headless_execute_with_credentials(
     live: bool,
     credentials: Option<HeadlessCredentials>,
 ) -> Result<String, String> {
-    // App::default owns the lock and performs the same startup recovery as
-    // the GUI. The environment override is read only during construction.
-    unsafe { std::env::set_var("MAILSWIFTSYNC_STATE_PATH", state_path) };
-    let mut app = App::default();
+    // Use the same startup recovery as the GUI, but pass the ledger path as
+    // data instead of mutating process-global environment state.
+    let mut app = App::from_state_path(Some(state_path));
     if let Some(credentials) = credentials {
         app.form.source_password = credentials.source;
         app.form.destination_password = credentials.destination;
@@ -350,8 +349,7 @@ pub(crate) fn headless_batch_execute(
     state_path: &std::path::Path,
     live: bool,
 ) -> Result<String, String> {
-    unsafe { std::env::set_var("MAILSWIFTSYNC_STATE_PATH", state_path) };
-    let mut app = App::default();
+    let mut app = App::from_state_path(Some(state_path));
     if !app.persistence_available {
         return Err("durable SQLite state is unavailable; batch execution is blocked".into());
     }

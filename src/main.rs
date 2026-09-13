@@ -1859,8 +1859,20 @@ struct App {
 }
 impl Default for App {
     fn default() -> Self {
+        Self::from_state_path(None)
+    }
+}
+
+impl App {
+    /// Construct the application against an explicit ledger path. Headless
+    /// callers use this to avoid process-global environment mutation while
+    /// retaining the same recovery and durable-state behavior as the GUI.
+    pub(crate) fn from_state_path(state_override: Option<&std::path::Path>) -> Self {
         let appearance = AppearancePreferences::load();
-        let state_path_result = persistent_state_path();
+        let state_path_result = match state_override {
+            Some(path) => Ok(path.to_owned()),
+            None => persistent_state_path(),
+        };
         let path_error = state_path_result.as_ref().err().cloned();
         let state_path = state_path_result.ok();
         let state_directory_error =

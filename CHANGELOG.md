@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Headless single and batch execution now pass their explicit ledger path
+  directly into application construction instead of mutating the process-wide
+  `MAILSWIFTSYNC_STATE_PATH` environment variable.
 - Kept customer-proof export completion-gated by default and added an explicit
   CLI `--allow-incomplete` opt-in for progress evidence only. Incomplete
   artifacts are labeled in JSON and documented as non-certificates.
