@@ -3121,11 +3121,13 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     }
     let preauth = greeting.contains("* PREAUTH");
     if !preauth {
+        let quoted_password = Zeroizing::new(imap_quote(password)?);
         let login = format!(
             "a002 LOGIN {} {}\r\n",
             imap_quote(user)?,
-            imap_quote(password)?
+            quoted_password.as_str()
         );
+        let login = Zeroizing::new(login);
         stream
             .write_all(login.as_bytes())
             .map_err(|e| e.to_string())?;
