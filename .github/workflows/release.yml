@@ -107,8 +107,24 @@ jobs:
           path: dist
           pattern: mailswiftsync-*
           merge-multiple: true
+      - name: Create deterministic release manifest
+        shell: bash
+        run: |
+          manifest=dist/mailswiftsync-release-manifest.txt
+          find dist -maxdepth 1 -type f \
+            ! -name '*.sha256' \
+            ! -name 'mailswiftsync-release-manifest.txt' \
+            -printf '%f\n' | sort | while read -r file; do
+              sha256sum "dist/$file"
+          done > "$manifest"
+          (cd dist && sha256sum mailswiftsync-release-manifest.txt) \
+            > dist/mailswiftsync-release-manifest.txt.sha256
       - name: Verify release checksums
         run: scripts/verify-release.sh dist
+      - name: Attest release manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/mailswiftsync-release-manifest.txt
       - uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           files: dist/*
