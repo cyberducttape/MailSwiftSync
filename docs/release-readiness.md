@@ -9,8 +9,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
 - CSV/XLS/XLSX validation queue with bounded 1–16 worker concurrency.
 - Bounded transient retries for validation; authentication and configuration failures stop without retry loops.
+- Live batch waves with mailbox-specific child runs, claim-before-launch, selective retry scopes, transactional plan checks, and per-mailbox aggregate/engine-dependent evidence.
 - Aggregate source/destination folder, message, and virtual-size evidence.
-- Timeout, cancellation, child-process-only imapsync passfile credentials, and documented Dovecot process-visibility limits.
+- Timeout, cancellation, child-process-only imapsync passfile credentials, fresh dual-IMAPS authentication before live imapsync launches, and documented Dovecot process-visibility limits.
 
 ## Required before calling it production-ready
 
@@ -29,7 +30,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 ## Proposed eight-week sequence
 
 1. Week 1: finalize identity, licensing, release metadata, and a compatibility/test matrix.
-2. Week 2: implement keyring-backed credential providers (available for operator-managed sessions); next, add provider OAuth and remove Dovecot process-argument secrets.
+2. Week 2: add provider OAuth and remove Dovecot process-argument secrets; retain keyring-backed credentials for attended operator-managed sessions.
 3. Week 3: split preflight into DNS, transport, TLS, auth, quota, inventory, and readiness checks.
 4. Week 4: add resumable checkpoints, retries, delta status, and explicit mailbox state transitions.
 5. Week 5: add bounded concurrency, throttling, scheduling, and durable cancellation/recovery.
