@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Documented that the existing Dovecot checkpoint column is not a resumability
+  guarantee; stateful `doveadm -s` support remains gated on version-aware output
+  capture and an atomic child-result/checkpoint commit.
 - Terminal SQLite commit failures now leave the durable run available for
   recovery instead of emitting a misleading completion event or advancing the
   project phase; the production runbook documents the operator response.
