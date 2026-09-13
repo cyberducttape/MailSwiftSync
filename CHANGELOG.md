@@ -27,6 +27,9 @@ All notable changes to MailSwiftSync are documented here.
   attention, unresolved, and clear-selection actions. These actions only
   select durable rows; existing preflight and live-confirmation gates remain
   mandatory.
+- Batch operators can export the selected failed, attention, unresolved, or
+  manually chosen rows as a secret-free JSON handoff for ticketing and review;
+  the export is not an executable migration plan.
 
 - Added separate dark and light semantic UI palettes with high-contrast
   primary, secondary, informational, success, warning, danger, link, border,

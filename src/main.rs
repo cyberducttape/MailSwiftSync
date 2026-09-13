@@ -1986,6 +1986,39 @@ impl BulkStateSet {
     }
 }
 
+fn bulk_selection_value(
+    jobs: &[BulkJob],
+    selected_ids: &HashSet<String>,
+    job_ids: &[String],
+) -> serde_json::Value {
+    let rows = jobs
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            selected_ids.is_empty()
+                || job_ids
+                    .get(*index)
+                    .is_some_and(|job_id| selected_ids.contains(job_id))
+        })
+        .map(|(_, job)| {
+            serde_json::json!({
+                "label": job.label,
+                "source_host": job.form.profile.source_host,
+                "source_user": job.form.profile.source_user,
+                "destination_host": job.form.profile.destination_host,
+                "destination_user": job.form.profile.destination_user,
+                "state": display_state_key(&job.state),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "format": "mailswiftsync-batch-selection",
+        "version": 1,
+        "selected_rows": rows,
+        "note": "This handoff intentionally excludes passwords, keyring references, extra options, and engine credentials. It is a review/retry scope, not an executable migration plan."
+    })
+}
+
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
 type PendingDbEvent = (String, String, String, String);
 
@@ -4533,6 +4566,20 @@ impl App {
             "Selected {} mailbox row(s) for focused review.",
             self.bulk_selected_ids.len()
         );
+    }
+
+    fn export_bulk_selection(&self) -> Result<(), String> {
+        if self.bulk_jobs.is_empty() {
+            return Err("The batch queue has no mailbox rows to export.".into());
+        }
+        let value =
+            bulk_selection_value(&self.bulk_jobs, &self.bulk_selected_ids, &self.bulk_job_ids);
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-batch-selection.json")
+            .save_file()
+            .ok_or("Batch selection export cancelled.")?;
+        let report = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+        write_private_atomic(&path, &report).map_err(|error| error.to_string())
     }
 
     fn activity_view(&mut self, ui: &mut egui::Ui) {
@@ -8014,6 +8061,12 @@ impl App {
                         self.bulk_clear_confirm_open = true;
                     }
                 }
+                if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new("Export selected set…")).clicked() {
+                    self.bulk_message = match self.export_bulk_selection() {
+                        Ok(()) => "Selected batch rows exported without credentials or engine options.".into(),
+                        Err(error) => error,
+                    };
+                }
                 let live_count = self
                     .bulk_jobs
                     .iter()
@@ -10896,6 +10949,31 @@ mod tests {
         assert!(error.contains("import file"));
         assert!(error.contains("limit"));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn batch_selection_export_excludes_secret_material() {
+        let mut form = Form::default();
+        form.profile.source_host = "source.example".into();
+        form.profile.source_user = "source@example".into();
+        form.profile.destination_host = "destination.example".into();
+        form.profile.destination_user = "destination@example".into();
+        form.source_password = "source-secret".to_owned().into();
+        form.destination_password = "destination-secret".to_owned().into();
+        form.profile.source_credential_id = "source-key".into();
+        let jobs = vec![BulkJob {
+            label: "mailbox".into(),
+            form,
+            state: "failed".into(),
+        }];
+        let value = bulk_selection_value(&jobs, &HashSet::new(), &[]);
+        let text = serde_json::to_string(&value).unwrap();
+        assert!(text.contains("source@example"));
+        assert!(text.contains("failed"));
+        assert!(!text.contains("source-secret"));
+        assert!(!text.contains("destination-secret"));
+        assert!(!text.contains("source-key"));
+        assert!(!text.contains("extra_options"));
     }
 
     #[test]
