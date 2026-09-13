@@ -3,6 +3,7 @@
 //! The GUI may be replaced, but project state and verification evidence remain
 //! portable SQLite data. No credentials or message content belong in this store.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, backup, params};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -256,10 +257,37 @@ fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionRe
     Some(AttentionReason::Unknown)
 }
 
-fn valid_dovecot_checkpoint(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_DOVECOT_CHECKPOINT_BYTES
-        && value.bytes().all(|byte| byte.is_ascii_graphic())
+pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
+    let value = value.trim();
+    if value.len() < 8
+        || value.len() > MAX_DOVECOT_CHECKPOINT_BYTES
+        || value.bytes().any(|byte| byte.is_ascii_whitespace())
+        || matches!(
+            value.to_ascii_lowercase().as_str(),
+            "success" | "successful" | "completed"
+        )
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(byte, b'+' | b'/' | b'='))
+    {
+        return false;
+    }
+    let padding_start = value.find('=');
+    if let Some(index) = padding_start {
+        if !value.len().is_multiple_of(4)
+            || value[index..].len() > 2
+            || value[index..].bytes().any(|byte| byte != b'=')
+        {
+            return false;
+        }
+    } else if value.len() % 4 == 1 {
+        return false;
+    }
+    let mut padded = value.to_owned();
+    while !padded.len().is_multiple_of(4) {
+        padded.push('=');
+    }
+    BASE64_STANDARD.decode(padded).is_ok()
 }
 
 /// The transfer engine is a policy decision, not an implementation detail.

@@ -8664,10 +8664,8 @@ mod tests {
             dovecot_state_candidate("AQAAAHm4+Jk"),
             Some("AQAAAHm4+Jk".into())
         );
-        assert_eq!(
-            dovecot_state_candidate("state-token_v2"),
-            Some("state-token_v2".into())
-        );
+        assert!(dovecot_state_candidate("state-token_v2").is_none());
+        assert!(dovecot_state_candidate("debug-output").is_none());
         assert!(dovecot_state_candidate("completed").is_none());
         assert!(dovecot_state_candidate(" short ").is_none());
     }

@@ -352,20 +352,11 @@ pub(crate) fn run_streaming(
 }
 
 /// Dovecot emits the stateful-sync resume value as a compact, single-line
-/// token. The public contract does not require padded base64, so only the
-/// documented shape (printable, non-whitespace, bounded single line) is
-/// enforced here; the durable store applies the same safety bound.
+/// standard-base64 token. Both padded and unpadded forms are accepted; the
+/// durable store applies the same validation before persistence.
 pub(crate) fn dovecot_state_candidate(line: &str) -> Option<String> {
     let value = line.trim();
-    if value.len() < 8 || value.len() > 4096 || value.chars().any(char::is_whitespace) {
-        return None;
-    }
-    if value.bytes().all(|byte| byte.is_ascii_graphic())
-        && !matches!(
-            value.to_ascii_lowercase().as_str(),
-            "success" | "successful" | "completed"
-        )
-    {
+    if core::valid_dovecot_checkpoint(value) {
         Some(value.to_owned())
     } else {
         None

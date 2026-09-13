@@ -45,7 +45,8 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Opening an existing older on-disk schema now creates a unique,
   integrity-checked `state.db.pre-migrate-vN.<id>.db` backup before migration;
   new and in-memory databases are not copied.
-- Dovecot checkpoint extraction accepts unpadded printable state tokens, and
+- Dovecot checkpoint extraction accepts bounded standard-base64 state tokens
+  (with or without padding), and
   semantic Dovecot verification continues when only the bounded diagnostic
   transcript is truncated.
 - Authenticated IMAP readiness probes require an untagged folder inventory,
