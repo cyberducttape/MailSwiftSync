@@ -3164,6 +3164,12 @@ impl App {
             .project_id_for_mailbox(job)
             .map_err(|e| e.to_string())?
             .ok_or("The mailbox job no longer belongs to a project.")?;
+        if self.active_project_id() != Some(project_id.as_str()) {
+            return Err(
+                "The selected project does not contain this mailbox; select its project before exporting mailbox evidence."
+                    .into(),
+            );
+        }
         let project = self
             .store
             .project(&project_id)
@@ -3552,7 +3558,15 @@ impl App {
                     self.report_export_result("Project health export", result);
                 }
             }
-            if let Some(job) = &self.job_id {
+            let selected_project = self.active_project_id().map(str::to_owned);
+            let selected_job = self.job_id.clone().filter(|job| {
+                self.store
+                    .project_id_for_mailbox(job)
+                    .ok()
+                    .flatten()
+                    == selected_project
+            });
+            if let Some(job) = selected_job.as_deref() {
                 match self.store.evidence(job) {
                     Ok(Some(evidence)) => {
                         ui.label("Durable mailbox reconciliation");
@@ -3572,6 +3586,13 @@ impl App {
                     Ok(None) => { ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(ALERT)); }
                     Err(error) => { ui.label(RichText::new(format!("Could not read evidence: {error}")).color(ALERT)); }
                 }
+            } else if self.job_id.is_some() && selected_project.is_some() {
+                ui.label(
+                    RichText::new(
+                        "The retained single-mailbox selection belongs to another project. Select a mailbox from the current project before viewing or exporting its evidence.",
+                    )
+                    .color(ALERT),
+                );
             } else {
                 ui.label("Run a migration to create a durable mailbox evidence record.");
             }
