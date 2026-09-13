@@ -2168,8 +2168,10 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
 
 impl App {
     fn active_project_id(&self) -> Option<&str> {
-        self.project_id
-            .as_deref()
+        self.active_run
+            .as_ref()
+            .map(|run| run.project_id.as_str())
+            .or(self.project_id.as_deref())
             .or(self.bulk_project_id.as_deref())
     }
 
