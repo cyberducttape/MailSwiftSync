@@ -62,13 +62,13 @@ pub(crate) fn imapsync_args(
         args.extend([
             "--tls1".into(),
             "--tlsargs1".into(),
-            "SSL_verify_mode=1".into(),
+            ssl_args(&profile.source_ca_bundle),
         ]);
     } else {
         args.extend([
             "--ssl1".into(),
             "--sslargs1".into(),
-            "SSL_verify_mode=1".into(),
+            ssl_args(&profile.source_ca_bundle),
         ]);
     }
     args.extend(["--port2".into(), destination_port]);
@@ -76,13 +76,13 @@ pub(crate) fn imapsync_args(
         args.extend([
             "--tls2".into(),
             "--tlsargs2".into(),
-            "SSL_verify_mode=1".into(),
+            ssl_args(&profile.destination_ca_bundle),
         ]);
     } else {
         args.extend([
             "--ssl2".into(),
             "--sslargs2".into(),
-            "SSL_verify_mode=1".into(),
+            ssl_args(&profile.destination_ca_bundle),
         ]);
     }
     for (enabled, flag) in [
@@ -127,6 +127,15 @@ pub(crate) fn imapsync_args(
         args.extend(extra);
     }
     args
+}
+
+fn ssl_args(ca_bundle: &str) -> String {
+    let ca_bundle = ca_bundle.trim();
+    if ca_bundle.is_empty() {
+        "SSL_verify_mode=1".into()
+    } else {
+        format!("SSL_verify_mode=1 SSL_ca_file={ca_bundle}")
+    }
 }
 
 /// Command generation is also used by the UI preview and plan fingerprint

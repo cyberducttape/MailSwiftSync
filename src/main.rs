@@ -29,13 +29,14 @@ use keyring::Entry;
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
+use rustls_pemfile::certs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     ffi::OsString,
-    io::{Read, Write},
+    io::{BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     path::PathBuf,
     process::{Command, Stdio},
@@ -85,6 +86,10 @@ struct Profile {
     source_port: String,
     #[serde(default = "default_source_tls")]
     source_tls: String,
+    #[serde(default)]
+    source_ca_bundle: String,
+    #[serde(default)]
+    source_certificate_pin_sha256: String,
     /// Explicit operator acknowledgement required before a live cleartext
     /// source connection. This is part of the plan fingerprint.
     #[serde(default)]
@@ -100,6 +105,10 @@ struct Profile {
     destination_port: String,
     #[serde(default = "default_destination_tls")]
     destination_tls: String,
+    #[serde(default)]
+    destination_ca_bundle: String,
+    #[serde(default)]
+    destination_certificate_pin_sha256: String,
     imapsync_path: String,
     #[serde(default)]
     engine: core::Engine,
@@ -211,6 +220,8 @@ struct RunProfileSnapshot {
     source_host: String,
     source_port: String,
     source_tls: String,
+    source_ca_bundle: String,
+    source_certificate_pin_sha256: String,
     allow_insecure_source_transport: bool,
     source_user: String,
     source_credential_id: String,
@@ -219,6 +230,8 @@ struct RunProfileSnapshot {
     destination_credential_id: String,
     destination_port: String,
     destination_tls: String,
+    destination_ca_bundle: String,
+    destination_certificate_pin_sha256: String,
     imapsync_path: String,
     engine: core::Engine,
     doveadm_path: String,
@@ -275,6 +288,19 @@ fn effective_destination_tls(mode: &str) -> &str {
     } else {
         "imaps"
     }
+}
+
+fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
+    let pin = value.trim();
+    if pin.is_empty() {
+        return Ok(());
+    }
+    if pin.len() != 64 || !pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{label} must be a 64-character SHA-256 certificate fingerprint"
+        ));
+    }
+    Ok(())
 }
 
 fn plan_snapshot_sha256(snapshot: &str) -> String {
@@ -566,9 +592,15 @@ fn dovecot_ssl_mode(mode: &str) -> &str {
     }
 }
 
-fn append_dovecot_source_tls_policy(args: &mut Vec<String>, mode: &str) {
+fn append_dovecot_source_tls_policy(args: &mut Vec<String>, mode: &str, ca_bundle: &str) {
     if mode != "plain" {
         args.extend(["-o".into(), "ssl_client_require_valid_cert=yes".into()]);
+        if !ca_bundle.trim().is_empty() {
+            args.extend([
+                "-o".into(),
+                format!("ssl_client_ca_file={}", ca_bundle.trim()),
+            ]);
+        }
     }
 }
 
@@ -781,6 +813,14 @@ impl Form {
         ) {
             return Err("Destination TLS mode must be imaps or starttls.".into());
         }
+        validate_certificate_pin(
+            &self.profile.source_certificate_pin_sha256,
+            "Source certificate pin",
+        )?;
+        validate_certificate_pin(
+            &self.profile.destination_certificate_pin_sha256,
+            "Destination certificate pin",
+        )?;
         endpoint::parts(
             &self.profile.source_host,
             default_imap_port(&self.profile.source_tls),
@@ -965,12 +1005,22 @@ impl Form {
             remove_option(&mut args, "--password2");
         }
         format!(
-            "{}\n{}\ncredential-source1={}\ncredential-source2={}\ninsecure-source-transport-ack={}",
+            "{}\n{}\ncredential-source1={}\ncredential-source2={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-certificate-pin={}\ndestination-ca-bundle={}\ndestination-certificate-pin={}",
             executable,
             args.join("\u{1f}"),
             self.profile.source_credential_id.trim(),
             self.profile.destination_credential_id.trim(),
             self.profile.allow_insecure_source_transport,
+            self.profile.source_ca_bundle.trim(),
+            self.profile
+                .source_certificate_pin_sha256
+                .trim()
+                .to_ascii_lowercase(),
+            self.profile.destination_ca_bundle.trim(),
+            self.profile
+                .destination_certificate_pin_sha256
+                .trim()
+                .to_ascii_lowercase(),
         )
     }
 
@@ -1000,6 +1050,8 @@ impl Form {
                 source_host: profile.source_host.clone(),
                 source_port: profile.source_port.clone(),
                 source_tls: profile.source_tls.clone(),
+                source_ca_bundle: profile.source_ca_bundle.clone(),
+                source_certificate_pin_sha256: profile.source_certificate_pin_sha256.clone(),
                 allow_insecure_source_transport: profile.allow_insecure_source_transport,
                 source_user: profile.source_user.clone(),
                 source_credential_id: profile.source_credential_id.clone(),
@@ -1008,6 +1060,10 @@ impl Form {
                 destination_credential_id: profile.destination_credential_id.clone(),
                 destination_port: profile.destination_port.clone(),
                 destination_tls: profile.destination_tls.clone(),
+                destination_ca_bundle: profile.destination_ca_bundle.clone(),
+                destination_certificate_pin_sha256: profile
+                    .destination_certificate_pin_sha256
+                    .clone(),
                 imapsync_path: profile.imapsync_path.clone(),
                 engine: profile.engine,
                 doveadm_path: profile.doveadm_path.clone(),
@@ -1105,7 +1161,11 @@ impl Form {
             "-o".into(),
             format!("imapc_password={password}"),
         ]);
-        append_dovecot_source_tls_policy(&mut args, &self.profile.source_tls);
+        append_dovecot_source_tls_policy(
+            &mut args,
+            &self.profile.source_tls,
+            &self.profile.source_ca_bundle,
+        );
         if !self.profile.source_port.trim().is_empty() {
             args.extend([
                 "-o".into(),
@@ -1229,7 +1289,11 @@ impl Form {
             "messages,vsize".into(),
             "*".into(),
         ]);
-        append_dovecot_source_tls_policy(&mut source, &self.profile.source_tls);
+        append_dovecot_source_tls_policy(
+            &mut source,
+            &self.profile.source_tls,
+            &self.profile.source_ca_bundle,
+        );
         if !self.profile.source_port.trim().is_empty() {
             source.extend([
                 "-o".into(),
@@ -2394,6 +2458,13 @@ struct App {
     activity_search: String,
     activity_status_filter: String,
     reopen_reason: String,
+    /// Database-backed UI read model. Rendering consumes this cache instead
+    /// of issuing SQLite queries on every egui repaint.
+    ui_projects: Vec<core::ProjectListItem>,
+    ui_runs: Vec<core::RunListItem>,
+    ui_report: Option<core::ProjectReportSnapshot>,
+    ui_snapshot_project_id: Option<String>,
+    ui_snapshot_refreshed_at: Option<std::time::Instant>,
 }
 impl Default for App {
     fn default() -> Self {
@@ -2750,6 +2821,11 @@ impl Default for App {
             activity_search: String::new(),
             activity_status_filter: "all".into(),
             reopen_reason: String::new(),
+            ui_projects: Vec::new(),
+            ui_runs: Vec::new(),
+            ui_report: None,
+            ui_snapshot_project_id: None,
+            ui_snapshot_refreshed_at: None,
         }
     }
 }
@@ -3073,6 +3149,8 @@ fn probe_tls_capabilities_with_transport(
     user: &str,
     password: &str,
     transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
 ) -> Result<core::ServerCapabilities, String> {
     let (server_name, port) = endpoint::parts(host, default_imap_port(transport))
         .map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
@@ -3109,7 +3187,24 @@ fn probe_tls_capabilities_with_transport(
     })?;
     tcp.set_read_timeout(Some(Duration::from_secs(8)))
         .map_err(|e| e.to_string())?;
-    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if !ca_bundle.trim().is_empty() {
+        let file = std::fs::File::open(ca_bundle.trim())
+            .map_err(|error| format!("{host}: could not open additional CA bundle: {error}"))?;
+        let mut reader = BufReader::new(file);
+        let mut loaded = 0;
+        for certificate in certs(&mut reader) {
+            let certificate = certificate
+                .map_err(|error| format!("{host}: invalid certificate in CA bundle: {error}"))?;
+            roots
+                .add(certificate)
+                .map_err(|error| format!("{host}: could not add CA certificate: {error}"))?;
+            loaded += 1;
+        }
+        if loaded == 0 {
+            return Err(format!("{host}: CA bundle contained no PEM certificates"));
+        }
+    }
     let config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
@@ -3136,20 +3231,43 @@ fn probe_tls_capabilities_with_transport(
         }
         let connection = ClientConnection::new(Arc::new(config), name)
             .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
-        return complete_authenticated_imap_probe(
-            StreamOwned::new(connection, tcp),
-            host,
-            user,
-            password,
-            greeting,
-        );
+        let mut stream = StreamOwned::new(connection, tcp);
+        stream
+            .conn
+            .complete_io(&mut stream.sock)
+            .map_err(|error| format!("{host}: TLS handshake failed: {error}"))?;
+        verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
+        return complete_authenticated_imap_probe(stream, host, user, password, greeting);
     }
 
     let connection = ClientConnection::new(Arc::new(config), name)
         .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
     let mut stream = StreamOwned::new(connection, tcp);
     let greeting = read_imap_greeting(&mut stream, host)?;
+    verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
     complete_authenticated_imap_probe(stream, host, user, password, greeting)
+}
+
+fn verify_certificate_pin(
+    stream: &StreamOwned<ClientConnection, TcpStream>,
+    host: &str,
+    expected: &str,
+) -> Result<(), String> {
+    if expected.trim().is_empty() {
+        return Ok(());
+    }
+    let certificate = stream
+        .conn
+        .peer_certificates()
+        .and_then(|certificates| certificates.first())
+        .ok_or_else(|| format!("{host}: TLS peer did not provide a certificate"))?;
+    let actual = format!("{:x}", Sha256::digest(certificate.as_ref()));
+    if actual != expected.trim().to_ascii_lowercase() {
+        return Err(format!(
+            "{host}: TLS certificate SHA-256 pin mismatch (presented {actual})"
+        ));
+    }
+    Ok(())
 }
 
 fn complete_authenticated_imap_probe<S: Read + Write>(
@@ -3260,6 +3378,8 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
         &form.profile.source_user,
         form.source_password.as_str(),
         &form.profile.source_tls,
+        &form.profile.source_ca_bundle,
+        &form.profile.source_certificate_pin_sha256,
     )?;
     if source_capabilities.quota_exceeded {
         return Err(
@@ -3272,6 +3392,8 @@ fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
         &form.profile.destination_user,
         form.destination_password.as_str(),
         &form.profile.destination_tls,
+        &form.profile.destination_ca_bundle,
+        &form.profile.destination_certificate_pin_sha256,
     )?;
     if destination_capabilities.quota_exceeded {
         return Err("destination mailbox quota is exhausted according to the authenticated IMAP quota response".into());
@@ -3299,6 +3421,39 @@ fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
 }
 
 impl App {
+    /// Refresh the database-backed UI read model at a low frequency. egui may
+    /// repaint many times per second while a process is producing output;
+    /// those repaints must not turn into repeated SQLite reads.
+    fn refresh_ui_snapshot(&mut self) {
+        if self
+            .ui_snapshot_refreshed_at
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(500))
+        {
+            return;
+        }
+        self.ui_snapshot_refreshed_at = Some(std::time::Instant::now());
+        if let Ok(projects) = self.store.recent_projects(500) {
+            self.ui_projects = projects;
+        }
+        let project_id = self.active_project_id().map(str::to_owned);
+        if project_id != self.ui_snapshot_project_id {
+            self.ui_snapshot_project_id = project_id.clone();
+            self.ui_report = None;
+            self.ui_runs.clear();
+        }
+        if let Some(project_id) = project_id {
+            if let Ok(Some(report)) = self.store.project_report_snapshot(&project_id) {
+                self.ui_report = Some(report);
+            }
+            if let Ok(runs) = self
+                .store
+                .recent_run_list(&project_id, MAX_ACTIVITY_HISTORY_ROWS)
+            {
+                self.ui_runs = runs;
+            }
+        }
+    }
+
     fn current_editable_project_id(&self) -> Option<&str> {
         self.active_run
             .as_ref()
@@ -3412,12 +3567,19 @@ impl App {
         let destination_password = self.form.destination_password.clone();
         let source_tls = self.form.profile.source_tls.clone();
         let destination_tls = self.form.profile.destination_tls.clone();
+        let source_ca_bundle = self.form.profile.source_ca_bundle.clone();
+        let source_certificate_pin_sha256 = self.form.profile.source_certificate_pin_sha256.clone();
+        let destination_ca_bundle = self.form.profile.destination_ca_bundle.clone();
+        let destination_certificate_pin_sha256 =
+            self.form.profile.destination_certificate_pin_sha256.clone();
         thread::spawn(move || {
             let result = probe_tls_capabilities_with_transport(
                 &source,
                 &source_user,
                 source_password.as_str(),
                 &source_tls,
+                &source_ca_bundle,
+                &source_certificate_pin_sha256,
             )
             .and_then(|left| {
                 probe_tls_capabilities_with_transport(
@@ -3425,6 +3587,8 @@ impl App {
                     &destination_user,
                     destination_password.as_str(),
                     &destination_tls,
+                    &destination_ca_bundle,
+                    &destination_certificate_pin_sha256,
                 )
                 .map(|right| (left, right))
             });
@@ -3470,6 +3634,11 @@ impl App {
         let destination_password = self.form.destination_password.clone();
         let source_tls = self.form.profile.source_tls.clone();
         let destination_tls = self.form.profile.destination_tls.clone();
+        let source_ca_bundle = self.form.profile.source_ca_bundle.clone();
+        let source_certificate_pin_sha256 = self.form.profile.source_certificate_pin_sha256.clone();
+        let destination_ca_bundle = self.form.profile.destination_ca_bundle.clone();
+        let destination_certificate_pin_sha256 =
+            self.form.profile.destination_certificate_pin_sha256.clone();
         let (tx, rx) = mpsc::channel();
         self.live_auth_receiver = Some(rx);
         self.status = "Re-authenticating encrypted IMAP endpoints before live execution…".into();
@@ -3479,6 +3648,8 @@ impl App {
                 &source_user,
                 source_password.as_str(),
                 &source_tls,
+                &source_ca_bundle,
+                &source_certificate_pin_sha256,
             )
             .and_then(|_| {
                 probe_tls_capabilities_with_transport(
@@ -3486,6 +3657,8 @@ impl App {
                     &destination_user,
                     destination_password.as_str(),
                     &destination_tls,
+                    &destination_ca_bundle,
+                    &destination_certificate_pin_sha256,
                 )
                 .map(|_| LiveAuthProof {
                     plan_fingerprint,
@@ -3635,8 +3808,8 @@ impl App {
                 });
                 ui.add_space(8.0);
                 let search = self.project_search.trim().to_ascii_lowercase();
-                match self.store.recent_projects(500) {
-                    Ok(projects) => {
+                {
+                    let projects = self.ui_projects.clone();
                         let visible = projects.into_iter().filter(|project| {
                             search.is_empty()
                                 || project.name.to_ascii_lowercase().contains(&search)
@@ -3667,10 +3840,6 @@ impl App {
                                 });
                             });
                     }
-                    Err(error) => {
-                        ui.label(RichText::new(format!("Could not read projects: {error}")).color(ALERT));
-                    }
-                }
                 ui.add_space(8.0);
                 if ui.button("New migration plan").clicked() {
                     self.start_new_migration();
@@ -4564,7 +4733,7 @@ impl App {
                 self.activity_show_all = !self.activity_show_all;
             }
         });
-        let Some(project) = self.active_project_id().map(str::to_owned) else {
+        let Some(_project) = self.active_project_id().map(str::to_owned) else {
             ui.label(
                 RichText::new("Create or restore a project to see durable runs.").color(MUTED),
             );
@@ -4600,11 +4769,17 @@ impl App {
                     }
                 });
         });
-        match self.store.recent_run_list(&project, run_limit) {
-            Ok(runs) if runs.is_empty() => {
+        let runs = self
+            .ui_runs
+            .iter()
+            .take(run_limit as usize)
+            .cloned()
+            .collect::<Vec<_>>();
+        match runs {
+            runs if runs.is_empty() => {
                 ui.label(RichText::new("No durable runs recorded yet.").color(MUTED));
             }
-            Ok(runs) => {
+            runs => {
                 let search = self.activity_search.trim().to_ascii_lowercase();
                 let visible = runs
                     .iter()
@@ -4705,11 +4880,6 @@ impl App {
                                 }
                             });
                     });
-            }
-            Err(error) => {
-                ui.label(
-                    RichText::new(format!("Could not read run history: {error}")).color(ALERT),
-                );
             }
         }
     }
@@ -5272,9 +5442,9 @@ impl App {
                 }
             }
             let selected_project = self.active_project_id().map(str::to_owned);
-            if let Some(project_id) = selected_project.as_deref() {
-                match self.store.project_report_snapshot(project_id) {
-                    Ok(Some(snapshot)) => {
+            if selected_project.is_some() {
+                match self.ui_report.clone() {
+                    Some(snapshot) => {
                         let verified = snapshot
                             .mailboxes
                             .iter()
@@ -5368,18 +5538,9 @@ impl App {
                                     });
                             });
                     }
-                    Ok(None) => {
+                    None => {
                         ui.separator();
                         ui.label(RichText::new("The selected project no longer exists.").color(ALERT));
-                    }
-                    Err(error) => {
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!(
-                                "Mailbox evidence is unavailable because durable state could not be read: {error}"
-                            ))
-                            .color(ALERT),
-                        );
                     }
                 }
             }
@@ -7145,6 +7306,7 @@ impl App {
         });
     }
     fn poll(&mut self) {
+        self.refresh_ui_snapshot();
         if let Some(receiver) = &self.bulk_import_receiver
             && let Ok(result) = receiver.try_recv()
         {
@@ -9124,21 +9286,8 @@ impl eframe::App for App {
                             .italics()
                             .color(MUTED),
                     );
-                    if let Ok(mut projects) = self.store.recent_projects(8)
-                        && (!projects.is_empty() || self.selected_project_id.is_some())
-                    {
-                        if let Some(selected_id) = self.selected_project_id.as_deref()
-                            && !projects.iter().any(|project| project.id == selected_id)
-                            && let Ok(Some(project)) = self.store.project(selected_id)
-                        {
-                            projects.push(core::ProjectListItem {
-                                id: project.id,
-                                name: project.name,
-                                source_endpoint: project.source_endpoint,
-                                destination_endpoint: project.destination_endpoint,
-                                phase: project.phase,
-                            });
-                        }
+                    let projects = self.ui_projects.iter().take(8).cloned().collect::<Vec<_>>();
+                    if !projects.is_empty() || self.selected_project_id.is_some() {
                         let selected_name = self
                             .selected_project_id
                             .as_deref()
@@ -9286,6 +9435,22 @@ impl eframe::App for App {
                                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_port).desired_width(70.0));
                                 ui.label("TLS");
                                 egui::ComboBox::from_id_salt("destination_tls").selected_text(&self.form.profile.destination_tls).show_ui(ui, |ui| for mode in ["imaps", "starttls"] { ui.selectable_value(&mut self.form.profile.destination_tls, mode.into(), mode); });
+                            });
+                            ui.collapsing("Enterprise certificate trust (optional)", |ui| {
+                                ui.label(RichText::new("Use a PEM CA bundle for private PKI, or pin the leaf certificate's SHA-256 fingerprint. Public/system roots remain enabled.").color(MUTED));
+                                ui.horizontal(|ui| {
+                                    ui.label("Source CA bundle");
+                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
+                                    ui.label("SHA-256 pin");
+                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_certificate_pin_sha256).desired_width(300.0).hint_text("64 hex characters"));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Destination CA bundle");
+                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
+                                    ui.label("SHA-256 pin");
+                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_certificate_pin_sha256).desired_width(300.0).hint_text("64 hex characters"));
+                                });
+                                ui.label(RichText::new("Pins are checked in the authenticated readiness probe; a mismatch blocks execution. Do not use a pin as a substitute for an approved CA unless your security policy explicitly permits it.").color(MUTED));
                             });
                             ui.add_space(14.0);
                             ui.group(|ui| {
@@ -12030,11 +12195,50 @@ mod tests {
         let mut form = dovecot_form();
         form.profile.source_tls = "starttls".into();
         form.profile.dovecot_config = "/etc/dovecot/custom.conf".into();
+        form.profile.source_ca_bundle = "/etc/company-ca.pem".into();
         let (_, args) = form.command(true);
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["-o", "ssl_client_require_valid_cert=yes"])
         );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["-o", "ssl_client_ca_file=/etc/company-ca.pem"])
+        );
+    }
+
+    #[test]
+    fn imapsync_trust_bundle_is_explicit_and_verification_stays_enabled() {
+        let mut form = Form::default();
+        form.profile.source_ca_bundle = "/etc/company ca.pem".into();
+        let args = form.args(true);
+        assert!(args.windows(2).any(|pair| {
+            pair == [
+                "--sslargs1",
+                "SSL_verify_mode=1 SSL_ca_file=/etc/company ca.pem",
+            ]
+        }));
+    }
+
+    #[test]
+    fn certificate_pins_require_sha256_hex() {
+        assert!(validate_certificate_pin(&"ab".repeat(32), "source").is_ok());
+        assert!(validate_certificate_pin(&"AB".repeat(32), "source").is_ok());
+        assert!(validate_certificate_pin("", "source").is_ok());
+        assert!(validate_certificate_pin("not-a-pin", "source").is_err());
+        assert!(validate_certificate_pin(&"g".repeat(64), "source").is_err());
+    }
+
+    #[test]
+    fn trust_settings_change_the_preflight_fingerprint() {
+        let form = Form::default();
+        let original = form.plan_fingerprint();
+        let mut changed = form.clone();
+        changed.profile.source_ca_bundle = "/etc/company-ca.pem".into();
+        assert_ne!(original, changed.plan_fingerprint());
+        changed.profile.source_ca_bundle.clear();
+        changed.profile.destination_certificate_pin_sha256 = "ab".repeat(32);
+        assert_ne!(original, changed.plan_fingerprint());
     }
 
     #[test]
