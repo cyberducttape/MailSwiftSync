@@ -721,7 +721,10 @@ impl Form {
                 allowsizemismatch: profile.allowsizemismatch,
                 delete2: profile.delete2,
                 extra_options_sha256,
-                dovecot_checkpoint_sha256: checkpoint.map(plan_snapshot_sha256),
+                dovecot_checkpoint_sha256: (self.engine() == core::Engine::Dovecot
+                    && !self.dry_run)
+                    .then(|| checkpoint.map(plan_snapshot_sha256))
+                    .flatten(),
             },
         };
         toml::to_string(&snapshot).unwrap_or_default()
@@ -3963,7 +3966,14 @@ impl App {
             .collect::<Vec<_>>();
         let queue_checkpoints = selected_job_ids
             .iter()
-            .map(|job_id| self.store.mailbox_checkpoint(job_id))
+            .zip(jobs.iter())
+            .map(|(job_id, job)| {
+                if live && job.form.engine() == core::Engine::Dovecot {
+                    self.store.mailbox_checkpoint(job_id)
+                } else {
+                    Ok(None)
+                }
+            })
             .collect::<rusqlite::Result<Vec<_>>>();
         let queue_checkpoints = match queue_checkpoints {
             Ok(value) => value,
@@ -6643,13 +6653,32 @@ mod tests {
 
     #[test]
     fn plan_snapshot_records_checkpoint_identity_without_checkpoint_value() {
-        let form = dovecot_form();
+        let mut form = dovecot_form();
+        form.dry_run = false;
         let checkpoint = "AQAAAHm4+Jk=";
         let snapshot = form.plan_snapshot_with_checkpoint(Some(checkpoint));
         let digest = plan_snapshot_sha256(checkpoint);
         assert!(snapshot.contains("dovecot_checkpoint_sha256"));
         assert!(snapshot.contains(&digest));
         assert!(!snapshot.contains(checkpoint));
+    }
+
+    #[test]
+    fn dry_or_non_dovecot_snapshots_do_not_claim_checkpoint_input() {
+        let mut dovecot = dovecot_form();
+        assert!(
+            !dovecot
+                .plan_snapshot_with_checkpoint(Some("AQAAAHm4+Jk="))
+                .contains("dovecot_checkpoint_sha256")
+        );
+
+        dovecot.dry_run = false;
+        dovecot.profile.engine = core::Engine::ImapSync;
+        assert!(
+            !dovecot
+                .plan_snapshot_with_checkpoint(Some("AQAAAHm4+Jk="))
+                .contains("dovecot_checkpoint_sha256")
+        );
     }
 
     #[test]

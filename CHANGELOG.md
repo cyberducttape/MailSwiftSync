@@ -9,6 +9,9 @@ All notable changes to MailSwiftSync are documented here.
 - Immutable run snapshots now include a digest of the Dovecot checkpoint used
   for launch, preserving resume-point provenance without storing the raw state
   token in reports.
+- Batch snapshots now include checkpoint identity only for live Dovecot rows;
+  dry validation and imapsync runs cannot imply that a Dovecot resume point was
+  used.
 - Durable checkpoint completion APIs now reject empty, whitespace-containing,
   control-character, or oversized Dovecot state values at the storage boundary;
   malformed resume state cannot be written by non-UI callers.
