@@ -12051,12 +12051,19 @@ mod tests {
         let mut form = Form::default();
         form.profile.source_ca_bundle = "/etc/company ca.pem".into();
         let args = form.args(true);
-        assert!(args.windows(2).any(|pair| {
-            pair == [
-                "--sslargs1",
-                "SSL_verify_mode=1 SSL_ca_file=/etc/company ca.pem",
-            ]
-        }));
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--sslargs1", "SSL_verify_mode=1"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--sslargs1", "SSL_ca_file=/etc/company ca.pem"])
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("SSL_verify_mode=1 SSL_ca_file="))
+        );
     }
 
     #[test]

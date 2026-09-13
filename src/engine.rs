@@ -64,29 +64,19 @@ pub(crate) fn imapsync_args(
             // imapsync uses --sslargsN for SSL parameters on both implicit
             // TLS and IMAP STARTTLS connections. There is no --tlsargsN
             // option in the supported imapsync CLI.
-            "--sslargs1".into(),
-            ssl_args(&profile.source_ca_bundle),
         ]);
+        append_ssl_args(&mut args, "--sslargs1", &profile.source_ca_bundle);
     } else {
-        args.extend([
-            "--ssl1".into(),
-            "--sslargs1".into(),
-            ssl_args(&profile.source_ca_bundle),
-        ]);
+        args.push("--ssl1".into());
+        append_ssl_args(&mut args, "--sslargs1", &profile.source_ca_bundle);
     }
     args.extend(["--port2".into(), destination_port]);
     if destination_tls == "starttls" {
-        args.extend([
-            "--tls2".into(),
-            "--sslargs2".into(),
-            ssl_args(&profile.destination_ca_bundle),
-        ]);
+        args.push("--tls2".into());
+        append_ssl_args(&mut args, "--sslargs2", &profile.destination_ca_bundle);
     } else {
-        args.extend([
-            "--ssl2".into(),
-            "--sslargs2".into(),
-            ssl_args(&profile.destination_ca_bundle),
-        ]);
+        args.push("--ssl2".into());
+        append_ssl_args(&mut args, "--sslargs2", &profile.destination_ca_bundle);
     }
     for (enabled, flag) in [
         (profile.automap, "--automap"),
@@ -132,12 +122,11 @@ pub(crate) fn imapsync_args(
     args
 }
 
-fn ssl_args(ca_bundle: &str) -> String {
+fn append_ssl_args(args: &mut Vec<String>, option: &str, ca_bundle: &str) {
+    args.extend([option.to_owned(), "SSL_verify_mode=1".into()]);
     let ca_bundle = ca_bundle.trim();
-    if ca_bundle.is_empty() {
-        "SSL_verify_mode=1".into()
-    } else {
-        format!("SSL_verify_mode=1 SSL_ca_file={ca_bundle}")
+    if !ca_bundle.is_empty() {
+        args.extend([option.to_owned(), format!("SSL_ca_file={ca_bundle}")]);
     }
 }
 

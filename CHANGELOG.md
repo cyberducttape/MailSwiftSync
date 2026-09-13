@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Fixed custom CA bundle encoding for imapsync. Verification and
+  `SSL_ca_file` are now emitted as separate repeatable `--sslargsN` values,
+  preserving paths containing spaces and matching imapsync's parser.
 - Fixed imapsync STARTTLS command generation to use its supported
   `--sslargs1`/`--sslargs2` parameters; nonexistent `--tlsargs1` and
   `--tlsargs2` options are no longer emitted.
