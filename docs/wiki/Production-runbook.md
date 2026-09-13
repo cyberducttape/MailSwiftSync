@@ -20,12 +20,14 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
 8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof; if residual differences are accepted, record the decision and risk in the change ticket until the application provides a durable acceptance action.
 
-The current Dovecot path does not claim stateful-resume semantics. Its
-`checkpoint` field is retained for future, version-aware `doveadm sync -s`
-support; it must not be treated as a usable resume token or as proof that a
-partially completed transfer can safely skip a full pass. Until that feature is
-implemented and tested against the deployed Dovecot version, rerun the normal
-engine path after recovery and review the resulting evidence.
+The Dovecot path uses the durable `checkpoint` field as a conservative
+stateful-resume token. Live `sync`/`backup` passes provide the last committed
+value to `doveadm -s`; the initial pass uses an empty state, and a newly
+emitted state is committed atomically with the child result. Dry preflight and
+failed or cancelled runs do not advance it. This is an engine resume
+optimization, not UIDVALIDITY-aware message evidence: after recovery, review
+the resulting evidence and run another delta or verification pass when the
+destination is not yet reconciled.
 
 ## During execution
 

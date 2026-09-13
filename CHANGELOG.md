@@ -45,9 +45,9 @@ All notable changes to MailSwiftSync are documented here.
   process-group descendants as an abnormal result, terminates the remaining
   group, and refuses to report clean success; a Unix regression test covers
   the wrapper/helper case.
-- Documented that the existing Dovecot checkpoint column is not a resumability
-  guarantee; stateful `doveadm -s` support remains gated on version-aware output
-  capture and an atomic child-result/checkpoint commit.
+- Documented Dovecot checkpoint behavior: live stateful `doveadm -s` resume is
+  supported with atomic child-result/checkpoint commits, while UIDVALIDITY-aware
+  verification evidence remains a separate future capability.
 - Terminal SQLite commit failures now leave the durable run available for
   recovery instead of emitting a misleading completion event or advancing the
   project phase; the production runbook documents the operator response.
