@@ -10613,6 +10613,44 @@ mod tests {
     }
 
     #[test]
+    fn durable_preflight_rejects_same_path_runtime_replacements() {
+        let executable = std::env::temp_dir().join(format!(
+            "mailswiftsync-durable-plan-executable-{}",
+            Uuid::new_v4()
+        ));
+        let ca_bundle =
+            std::env::temp_dir().join(format!("mailswiftsync-durable-plan-ca-{}", Uuid::new_v4()));
+        std::fs::write(&executable, b"engine version one").unwrap();
+        std::fs::write(&ca_bundle, b"trust bundle one").unwrap();
+
+        let mut form = Form::default();
+        form.profile.imapsync_path = executable.to_string_lossy().into_owned();
+        form.profile.source_ca_bundle = ca_bundle.to_string_lossy().into_owned();
+        let planned_digest = plan_fingerprint_digest(&form.plan_fingerprint());
+
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("runtime-identity", "source.example", "destination.example")
+            .unwrap();
+        let job = store
+            .add_mailbox(&project.id, "source@example", "destination@example")
+            .unwrap();
+        store.set_preflight_plan(&job, &planned_digest).unwrap();
+
+        std::fs::write(&executable, b"engine version two").unwrap();
+        std::fs::write(&ca_bundle, b"trust bundle two").unwrap();
+        let current_digest = plan_fingerprint_digest(&form.plan_fingerprint());
+        assert_ne!(planned_digest, current_digest);
+        assert_ne!(
+            store.preflight_plan(&job).unwrap().as_deref(),
+            Some(current_digest.as_str())
+        );
+
+        let _ = std::fs::remove_file(executable);
+        let _ = std::fs::remove_file(ca_bundle);
+    }
+
+    #[test]
     fn plain_source_requires_explicit_live_transport_ack_and_binds_plan() {
         let mut form = dovecot_form();
         form.profile.source_tls = "plain".into();
