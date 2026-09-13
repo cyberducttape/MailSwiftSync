@@ -9,6 +9,7 @@ mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
 mailswiftsync headless /path/to/state.db batch-preflight
 mailswiftsync headless /path/to/state.db batch-live
+mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
 ```
 
 The live form always runs a fresh preflight in the same process before

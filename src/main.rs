@@ -302,6 +302,12 @@ fn with_proof_digest(mut value: serde_json::Value) -> Result<serde_json::Value, 
         .as_object_mut()
         .expect("object checked above")
         .remove("proof_digest");
+    // Re-signing must produce the same digest as signing an unsigned report.
+    // The prior signature is metadata, not part of the signed report payload.
+    value
+        .as_object_mut()
+        .expect("object checked above")
+        .remove("proof_signature");
     let canonical = serde_json::to_string(&value).map_err(|error| error.to_string())?;
     let digest = plan_snapshot_sha256(&canonical);
     value
@@ -4547,6 +4553,14 @@ impl App {
     /// or change record can verify what was established without receiving the
     /// forensic report.
     fn export_customer_proof(&self) -> Result<(), String> {
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-customer-proof.json")
+            .save_file()
+            .ok_or("Customer proof export cancelled.")?;
+        self.export_customer_proof_to(&path)
+    }
+
+    fn export_customer_proof_to(&self, path: &std::path::Path) -> Result<(), String> {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
@@ -4642,12 +4656,8 @@ impl App {
             "runs": run_manifest,
             "note": "This customer proof contains no passwords, credential references, endpoints, plan snapshots, executable paths, or diagnostic details. Aggregate and engine-confirmed evidence are not independent message-level reconciliation. Verify the proof digest, and add an Ed25519 signature before treating it as an authenticated artifact."
         }))?;
-        let path = rfd::FileDialog::new()
-            .set_file_name("mailswiftsync-customer-proof.json")
-            .save_file()
-            .ok_or("Customer proof export cancelled.")?;
         let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-        write_private_atomic(&path, &report).map_err(|e| e.to_string())
+        write_private_atomic(path, &report).map_err(|e| e.to_string())
     }
 
     fn export_support_bundle_dialog(&self) -> Result<(), String> {
@@ -5160,7 +5170,9 @@ impl App {
             self.bulk_message = "Batch execution requires durable SQLite storage.".into();
             return;
         }
-        let durable_admissions = if live {
+        let durable_admissions = if self.bulk_project_id.is_some()
+            && self.bulk_job_ids.len() == self.bulk_jobs.len()
+        {
             let Some(project_id) = self.bulk_project_id.as_deref() else {
                 self.bulk_message =
                     "Run a successful preflight for this queue before starting live migrations."
@@ -5197,11 +5209,10 @@ impl App {
                         .get(*index)
                         .is_some_and(|id| self.bulk_selected_ids.contains(id));
                 selected
-                    && (!live
-                        || durable_states
-                            .get(*index)
-                            .and_then(Option::as_deref)
-                            .is_some_and(|state| self.bulk_retry_scope.includes(state)))
+                    && durable_states
+                        .get(*index)
+                        .and_then(Option::as_deref)
+                        .is_none_or(|state| self.bulk_retry_scope.includes(state))
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
@@ -5231,6 +5242,7 @@ impl App {
                             | "cancelled"
                             | "completed"
                             | "verified"
+                            | "verified_with_exceptions"
                     )
                 ) || preflight
                     != Some(plan_fingerprint_digest(&job.form.plan_fingerprint()).as_str())
@@ -5417,21 +5429,28 @@ impl App {
         };
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
+        // Version metadata is a property of the executable, not the mailbox.
+        // Probe each distinct path once so a large batch does not synchronously
+        // spawn one --version process per row on the UI thread.
+        let mut engine_versions = HashMap::<String, Option<String>>::new();
         let child_plans = jobs
             .iter()
             .zip(queue_checkpoints.iter())
             .map(|(job, checkpoint)| {
+                let executable = match job.form.engine() {
+                    core::Engine::Dovecot => &job.form.profile.doveadm_path,
+                    core::Engine::Auto | core::Engine::ImapSync => &job.form.profile.imapsync_path,
+                };
+                let engine_version = engine_versions
+                    .entry(executable.clone())
+                    .or_insert_with(|| probe_engine_version(executable))
+                    .clone();
                 job.form
                     .plan_snapshot_with_checkpoint(checkpoint.as_deref())
                     .map(|plan_snapshot| core::BatchChildPlan {
                         engine: job.form.engine().label().to_owned(),
                         plan_snapshot,
-                        engine_version: probe_engine_version(match job.form.engine() {
-                            core::Engine::Dovecot => &job.form.profile.doveadm_path,
-                            core::Engine::Auto | core::Engine::ImapSync => {
-                                &job.form.profile.imapsync_path
-                            }
-                        }),
+                        engine_version,
                     })
             })
             .collect::<Result<Vec<_>, _>>();
@@ -8658,6 +8677,40 @@ fn main() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("customer-proof") {
+        let (Some(state), Some(output)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync customer-proof <state.db> <output.json>");
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let output = std::path::PathBuf::from(output);
+        unsafe { std::env::set_var("MAILSWIFTSYNC_STATE_PATH", &state) };
+        let app = App::default();
+        if !app.persistence_available {
+            eprintln!("Customer-proof export refused: durable SQLite state is unavailable");
+            std::process::exit(1);
+        }
+        if app.process_review_required {
+            eprintln!(
+                "Customer-proof export refused: recorded process ownership requires recovery review"
+            );
+            std::process::exit(1);
+        }
+        match app.export_customer_proof_to(&output) {
+            Ok(()) => {
+                println!("Created customer migration proof: {}", output.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Customer-proof export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("supervise") {
         let Some(state) = arguments.next() else {
             eprintln!("Usage: mailswiftsync supervise <state.db> [poll-seconds] [idle-polls]");
@@ -8738,7 +8791,7 @@ fn main() -> eframe::Result<()> {
         }
     }
     eprintln!(
-        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, `support-bundle`, `supervise`, or `headless`; run without a command for the GUI."
+        "Unknown command. Use `verify`, `sign`, `backup`, `status`, `recover`, `support-bundle`, `customer-proof`, `supervise`, or `headless`; run without a command for the GUI."
     );
     std::process::exit(2);
 }
@@ -9033,13 +9086,16 @@ fn headless_execute(state_path: &std::path::Path, live: bool) -> Result<String, 
         .map_err(|error| error.to_string())?;
     if !matches!(
         final_state.as_deref(),
-        Some("verified")
-            | Some("verified_with_exceptions")
-            | Some("verification_difference")
-            | Some("delta_required")
+        Some("verified") | Some("verified_with_exceptions")
     ) {
+        let exit_hint = match final_state.as_deref() {
+            Some("delta_required") => "delta required (exit status 3)",
+            Some("verification_difference") => "verification difference (exit status 4)",
+            Some("attention") => "operator attention (exit status 5)",
+            _ => "unresolved (exit status 1)",
+        };
         return Err(format!(
-            "live migration did not reach an evidence-bearing terminal state (state={:?}, status={})",
+            "live migration did not reach a verified terminal state: {exit_hint}; state={:?}, status={}",
             final_state, app.status
         ));
     }
@@ -9148,7 +9204,14 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         .filter(|mailbox| {
             matches!(
                 mailbox.state.as_str(),
-                "failed" | "attention" | "cancelled" | "queued" | "claimed" | "running"
+                "failed"
+                    | "attention"
+                    | "cancelled"
+                    | "queued"
+                    | "claimed"
+                    | "running"
+                    | "delta_required"
+                    | "verification_difference"
             )
         })
         .map(|mailbox| format!("{}={}", mailbox.id, mailbox.state))
@@ -9160,8 +9223,8 @@ fn headless_batch_execute(state_path: &std::path::Path, live: bool) -> Result<St
         ));
     }
     Ok(format!(
-        "Headless batch live migration completed for project {project_id}; {} mailbox(es) reached evidence-bearing terminal states.",
-        final_mailboxes.len()
+        "Headless batch live migration completed for project {project_id}; {} mailbox(es) reached verified terminal states.",
+        job_ids.len()
     ))
 }
 
@@ -9452,6 +9515,9 @@ mod tests {
             std::fs::set_permissions(&key_path, permissions).unwrap();
         }
         sign_proof_file(&path, &key_path, "test-key").unwrap();
+        // Re-signing is a supported repair/rotation workflow. The previous
+        // signature must not become part of the newly calculated digest.
+        sign_proof_file(&path, &key_path, "test-key-rotated").unwrap();
         let signed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let public_key = signed["proof_signature"]["public_key"]

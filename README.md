@@ -161,6 +161,7 @@ mailswiftsync status /path/to/state.db
 mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
+mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
 mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls]
 mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
@@ -176,6 +177,9 @@ prove, and applies the same conservative recovery transition as GUI startup.
 it excludes endpoints, credentials, plan snapshots, command paths, mailbox
 content, and diagnostic text while retaining schema, platform, health, and
 bounded run metadata.
+`customer-proof` emits the same customer-safe proof artifact available from the
+GUI. It excludes internal topology and forensic detail; sign it separately
+with `mailswiftsync sign` before treating it as an authenticated deliverable.
 `supervise` is a foreground, GUI-independent batch controller. It processes
 only automation-safe queued/retryable work, waits through GUI lock ownership,
 and leaves Attention and verification-difference rows untouched. The optional
