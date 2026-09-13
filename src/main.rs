@@ -1606,6 +1606,11 @@ struct App {
     preflight_credential_fingerprint: Option<String>,
     run_id: Option<String>,
     active_run: Option<ActiveRunContext>,
+    /// Non-secret plan values captured for the active execution. The egui
+    /// form remains visible while a run is active, but edits must not mutate
+    /// the plan presented to the operator or the next retry.
+    locked_profile: Option<Profile>,
+    locked_dry_run: Option<bool>,
     cancel_requested: Option<Arc<AtomicBool>>,
     bulk_project_id: Option<String>,
     bulk_job_ids: Vec<String>,
@@ -1813,6 +1818,8 @@ impl Default for App {
             preflight_credential_fingerprint: None,
             run_id: None,
             active_run: None,
+            locked_profile: None,
+            locked_dry_run: None,
             cancel_requested: None,
             bulk_project_id: restored_bulk_project_id,
             bulk_job_ids: restored_bulk_job_ids,
@@ -3743,6 +3750,8 @@ impl App {
                 return;
             }
         };
+        self.locked_profile = Some(self.form.profile.clone());
+        self.locked_dry_run = Some(self.form.dry_run);
         self.active_run = Some(ActiveRunContext {
             run_id: run_id.clone(),
             project_id: project_id.clone(),
@@ -4444,6 +4453,8 @@ impl App {
             self.status = format!("Could not record durable run; nothing was started: {error}");
             return;
         }
+        self.locked_profile = Some(self.form.profile.clone());
+        self.locked_dry_run = Some(self.form.dry_run);
         self.live_auth_proof = None;
         self.live_confirmed = false;
         self.live_confirmation_plan = None;
@@ -5098,6 +5109,8 @@ impl App {
             self.run_started_at = None;
             self.run_id = None;
             self.active_run = None;
+            self.locked_profile = None;
+            self.locked_dry_run = None;
             self.pending_batch_evidence.clear();
             // Keep the durable queue after completion so a validated batch
             // can be promoted to live execution, and failed/live jobs can be
@@ -5780,6 +5793,14 @@ impl eframe::App for App {
     #[allow(clippy::possible_missing_else, clippy::collapsible_if)]
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll();
+        if self.running() {
+            if let Some(profile) = &self.locked_profile {
+                self.form.profile = profile.clone();
+            }
+            if let Some(dry_run) = self.locked_dry_run {
+                self.form.dry_run = dry_run;
+            }
+        }
         let plan_controls_enabled = !self.running();
         ctx.data_mut(|data| {
             data.insert_temp(

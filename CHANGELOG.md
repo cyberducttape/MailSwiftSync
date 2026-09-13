@@ -62,6 +62,7 @@ All notable changes to MailSwiftSync are documented here.
 - Account identity and credential fields are now locked while an execution is active, keeping the visible plan aligned with the immutable run context and preventing edits from contaminating the next retry.
 - Live single-mailbox startup now forcibly reloads referenced keyring credentials before credential fingerprinting and fresh authentication, so keyring rotation cannot be silently ignored by an older in-memory password.
 - Batch concurrency, retry scope, row credentials, and keyring-application controls are now disabled while workers are active, keeping the visible queue immutable for the lifetime of a wave.
+- The active single-run plan is now restored from an in-memory non-secret lock snapshot while execution is active, covering ports, TLS, engine, dry/live mode, and advanced policy fields in addition to account credentials.
 - Live batch admission now forcibly reloads each selected row's referenced keyring credentials before comparing dry-validation fingerprints, so rotated secrets cannot be hidden by cached row passwords.
 - Verification, project, JSON, and health export failures now appear in the operator status and journal instead of being silently discarded.
 - Security documentation now matches runtime-secret cleanup timing and identifies exported verification/health artifacts, rather than describing the visible journal as the audit record.
