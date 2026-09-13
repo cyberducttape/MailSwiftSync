@@ -6016,8 +6016,8 @@ impl App {
                             } else {
                                 "failed"
                             };
-                            let evidence = self.pending_batch_evidence.remove(&child_run_id);
-                            let final_state = evidence.as_ref().map_or(state.clone(), |value| {
+                            let evidence = self.pending_batch_evidence.get(&child_run_id);
+                            let final_state = evidence.map_or(state.clone(), |value| {
                                 if value.is_exact_match() && state != "delta_required" {
                                     "verified".into()
                                 } else if state == "delta_required" {
@@ -6028,7 +6028,7 @@ impl App {
                             });
                             let checkpoint = self
                                 .pending_batch_checkpoints
-                                .remove(&child_run_id)
+                                .get(&child_run_id)
                                 .filter(|_| run_status == "completed");
                             let preflight_plan = if run.dry_run && state == "ready" {
                                 run.batch_plan_fingerprints.get(index).cloned()
@@ -6046,7 +6046,7 @@ impl App {
                                         &detail,
                                         value,
                                         preflight_plan.as_deref(),
-                                        checkpoint.as_deref(),
+                                        checkpoint.map(String::as_str),
                                     )
                             } else {
                                 self.store
@@ -6058,7 +6058,7 @@ impl App {
                                         &final_state,
                                         &detail,
                                         preflight_plan.as_deref(),
-                                        checkpoint.as_deref(),
+                                        checkpoint.map(String::as_str),
                                     )
                             };
                             let completion_persisted = result.is_ok();
@@ -6077,6 +6077,22 @@ impl App {
                                     "persist child run {} completion failed: {error}",
                                     index + 1
                                 ));
+                                // Keep the completion event and its evidence
+                                // inputs together until the terminal
+                                // transaction succeeds. The next poll will
+                                // retry this event after any pending
+                                // diagnostics have been committed.
+                                deferred_events.push_front(Event::JobFinished {
+                                    job_id,
+                                    child_run_id,
+                                    state,
+                                    detail,
+                                    credential_fingerprint,
+                                });
+                                break;
+                            } else {
+                                self.pending_batch_evidence.remove(&child_run_id);
+                                self.pending_batch_checkpoints.remove(&child_run_id);
                             }
                             if completion_persisted
                                 && !self.bulk_live_run
