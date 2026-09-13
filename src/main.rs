@@ -8226,7 +8226,10 @@ impl eframe::App for App {
                             .italics()
                             .color(colors.link),
                     );
-                    let projects = self.ui_projects.iter().take(8).cloned().collect::<Vec<_>>();
+                    // The full project browser is available from the header,
+                    // so the switcher must not silently hide older projects
+                    // once the ledger grows beyond the first page.
+                    let projects = self.ui_projects.clone();
                     if !projects.is_empty() || self.selected_project_id.is_some() {
                         let selected_name = self
                             .selected_project_id

@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed the project switcher's hidden eight-project limit. The header now
+  keeps every project loaded in the cached workspace snapshot selectable;
+  search and the dedicated Projects browser remain available for large
+  ledgers.
 - Added a controller crash/recovery integration lab that uses a deterministic
   blocking engine, verifies the running mailbox is durably recorded, simulates
   an ungraceful controller crash, and confirms `recover` clears ownership and
