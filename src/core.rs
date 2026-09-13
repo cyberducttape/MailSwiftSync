@@ -463,9 +463,7 @@ impl StateStore {
           CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
           CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
           CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);
-          CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);
-          CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
-          CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');")?;
+          CREATE INDEX IF NOT EXISTS idx_active_processes_pid ON active_processes(pid);")?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = self
             .connection
@@ -560,8 +558,6 @@ impl StateStore {
             "CREATE INDEX IF NOT EXISTS idx_events_run_created ON events(run_id, created_at DESC)",
             [],
         )?;
-        self.connection
-            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         let process_columns = self
             .connection
             .prepare("PRAGMA table_info(active_processes)")?
@@ -608,7 +604,55 @@ impl StateStore {
                 [],
             )?;
         }
+        // Older alpha versions did not enforce one active run per mailbox.
+        // Reconcile those ledgers before creating the partial unique indexes;
+        // otherwise an otherwise recoverable database would fail to open.
+        self.reconcile_duplicate_active_runs()?;
+        self.connection.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
+             CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');",
+        )?;
+        self.connection
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         Ok(())
+    }
+
+    fn reconcile_duplicate_active_runs(&self) -> rusqlite::Result<()> {
+        let duplicate_jobs = self
+            .connection
+            .prepare(
+                "SELECT job_id FROM runs WHERE job_id IS NOT NULL AND status IN ('queued','running') GROUP BY job_id HAVING COUNT(*) > 1",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if duplicate_jobs.is_empty() {
+            return Ok(());
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        for job_id in duplicate_jobs {
+            let run_ids = tx
+                .prepare(
+                    "SELECT id FROM runs WHERE job_id=?1 AND status IN ('queued','running') ORDER BY started_at DESC, rowid DESC",
+                )?
+                .query_map([&job_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for run_id in run_ids.into_iter().skip(1) {
+                let project_id: String = tx.query_row(
+                    "SELECT project_id FROM runs WHERE id=?1",
+                    [&run_id],
+                    |row| row.get(0),
+                )?;
+                tx.execute(
+                    "UPDATE runs SET status='abandoned',finished_at=CURRENT_TIMESTAMP,detail='Superseded duplicate active run repaired during schema migration' WHERE id=?1 AND status IN ('queued','running')",
+                    [&run_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'schema_repaired_duplicate_run',?3)",
+                    params![project_id, run_id, format!("repaired duplicate active run for mailbox {job_id}")],
+                )?;
+            }
+        }
+        tx.commit()
     }
     pub fn create_project(
         &self,
@@ -3296,6 +3340,56 @@ mod tests {
         db.migrate().unwrap();
 
         assert_eq!(db.preflight_plan(&job).unwrap(), None);
+    }
+
+    #[test]
+    fn migration_repairs_duplicate_active_runs_before_recreating_constraints() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("legacy-active", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-newest", "test")
+            .unwrap();
+        db.connection
+            .execute("DROP INDEX one_active_run_per_job", [])
+            .unwrap();
+        db.connection
+            .execute("DROP INDEX one_running_run_per_job", [])
+            .unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status,started_at) VALUES('run-older',?1,?2,'test','discovery','','running','2000-01-01 00:00:00')",
+                params![project.id, job],
+            )
+            .unwrap();
+
+        db.migrate().unwrap();
+
+        let active: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM runs WHERE job_id=?1 AND status IN ('queued','running')",
+                [&job],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active, 1);
+        assert_eq!(
+            db.run_status("run-older").unwrap().as_deref(),
+            Some("abandoned")
+        );
+        let repaired: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='schema_repaired_duplicate_run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(repaired, 1);
     }
 
     #[test]
