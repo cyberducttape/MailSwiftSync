@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the IMAP readiness probe into `src/imap_probe.rs`, including
+  endpoint handling, TLS/CA trust, certificate pins, capability discovery,
+  and authenticated readiness checks.
 - Batch execution now uses an explicit controller-owned `BatchExecutionMode`
   instead of a second boolean dry-run flag, keeping GUI and headless admission
   on one source of truth.
