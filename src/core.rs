@@ -1309,6 +1309,21 @@ impl StateStore {
             params![job_id, project_id],
             |row| row.get(0),
         )?;
+        let terminal_pair_is_valid = match run_status {
+            "completed" => matches!(
+                mailbox_state,
+                "ready" | "completed" | "delta_required" | "verification_difference" | "attention"
+            ),
+            "failed" => matches!(mailbox_state, "failed" | "attention"),
+            "cancelled" => matches!(mailbox_state, "cancelled" | "attention"),
+            "verification_failed" => {
+                matches!(mailbox_state, "attention" | "verification_difference")
+            }
+            _ => false,
+        };
+        if !terminal_pair_is_valid {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         // Verification must be committed together with the evidence that
         // proves this run.  Merely finding an older evidence row is not
         // sufficient: otherwise a later run could reuse stale evidence and
@@ -1928,6 +1943,36 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn terminal_run_and_mailbox_states_must_agree() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("terminal-pair", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-terminal-pair", "test")
+            .unwrap();
+
+        assert!(
+            db.finish_run_for_mailbox(
+                &project.id,
+                &job,
+                "run-terminal-pair",
+                "failed",
+                "completed",
+                "contradictory terminal state",
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.run_status("run-terminal-pair").unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
     }
 
     #[test]
