@@ -2332,6 +2332,7 @@ struct App {
     verification_exception_reason: String,
     verification_search: String,
     verification_filter: String,
+    activity_show_all: bool,
     reopen_reason: String,
 }
 impl Default for App {
@@ -2650,6 +2651,7 @@ impl Default for App {
             verification_exception_reason: String::new(),
             verification_search: String::new(),
             verification_filter: "all".into(),
+            activity_show_all: false,
             reopen_reason: String::new(),
         }
     }
@@ -4297,14 +4299,25 @@ impl App {
                 });
         });
         ui.add_space(14.0);
-        ui.heading("Durable run history");
+        ui.horizontal(|ui| {
+            ui.heading("Durable run history");
+            let history_label = if self.activity_show_all {
+                "Show recent 20"
+            } else {
+                "Show all runs"
+            };
+            if ui.button(history_label).clicked() {
+                self.activity_show_all = !self.activity_show_all;
+            }
+        });
         let Some(project) = self.active_project_id() else {
             ui.label(
                 RichText::new("Create or restore a project to see durable runs.").color(MUTED),
             );
             return;
         };
-        match self.store.recent_run_list(project, 20) {
+        let run_limit = if self.activity_show_all { u32::MAX } else { 20 };
+        match self.store.recent_run_list(project, run_limit) {
             Ok(runs) if runs.is_empty() => {
                 ui.label(RichText::new("No durable runs recorded yet.").color(MUTED));
             }
