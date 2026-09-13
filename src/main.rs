@@ -595,17 +595,21 @@ impl Default for Form {
 impl Form {
     const KEYRING_SERVICE: &'static str = "com.mailswiftsync.mailbox";
 
-    fn path() -> std::path::PathBuf {
+    fn path() -> Result<std::path::PathBuf, String> {
         dirs_next::config_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("mailswiftsync/profile.toml")
+            .map(|directory| directory.join("mailswiftsync/profile.toml"))
+            .ok_or_else(|| {
+                "Cannot determine a durable configuration directory; repair the OS profile or use an explicit state path.".to_owned()
+            })
     }
     fn load() -> Result<Self, String> {
         let mut form = Self::default();
-        let path = Self::path();
-        let legacy = dirs_next::config_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("sourcecraft-imapsync/profile.toml");
+        let path = Self::path()?;
+        let legacy = path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .map(|directory| directory.join("sourcecraft-imapsync/profile.toml"))
+            .ok_or_else(|| "Saved profile path has no configuration directory.".to_owned())?;
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => Some((path, text)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -625,7 +629,7 @@ impl Form {
         Ok(form)
     }
     fn save(&self) -> Result<(), String> {
-        let path = Self::path();
+        let path = Self::path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             restrict_directory_permissions(parent).map_err(|e| e.to_string())?;

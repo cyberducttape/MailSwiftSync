@@ -93,6 +93,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   the OS data directory. If neither is available, the controller enters a
   clearly blocked non-durable mode instead of silently placing the ledger in
   a temporary directory.
+- Saved migration profiles use the OS configuration directory and fail
+  explicitly when it cannot be resolved; endpoint configuration is never
+  silently persisted under a temporary path.
 
 ## Available in 0.1
 
