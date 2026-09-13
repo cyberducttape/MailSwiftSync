@@ -24,6 +24,7 @@ use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
+use egui_extras::{Column, TableBuilder};
 use keyring::Entry;
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use rustls::pki_types::ServerName;
@@ -4165,75 +4166,91 @@ impl App {
                 self.active_view = WorkspaceView::Verification;
             }
             ui.add_space(8.0);
-            ui.strong("");
-            ui.strong("Mailbox");
-            ui.strong("Source");
-            ui.strong("Destination");
-            ui.strong("State");
-            ui.strong("Operator action");
-            ui.end_row();
-            egui::ScrollArea::vertical()
-                .id_salt("mailbox_overview_rows")
-                .max_height(520.0)
-                .auto_shrink([false, false])
-                .show_rows(ui, 42.0, visible_indices.len(), |ui, rows| {
-                    egui::Grid::new("mailbox_overview_rows_grid")
-                        .striped(true)
-                        .min_col_width(150.0)
-                        .show(ui, |ui| {
-                            for row in rows {
-                                let index = visible_indices[row];
-                                let job = &self.bulk_jobs[index];
-                                let Some(job_id) = self.bulk_job_ids.get(index) else {
-                                    continue;
-                                };
-                                let mut selected = self.bulk_selected_ids.contains(job_id);
-                                if ui.checkbox(&mut selected, "").changed() {
-                                    if selected {
-                                        self.bulk_selected_ids.insert(job_id.clone());
-                                    } else {
-                                        self.bulk_selected_ids.remove(job_id);
-                                    }
-                                }
-                                ui.label(&job.label);
-                                ui.label(format!(
-                                    "{}\n{}",
-                                    job.form.profile.source_host, job.form.profile.source_user
-                                ));
-                                ui.label(format!(
-                                    "{}\n{}",
-                                    job.form.profile.destination_host,
-                                    job.form.profile.destination_user
-                                ));
-                                let (badge, color) = job_state_badge(&job.state);
-                                ui.label(RichText::new(badge).color(color));
-                                if job.state == "attention" {
-                                    match self.store.mailbox_attention_reason(job_id) {
-                                        Ok(Some(reason)) => {
-                                            ui.label(
-                                                RichText::new(reason.recommended_action())
-                                                    .color(MUTED),
-                                            );
-                                        }
-                                        Ok(None) => {
-                                            ui.label(
-                                                RichText::new("Inspect durable run detail")
-                                                    .color(MUTED),
-                                            );
-                                        }
-                                        Err(_) => {
-                                            ui.label(
-                                                RichText::new("Attention reason unavailable")
-                                                    .color(ALERT),
-                                            );
-                                        }
-                                    }
+            TableBuilder::new(ui)
+                .striped(true)
+                .resizable(true)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::auto())
+                .column(Column::remainder())
+                .column(Column::remainder())
+                .column(Column::remainder())
+                .column(Column::auto())
+                .column(Column::remainder())
+                .header(32.0, |mut header| {
+                    for label in [
+                        "",
+                        "Mailbox",
+                        "Source",
+                        "Destination",
+                        "State",
+                        "Operator action",
+                    ] {
+                        header.col(|ui| {
+                            ui.strong(label);
+                        });
+                    }
+                })
+                .body(|body| {
+                    body.rows(42.0, visible_indices.len(), |mut row| {
+                        let index = visible_indices[row.index()];
+                        let job = &self.bulk_jobs[index];
+                        let Some(job_id) = self.bulk_job_ids.get(index) else {
+                            return;
+                        };
+                        row.col(|ui| {
+                            let mut selected = self.bulk_selected_ids.contains(job_id);
+                            if ui.checkbox(&mut selected, "").changed() {
+                                if selected {
+                                    self.bulk_selected_ids.insert(job_id.clone());
                                 } else {
-                                    ui.label("");
+                                    self.bulk_selected_ids.remove(job_id);
                                 }
-                                ui.end_row();
                             }
                         });
+                        row.col(|ui| {
+                            ui.label(&job.label);
+                        });
+                        row.col(|ui| {
+                            ui.label(format!(
+                                "{}\n{}",
+                                job.form.profile.source_host, job.form.profile.source_user
+                            ));
+                        });
+                        row.col(|ui| {
+                            ui.label(format!(
+                                "{}\n{}",
+                                job.form.profile.destination_host,
+                                job.form.profile.destination_user
+                            ));
+                        });
+                        row.col(|ui| {
+                            let (badge, color) = job_state_badge(&job.state);
+                            ui.label(RichText::new(badge).color(color));
+                        });
+                        row.col(|ui| {
+                            if job.state == "attention" {
+                                match self.store.mailbox_attention_reason(job_id) {
+                                    Ok(Some(reason)) => {
+                                        ui.label(
+                                            RichText::new(reason.recommended_action()).color(MUTED),
+                                        );
+                                    }
+                                    Ok(None) => {
+                                        ui.label(
+                                            RichText::new("Inspect durable run detail")
+                                                .color(MUTED),
+                                        );
+                                    }
+                                    Err(_) => {
+                                        ui.label(
+                                            RichText::new("Attention reason unavailable")
+                                                .color(ALERT),
+                                        );
+                                    }
+                                }
+                            }
+                        });
+                    });
                 });
             ui.label(RichText::new("When a selection is present, batch actions apply only to selected rows. With no selection, the chosen retry scope applies to all matching rows.").color(MUTED));
         }

@@ -11,6 +11,7 @@ categories = ["command-line-utilities", "gui", "network-programming"]
 
 [dependencies]
 eframe = "0.33"
+egui_extras = "0.33"
 rfd = "0.15"
 dirs-next = "2"
 serde = { version = "1", features = ["derive"] }
