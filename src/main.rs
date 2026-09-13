@@ -3676,21 +3676,6 @@ impl App {
                 });
             });
             ui.add_space(5.0);
-            ui.horizontal_wrapped(|ui| {
-                for (label, active) in [
-                    ("Discovery", self.source_capabilities.is_some() || self.destination_capabilities.is_some()),
-                    ("Preflight", !self.preflight.is_empty()),
-                    ("Pilot", false),
-                    ("Seed", false),
-                    ("Catch-up", false),
-                    ("Verify", false),
-                ] {
-                    ui.label(RichText::new(format!("{} {label}", if active { "●" } else { "○" }))
-                        .size(11.0)
-                        .color(if active { TEAL } else { MUTED }));
-                }
-            });
-            ui.add_space(4.0);
             ui.label(RichText::new("Recommended next step: run preflight, review blockers, then select a small pilot mailbox.").color(MUTED));
         });
     }
@@ -3702,15 +3687,16 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 let probe_enabled = self.capability_receiver.is_none()
                     && self.form.engine() != core::Engine::Dovecot
-                    && !self.running();
+                    && !self.running()
+                    && !self.workspace_read_only;
                 if ui.add_enabled(probe_enabled, egui::Button::new("Run authenticated readiness probe")).clicked() {
                     self.start_capability_probe();
                 }
-                if ui.add_enabled(!self.running(), egui::Button::new("Refresh assessment")).clicked() {
+                if ui.add_enabled(!self.running() && !self.workspace_read_only, egui::Button::new("Refresh assessment")).clicked() {
                     self.assess_plan();
                 }
                 if self.active_project_id().is_none()
-                    && ui.add_enabled(!self.running(), egui::Button::new("Create project from plan")).clicked()
+                    && ui.add_enabled(!self.running() && !self.workspace_read_only, egui::Button::new("Create project from plan")).clicked()
                 {
                     self.create_project();
                 }
@@ -3832,38 +3818,6 @@ impl App {
                 );
             }
         });
-        if !self.preflight.is_empty() {
-            ui.add_space(10.0);
-            ui.group(|ui| {
-                ui.heading("Preflight assessment");
-                egui::Grid::new("overview_preflight")
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.strong("Check");
-                        ui.strong("Result");
-                        ui.end_row();
-                        for (name, detail, passed) in &self.preflight {
-                            ui.label(
-                                RichText::new(if *passed { "✓" } else { "!" }).color(if *passed {
-                                    TEAL
-                                } else {
-                                    ALERT
-                                }),
-                            );
-                            ui.label(RichText::new(name).strong());
-                            ui.label(detail);
-                            ui.end_row();
-                        }
-                    });
-                ui.label(
-                    RichText::new(
-                        "Review every failed check before promoting a project to live execution.",
-                    )
-                    .size(11.0)
-                    .color(MUTED),
-                );
-            });
-        }
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.group(|ui| {
@@ -3922,13 +3876,31 @@ impl App {
             ui.label(next_action);
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Open migration plan  →").clicked() {
+                if ui
+                    .add_enabled(
+                        !self.workspace_read_only,
+                        egui::Button::new("Open migration plan  →"),
+                    )
+                    .clicked()
+                {
                     self.active_view = WorkspaceView::Plan;
                 }
-                if ui.button("Refresh preflight assessment").clicked() {
+                if ui
+                    .add_enabled(
+                        !self.workspace_read_only,
+                        egui::Button::new("Refresh preflight assessment"),
+                    )
+                    .clicked()
+                {
                     self.assess_plan();
                 }
-                if ui.button("Import mailbox list").clicked() {
+                if ui
+                    .add_enabled(
+                        !self.workspace_read_only,
+                        egui::Button::new("Import mailbox list"),
+                    )
+                    .clicked()
+                {
                     self.bulk_open = true;
                 }
             });
@@ -7371,6 +7343,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn account(
         ui: &mut egui::Ui,
         title: &str,
@@ -7378,6 +7351,7 @@ impl App {
         user: &mut String,
         password: &mut String,
         password_required: bool,
+        saved_credential: bool,
         color: Color32,
     ) {
         let editable = ui.ctx().data(|data| {
@@ -7424,7 +7398,20 @@ impl App {
                         .data_mut(|data| data.insert_temp(visibility_id, !visible));
                 }
             });
-            inline_error(ui, "Password", password, password_required);
+            if saved_credential && password.is_empty() {
+                ui.label(
+                    RichText::new("Saved credential configured; session password not required.")
+                        .color(TEAL)
+                        .size(12.0),
+                );
+            } else {
+                inline_error(
+                    ui,
+                    "Password",
+                    password,
+                    password_required && !saved_credential,
+                );
+            }
         });
     }
     fn preview(&mut self, ctx: &egui::Context) {
@@ -7499,12 +7486,12 @@ impl App {
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.label("Concurrent validations");
+                ui.label("Maximum concurrent workers");
                 ui.add_enabled(
                     queue_editable,
                     egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16),
                 );
-                ui.label(RichText::new("bounded 1–16 workers; live runs are capped by this value").size(11.0).color(MUTED));
+                ui.label(RichText::new("Applies to both preflight and live migration; bounded to 1–16 workers").size(11.0).color(MUTED));
             });
             ui.horizontal(|ui| {
                 ui.label("Transient retries");
@@ -8480,15 +8467,15 @@ impl eframe::App for App {
                                 self.form.engine() != core::Engine::Dovecot;
                             if ui.available_width() > 900.0 {
                                 ui.columns(2, |c| {
-                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, BLUE);
-                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, TEAL);
+                                    Self::account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), BLUE);
+                                    Self::account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), TEAL);
                                 });
                             } else {
-                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, BLUE);
+                                Self::account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), BLUE);
                                 ui.add_space(8.0);
-                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, TEAL);
+                                Self::account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), TEAL);
                             }
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label("Source port");
                                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(70.0));
                                 ui.label("TLS");
