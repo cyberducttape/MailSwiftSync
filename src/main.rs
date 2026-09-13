@@ -8047,14 +8047,26 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("Password");
                 let visibility_id = ui.make_persistent_id(title).with("password_visibility");
-                let visible = ui
-                    .ctx()
-                    .data_mut(|data| data.get_temp::<bool>(visibility_id).unwrap_or(false));
+                let visible = ui.ctx().data_mut(|data| {
+                    let requested = data.get_temp::<bool>(visibility_id).unwrap_or(false);
+                    if !editable {
+                        // A lock transition must not leave a disclosure state
+                        // waiting to be resurrected when the form is unlocked.
+                        data.remove::<bool>(visibility_id);
+                    }
+                    password_reveal_allowed(editable, requested)
+                });
                 ui.add_enabled(
                     editable,
                     egui::TextEdit::singleline(password).password(!visible),
                 );
-                if ui.button(if visible { "Hide" } else { "Show" }).clicked() {
+                if ui
+                    .add_enabled(
+                        editable,
+                        egui::Button::new(if visible { "Hide" } else { "Show" }),
+                    )
+                    .clicked()
+                {
                     ui.ctx()
                         .data_mut(|data| data.insert_temp(visibility_id, !visible));
                 }
@@ -9160,6 +9172,10 @@ fn classified_failure_detail(error: &str) -> String {
         class.attention_reason().as_str(),
         class.label()
     )
+}
+
+fn password_reveal_allowed(editable: bool, requested: bool) -> bool {
+    editable && requested
 }
 
 fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
@@ -12494,6 +12510,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn password_reveal_is_not_allowed_when_controls_are_locked() {
+        assert!(password_reveal_allowed(true, true));
+        assert!(!password_reveal_allowed(false, true));
+        assert!(!password_reveal_allowed(false, false));
     }
 
     #[test]
