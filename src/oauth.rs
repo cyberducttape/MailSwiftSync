@@ -36,14 +36,16 @@ pub(crate) fn read_auth_continuation<S: Read + Write>(
             // other providers may instead send the RFC 7628 error JSON here
             // when the token is already known to be invalid or expired.
             // A non-empty continuation is cancelled with an empty response;
-            // do not send the access token again or wait for a tagged result
-            // that the server will not produce until cancellation arrives.
+            // do not send the access token again. The tagged result is still
+            // consumed below so the AUTH exchange is complete before the
+            // caller closes the connection.
             if line
                 .trim_start()
                 .strip_prefix('+')
                 .is_some_and(|value| !value.trim().is_empty())
             {
                 stream.write_all(b"\r\n").map_err(|e| e.to_string())?;
+                consume_auth_error_result(stream, tag, response, buffer)?;
                 return Err(format!(
                     "IMAP OAuth authentication rejected before client response for {tag}"
                 ));
@@ -52,6 +54,30 @@ pub(crate) fn read_auth_continuation<S: Read + Write>(
         }
         if response.len() > 65_536 {
             return Err("IMAP OAuth authentication challenge exceeded 64 KiB".into());
+        }
+    }
+}
+
+fn consume_auth_error_result<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+) -> Result<(), String> {
+    loop {
+        if response
+            .lines()
+            .any(|line| line.starts_with(&format!("{tag} ")))
+        {
+            return Ok(());
+        }
+        let count = stream.read(buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            return Err("IMAP connection closed during OAuth authentication".into());
+        }
+        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
+        if response.len() > 65_536 {
+            return Err("IMAP OAuth authentication response exceeded 64 KiB".into());
         }
     }
 }
@@ -147,9 +173,12 @@ mod tests {
     }
 
     #[test]
-    fn oauth_initial_error_continuation_is_cancelled_without_sending_token() {
+    fn oauth_initial_error_continuation_is_cancelled_and_tagged_result_consumed() {
         let mut stream = ScriptedStream {
-            reads: VecDeque::from([b"+ eyJzdGF0dXMiOiI0MDEifA==\r\n".to_vec()]),
+            reads: VecDeque::from([
+                b"+ eyJzdGF0dXMiOiI0MDEifA==\r\n".to_vec(),
+                b"a002 NO authentication failed\r\n".to_vec(),
+            ]),
             writes: Vec::new(),
         };
         let mut response = String::new();
@@ -160,5 +189,6 @@ mod tests {
 
         assert!(error.contains("rejected before client response"));
         assert_eq!(stream.writes, b"\r\n");
+        assert!(response.contains("a002 NO"));
     }
 }

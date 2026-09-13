@@ -11,7 +11,8 @@ All notable changes to MailSwiftSync are documented here.
   is read, preventing failed OAuth probes from hanging or being misclassified.
 - Fixed XOAUTH2 handling when Gmail reports an invalid or expired token in the
   initial SASL continuation; the exchange is now cancelled and reported as a
-  clean authentication failure instead of waiting for a timeout.
+  clean authentication failure after consuming the tagged `NO`, instead of
+  waiting for a timeout or leaving the AUTH exchange incomplete.
 - Added a durable-state-driven overview workflow indicator for Connect,
   Assess, Preflight, Migrate, Verify, and Deliver, with explicit copy that
   the presentation step never bypasses execution gates.
