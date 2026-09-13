@@ -928,10 +928,14 @@ impl StateStore {
             return Ok(());
         }
         let tx = self.connection.unchecked_transaction()?;
-        let project_id: String =
-            tx.query_row("SELECT project_id FROM runs WHERE id=?1", [run_id], |row| {
-                row.get(0)
-            })?;
+        let (project_id, status): (String, String) = tx.query_row(
+            "SELECT project_id,status FROM runs WHERE id=?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if status != "running" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         {
             let mut statement = tx.prepare_cached(
                 "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,?3,?4)",
@@ -3346,6 +3350,19 @@ mod tests {
         assert!(
             rows.iter()
                 .any(|(_, _, detail)| detail == "transfer output")
+        );
+        db.finish_run_for_mailbox(
+            &project.id,
+            &job,
+            "run-events-1",
+            "failed",
+            "failed",
+            "terminal failure",
+        )
+        .unwrap();
+        assert!(
+            db.record_run_events_batch("run-events-1", &[("run_output", "late output")])
+                .is_err()
         );
     }
 

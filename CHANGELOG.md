@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Run-scoped diagnostic and verification events are now writable only while the run is active; terminal audit records cannot be appended later.
 - Preflight persistence now reports missing mailbox IDs as errors instead of silently succeeding with no durable update.
 - Evidence insertion is now test-only; production callers can only create durable evidence through run-owned terminal completion transactions.
 - Schema migration now clears legacy non-digest preflight plans instead of retaining potentially sensitive generated arguments; affected mailboxes must be preflighted again before live admission.
