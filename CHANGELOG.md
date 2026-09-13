@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Spreadsheet imports now show the workbook's worksheet names and require the
+  operator to select which worksheet contains migration rows; they no longer
+  silently import worksheet 1.
 - Plain-source imapsync plans now explicitly disable both implicit SSL and
   opportunistic STARTTLS with `--nossl1 --notls1`.
 - Corrected imapsync debug option validation: `debug`, `debugimap1`, and

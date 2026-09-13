@@ -1966,6 +1966,19 @@ struct BulkJob {
     state: String,
 }
 
+struct PendingSheetImport {
+    path: std::path::PathBuf,
+    sheets: Vec<String>,
+}
+
+enum BulkImportResult {
+    Jobs(Vec<BulkJob>),
+    Workbook {
+        path: std::path::PathBuf,
+        sheets: Vec<String>,
+    },
+}
+
 #[derive(Clone, Copy)]
 enum BulkStateSet {
     Failed,
@@ -2296,7 +2309,9 @@ struct App {
     bulk_dry_run: bool,
     bulk_clear_confirm_open: bool,
     pending_bulk_import: Option<std::path::PathBuf>,
-    bulk_import_receiver: Option<Receiver<Result<Vec<BulkJob>, String>>>,
+    pending_sheet_import: Option<PendingSheetImport>,
+    bulk_sheet_index: usize,
+    bulk_import_receiver: Option<Receiver<Result<BulkImportResult, String>>>,
     bulk_live_run: bool,
     /// Live retry scope defaults to unresolved rows and is process-local UI
     /// state; durable child/run IDs remain the execution identity.
@@ -2663,6 +2678,8 @@ impl Default for App {
             bulk_dry_run: true,
             bulk_clear_confirm_open: false,
             pending_bulk_import: None,
+            pending_sheet_import: None,
+            bulk_sheet_index: 0,
             bulk_import_receiver: None,
             bulk_live_run: false,
             bulk_retry_scope: BulkRetryScope::default(),
@@ -5454,9 +5471,9 @@ impl App {
             state: "imported".into(),
         })
     }
-    fn apply_bulk_import_result(&mut self, result: Result<Vec<BulkJob>, String>) {
+    fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {
         match result {
-            Ok(jobs) => {
+            Ok(BulkImportResult::Jobs(jobs)) => {
                 self.bulk_message = format!(
                     "Imported {} mailbox rows. Review them and run preflight before migration.",
                     jobs.len()
@@ -5473,6 +5490,12 @@ impl App {
                 self.bulk_selected_ids.clear();
                 self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
                 self.bulk_jobs = jobs;
+            }
+            Ok(BulkImportResult::Workbook { path, sheets }) => {
+                self.bulk_sheet_index = 0;
+                self.pending_sheet_import = Some(PendingSheetImport { path, sheets });
+                self.bulk_message =
+                    "Choose the worksheet containing the migration rows before importing.".into();
             }
             Err(e) => self.bulk_message = e,
         }
@@ -5499,12 +5522,28 @@ impl App {
                 .unwrap_or("")
                 .to_ascii_lowercase();
             let result = if ext == "csv" {
-                App::read_csv(&path, &base)
+                App::read_csv(&path, &base).map(BulkImportResult::Jobs)
             } else if ext == "xls" || ext == "xlsx" {
-                App::read_sheet(&path, &base)
+                App::workbook_sheets(&path)
+                    .map(|sheets| BulkImportResult::Workbook { path, sheets })
             } else {
                 Err("Choose a .csv, .xls, or .xlsx file.".into())
             };
+            let _ = sender.send(result);
+        });
+    }
+
+    fn begin_sheet_import(&mut self, path: std::path::PathBuf, sheet_index: usize) {
+        if self.bulk_import_receiver.is_some() {
+            self.bulk_message = "A mailbox file is already being imported.".into();
+            return;
+        }
+        let base = self.form.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.bulk_message = "Importing the selected worksheet in the background…".into();
+        self.bulk_import_receiver = Some(receiver);
+        thread::spawn(move || {
+            let result = App::read_sheet(&path, &base, sheet_index).map(BulkImportResult::Jobs);
             let _ = sender.send(result);
         });
     }
@@ -5615,12 +5654,27 @@ impl App {
         }
         Ok(jobs)
     }
-    fn read_sheet(path: &std::path::Path, base: &Form) -> Result<Vec<BulkJob>, String> {
+    fn workbook_sheets(path: &std::path::Path) -> Result<Vec<String>, String> {
+        validate_bulk_import_file(path)?;
+        let book = open_workbook_auto(path).map_err(|e| e.to_string())?;
+        let sheets = book.sheet_names().to_vec();
+        if sheets.is_empty() {
+            Err("The workbook has no worksheets.".into())
+        } else {
+            Ok(sheets)
+        }
+    }
+
+    fn read_sheet(
+        path: &std::path::Path,
+        base: &Form,
+        sheet_index: usize,
+    ) -> Result<Vec<BulkJob>, String> {
         validate_bulk_import_file(path)?;
         let mut book = open_workbook_auto(path).map_err(|e| e.to_string())?;
         let range = book
-            .worksheet_range_at(0)
-            .ok_or("The workbook has no worksheets.")?
+            .worksheet_range_at(sheet_index)
+            .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?
             .map_err(|e| e.to_string())?;
         let mut rows = range.rows();
         let headers = rows
@@ -8242,6 +8296,68 @@ impl App {
             }
         }
     }
+
+    fn bulk_sheet_selection(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.pending_sheet_import.as_ref() else {
+            return;
+        };
+        let path_label = pending
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("the workbook")
+            .to_owned();
+        let sheets = pending.sheets.clone();
+        let mut open = true;
+        let mut cancel = false;
+        let mut import = false;
+        egui::Window::new("Choose worksheet")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading("Select the migration worksheet");
+                ui.label(format!(
+                    "{path_label} contains {} worksheet(s). Choose the sheet with the mailbox headers.",
+                    sheets.len()
+                ));
+                egui::ComboBox::from_id_salt("bulk_sheet_selection")
+                    .selected_text(
+                        sheets
+                            .get(self.bulk_sheet_index)
+                            .map(String::as_str)
+                            .unwrap_or("Select a worksheet"),
+                    )
+                    .show_ui(ui, |ui| {
+                        for (index, name) in sheets.iter().enumerate() {
+                            ui.selectable_value(&mut self.bulk_sheet_index, index, name);
+                        }
+                    });
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "The selected worksheet is parsed and validated in the background. Other worksheets are not imported.",
+                    )
+                    .size(11.0)
+                    .color(MUTED),
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui.button("Import selected worksheet").clicked() {
+                        import = true;
+                    }
+                });
+            });
+        if cancel || !open {
+            self.pending_sheet_import = None;
+            self.bulk_message = "Worksheet selection cancelled; no rows were imported.".into();
+        } else if import && let Some(pending) = self.pending_sheet_import.take() {
+            self.begin_sheet_import(pending.path, self.bulk_sheet_index);
+        }
+    }
+
     fn bulk_live_confirmation(&mut self, ctx: &egui::Context) {
         if !self.bulk_live_confirm_open {
             return;
@@ -9276,6 +9392,7 @@ impl eframe::App for App {
         self.bulk_dialog(ctx);
         self.bulk_clear_confirmation(ctx);
         self.bulk_import_confirmation(ctx);
+        self.bulk_sheet_selection(ctx);
         self.bulk_live_confirmation(ctx);
         self.settings_dialog(ctx);
         self.projects_dialog(ctx);
