@@ -12,6 +12,17 @@ fn number_after(line: &str, marker: &str) -> Option<u64> {
         })
 }
 
+fn detected_error_count(line: &str) -> Option<u64> {
+    let remainder = line.strip_prefix("Detected ")?;
+    let count = remainder.split_whitespace().next()?.parse().ok()?;
+    remainder
+        .split_whitespace()
+        .any(|word| {
+            word.trim_matches(|character: char| !character.is_ascii_alphabetic()) == "errors"
+        })
+        .then_some(count)
+}
+
 /// Extract the stable summary fields emitted by imapsync.  The parser only
 /// receives summary markers; the process runner keeps the complete journal
 /// streaming and bounded separately.
@@ -28,7 +39,11 @@ pub(crate) fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxE
     let destination_messages = last("Host2 Nb messages:")?;
     let source_bytes = last("Host1 Total size:")?;
     let destination_bytes = last("Host2 Total size:")?;
-    let failed_messages = last("Detected ").unwrap_or(0);
+    let failed_messages = lines
+        .iter()
+        .rev()
+        .find_map(|line| detected_error_count(line))
+        .unwrap_or(0);
     let matched = lines
         .iter()
         .any(|line| line.contains("The sync looks good"));

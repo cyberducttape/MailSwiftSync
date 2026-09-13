@@ -7471,6 +7471,22 @@ mod tests {
     }
 
     #[test]
+    fn imapsync_parser_ignores_unrelated_detected_lines() {
+        let lines = [
+            "Host1 Nb folders: 1 folders".into(),
+            "Host2 Nb folders: 1 folders".into(),
+            "Host1 Nb messages: 2 messages".into(),
+            "Host2 Nb messages: 2 messages".into(),
+            "Host1 Total size: 100 bytes".into(),
+            "Host2 Total size: 100 bytes".into(),
+            "Detected 17 folders during namespace discovery".into(),
+            "The sync looks good".into(),
+        ];
+        let evidence = verification::parse_imapsync_evidence(&lines).unwrap();
+        assert_eq!(evidence.failed_messages, 0);
+    }
+
+    #[test]
     fn dovecot_status_aggregates_mailbox_evidence() {
         let source = vec![
             "INBOX messages=10 vsize=100".into(),
