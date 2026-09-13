@@ -56,6 +56,14 @@ const SKY: Color32 = Color32::from_rgb(235, 243, 252);
 const MUTED: Color32 = Color32::from_rgb(103, 119, 139);
 const ALERT: Color32 = Color32::from_rgb(193, 74, 61);
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
+const MAX_VISIBLE_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PROCESS_TAIL_LINES: usize = 200;
+const MAX_PROCESS_TAIL_BYTES: usize = 1024 * 1024;
+const MAX_DIAGNOSTIC_LINE_BYTES: usize = 16 * 1024;
+const MAX_BULK_IMPORT_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_BULK_IMPORT_ROWS: usize = 100_000;
+const MAX_BULK_IMPORT_COLUMNS: usize = 64;
+const MAX_BULK_IMPORT_CELL_BYTES: usize = 64 * 1024;
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const DOVECOT_SYNC_LOCK_WAIT_SECONDS: u64 = 300;
 const MAX_PENDING_EVENTS: usize = 4_096;
@@ -1757,10 +1765,14 @@ fn dovecot_state_candidate(line: &str) -> Option<String> {
 
 fn record_process_tail(tail: &Mutex<VecDeque<String>>, line: &str) {
     if let Ok(mut tail) = tail.lock() {
-        if tail.len() == 200 {
+        let line = truncate_utf8(line, MAX_DIAGNOSTIC_LINE_BYTES);
+        let line_bytes = line.len();
+        while tail.len() >= MAX_PROCESS_TAIL_LINES
+            || tail.iter().map(String::len).sum::<usize>() + line_bytes > MAX_PROCESS_TAIL_BYTES
+        {
             tail.pop_front();
         }
-        tail.push_back(line.to_owned());
+        tail.push_back(line);
     }
 }
 
@@ -2130,6 +2142,19 @@ fn canonical_destination_identity(profile: &Profile) -> Result<String, String> {
     ))
 }
 
+fn validate_bulk_import_file(path: &std::path::Path) -> Result<(), String> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| format!("Could not inspect import file: {error}"))?
+        .len();
+    if size > MAX_BULK_IMPORT_BYTES {
+        return Err(format!(
+            "The import file is {} bytes; the limit is {} bytes.",
+            size, MAX_BULK_IMPORT_BYTES
+        ));
+    }
+    Ok(())
+}
+
 fn duplicate_bulk_destination(jobs: &[BulkJob]) -> Result<Option<String>, String> {
     let mut destinations = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
@@ -2353,6 +2378,7 @@ struct App {
     bulk_confirmation_summary: Option<BulkConfirmationSummary>,
     bulk_clear_confirm_open: bool,
     pending_bulk_import: Option<std::path::PathBuf>,
+    bulk_import_receiver: Option<Receiver<Result<Vec<BulkJob>, String>>>,
     bulk_live_run: bool,
     /// Live retry scope defaults to unresolved rows and is process-local UI
     /// state; durable child/run IDs remain the execution identity.
@@ -2709,6 +2735,7 @@ impl Default for App {
             bulk_confirmation_summary: None,
             bulk_clear_confirm_open: false,
             pending_bulk_import: None,
+            bulk_import_receiver: None,
             bulk_live_run: false,
             bulk_retry_scope: BulkRetryScope::default(),
             bulk_source_keyring_apply: String::new(),
@@ -5498,19 +5525,7 @@ impl App {
             state: "imported".into(),
         })
     }
-    fn import_bulk(&mut self, path: &std::path::Path) {
-        let ext = path
-            .extension()
-            .and_then(|x| x.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let result = if ext == "csv" {
-            Self::read_csv(path, &self.form)
-        } else if ext == "xls" || ext == "xlsx" {
-            Self::read_sheet(path, &self.form)
-        } else {
-            Err("Choose a .csv, .xls, or .xlsx file.".into())
-        };
+    fn apply_bulk_import_result(&mut self, result: Result<Vec<BulkJob>, String>) {
         match result {
             Ok(jobs) => {
                 self.bulk_message = format!(
@@ -5532,6 +5547,41 @@ impl App {
             }
             Err(e) => self.bulk_message = e,
         }
+    }
+
+    fn begin_bulk_import(&mut self, path: std::path::PathBuf) {
+        if self.bulk_import_receiver.is_some() {
+            self.bulk_message = "A mailbox file is already being imported.".into();
+            return;
+        }
+        let base = self.form.clone();
+        let (sender, receiver) = mpsc::channel();
+        self.bulk_message = format!(
+            "Importing {} in the background…",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("mailbox file")
+        );
+        self.bulk_import_receiver = Some(receiver);
+        thread::spawn(move || {
+            let ext = path
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let result = if ext == "csv" {
+                App::read_csv(&path, &base)
+            } else if ext == "xls" || ext == "xlsx" {
+                App::read_sheet(&path, &base)
+            } else {
+                Err("Choose a .csv, .xls, or .xlsx file.".into())
+            };
+            let _ = sender.send(result);
+        });
+    }
+
+    fn import_bulk(&mut self, path: &std::path::Path) {
+        self.begin_bulk_import(path.to_owned());
     }
 
     fn request_bulk_import(&mut self, path: std::path::PathBuf) {
@@ -5585,6 +5635,7 @@ impl App {
         );
     }
     fn read_csv(path: &std::path::Path, base: &Form) -> Result<Vec<BulkJob>, String> {
+        validate_bulk_import_file(path)?;
         let mut reader = csv::Reader::from_path(path).map_err(|e| e.to_string())?;
         let headers = reader
             .headers()
@@ -5593,8 +5644,18 @@ impl App {
             .map(|s| s.trim().to_ascii_lowercase())
             .collect::<Vec<_>>();
         Self::validate_headers(&headers, base)?;
+        if headers.len() > MAX_BULK_IMPORT_COLUMNS {
+            return Err(format!(
+                "The file has too many columns; the limit is {MAX_BULK_IMPORT_COLUMNS}."
+            ));
+        }
         let mut jobs = Vec::new();
         for (index, record) in reader.records().enumerate() {
+            if index >= MAX_BULK_IMPORT_ROWS {
+                return Err(format!(
+                    "The file exceeds the {MAX_BULK_IMPORT_ROWS}-row import limit."
+                ));
+            }
             let record = record.map_err(|e| e.to_string())?;
             if record.len() != headers.len() {
                 return Err(format!(
@@ -5607,8 +5668,17 @@ impl App {
             let values = headers
                 .iter()
                 .zip(record.iter())
-                .map(|(h, v)| (h.clone(), v.to_owned()))
-                .collect();
+                .map(|(h, v)| {
+                    if v.len() > MAX_BULK_IMPORT_CELL_BYTES {
+                        return Err(format!(
+                            "Row {} contains a cell larger than {} bytes.",
+                            index + 2,
+                            MAX_BULK_IMPORT_CELL_BYTES
+                        ));
+                    }
+                    Ok((h.clone(), v.to_owned()))
+                })
+                .collect::<Result<HashMap<_, _>, String>>()?;
             jobs.push(Self::job_from_values(&values, base, index + 2)?);
         }
         if jobs.is_empty() {
@@ -5617,6 +5687,7 @@ impl App {
         Ok(jobs)
     }
     fn read_sheet(path: &std::path::Path, base: &Form) -> Result<Vec<BulkJob>, String> {
+        validate_bulk_import_file(path)?;
         let mut book = open_workbook_auto(path).map_err(|e| e.to_string())?;
         let range = book
             .worksheet_range_at(0)
@@ -5630,16 +5701,36 @@ impl App {
             .map(|x| x.to_string().trim().to_ascii_lowercase())
             .collect::<Vec<_>>();
         Self::validate_headers(&headers, base)?;
+        if headers.len() > MAX_BULK_IMPORT_COLUMNS {
+            return Err(format!(
+                "The worksheet has too many columns; the limit is {MAX_BULK_IMPORT_COLUMNS}."
+            ));
+        }
         let mut jobs = Vec::new();
         for (index, row) in rows.enumerate() {
+            if index >= MAX_BULK_IMPORT_ROWS {
+                return Err(format!(
+                    "The worksheet exceeds the {MAX_BULK_IMPORT_ROWS}-row import limit."
+                ));
+            }
             if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
                 continue;
             }
             let values = headers
                 .iter()
                 .zip(row.iter())
-                .map(|(h, v)| (h.clone(), v.to_string()))
-                .collect();
+                .map(|(h, v)| {
+                    let value = v.to_string();
+                    if value.len() > MAX_BULK_IMPORT_CELL_BYTES {
+                        return Err(format!(
+                            "Row {} contains a cell larger than {} bytes.",
+                            index + 2,
+                            MAX_BULK_IMPORT_CELL_BYTES
+                        ));
+                    }
+                    Ok((h.clone(), value))
+                })
+                .collect::<Result<HashMap<_, _>, String>>()?;
             jobs.push(Self::job_from_values(&values, base, index + 2)?);
         }
         if jobs.is_empty() {
@@ -7040,6 +7131,12 @@ impl App {
         });
     }
     fn poll(&mut self) {
+        if let Some(receiver) = &self.bulk_import_receiver
+            && let Ok(result) = receiver.try_recv()
+        {
+            self.bulk_import_receiver = None;
+            self.apply_bulk_import_result(result);
+        }
         let live_auth_result = self
             .live_auth_receiver
             .as_ref()
@@ -7967,7 +8064,7 @@ impl App {
             ui.add_space(8.0);
             let queue_editable = !self.running();
             ui.horizontal(|ui| {
-                if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
+                if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
                     if self.bulk_jobs.is_empty() {
                         self.clear_bulk_queue();
@@ -8561,10 +8658,24 @@ fn markdown_escape(value: &str) -> String {
 }
 
 fn push_visible_output(output: &mut VecDeque<String>, line: String) {
-    if output.len() >= MAX_VISIBLE_OUTPUT_LINES {
+    let line = truncate_utf8(&line, MAX_DIAGNOSTIC_LINE_BYTES);
+    while output.len() >= MAX_VISIBLE_OUTPUT_LINES
+        || output.iter().map(String::len).sum::<usize>() + line.len() > MAX_VISIBLE_OUTPUT_BYTES
+    {
         output.pop_front();
     }
     output.push_back(line);
+}
+
+fn truncate_utf8(value: &str, limit: usize) -> String {
+    if value.len() <= limit {
+        return value.to_owned();
+    }
+    let mut end = limit;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
 }
 
 fn display_job_state(state: &str) -> &'static str {
@@ -9224,7 +9335,10 @@ impl eframe::App for App {
         self.engine_dialog(ctx);
         self.live_confirmation(ctx);
         self.stop_confirmation(ctx);
-        if self.running() || self.capability_receiver.is_some() || self.live_auth_receiver.is_some()
+        if self.running()
+            || self.capability_receiver.is_some()
+            || self.live_auth_receiver.is_some()
+            || self.bulk_import_receiver.is_some()
         {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -11370,6 +11484,27 @@ mod tests {
             output.back().and_then(|line| line.parse::<usize>().ok()),
             Some(MAX_VISIBLE_OUTPUT_LINES)
         );
+    }
+
+    #[test]
+    fn diagnostic_buffers_truncate_utf8_and_bound_bytes() {
+        let mut output = VecDeque::new();
+        push_visible_output(&mut output, "é".repeat(MAX_DIAGNOSTIC_LINE_BYTES + 1));
+        assert!(output.front().unwrap().len() <= MAX_DIAGNOSTIC_LINE_BYTES);
+        assert!(
+            output
+                .front()
+                .unwrap()
+                .is_char_boundary(output.front().unwrap().len())
+        );
+
+        let tail = Mutex::new(VecDeque::new());
+        for _ in 0..100 {
+            record_process_tail(&tail, &"x".repeat(MAX_DIAGNOSTIC_LINE_BYTES));
+        }
+        let tail = tail.lock().unwrap();
+        assert!(tail.iter().map(String::len).sum::<usize>() <= MAX_PROCESS_TAIL_BYTES);
+        assert!(tail.len() <= MAX_PROCESS_TAIL_LINES);
     }
 
     #[cfg(unix)]
