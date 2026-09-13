@@ -72,6 +72,14 @@ fn destination_host_port(value: &str, default_port: u16) -> (String, u16) {
     (value.to_owned(), default_port)
 }
 
+const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;
+
+fn valid_dovecot_checkpoint(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_DOVECOT_CHECKPOINT_BYTES
+        && value.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
 /// The transfer engine is a policy decision, not an implementation detail.
 /// Dovecot destinations should use the destination server's own dsync engine;
 /// imapsync remains available for arbitrary IMAP destinations.
@@ -1553,6 +1561,9 @@ impl StateStore {
         detail: &str,
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
+        if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if !matches!(
             run_status,
             "completed" | "failed" | "cancelled" | "verification_failed"
@@ -1670,6 +1681,9 @@ impl StateStore {
         value: &MailboxEvidence,
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
+        if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         if run_status != "completed"
             || !matches!(
                 mailbox_state,
@@ -2097,6 +2111,37 @@ mod tests {
             db.run_status("checkpoint-run").unwrap().as_deref(),
             Some("completed")
         );
+    }
+
+    #[test]
+    fn malformed_dovecot_checkpoint_is_rejected_before_terminal_commit() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("checkpoint-validation", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source@example", "destination@example")
+            .unwrap();
+        db.begin_run(&project.id, &job, "checkpoint-invalid", "dovecot")
+            .unwrap();
+
+        assert!(
+            db.finish_run_for_mailbox_with_checkpoint(
+                &project.id,
+                &job,
+                "checkpoint-invalid",
+                "completed",
+                "completed",
+                "",
+                Some("state with whitespace"),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.run_status("checkpoint-invalid").unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(db.mailbox_checkpoint(&job).unwrap(), None);
     }
 
     #[test]
