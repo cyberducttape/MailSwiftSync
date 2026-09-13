@@ -1054,12 +1054,16 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let tx = self.connection.unchecked_transaction()?;
+        let mut destinations = BTreeSet::new();
         for (index, job_id) in job_ids.iter().enumerate() {
-            let current: String = tx.query_row(
-                "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
+            let (current, destination): (String, String) = tx.query_row(
+                "SELECT state,destination_mailbox FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
                 params![job_id, project_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
+            if !destinations.insert(destination.trim().to_ascii_lowercase()) {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             // Reject an already-running child rather than treating it as a
             // harmless retry. This keeps one durable execution owner per
             // mailbox even when two callers race.
@@ -2975,6 +2979,38 @@ mod tests {
             db.mailbox_state(&jobs[0]).unwrap().as_deref(),
             Some("queued")
         );
+    }
+
+    #[test]
+    fn batch_start_rejects_duplicate_durable_destinations() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("legacy-duplicate-target", "source", "destination")
+            .unwrap();
+        let first = db
+            .add_mailbox(&project.id, "one", "target@example.test")
+            .unwrap();
+        let second = Uuid::new_v4().to_string();
+        db.connection
+            .execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,state) VALUES(?1,?2,?3,?4,'queued')",
+                params![second, project.id, "two", " Target@Example.Test "],
+            )
+            .unwrap();
+
+        assert!(
+            db.begin_batch_run_with_children(
+                &project.id,
+                &[first, second],
+                "run-legacy-duplicate-target",
+                "batch",
+                &[],
+                "snapshot",
+                &[],
+            )
+            .is_err()
+        );
+        assert_eq!(db.run_status("run-legacy-duplicate-target").unwrap(), None);
     }
 
     #[test]
