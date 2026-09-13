@@ -57,7 +57,9 @@ pub(crate) fn imapsync_args(
         source_port,
     ];
     if profile.source_tls == "plain" {
-        args.push("--nossl1".into());
+        // Plain mode must disable both implicit SSL and imapsync's default
+        // opportunistic STARTTLS negotiation.
+        args.extend(["--nossl1".into(), "--notls1".into()]);
     } else if profile.source_tls == "starttls" {
         args.extend([
             "--tls1".into(),

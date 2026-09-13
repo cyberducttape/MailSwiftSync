@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Plain-source imapsync plans now explicitly disable both implicit SSL and
+  opportunistic STARTTLS with `--nossl1 --notls1`.
 - Corrected imapsync debug option validation: `debug`, `debugimap1`, and
   `debugimap2` are boolean switches and no longer consume or accept values.
 - Removed execution-capable imapsync `pipemess` from the extra-option

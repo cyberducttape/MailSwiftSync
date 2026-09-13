@@ -12092,6 +12092,19 @@ mod tests {
     }
 
     #[test]
+    fn imapsync_plain_source_disables_implicit_ssl_and_starttls() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.source_tls = "plain".into();
+        let args = engine::imapsync_args(&form.profile, "source", "destination", true, true, 1);
+
+        assert!(args.iter().any(|arg| arg == "--nossl1"));
+        assert!(args.iter().any(|arg| arg == "--notls1"));
+        assert!(!args.iter().any(|arg| arg == "--ssl1"));
+        assert!(!args.iter().any(|arg| arg == "--tls1"));
+    }
+
+    #[test]
     fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
