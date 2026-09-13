@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted shared phase, mailbox-state, status-severity, and health-summary
+  presentation helpers into `src/ui/status.rs`, reducing UI logic in the
+  application entrypoint while keeping the semantic palette centralized.
 - Extracted process execution, diagnostic capture, Dovecot verification, and
   engine-version probing into `src/runner.rs`, leaving the application layer
   responsible for durable event handling rather than child-process mechanics.
