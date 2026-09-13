@@ -6365,7 +6365,7 @@ impl App {
                                         child_run_id: child_run_id.clone(),
                                         state: "Retrying".into(),
                                     });
-                                    let delay = Duration::from_secs(1_u64 << attempt.min(5));
+                                    let delay = transient_retry_delay(&error, attempt);
                                     let started = std::time::Instant::now();
                                     while started.elapsed() < delay {
                                         if cancel.load(Ordering::Relaxed) {
@@ -8648,6 +8648,7 @@ enum FailureClass {
     Cancellation,
     Authentication,
     Quota,
+    Capacity,
     Transport,
     Configuration,
     Message,
@@ -8661,6 +8662,7 @@ impl FailureClass {
             Self::Cancellation => "cancelled",
             Self::Authentication => "authentication",
             Self::Quota => "quota",
+            Self::Capacity => "capacity",
             Self::Transport => "transport",
             Self::Configuration => "configuration",
             Self::Message => "message",
@@ -8674,6 +8676,7 @@ impl FailureClass {
             Self::Cancellation => core::AttentionReason::Interrupted,
             Self::Authentication => core::AttentionReason::AuthenticationFailed,
             Self::Quota => core::AttentionReason::CapacityLimited,
+            Self::Capacity => core::AttentionReason::CapacityLimited,
             Self::Transport => core::AttentionReason::TransportFailed,
             Self::Configuration => core::AttentionReason::ConfigurationInvalid,
             Self::Message => core::AttentionReason::MessageRejected,
@@ -8711,6 +8714,20 @@ fn classify_failure(error: &str) -> FailureClass {
     .any(|marker| error.contains(marker))
     {
         FailureClass::Authentication
+    } else if [
+        "rate limit",
+        "rate-limit",
+        "throttl",
+        "too many connections",
+        "too many requests",
+        "server busy",
+        "temporarily overloaded",
+        "429",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Capacity
     } else if [
         "overquota",
         "over quota",
@@ -8780,7 +8797,20 @@ fn classify_failure(error: &str) -> FailureClass {
 }
 
 fn is_transient_batch_error(error: &str) -> bool {
-    classify_failure(error) == FailureClass::Transport
+    matches!(
+        classify_failure(error),
+        FailureClass::Transport | FailureClass::Capacity
+    )
+}
+
+fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
+    let base_seconds = if classify_failure(error) == FailureClass::Capacity {
+        5
+    } else {
+        1
+    };
+    let multiplier = 1_u64 << attempt.min(5);
+    Duration::from_secs((base_seconds * multiplier).min(120))
 }
 
 fn classified_failure_detail(error: &str) -> String {
@@ -10879,10 +10909,36 @@ mod tests {
     fn batch_retry_classifier_excludes_authentication_failures() {
         assert!(is_transient_batch_error("connection reset by peer"));
         assert!(is_transient_batch_error("operation timed out"));
+        assert!(is_transient_batch_error("server returned 429 rate limit"));
+        assert!(!is_transient_batch_error("mailbox is full: OVERQUOTA"));
         assert!(!is_transient_batch_error("IMAP authentication failed"));
         assert!(!is_transient_batch_error(
             "invalid destination configuration"
         ));
+    }
+
+    #[test]
+    fn capacity_retries_back_off_longer_than_transport_retries() {
+        assert_eq!(
+            classify_failure("too many connections"),
+            FailureClass::Capacity
+        );
+        assert_eq!(
+            transient_retry_delay("connection reset by peer", 0),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            transient_retry_delay("server busy", 0),
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            transient_retry_delay("server busy", 99),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            classified_failure_detail("too many requests"),
+            "[attention_reason=capacity_limited] [class=capacity] too many requests"
+        );
     }
 
     #[test]
