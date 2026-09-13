@@ -2376,6 +2376,7 @@ struct App {
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_confirmation_summary: Option<BulkConfirmationSummary>,
+    bulk_dry_run: bool,
     bulk_clear_confirm_open: bool,
     pending_bulk_import: Option<std::path::PathBuf>,
     bulk_import_receiver: Option<Receiver<Result<Vec<BulkJob>, String>>>,
@@ -2733,6 +2734,7 @@ impl Default for App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
+            bulk_dry_run: true,
             bulk_clear_confirm_open: false,
             pending_bulk_import: None,
             bulk_import_receiver: None,
@@ -4536,12 +4538,16 @@ impl App {
                 }
             });
             egui::ScrollArea::vertical()
+                .hscroll(true)
                 .stick_to_bottom(true)
                 .max_height(420.0)
                 .show_rows(ui, 20.0, self.output.len(), |ui, rows| {
                     for index in rows {
                         if let Some(line) = self.output.get(index) {
-                            ui.label(RichText::new(line).monospace().size(14.0));
+                            ui.add(
+                                egui::Label::new(RichText::new(line).monospace().size(14.0))
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                            );
                         }
                     }
                 });
@@ -5792,7 +5798,7 @@ impl App {
             self.bulk_message = "Import a file before starting the queue.".into();
             return;
         }
-        let live = !self.form.dry_run;
+        let live = !self.bulk_dry_run;
         if live && !self.bulk_live_confirmed {
             self.bulk_live_confirm_open = true;
             self.bulk_confirmation_summary = None;
@@ -8062,6 +8068,16 @@ impl App {
             ui.heading("Import → review → validate");
             ui.label(RichText::new(&self.bulk_message).color(MUTED));
             ui.add_space(8.0);
+            let previous_bulk_dry_run = self.bulk_dry_run;
+            ui.horizontal(|ui| {
+                ui.label("Batch mode");
+                ui.selectable_value(&mut self.bulk_dry_run, true, "Preflight");
+                ui.selectable_value(&mut self.bulk_dry_run, false, "Live migration");
+            });
+            if self.bulk_dry_run != previous_bulk_dry_run {
+                self.bulk_live_confirmed = false;
+                self.bulk_confirmation_summary = None;
+            }
             let queue_editable = !self.running();
             ui.horizontal(|ui| {
                 if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
@@ -8077,15 +8093,15 @@ impl App {
                     .iter()
                     .filter(|job| self.bulk_retry_scope.includes(&display_state_key(&job.state)))
                     .count();
-                let label = if self.form.dry_run {
+                let label = if self.bulk_dry_run {
                     format!("Run {} preflight checks", self.bulk_jobs.len())
                 } else {
                     format!("Start {live_count} live migrations")
                 };
                 let can_start = !self.running()
                     && !self.bulk_jobs.is_empty()
-                    && (self.form.dry_run || live_count > 0);
-                if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.form.dry_run { BLUE } else { ALERT })).clicked() { self.start_bulk(); }
+                    && (self.bulk_dry_run || live_count > 0);
+                if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.bulk_dry_run { BLUE } else { ALERT })).clicked() { self.start_bulk(); }
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -8104,7 +8120,7 @@ impl App {
                 );
                 ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(MUTED));
             });
-            if !self.form.dry_run {
+            if !self.bulk_dry_run {
                 ui.add_enabled_ui(queue_editable, |ui| {
                     egui::ComboBox::from_id_salt("bulk_retry_scope")
                         .selected_text(self.bulk_retry_scope.label())
@@ -9308,12 +9324,13 @@ impl eframe::App for App {
                         ui.group(|ui| {
                             ui.horizontal(|ui| { ui.heading("Execution journal"); ui.label(RichText::new(if self.running() { "streaming output" } else { "waiting" }).color(MUTED)); });
                             egui::ScrollArea::vertical()
+                                .hscroll(true)
                                 .stick_to_bottom(true)
                                 .max_height(180.0)
                                 .show_rows(ui, 20.0, self.output.len(), |ui, rows| {
                                     for index in rows {
                                         if let Some(line) = self.output.get(index) {
-                                            ui.label(RichText::new(line).monospace().size(14.0));
+                                            ui.add(egui::Label::new(RichText::new(line).monospace().size(14.0)).wrap_mode(egui::TextWrapMode::Extend));
                                         }
                                     }
                                 });
