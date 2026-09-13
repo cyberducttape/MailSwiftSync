@@ -1947,7 +1947,7 @@ impl Default for App {
             let _ = restrict_directory_permissions(parent);
         }
         let instance_lock = acquire_instance_lock(&state_path);
-        let (store, persistence_warning) = match &instance_lock {
+        let (store, mut persistence_warning) = match &instance_lock {
             Ok(_) => match core::StateStore::open(&state_path) {
                 Ok(store) => (store, None),
                 Err(error) => (
@@ -1961,22 +1961,36 @@ impl Default for App {
             ),
         };
         let (recovered, orphaned, unverified_processes) = if persistence_warning.is_none() {
-            let processes = store.active_processes().unwrap_or_default();
-            let mut unverified = Vec::new();
-            for process in &processes {
-                if process.pid > 0 && recorded_process_matches(process) {
-                    terminate_recorded_process_group(process);
-                } else {
-                    unverified.push(process.clone());
+            let processes = match store.active_processes() {
+                Ok(processes) => processes,
+                Err(error) => {
+                    persistence_warning = Some(format!(
+                        "Persistent SQLite recovery unavailable; execution is blocked: {error}"
+                    ));
+                    Vec::new()
+                }
+            };
+            if persistence_warning.is_some() {
+                (0, 0, Vec::new())
+            } else {
+                let mut unverified = Vec::new();
+                for process in &processes {
+                    if process.pid > 0 && recorded_process_matches(process) {
+                        terminate_recorded_process_group(process);
+                    } else {
+                        unverified.push(process.clone());
+                    }
+                }
+                match store.recover_abandoned_jobs_preserving(&unverified) {
+                    Ok(recovered) => (recovered, processes.len(), unverified),
+                    Err(error) => {
+                        persistence_warning = Some(format!(
+                            "Persistent SQLite recovery failed; execution is blocked: {error}"
+                        ));
+                        (0, 0, Vec::new())
+                    }
                 }
             }
-            (
-                store
-                    .recover_abandoned_jobs_preserving(&unverified)
-                    .unwrap_or(0),
-                processes.len(),
-                unverified,
-            )
         } else {
             (0, 0, Vec::new())
         };
