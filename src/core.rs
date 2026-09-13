@@ -633,7 +633,6 @@ impl ServerCapabilities {
             .iter()
             .filter(|line| {
                 [
-                    r"\INBOX",
                     r"\ALL",
                     r"\ARCHIVE",
                     r"\DRAFTS",
@@ -3325,7 +3324,7 @@ mod tests {
         );
         assert!(caps.inventory_complete);
         assert_eq!(caps.mailbox_count, 4);
-        assert_eq!(caps.special_use_mailboxes, 3);
+        assert_eq!(caps.special_use_mailboxes, 2);
     }
 
     #[test]
