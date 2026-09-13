@@ -317,16 +317,17 @@ pub struct StateStore {
     connection: Connection,
 }
 
-/// Verbose subprocess output is diagnostic context, not the immutable audit
-/// record. Keep a bounded per-project tail so multi-wave migrations cannot
-/// grow the ledger without limit; lifecycle, run, evidence, and phase events
-/// remain retained.
+/// Verbose subprocess output and error detail are diagnostic context, not the
+/// immutable audit record. Keep a bounded per-project tail and cap every
+/// individual event detail so pathological engine output cannot create an
+/// oversized SQLite record; lifecycle, run, evidence, and phase events remain
+/// retained.
 const MAX_DURABLE_RUN_OUTPUT_EVENTS: i64 = 10_000;
 const MAX_DURABLE_EVENT_DETAIL_BYTES: usize = 16 * 1024;
 const DURABLE_EVENT_TRUNCATION_SUFFIX: &str = " [diagnostic detail truncated by MailSwiftSync]";
 
-fn bounded_event_detail(kind: &str, detail: &str) -> String {
-    if kind != "run_output" || detail.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES {
+fn bounded_event_detail(_kind: &str, detail: &str) -> String {
+    if detail.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES {
         return detail.to_owned();
     }
 
@@ -3457,6 +3458,19 @@ mod tests {
             .unwrap();
         assert!(stored.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
         assert!(stored.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
+
+        db.record_run_events_batch(run_id, &[("verification_pending", oversized.as_str())])
+            .unwrap();
+        let stored_error: String = db
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE run_id=?1 AND kind='verification_pending'",
+                [run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored_error.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
+        assert!(stored_error.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
     }
 
     #[test]
