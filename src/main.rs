@@ -2690,7 +2690,6 @@ impl App {
             return;
         }
         let (passed, total) = self.readiness_score();
-        let percent = (passed * 100 / total.max(1)) as u8;
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("Migration workspace");
@@ -2698,7 +2697,11 @@ impl App {
                     .strong()
                     .color(if self.form.dry_run { TEAL } else { ALERT }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{percent}% ready")).strong().color(if percent >= 80 { TEAL } else { ALERT }));
+                    ui.label(
+                        RichText::new(format!("{passed}/{total} checks passed"))
+                            .strong()
+                            .color(if passed == total { TEAL } else { ALERT }),
+                    );
                 });
             });
             ui.add_space(5.0);
