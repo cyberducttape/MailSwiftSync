@@ -65,10 +65,23 @@ pub(crate) struct DovecotStatusAccumulator {
     pub(crate) folders: u64,
     pub(crate) messages: u64,
     pub(crate) bytes: u64,
+    /// Number of lines that looked like Dovecot mailbox status records but
+    /// could not be parsed completely. Ignoring these would allow a partial
+    /// inventory to accidentally compare equal and become Verified.
+    pub(crate) malformed_lines: u64,
 }
 
 impl DovecotStatusAccumulator {
     pub(crate) fn observe(&mut self, line: &str) {
+        let has_messages_field = line
+            .split_whitespace()
+            .any(|token| token.starts_with("messages="));
+        let has_vsize_field = line
+            .split_whitespace()
+            .any(|token| token.starts_with("vsize="));
+        if !has_messages_field && !has_vsize_field {
+            return;
+        }
         let message_count = line
             .split_whitespace()
             .find_map(|token| token.strip_prefix("messages=")?.parse::<u64>().ok());
@@ -79,6 +92,8 @@ impl DovecotStatusAccumulator {
             self.folders = self.folders.saturating_add(1);
             self.messages = self.messages.saturating_add(message_count);
             self.bytes = self.bytes.saturating_add(virtual_size);
+        } else {
+            self.malformed_lines = self.malformed_lines.saturating_add(1);
         }
     }
 }
@@ -87,17 +102,21 @@ pub(crate) fn dovecot_evidence_from_accumulators(
     source: &DovecotStatusAccumulator,
     destination: &DovecotStatusAccumulator,
 ) -> Option<core::MailboxEvidence> {
-    (source.folders > 0 && destination.folders > 0).then_some(core::MailboxEvidence {
-        source_messages: source.messages,
-        destination_messages: destination.messages,
-        source_bytes: source.bytes,
-        destination_bytes: destination.bytes,
-        unmatched_messages: 0,
-        failed_messages: 0,
-        source_folders: source.folders,
-        destination_folders: destination.folders,
-        authoritative: false,
-    })
+    (source.folders > 0
+        && destination.folders > 0
+        && source.malformed_lines == 0
+        && destination.malformed_lines == 0)
+        .then_some(core::MailboxEvidence {
+            source_messages: source.messages,
+            destination_messages: destination.messages,
+            source_bytes: source.bytes,
+            destination_bytes: destination.bytes,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: source.folders,
+            destination_folders: destination.folders,
+            authoritative: false,
+        })
 }
 
 #[cfg(test)]
@@ -134,10 +153,19 @@ mod tests {
     }
 
     #[test]
-    fn dovecot_accumulator_ignores_incomplete_status_lines() {
+    fn dovecot_accumulator_rejects_incomplete_status_lines() {
         let mut status = DovecotStatusAccumulator::default();
         status.observe("mailbox messages=not-a-number vsize=40");
         status.observe("mailbox messages=3");
         assert_eq!(status.folders, 0);
+        assert_eq!(status.malformed_lines, 2);
+
+        let valid = DovecotStatusAccumulator {
+            folders: 1,
+            messages: 3,
+            bytes: 40,
+            malformed_lines: 0,
+        };
+        assert!(dovecot_evidence_from_accumulators(&valid, &status).is_none());
     }
 }
