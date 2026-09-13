@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Replaced the headless module’s wildcard crate import with explicit
+  controller, state, recovery, and artifact dependencies to keep the
+  GUI-independent path isolated as controller extraction continues.
 - Corrected the security policy’s transport wording to document certificate
   validation on both IMAPS and STARTTLS readiness probes.
 - Updated the compatibility matrix to reflect the current packaged
