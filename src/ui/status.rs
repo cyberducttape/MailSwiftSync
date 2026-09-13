@@ -57,6 +57,29 @@ pub(crate) fn recommended_next_action(
     }
 }
 
+/// Map the durable project phase to the operator-facing six-step workflow.
+/// The overview uses this only for presentation; execution still requires the
+/// controller's existing preflight and live-admission gates.
+pub(crate) fn workflow_step_index(
+    phase: core::Phase,
+    has_preflight: bool,
+    has_mailboxes: bool,
+) -> usize {
+    match phase {
+        core::Phase::Discovery if has_preflight => 2,
+        core::Phase::Discovery if has_mailboxes => 1,
+        core::Phase::Discovery => 0,
+        core::Phase::Preflight if !has_preflight => 1,
+        core::Phase::Preflight => 2,
+        core::Phase::Pilot | core::Phase::Seed | core::Phase::CatchUp | core::Phase::FinalDelta => {
+            3
+        }
+        core::Phase::Verification => 4,
+        core::Phase::Complete => 5,
+        core::Phase::Attention => 1,
+    }
+}
+
 pub(crate) fn display_job_state(state: &str) -> &'static str {
     match state {
         "imported" => "Imported",
@@ -175,4 +198,22 @@ pub(crate) fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap
         *counts.entry(job.state.clone()).or_insert(0) += 1;
     }
     counts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workflow_progress_follows_durable_phase() {
+        assert_eq!(workflow_step_index(core::Phase::Discovery, false, false), 0);
+        assert_eq!(workflow_step_index(core::Phase::Preflight, false, true), 1);
+        assert_eq!(workflow_step_index(core::Phase::Preflight, true, true), 2);
+        assert_eq!(workflow_step_index(core::Phase::Pilot, true, true), 3);
+        assert_eq!(
+            workflow_step_index(core::Phase::Verification, true, true),
+            4
+        );
+        assert_eq!(workflow_step_index(core::Phase::Complete, true, true), 5);
+    }
 }

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added a durable-state-driven overview workflow indicator for Connect,
+  Assess, Preflight, Migrate, Verify, and Deliver, with explicit copy that
+  the presentation step never bypasses execution gates.
 - Moved batch retry scopes, mailbox-selection state sets, and live-confirmation
   summary data into `src/controller/batch.rs`, so retry eligibility and
   automation policy are shared controller rules rather than UI-local types.

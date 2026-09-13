@@ -78,6 +78,7 @@ use ui::{StatusSeverity, contrast_ratio, status_severity};
 use ui::{
     ThemeColors, display_job_state, display_state_key, format_phase_name, job_state_badge,
     needs_operator_review, project_health_state_counts, recommended_next_action, status_color,
+    workflow_step_index,
 };
 use zeroize::Zeroizing;
 
@@ -3163,6 +3164,54 @@ impl App {
             self.running(),
         );
         self.overview_readiness_controls(ui);
+        ui.add_space(14.0);
+        let workflow_index = workflow_step_index(
+            phase,
+            !self.preflight.is_empty(),
+            !durable_jobs.is_empty() || !self.bulk_jobs.is_empty(),
+        );
+        ui.group(|ui| {
+            ui.label(RichText::new("MIGRATION WORKFLOW").strong().size(11.0));
+            ui.horizontal_wrapped(|ui| {
+                for (index, (title, detail)) in [
+                    ("Connect", "endpoints"),
+                    ("Assess", "readiness"),
+                    ("Preflight", "review"),
+                    ("Migrate", "execute"),
+                    ("Verify", "evidence"),
+                    ("Deliver", "customer proof"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let (marker, color) = if index < workflow_index {
+                        ("✓", self.theme_colors().success)
+                    } else if index == workflow_index {
+                        ("●", self.theme_colors().info)
+                    } else {
+                        ("○", self.theme_colors().text_secondary)
+                    };
+                    ui.group(|ui| {
+                        ui.label(
+                            RichText::new(format!("{marker} {title}"))
+                                .strong()
+                                .color(color),
+                        );
+                        ui.label(
+                            RichText::new(detail).color(self.theme_colors().text_secondary),
+                        );
+                    });
+                    if index < 5 {
+                        ui.label(RichText::new("→").color(self.theme_colors().text_secondary));
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("The highlighted step is the current operator focus. A completed-looking step never bypasses the durable execution gates.")
+                    .size(11.0)
+                    .color(self.theme_colors().text_secondary),
+            );
+        });
         ui.add_space(14.0);
         if project.is_none() && self.bulk_jobs.is_empty() {
             ui.group(|ui| {
