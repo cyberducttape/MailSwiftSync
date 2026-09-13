@@ -3214,17 +3214,34 @@ impl App {
                 .color(MUTED),
         );
         ui.add_space(16.0);
+        let mut view_error = None;
         let project = self
             .active_project_id()
-            .and_then(|id| self.store.project(id).ok().flatten());
+            .and_then(|id| match self.store.project(id) {
+                Ok(project) => project,
+                Err(error) => {
+                    view_error = Some(format!(
+                        "Could not read the selected project from durable storage: {error}"
+                    ));
+                    None
+                }
+            });
         let phase = project
             .as_ref()
             .map(|value| value.phase)
             .unwrap_or(core::Phase::Discovery);
-        let durable_jobs = project
-            .as_ref()
-            .and_then(|value| self.store.mailboxes(&value.id).ok())
-            .unwrap_or_default();
+        let durable_jobs =
+            project
+                .as_ref()
+                .map_or_else(Vec::new, |value| match self.store.mailboxes(&value.id) {
+                    Ok(jobs) => jobs,
+                    Err(error) => {
+                        view_error = Some(format!(
+                            "Could not read mailbox state from durable storage: {error}"
+                        ));
+                        Vec::new()
+                    }
+                });
         let attention_count = durable_jobs
             .iter()
             .filter(|job| needs_operator_review(&job.state))
@@ -3235,6 +3252,14 @@ impl App {
             attention_count,
             self.running(),
         );
+        if let Some(error) = view_error {
+            ui.group(|ui| {
+                ui.label(RichText::new("DURABLE STORAGE UNAVAILABLE").strong().color(ALERT));
+                ui.label(error);
+                ui.label("The displayed project state may be incomplete. Do not start or retry a migration until storage is available again.");
+            });
+            ui.add_space(10.0);
+        }
         self.overview_readiness_controls(ui);
         ui.add_space(14.0);
         ui.group(|ui| {
