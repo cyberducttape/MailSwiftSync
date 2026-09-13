@@ -228,7 +228,7 @@ Maildir. Set `MAILSWIFTSYNC_KEEP_LAB=1` to retain the temporary logs for
 diagnosis. This validates the external engines and authentication path; it is
 not a substitute for the still-planned controller crash/restart chaos lab.
 
-![Batch migration review](docs/wiki/assets/batch-queue.png)
+![Mailboxes workspace](docs/wiki/assets/batch-queue.png)
 
 The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the redacted durable event ledger remains the longer-lived audit record.
 
