@@ -895,7 +895,11 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let changed = self.connection.execute(
-            "UPDATE mailbox_jobs SET preflight_plan=?1 WHERE id=?2",
+            // A Dovecot state token is only meaningful for the plan that
+            // produced it. Keep it for a repeated preflight of the same
+            // plan, but invalidate it when a new plan is preflighted so a
+            // later live run cannot resume across endpoint or policy drift.
+            "UPDATE mailbox_jobs SET checkpoint=CASE WHEN preflight_plan=?1 THEN checkpoint ELSE NULL END, preflight_plan=?1 WHERE id=?2",
             params![plan, job_id],
         )?;
         if changed != 1 {
@@ -3649,6 +3653,42 @@ destination_port = "143"
         assert!(db.set_preflight_plan("missing-job", digest).is_err());
         db.set_preflight_plan(&job, digest).unwrap();
         assert_eq!(db.preflight_plan(&job).unwrap().as_deref(), Some(digest));
+    }
+
+    #[test]
+    fn changing_preflight_plan_invalidates_dovecot_checkpoint() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("checkpoint-plan", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source@example", "destination@example")
+            .unwrap();
+        let first_plan = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let second_plan = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        db.set_preflight_plan(&job, first_plan).unwrap();
+        db.begin_run(&project.id, &job, "checkpoint-plan-run", "dovecot")
+            .unwrap();
+        db.finish_run_for_mailbox_with_checkpoint(
+            &project.id,
+            &job,
+            "checkpoint-plan-run",
+            "completed",
+            "completed",
+            "",
+            Some("AQAAAHm4+Jk="),
+        )
+        .unwrap();
+
+        db.set_preflight_plan(&job, first_plan).unwrap();
+        assert!(db.mailbox_checkpoint(&job).unwrap().is_some());
+        db.set_preflight_plan(&job, second_plan).unwrap();
+        assert_eq!(db.mailbox_checkpoint(&job).unwrap(), None);
+        assert_eq!(
+            db.preflight_plan(&job).unwrap().as_deref(),
+            Some(second_plan)
+        );
     }
 
     #[test]
