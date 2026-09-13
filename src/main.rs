@@ -12050,6 +12050,7 @@ mod tests {
     fn imapsync_trust_bundle_is_explicit_and_verification_stays_enabled() {
         let mut form = Form::default();
         form.profile.source_ca_bundle = "/etc/company ca.pem".into();
+        form.profile.destination_ca_bundle = "/opt/customer trust/ca.pem".into();
         let args = form.args(true);
         assert!(
             args.windows(2)
@@ -12063,6 +12064,14 @@ mod tests {
             !args
                 .iter()
                 .any(|arg| arg.contains("SSL_verify_mode=1 SSL_ca_file="))
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--sslargs2", "SSL_verify_mode=1"])
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| { pair == ["--sslargs2", "SSL_ca_file=/opt/customer trust/ca.pem"] })
         );
     }
 
