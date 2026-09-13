@@ -9,6 +9,16 @@ fully backed-up mailboxes.
 |---|---|---|---|---|---|---|---|---|---|---|
 | TBD | TBD | imapsync | TBD | TBD | TBD | TBD | TBD | TBD | TBD | Add provider-specific limits and known issues. |
 
+## Verified engine fixture
+
+The checked-in `scripts/imap-integration-smoke.sh` was run successfully on
+2026-09-13 with Dovecot `2.4.5 (0cbb641e3e)` at both disposable endpoints and
+imapsync `2.229`. It authenticated to both local servers, transferred the
+fixture message, and verified that the destination Maildir contained it. This
+is evidence for the external IMAP engine path only; it does not mark the row
+above as generally supported and does not replace controller crash/restart,
+storage-fault, or provider-specific tests.
+
 Minimum test cases for every row:
 
 - DNS, certificate validation, authentication, capability, namespace, and

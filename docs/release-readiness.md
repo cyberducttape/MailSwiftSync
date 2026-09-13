@@ -109,16 +109,16 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 The test-gate template is [compatibility-matrix.md](compatibility-matrix.md).
 An empty matrix is an explicit release blocker, not evidence of compatibility.
 
-## Proposed eight-week sequence
+## Remaining roadmap (not a release gate by itself)
 
-1. Week 1: finalize identity, licensing, release metadata, and a compatibility/test matrix.
-2. Week 2: add provider OAuth and remove Dovecot process-argument secrets; retain keyring-backed credentials for attended operator-managed sessions.
-3. Week 3: split preflight into DNS, transport, TLS, auth, quota, inventory, and readiness checks.
-4. Week 4: add resumable checkpoints, retries, delta status, and explicit mailbox state transitions.
-5. Week 5: add bounded concurrency, throttling, scheduling, and durable cancellation/recovery.
-6. Week 6: build exportable verification reports and message-level mismatch diagnostics.
-7. Week 7: publish installers, signed artifacts, checksums, and upgrade/rollback guidance.
-8. Week 8: run documented large-scale migrations, publish results, and decide whether the 1.0 criteria are met.
+1. Add provider OAuth/Modern Auth and a secret-safe remote execution path.
+2. Expand the compatibility matrix with provider-specific dry/live pilots,
+   interruption recovery, and evidence exports.
+3. Add independent message-level reconciliation and UIDVALIDITY-aware evidence.
+4. Add controller crash/restart, storage-fault, and cross-platform supervision
+   tests against disposable servers.
+5. Publish signed native installers, upgrade/rollback guidance, and results
+   from representative large-scale migrations.
 
 ## Current dependency audit
 
