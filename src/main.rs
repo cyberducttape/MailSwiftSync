@@ -369,6 +369,17 @@ fn durable_batch_profile_config(profile: &Profile) -> Result<String, String> {
         .map_err(|error| format!("Could not serialize batch plan: {error}"))
 }
 
+/// Decode a persisted batch row without ever substituting a default plan.
+/// A missing or corrupt plan is durable-state corruption, not a request for a
+/// new migration profile. Callers must surface the error and keep execution
+/// disabled until the row is repaired or discarded deliberately.
+fn decode_persisted_batch_profile(config: Option<&str>, job_id: &str) -> Result<Profile, String> {
+    let config =
+        config.ok_or_else(|| format!("Saved batch mailbox {job_id} has no migration plan"))?;
+    toml::from_str(config)
+        .map_err(|error| format!("Saved batch mailbox {job_id} is corrupt: {error}"))
+}
+
 fn default_imap_port(tls_mode: &str) -> u16 {
     match tls_mode {
         "starttls" | "plain" => 143,
@@ -2110,10 +2121,19 @@ impl Default for App {
         if form.profile.destination_tls.is_empty() {
             form.profile.destination_tls = default_destination_tls();
         }
-        let restored_project = persistence_warning
-            .is_none()
-            .then(|| store.latest_project().ok().flatten())
-            .flatten();
+        let restored_project = if persistence_warning.is_none() {
+            match store.latest_project() {
+                Ok(project) => project,
+                Err(error) => {
+                    persistence_warning = Some(format!(
+                        "Persistent project restore failed; execution is blocked: {error}"
+                    ));
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let (project_id, job_id) = restored_project
             .as_ref()
             .filter(|project| {
@@ -2121,18 +2141,34 @@ impl Default for App {
                     && project.destination_endpoint == form.profile.destination_host
             })
             .map(|project| {
-                let job_id = store.first_mailbox(&project.id).ok().flatten();
-                if let Some(job) = &job_id
-                    && let Ok(Some((source_user, destination_user, state))) =
-                        store.mailbox_identity(job)
-                {
-                    // Restore non-secret mailbox identity and make recovery
-                    // state visible immediately. Passwords remain blank and
-                    // must be entered again before a live run.
-                    form.profile.source_user = source_user;
-                    form.profile.destination_user = destination_user;
-                    if state == "attention" {
-                        form.dry_run = true;
+                let job_id = match store.first_mailbox(&project.id) {
+                    Ok(job_id) => job_id,
+                    Err(error) => {
+                        persistence_warning = Some(format!(
+                            "Persistent mailbox restore failed; execution is blocked: {error}"
+                        ));
+                        None
+                    }
+                };
+                if let Some(job) = &job_id {
+                    match store.mailbox_identity(job) {
+                        Ok(Some((source_user, destination_user, state))) => {
+                            // Restore non-secret mailbox identity and make
+                            // recovery state visible immediately. Passwords
+                            // remain blank and must be entered again before a
+                            // live run.
+                            form.profile.source_user = source_user;
+                            form.profile.destination_user = destination_user;
+                            if state == "attention" {
+                                form.dry_run = true;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            persistence_warning = Some(format!(
+                                "Persistent mailbox identity restore failed; execution is blocked: {error}"
+                            ));
+                        }
                     }
                 }
                 (Some(project.id.clone()), job_id)
@@ -2149,13 +2185,23 @@ impl Default for App {
             {
                 return None;
             }
-            let jobs = store.mailboxes(&project.id).ok()?;
+            let jobs = match store.mailboxes(&project.id) {
+                Ok(jobs) => jobs,
+                Err(error) => {
+                    persistence_warning = Some(format!(
+                        "Persistent batch restore failed; execution is blocked: {error}"
+                    ));
+                    return None;
+                }
+            };
             for job in jobs {
-                let profile = job
-                    .config
-                    .as_deref()
-                    .and_then(|config| toml::from_str::<Profile>(config).ok())
-                    .unwrap_or_default();
+                let profile = match decode_persisted_batch_profile(job.config.as_deref(), &job.id) {
+                    Ok(profile) => profile,
+                    Err(error) => {
+                        persistence_warning = Some(format!("{error}; execution is blocked"));
+                        return None;
+                    }
+                };
                 let mut profile = profile;
                 if profile.destination_tls.is_empty() {
                     profile.destination_tls = default_destination_tls();
@@ -2174,6 +2220,15 @@ impl Default for App {
             }
             Some(project.id.clone())
         });
+        if let Some(warning) = persistence_warning.as_ref()
+            && !initial_output.iter().any(|line| line == warning)
+        {
+            initial_output.push_front(warning.clone());
+            initial_output.push_back(
+                "WARNING: durable state could not be restored; repair the ledger before execution."
+                    .into(),
+            );
+        }
         let restored_bulk_preflight_credential_fingerprints = vec![None; restored_bulk_jobs.len()];
         Self {
             form,
@@ -8056,6 +8111,23 @@ mod tests {
         let job = App::job_from_values(&values, &Form::default(), 2).unwrap();
         assert_eq!(job.form.source_password.as_str(), " Secret123 ");
         assert_eq!(job.form.destination_password.as_str(), " Destination! ");
+    }
+
+    #[test]
+    fn corrupt_or_missing_persisted_batch_plan_fails_closed() {
+        let missing = match decode_persisted_batch_profile(None, "job-1") {
+            Ok(_) => panic!("missing persisted plan must be rejected"),
+            Err(error) => error,
+        };
+        assert!(missing.contains("job-1"));
+        assert!(missing.contains("no migration plan"));
+
+        let corrupt = match decode_persisted_batch_profile(Some("not = valid = toml"), "job-2") {
+            Ok(_) => panic!("corrupt persisted plan must be rejected"),
+            Err(error) => error,
+        };
+        assert!(corrupt.contains("job-2"));
+        assert!(corrupt.contains("is corrupt"));
     }
 
     #[test]
