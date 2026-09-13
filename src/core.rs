@@ -147,11 +147,14 @@ pub struct Project {
 
 /// Compact project row for workspace selection. It intentionally omits
 /// mailbox configuration and plan snapshots so switching customers never
-/// loads secrets or large historical plans into the UI shell.
+/// loads secrets or large historical plans into the UI shell. Endpoints are
+/// non-secret identity metadata and make project search useful to operators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectListItem {
     pub id: String,
     pub name: String,
+    pub source_endpoint: String,
+    pub destination_endpoint: String,
     pub phase: Phase,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2108,14 +2111,16 @@ impl StateStore {
     }
     pub fn recent_projects(&self, limit: usize) -> rusqlite::Result<Vec<ProjectListItem>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,name,phase FROM projects ORDER BY created_at DESC, rowid DESC LIMIT ?1",
+            "SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects ORDER BY created_at DESC, rowid DESC LIMIT ?1",
         )?;
         statement
             .query_map([limit as i64], |row| {
                 Ok(ProjectListItem {
                     id: row.get(0)?,
                     name: row.get(1)?,
-                    phase: Phase::parse(&row.get::<_, String>(2)?)?,
+                    source_endpoint: row.get(2)?,
+                    destination_endpoint: row.get(3)?,
+                    phase: Phase::parse(&row.get::<_, String>(4)?)?,
                 })
             })?
             .collect()

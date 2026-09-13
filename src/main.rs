@@ -1940,6 +1940,8 @@ struct App {
     /// This is deliberately separate from `active_run`, which is execution
     /// ownership and must never be inferred from UI selection.
     selected_project_id: Option<String>,
+    projects_open: bool,
+    project_search: String,
     project_id: Option<String>,
     job_id: Option<String>,
     /// Process-local credential material used by the last successful dry
@@ -2203,6 +2205,8 @@ impl Default for App {
             selected_project_id: restored_bulk_project_id
                 .clone()
                 .or_else(|| project_id.clone()),
+            projects_open: false,
+            project_search: String::new(),
             project_id,
             job_id,
             preflight_credential_fingerprint: None,
@@ -2843,6 +2847,75 @@ impl App {
             Err(e) => self.status = format!("Could not create project: {e}"),
         }
     }
+    fn projects_dialog(&mut self, ctx: &egui::Context) {
+        if !self.projects_open {
+            return;
+        }
+        let mut open = self.projects_open;
+        egui::Window::new("Projects")
+            .open(&mut open)
+            .default_width(760.0)
+            .default_height(520.0)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.heading("Migration projects");
+                ui.label(RichText::new("Select a durable project to make it the workspace for reports, mailboxes, activity, and verification.").color(MUTED));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Search");
+                    ui.add(egui::TextEdit::singleline(&mut self.project_search)
+                        .hint_text("project name, source, or destination")
+                        .desired_width(320.0));
+                });
+                ui.add_space(8.0);
+                let search = self.project_search.trim().to_ascii_lowercase();
+                match self.store.recent_projects(500) {
+                    Ok(projects) => {
+                        let visible = projects.into_iter().filter(|project| {
+                            search.is_empty()
+                                || project.name.to_ascii_lowercase().contains(&search)
+                                || project.source_endpoint.to_ascii_lowercase().contains(&search)
+                                || project.destination_endpoint.to_ascii_lowercase().contains(&search)
+                        }).collect::<Vec<_>>();
+                        ui.label(RichText::new(format!("{} project(s)", visible.len())).color(MUTED));
+                        egui::ScrollArea::vertical()
+                            .max_height(360.0)
+                            .show(ui, |ui| {
+                                egui::Grid::new("project_browser").striped(true).show(ui, |ui| {
+                                    ui.strong("Project");
+                                    ui.strong("Phase");
+                                    ui.strong("Source");
+                                    ui.strong("Destination");
+                                    ui.end_row();
+                                    for project in visible {
+                                        let selected = self.selected_project_id.as_deref() == Some(project.id.as_str());
+                                        if ui.selectable_label(selected, &project.name).clicked() {
+                                            self.selected_project_id = Some(project.id.clone());
+                                            self.active_view = WorkspaceView::Overview;
+                                            self.projects_open = false;
+                                        }
+                                        ui.label(format_phase_name(project.phase));
+                                        ui.label(&project.source_endpoint);
+                                        ui.label(&project.destination_endpoint);
+                                        ui.end_row();
+                                    }
+                                });
+                            });
+                    }
+                    Err(error) => {
+                        ui.label(RichText::new(format!("Could not read projects: {error}")).color(ALERT));
+                    }
+                }
+                ui.add_space(8.0);
+                if ui.button("New migration plan").clicked() {
+                    self.selected_project_id = None;
+                    self.active_view = WorkspaceView::Plan;
+                    self.projects_open = false;
+                }
+            });
+        self.projects_open = open && self.projects_open;
+    }
+
     fn settings_dialog(&mut self, ctx: &egui::Context) {
         if !self.settings_open {
             return;
@@ -2887,6 +2960,10 @@ impl App {
                 ui.add_space(8.0);
                 ui.group(|ui| {
                     ui.heading("Migration configuration");
+                    if ui.button("Project browser").clicked() {
+                        self.projects_open = true;
+                        close_requested = true;
+                    }
                     if ui.button("Credentials").clicked() { self.keyring_open = true; }
                     if ui.button(format!("Engine: {}", self.form.engine().label())).clicked() { self.engine_open = true; }
                     if ui.button("Advanced options").clicked() { self.advanced_open = true; }
@@ -7359,6 +7436,7 @@ impl eframe::App for App {
         self.bulk_dialog(ctx);
         self.bulk_live_confirmation(ctx);
         self.settings_dialog(ctx);
+        self.projects_dialog(ctx);
         self.keyring_dialog(ctx);
         self.advanced_dialog(ctx);
         self.engine_dialog(ctx);
