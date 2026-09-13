@@ -35,6 +35,8 @@ This runbook is for attended migrations on a dedicated Unix admin workstation or
 4. Confirm no migration engine remains active outside the application. On Windows and macOS, process-recovery guarantees are weaker than the Linux path; prefer a Unix admin host for production windows.
 5. Re-enter credentials as required, rerun dry validation when the plan or credentials changed, and export the resulting evidence after the retry.
 
+If startup cannot verify a recorded process identity, MailSwiftSync fails closed and keeps that identity in the ledger across restarts. Check the host process list and use **I confirmed no unverified migration process remains** only after confirming that no MailSwiftSync engine is still active; do not delete the state or lock files to bypass this review.
+
 ## Closeout
 
 - Export the project verification report and project-health summary and attach both to the change record.

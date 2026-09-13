@@ -71,6 +71,7 @@ All notable changes to MailSwiftSync are documented here.
 - A panic in the single-run worker is now converted into a failed `Finished` event, allowing normal transactional terminal cleanup and operator review instead of leaving the UI apparently running until restart.
 - When startup cannot verify a recorded process identity, all new execution is blocked until the operator explicitly confirms the host has no surviving MailSwiftSync engine; this closes the non-Linux retry-overlap gap.
 - Cockpit phase-advance failures are now shown as errors instead of being reported as a successful Preflight transition.
+- The production runbook now documents that unverified process identities persist across restarts until explicit operator review clears them.
 - Moved application instance-lock ownership and acquisition into `src/process.rs`, while centralizing restrictive file permissions in `src/credentials.rs`; lock/recovery policy is now separated from the UI controller.
 - Subprocess line framing now reads in fixed-size chunks and caps any single unterminated line at 64 KiB with an explicit truncation marker, preventing pathological engine output from causing unbounded allocation.
 - Subprocess stdout/stderr readers are joined on every completion path, including timeout and cancellation, so reader failures or panics cannot be silently discarded or leave unmanaged reader threads.
