@@ -2321,6 +2321,7 @@ struct App {
     bulk_live_confirmed: bool,
     bulk_confirmation_summary: Option<BulkConfirmationSummary>,
     bulk_clear_confirm_open: bool,
+    pending_bulk_import: Option<std::path::PathBuf>,
     bulk_live_run: bool,
     /// Live retry scope defaults to unresolved rows and is process-local UI
     /// state; durable child/run IDs remain the execution identity.
@@ -2640,6 +2641,7 @@ impl Default for App {
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
             bulk_clear_confirm_open: false,
+            pending_bulk_import: None,
             bulk_live_run: false,
             bulk_retry_scope: BulkRetryScope::default(),
             bulk_source_keyring_apply: String::new(),
@@ -5190,6 +5192,14 @@ impl App {
         }
     }
 
+    fn request_bulk_import(&mut self, path: std::path::PathBuf) {
+        if self.bulk_jobs.is_empty() {
+            self.import_bulk(&path);
+        } else {
+            self.pending_bulk_import = Some(path);
+        }
+    }
+
     fn clear_bulk_queue(&mut self) {
         self.bulk_jobs.clear();
         self.bulk_selected_ids.clear();
@@ -7592,7 +7602,7 @@ impl App {
             ui.add_space(8.0);
             let queue_editable = !self.running();
             ui.horizontal(|ui| {
-                if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.import_bulk(&path); }
+                if ui.add_enabled(!self.running(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
                     if self.bulk_jobs.is_empty() {
                         self.clear_bulk_queue();
@@ -7760,6 +7770,48 @@ impl App {
         self.bulk_clear_confirm_open = open && !close_requested;
         if clear {
             self.clear_bulk_queue();
+        }
+    }
+    fn bulk_import_confirmation(&mut self, ctx: &egui::Context) {
+        if self.pending_bulk_import.is_none() || self.running() {
+            return;
+        }
+        let path_label = self
+            .pending_bulk_import
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .and_then(|name| name.to_str())
+            .unwrap_or("the selected file")
+            .to_owned();
+        let mut open = true;
+        let mut close_requested = false;
+        let mut replace = false;
+        egui::Window::new("Replace mailbox queue?")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading("Replace the current queue?");
+                ui.label(format!(
+                    "Importing {path_label} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.",
+                    self.bulk_jobs.len()
+                ));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Keep current queue").clicked() {
+                        close_requested = true;
+                    }
+                    if ui.button("Replace queue").clicked() {
+                        replace = true;
+                        close_requested = true;
+                    }
+                });
+            });
+        if close_requested || !open {
+            let path = self.pending_bulk_import.take();
+            if replace && let Some(path) = path {
+                self.import_bulk(&path);
+            }
         }
     }
     fn bulk_live_confirmation(&mut self, ctx: &egui::Context) {
@@ -8713,6 +8765,7 @@ impl eframe::App for App {
         self.preview(ctx);
         self.bulk_dialog(ctx);
         self.bulk_clear_confirmation(ctx);
+        self.bulk_import_confirmation(ctx);
         self.bulk_live_confirmation(ctx);
         self.settings_dialog(ctx);
         self.projects_dialog(ctx);
