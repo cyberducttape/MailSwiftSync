@@ -1,0 +1,32 @@
+name: IMAP integration lab
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  real-engine-transfer:
+    name: Dovecot + imapsync transfer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install integration engines
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y dovecot-imapd imapsync
+      - name: Run disposable real-server transfer
+        shell: bash
+        run: |
+          set +e
+          scripts/imap-integration-smoke.sh
+          status=$?
+          set -e
+          if [[ "$status" == 77 ]]; then
+            echo "Integration fixture skipped: this runner does not provide the supported Dovecot 2.4.x package."
+            exit 0
+          fi
+          exit "$status"
