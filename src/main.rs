@@ -1619,6 +1619,18 @@ struct ActiveRunContext {
 }
 
 impl ActiveRunContext {
+    fn owns_batch_child(&self, parent_run_id: &str, child_run_id: &str, job_id: &str) -> bool {
+        matches!(self.kind, RunKind::Batch)
+            && self.run_id == parent_run_id
+            && self
+                .batch_job_ids
+                .iter()
+                .zip(&self.batch_child_run_ids)
+                .any(|(owned_job_id, owned_run_id)| {
+                    owned_job_id == job_id && owned_run_id == child_run_id
+                })
+    }
+
     fn owns_process(&self, process_run_id: &str, job_id: &str) -> bool {
         if self.run_id == process_run_id {
             return matches!(self.kind, RunKind::Single) && self.job_id.as_deref() == Some(job_id);
@@ -4779,15 +4791,24 @@ impl App {
                         child_run_id,
                         reply,
                     } => {
-                        let result = self
-                            .store
-                            .claim_batch_mailbox_for_child(
-                                &project_id,
-                                &job_id,
-                                &parent_run_id,
-                                &child_run_id,
+                        let result = if active_run.as_ref().is_some_and(|run| {
+                            run.project_id == project_id
+                                && run.owns_batch_child(&parent_run_id, &child_run_id, &job_id)
+                        }) {
+                            self.store
+                                .claim_batch_mailbox_for_child(
+                                    &project_id,
+                                    &job_id,
+                                    &parent_run_id,
+                                    &child_run_id,
+                                )
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Err(
+                                "batch claim event does not belong to the active run context"
+                                    .to_owned(),
                             )
-                            .map_err(|error| error.to_string());
+                        };
                         if let Err(error) = &result {
                             durability_errors.push(format!(
                                 "durable claim for child run {child_run_id} failed: {error}"
@@ -7008,9 +7029,12 @@ mod tests {
         };
         assert!(context.owns_process("child-a", "job-a"));
         assert!(context.owns_process("child-b", "job-b"));
+        assert!(context.owns_batch_child("parent", "child-a", "job-a"));
         assert!(!context.owns_process("child-a", "job-b"));
         assert!(!context.owns_process("foreign-child", "job-a"));
         assert!(!context.owns_process("parent", "job-a"));
+        assert!(!context.owns_batch_child("other-parent", "child-a", "job-a"));
+        assert!(!context.owns_batch_child("parent", "child-a", "job-b"));
     }
 
     #[test]
