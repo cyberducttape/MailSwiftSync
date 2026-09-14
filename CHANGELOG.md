@@ -45,6 +45,8 @@ All notable changes to MailSwiftSync are documented here.
   storage-level UTF-8 regression test.
 - Removed the obsolete event-kind parameter from durable detail bounding so
   every SQLite detail writer uses the same explicit storage policy.
+- Extracted bounded output and Markdown-presentation helpers into `ui/output.rs`,
+  reducing presentation utility code in the application composition root.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.

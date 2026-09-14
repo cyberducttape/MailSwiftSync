@@ -122,9 +122,10 @@ use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
     AppearancePreferences, SettingsAction, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
     display_job_state, display_state_key, filter_project_indices, format_elapsed,
-    format_phase_name, job_state_badge, needs_operator_review, password_visibility_id,
-    project_health_state_counts, recommended_next_action, render_account, show_settings,
-    status_color, successful_run_severity, successful_run_status, workflow_step_index,
+    format_phase_name, job_state_badge, markdown_escape, needs_operator_review,
+    password_visibility_id, project_health_state_counts, push_visible_output,
+    recommended_next_action, render_account, show_settings, status_color, successful_run_severity,
+    successful_run_status, truncate_utf8, workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -5226,30 +5227,6 @@ impl App {
             });
         self.stop_confirm_open = open && !close_requested;
     }
-}
-
-fn markdown_escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('|', "\\|")
-        .replace("\r\n", " ")
-        .replace(['\r', '\n'], " ")
-}
-
-fn push_visible_output(output: &mut BoundedLineBuffer, line: String) {
-    let line = truncate_utf8(&line, MAX_DIAGNOSTIC_LINE_BYTES);
-    output.push_bounded(line, MAX_VISIBLE_OUTPUT_LINES, MAX_VISIBLE_OUTPUT_BYTES);
-}
-
-fn truncate_utf8(value: &str, limit: usize) -> String {
-    if value.len() <= limit {
-        return value.to_owned();
-    }
-    let mut end = limit;
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
 }
 
 /// Case-insensitive matching for the ASCII identifiers used by project,
