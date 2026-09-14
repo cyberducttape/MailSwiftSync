@@ -4539,8 +4539,35 @@ impl App {
                     ui.label(format!("{} ready", summary.ready));
                     ui.label(format!("{} running", summary.running));
                     ui.label(format!("{} verified", summary.verified));
+                    if summary.failed > 0 {
+                        ui.label(
+                            RichText::new(format!("{} failed", summary.failed))
+                                .color(colors.danger),
+                        );
+                    }
+                    if summary.attention > 0 {
+                        ui.label(
+                            RichText::new(format!("{} attention", summary.attention))
+                                .color(colors.warning),
+                        );
+                    }
+                    if summary.delta_required > 0 {
+                        ui.label(format!("{} delta required", summary.delta_required));
+                    }
+                    if summary.verification_difference > 0 {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} verification differences",
+                                summary.verification_difference
+                            ))
+                            .color(colors.warning),
+                        );
+                    }
                     let unresolved_count = summary.unresolved();
                     ui.label(RichText::new(format!("{} unresolved", unresolved_count)).color(if unresolved_count > 0 { self.theme_colors().danger } else { self.theme_colors().success }));
+                    if !self.bulk_selected_ids.is_empty() {
+                        ui.label(format!("{} selected", self.bulk_selected_ids.len()));
+                    }
                     if ui.button("Select unresolved").clicked() { self.select_bulk_state_set(BulkStateSet::Unresolved); }
                     if ui.button("Select failed").clicked() { self.select_bulk_state_set(BulkStateSet::Failed); }
                     if ui.button("Select attention").clicked() { self.select_bulk_state_set(BulkStateSet::Attention); }

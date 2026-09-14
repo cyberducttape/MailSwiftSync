@@ -55,6 +55,9 @@ All notable changes to MailSwiftSync are documented here.
 - Added a first-run safe-start card that explains the Connect → Preflight →
   Pilot workflow and provides a direct mailbox-list import action in an empty
   workspace.
+- Expanded the batch cockpit summary to distinguish failed, attention,
+  delta-required, and verification-difference rows, and to show the active
+  selection scope alongside the aggregate unresolved count.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
