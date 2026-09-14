@@ -64,6 +64,8 @@ All notable changes to MailSwiftSync are documented here.
   pages remain bounded while aggregate state counts cover the full project.
 - Moved workspace project-resolution policy into the UI read-model module with
   direct tests, reducing another pure selection rule in `main.rs`.
+- Corrected the architecture documentation to state that raw engine
+  transcripts are process-local diagnostics, not durable ledger data.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
