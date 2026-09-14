@@ -975,6 +975,10 @@ impl App {
             } else {
                 0
             },
+            matches!(
+                self.active_view,
+                WorkspaceView::Activity | WorkspaceView::Verification
+            ),
         );
     }
 

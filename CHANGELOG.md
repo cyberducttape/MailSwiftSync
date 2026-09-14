@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Made full evidence-report loading demand-driven in the workspace snapshot:
+  overview and mailbox views use compact projections, while verification and
+  activity load the detailed report only when opened. Explicit snapshot
+  invalidation clears the detailed report so the next relevant view reloads a
+  fresh durable model.
 - Tightened imapsync evidence admission: an authoritative success now requires
   the engine's explicit `Detected 0 errors` summary in addition to aggregate
   counts and the success marker. Missing error summaries remain incomplete
