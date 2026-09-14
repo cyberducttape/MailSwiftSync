@@ -39,6 +39,9 @@ All notable changes to MailSwiftSync are documented here.
 - Extracted the single-run start safety gate into a typed controller decision,
   matching batch admission's tested fail-closed ordering before credentials,
   engine preparation, or durable run creation begins.
+- Extracted batch-child terminal persistence into `controller::finish_batch_child`,
+  keeping evidence, state, preflight-plan, and checkpoint commits together
+  outside the large egui event reducer.
 - Updated the batch cockpit's import guidance to expose `project_name` and
   distinguish durable customer-migration identity from per-mailbox `name`
   labels.

@@ -41,8 +41,8 @@ use controller::{
     ActiveRunContext, BatchExecutionMode, BatchStartContext, BatchStartDecision,
     BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, LiveAuthProof,
     RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext, SingleStartDecision,
-    admit_batch_run, admit_single_run, assess_plan, batch_mailbox_state, batch_run_status,
-    batch_start_decision, durable_batch_profile_config, durable_single_identity_matches,
+    admit_batch_run, admit_single_run, assess_plan, batch_mailbox_state, batch_start_decision,
+    durable_batch_profile_config, durable_single_identity_matches, finish_batch_child,
     is_verified_terminal_state, prepare_batch_project, prepare_batch_run,
     prepare_selected_batch_jobs, selected_batch_indices, single_start_decision, spawn_batch_worker,
     spawn_single_run_worker, suggested_batch_project_name,
@@ -4148,44 +4148,24 @@ impl App {
                             && matches!(run.kind, RunKind::Batch)
                             && let Some(index) = run.batch_child_index(&job_id, &child_run_id)
                         {
-                            let run_status = batch_run_status(&state);
                             let evidence = self.pending_batch_evidence.get(&child_run_id);
                             let final_state = batch_mailbox_state(&state, evidence);
                             let checkpoint = self
                                 .pending_batch_checkpoints
                                 .get(&child_run_id)
-                                .filter(|_| run_status == "completed");
-                            let preflight_plan = if run.dry_run && state == "ready" {
-                                run.batch_plan_fingerprints.get(index).cloned()
-                            } else {
-                                None
-                            };
-                            let result = if let Some(value) = evidence.as_ref() {
-                                self.store
-                                    .finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
-                                        &run.project_id,
-                                        &job_id,
-                                        &child_run_id,
-                                        run_status,
-                                        &final_state,
-                                        &detail,
-                                        value,
-                                        preflight_plan.as_deref(),
-                                        checkpoint.map(String::as_str),
-                                    )
-                            } else {
-                                self.store
-                                    .finish_run_for_mailbox_with_preflight_plan_and_checkpoint(
-                                        &run.project_id,
-                                        &job_id,
-                                        &child_run_id,
-                                        run_status,
-                                        &final_state,
-                                        &detail,
-                                        preflight_plan.as_deref(),
-                                        checkpoint.map(String::as_str),
-                                    )
-                            };
+                                .map(String::as_str);
+                            let result = finish_batch_child(
+                                &self.store,
+                                run,
+                                controller::BatchChildCompletion {
+                                    job_id: &job_id,
+                                    child_run_id: &child_run_id,
+                                    state: &state,
+                                    detail: &detail,
+                                    evidence,
+                                    checkpoint,
+                                },
+                            );
                             let completion_persisted = result.is_ok();
                             // Durable state is authoritative. Do not show a
                             // terminal child state in the editable queue until
