@@ -97,6 +97,23 @@ pub(crate) struct Profile {
     pub(crate) delete2: bool,
     pub(crate) extra_options: String,
 }
+
+/// Count only locally provable plan fields. Network authentication and
+/// server capability checks belong to the explicit preflight, not this UI
+/// completeness indicator.
+pub(crate) fn completeness(profile: &Profile) -> (usize, usize) {
+    let checks = 4;
+    let passed = [
+        !profile.source_host.trim().is_empty(),
+        !profile.destination_host.trim().is_empty(),
+        !profile.source_user.trim().is_empty(),
+        !profile.destination_user.trim().is_empty(),
+    ]
+    .into_iter()
+    .filter(|ok| *ok)
+    .count();
+    (passed, checks)
+}
 pub(crate) fn default_doveadm_path() -> String {
     "doveadm".into()
 }

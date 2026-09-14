@@ -71,8 +71,8 @@ use imap_probe::{
     probe_tls_capabilities_with_transport,
 };
 use migration_plan::{
-    Form, Profile, auth_method_is_oauth, default_auth_method, default_destination_tls,
-    default_imap_port, effective_destination_tls,
+    Form, Profile, auth_method_is_oauth, completeness as plan_completeness, default_auth_method,
+    default_destination_tls, default_imap_port, effective_destination_tls,
 };
 #[cfg(test)]
 use oauth::xoauth2_payload;
@@ -1578,23 +1578,6 @@ impl App {
         self.settings_open = open && !close_requested;
     }
 
-    fn plan_completeness(&self) -> (usize, usize) {
-        // This is deliberately limited to values the local form can prove.
-        // Network authentication and server capability checks belong to the
-        // explicit preflight assessment below, not to this counter.
-        let checks = 4;
-        let passed = [
-            !self.form.profile.source_host.trim().is_empty(),
-            !self.form.profile.destination_host.trim().is_empty(),
-            !self.form.profile.source_user.trim().is_empty(),
-            !self.form.profile.destination_user.trim().is_empty(),
-        ]
-        .into_iter()
-        .filter(|ok| *ok)
-        .count();
-        (passed, checks)
-    }
-
     fn lifecycle_stepper(&self, ui: &mut egui::Ui) {
         let phases = [
             core::Phase::Discovery,
@@ -1729,7 +1712,7 @@ impl App {
             }
             return;
         }
-        let (passed, total) = self.plan_completeness();
+        let (passed, total) = plan_completeness(&self.form.profile);
         ui.group(|ui| {
             ui.horizontal(|ui| {
                 ui.heading("Migration workspace");
