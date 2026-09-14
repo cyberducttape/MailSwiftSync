@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- The Overview now reflects imported batch queues before durable admission,
+  showing the queue as loaded with its readiness and unresolved counts instead
+  of incorrectly reporting that no project or mailboxes exist.
 - Centralized the Verification UI customer-proof readiness predicate so export
   enablement and readiness messaging use the same completion, review, and
   durable-view gate.
