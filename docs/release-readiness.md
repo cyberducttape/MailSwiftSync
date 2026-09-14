@@ -30,7 +30,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   macOS retains a conservative no-signal fallback only when its native
   identity query cannot validate the recorded process.
 - A compatibility-matrix release gate and verification script are checked into
-  the repository.
+  the repository. Branch validation checks structure; tagged release
+  validation uses strict mode and rejects unresolved evidence markers in the
+  dry-pilot, live-pilot, recovery, or evidence columns.
 - Durable attention reasons now survive restart and are included in Markdown
   and proof-wrapped JSON reports; `mailswiftsync backup <state.db> <backup.db>`
   creates a locked, non-overwriting, SQLite-integrity-checked ledger backup.

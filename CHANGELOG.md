@@ -57,6 +57,8 @@ All notable changes to MailSwiftSync are documented here.
   recovery ownership.
 - Moved the paged historical mailbox renderer into `ui/workspace.rs`, keeping
   read-only mailbox navigation on the cached durable read-model boundary.
+- Added strict compatibility-matrix validation to the release workflow so
+  unresolved evidence markers cannot pass a tagged release gate.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution

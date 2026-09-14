@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+strict=0
+if [[ "${1:-}" == "--release" ]]; then
+  strict=1
+  shift
+fi
 matrix_path="${1:-docs/compatibility-matrix.md}"
 if [[ ! -f "$matrix_path" ]]; then
   echo "FAIL: compatibility matrix not found: $matrix_path" >&2
@@ -10,7 +15,7 @@ fi
 # Keep this gate deliberately structural. It verifies that the release has a
 # real, reviewable data row and that every gate column is populated, while the
 # matrix itself remains the authority for whether a row is supported.
-awk '
+awk -v strict="$strict" '
   function trim(value) {
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
     return value
@@ -32,6 +37,14 @@ awk '
     for (column = 1; column <= 11; column++) {
       if (trim(columns[column + 1]) == "") {
         printf "FAIL: compatibility matrix row has an empty column %d: %s\n", column, $0 > "/dev/stderr"
+        failed = 1
+      }
+      # The normal branch gate accepts an explicitly documented lab row,
+      # including work that is still pending. Release publication must only
+      # proceed when every evidence gate is resolved. Columns 7–10 are the
+      # dry pilot, live pilot, recovery, and evidence results.
+      if (strict && column >= 7 && column <= 10 && tolower(trim(columns[column + 1])) ~ /(pending|not tested|outstanding|tbd|n\/a)/) {
+        printf "FAIL: release matrix row has unresolved evidence in column %d: %s\n", column, $0 > "/dev/stderr"
         failed = 1
       }
     }

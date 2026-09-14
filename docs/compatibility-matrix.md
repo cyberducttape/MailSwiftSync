@@ -3,7 +3,9 @@
 This is the release-gate template for validating a provider/engine pair. A
 row is not considered supported until it has a successful dry pilot, live
 pilot, interruption/recovery test, and evidence export using disposable or
-fully backed-up mailboxes.
+fully backed-up mailboxes. Branch CI checks table structure while work is in
+progress; tagged release validation additionally rejects unresolved markers
+such as `pending`, `not tested`, or `outstanding` in the four evidence columns.
 
 | Source | Destination | Engine | TLS/auth | Folder namespace | Dovecot/provider version | Dry pilot | Live pilot | Recovery | Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
