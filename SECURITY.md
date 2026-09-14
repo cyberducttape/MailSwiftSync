@@ -16,9 +16,14 @@ MailSwiftSync executes the local `imapsync` binary or destination-side `doveadm`
 
 MailSwiftSync does not collect telemetry or retain passwords in its profile file. Passwords are held only while the application is running and passed to the active migration process. Always use dry-run mode before a live migration and use an operating system account with appropriate process visibility controls.
 
+## Recent fixes
+
+- **State directory permissions (9e37e20):** Fixed a directory permission mutation vulnerability where arbitrary state paths could cause MailSwiftSync to chmod pre-existing system directories. Now only restricts permissions on directories MailSwiftSync creates; pre-existing directories are verified writable but never modified.
+
 ## Security boundaries
 
 - **Credential lifetime:** imapsync passwords are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot runs use a child environment variable. Remote Dovecot execution is unavailable because the current compatibility path could expose the source password through process inspection on the destination host; it must not be enabled through an expert flag or wrapper.
+- **State directory ownership:** Explicit state paths undergo permission validation only if the parent directory doesn't already exist. Pre-existing parent directories are verified writable but their permissions are not modified, preventing accidental chmod of system directories.
 - **Transport:** imapsync plans explicitly select IMAPS or STARTTLS according to the plan. A plain source is an explicit warning, not a verified secure plan. The Rustls readiness probe validates certificates on both the IMAPS and STARTTLS paths; it does not magically enforce TLS behavior in an externally supplied engine or wrapper.
 - **Persistence:** profiles, SQLite state, event output, reports, and diagnostics must remain secret-free. Output is redacted before it reaches the visible journal or durable event ledger, but operators must still treat the host, engine executable, imported spreadsheets, and crash/debug tooling as trusted infrastructure.
 - **Destructive actions:** destination deletion and expert options are controlled and require deliberate review. Do not run MailSwiftSync or an engine wrapper from an untrusted account, and do not grant it broader destination access than the migration requires.
