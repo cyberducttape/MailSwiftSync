@@ -225,9 +225,10 @@ mailswiftsync headless /path/to/state.db preflight \
   --destination-secret-file /run/private/destination
 ```
 
-The files must be regular files no larger than 64 KiB and, on Unix, must be
-owner-only. They are read into the zeroizing execution path and are never
-stored in the ledger. Batch headless modes intentionally require credentials
+The files must be regular files no larger than 64 KiB. On Unix they must be
+owner-only; on Windows they must have the protected Owner Rights/System ACL
+that MailSwiftSync validates on the opened file handle. They are read into the
+zeroizing execution path and are never stored in the ledger. Batch headless modes intentionally require credentials
 to be provided through the already admitted durable queue.
 
 These commands are headless control-plane operations; they do not yet replace
