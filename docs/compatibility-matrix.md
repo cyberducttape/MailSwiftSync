@@ -9,7 +9,7 @@ such as `pending`, `not tested`, or `outstanding` in the four evidence columns.
 
 | Source | Destination | Engine | TLS/auth | Folder namespace | Dovecot/provider version | Dry pilot | Live pilot | Recovery | Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Disposable local Dovecot | Disposable local Dovecot | imapsync | STARTTLS with fixture CA bundles and password files | Maildir default / automap | Pinned Debian Bookworm Dovecot 2.3.x, imapsync 2.314 | Automated product lab | Automated product lab, including incremental pass | Controller crash/recovery lab is separate; engine interruption remains pending | Durable state, destination Message-ID, customer-proof export and verifier checks | Reproducible CI fixture; evidence for the generic IMAP path, not a hosted-provider compatibility claim. |
+| Disposable local Dovecot | Disposable local Dovecot | imapsync | STARTTLS with fixture CA bundles and password files | Maildir default / automap | Pinned Debian Bookworm Dovecot 2.3.x, imapsync 2.314 | Automated product lab | Automated product lab, including incremental pass | Packaged controller recovery lab covers controller crash and engine interruption with durable review state | Durable state, destination Message-ID, customer-proof export and verifier checks | Reproducible CI fixture; evidence for the generic IMAP path, not a hosted-provider compatibility claim. |
 
 ## Verified engine fixture
 
@@ -19,10 +19,10 @@ disposable transfer fixture inside that image. The fixture prints the actual
 engine versions and fails rather than silently skipping when the engines are
 unavailable. It drives the packaged MailSwiftSync binary through its profile,
 secret-file, preflight, live, incremental, durable-evidence, customer-proof,
-and verification paths. A separate recovery fixture covers controller crash
-and restart ownership. This remains evidence for a reproducible generic-IMAP
-lab, not a hosted-provider support claim, and engine interruption,
-storage-fault, and provider-specific tests remain separate gates.
+and verification paths. A separate recovery fixture covers controller crash,
+engine interruption, and restart ownership. This remains evidence for a
+reproducible generic-IMAP lab, not a hosted-provider support claim, and
+storage-fault and provider-specific tests remain separate gates.
 
 Minimum test cases for every row:
 

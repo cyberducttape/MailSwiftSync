@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extended the packaged controller recovery lab to interrupt an active engine
+  and verify durable `attention` classification, closing the release matrix's
+  engine-interruption evidence gap.
 - Prevented bulk-import row construction from copying base-form passwords
   into transient row forms before applying row credentials.
 - Extracted the batch launch presentation bridge from `main.rs` into the UI

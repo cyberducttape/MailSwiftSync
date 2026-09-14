@@ -14,10 +14,14 @@ done
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-recovery-lab.XXXXXX")"
 controller_pid=""
+engine_pid=""
 cleanup() {
   if [[ -n "$controller_pid" ]]; then
     kill -KILL "$controller_pid" 2>/dev/null || true
     wait "$controller_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$engine_pid" ]]; then
+    kill -KILL "$engine_pid" 2>/dev/null || true
   fi
   if [[ "${MAILSWIFTSYNC_KEEP_LAB:-0}" != "1" ]]; then
     rm -rf -- "$workspace"
@@ -29,8 +33,9 @@ trap cleanup EXIT
 
 mkdir -p "$workspace/config/mailswiftsync"
 chmod 0700 "$workspace" "$workspace/config" "$workspace/config/mailswiftsync"
-cat > "$workspace/fake-engine" <<'EOF'
+cat > "$workspace/fake-engine" <<EOF
 #!/usr/bin/env bash
+printf '%s' "\$\$" > "$workspace/engine.pid"
 trap '' TERM INT HUP
 sleep 300
 EOF
@@ -133,3 +138,59 @@ if mailswiftsync status "$state" | grep -q '"active_processes": \[[^]]'; then
   exit 1
 fi
 echo "PASS: recovery cleared process ownership and classified work for review"
+
+# Interrupt the engine while leaving the controller alive. This proves that
+# an engine failure is durable and reviewable separately from controller loss.
+engine_state="$workspace/engine-interruption.db"
+rm -f "$workspace/engine.pid"
+mailswiftsync headless "$engine_state" preflight \
+  --source-secret-file "$workspace/source.secret" \
+  --destination-secret-file "$workspace/destination.secret" \
+  >"$workspace/engine-interruption.log" 2>&1 &
+controller_pid="$!"
+
+running=0
+for _ in {1..100}; do
+  if [[ -f "$engine_state" ]] && [[ -s "$workspace/engine.pid" ]] && \
+    mailswiftsync status "$engine_state" 2>/dev/null | grep -q '"state": "running"'; then
+    running=1
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$running" != 1 ]]; then
+  echo "FAIL: engine interruption fixture never recorded active work" >&2
+  tail -40 "$workspace/engine-interruption.log" >&2 || true
+  exit 1
+fi
+engine_pid="$(<"$workspace/engine.pid")"
+if [[ ! "$engine_pid" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: engine interruption fixture recorded an invalid engine PID" >&2
+  exit 1
+fi
+# The runner owns the engine as a process group. Interrupt the whole group so
+# the wrapper's blocking child cannot survive as an orphan and turn this into
+# a different, correctly-rejected process-identity scenario.
+kill -KILL -- "-$engine_pid"
+engine_pid=""
+
+failed=0
+for _ in {1..100}; do
+  if mailswiftsync status "$engine_state" 2>/dev/null | grep -q '"state": "failed"'; then
+    failed=1
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$failed" != 1 ]]; then
+  echo "FAIL: interrupted engine was not classified as a durable failure" >&2
+  tail -40 "$workspace/engine-interruption.log" >&2 || true
+  exit 1
+fi
+if ! mailswiftsync status "$engine_state" 2>/dev/null | grep -q '"phase": "attention"'; then
+  echo "FAIL: interrupted engine did not move the project into operator review" >&2
+  exit 1
+fi
+wait "$controller_pid" 2>/dev/null || true
+controller_pid=""
+echo "PASS: engine interruption remained durable and was classified for review"
