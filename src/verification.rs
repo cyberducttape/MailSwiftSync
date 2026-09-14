@@ -71,7 +71,7 @@ impl ImapsyncEvidenceAccumulator {
             source_bytes: self.source_bytes?,
             destination_bytes: self.destination_bytes?,
             unmatched_messages: if self.sync_good { 0 } else { 1 },
-            failed_messages: self.failed_messages.unwrap_or(0),
+            failed_messages: self.failed_messages?,
             source_folders: self.source_folders?,
             destination_folders: self.destination_folders?,
             authoritative: self.sync_good,
@@ -211,6 +211,7 @@ mod tests {
             "Host2 Nb messages: 42 messages",
             "Host1 Total size: 1000 bytes",
             "Host2 Total size: 1000 bytes",
+            "Detected 0 errors",
         ] {
             accumulator.observe(line);
         }
@@ -254,6 +255,23 @@ mod tests {
             "The sync looks good".into(),
         ];
         assert!(parse_imapsync_evidence(&lines).is_none());
+    }
+
+    #[test]
+    fn imapsync_parser_requires_explicit_error_summary() {
+        let mut accumulator = ImapsyncEvidenceAccumulator::default();
+        for line in [
+            "Host1 Nb folders: 1 folders",
+            "Host2 Nb folders: 1 folders",
+            "Host1 Nb messages: 1 messages",
+            "Host2 Nb messages: 1 messages",
+            "Host1 Total size: 10 bytes",
+            "Host2 Total size: 10 bytes",
+            "The sync looks good",
+        ] {
+            accumulator.observe(line);
+        }
+        assert!(accumulator.evidence().is_none());
     }
 
     #[test]

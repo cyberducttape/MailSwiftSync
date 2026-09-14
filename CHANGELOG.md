@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Tightened imapsync evidence admission: an authoritative success now requires
+  the engine's explicit `Detected 0 errors` summary in addition to aggregate
+  counts and the success marker. Missing error summaries remain incomplete
+  evidence instead of being interpreted as zero failures.
 - Added aggregate mailbox state counts for overview health cards. Large
   durable queues no longer require loading every mailbox record just to render
   total, ready, running, verified, and attention counts.
