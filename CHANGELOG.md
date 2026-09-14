@@ -30,6 +30,8 @@ All notable changes to MailSwiftSync are documented here.
 - Made certificate pinning fail closed for Dovecot plans, where the native
   engine does not enforce application-level leaf pins, and clarified the UI
   to expose only the applicable source CA control.
+- Made ledger restore reject SQLite WAL/SHM sidecars beside the source, which
+  prevents copying a stale main database file from a non-standalone snapshot.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

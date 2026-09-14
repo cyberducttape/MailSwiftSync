@@ -38,6 +38,15 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
     if backup == destination {
         return Err("Restore source and destination must be different files.".into());
     }
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{}", backup.display(), suffix));
+        if sidecar.exists() {
+            return Err(format!(
+                "restore source has a SQLite sidecar {}; use the backup command to create a standalone snapshot before restoring",
+                sidecar.display()
+            ));
+        }
+    }
     core::StateStore::open_readonly(backup)
         .map_err(|error| format!("restore source is not a valid current ledger: {error}"))?;
     let parent = destination

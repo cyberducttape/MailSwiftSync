@@ -7346,6 +7346,12 @@ mod tests {
         std::fs::remove_file(orphaned_sidecar).unwrap();
         assert!(restore_ledger(&source, &destination).unwrap().is_none());
 
+        let source_sidecar = PathBuf::from(format!("{}-wal", source.display()));
+        std::fs::write(&source_sidecar, b"live sqlite sidecar").unwrap();
+        let error = restore_ledger(&source, &destination).unwrap_err();
+        assert!(error.contains("restore source has a SQLite sidecar"));
+        std::fs::remove_file(source_sidecar).unwrap();
+
         core::StateStore::in_memory()
             .unwrap()
             .backup_to(&destination.with_extension("replacement.db"))
