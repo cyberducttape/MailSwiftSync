@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added a job-level timeout to the packaged release integration gate so a
+  hung disposable server or controller cannot consume a release runner
+  indefinitely.
 - Moved migration-plan readiness invalidation, assessment, and project creation
   into `ui/plan.rs`, further reducing plan orchestration in `main.rs`.
 - Added the controller crash and engine-interruption recovery fixture to the
