@@ -4433,6 +4433,12 @@ impl App {
                             .color(colors.warning),
                         );
                     }
+                    if summary.cancelled > 0 {
+                        ui.label(
+                            RichText::new(format!("{} cancelled", summary.cancelled))
+                                .color(colors.warning),
+                        );
+                    }
                     let unresolved_count = summary.unresolved();
                     ui.label(RichText::new(format!("{} unresolved", unresolved_count)).color(if unresolved_count > 0 { self.theme_colors().danger } else { self.theme_colors().success }));
                     if !self.bulk_selected_ids.is_empty() {
