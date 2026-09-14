@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Corrected the CI `actions/upload-artifact` SHA to the actual reviewed
+  `v4.6.0` commit, allowing platform jobs and failure-log uploads to start.
 - Fixed Windows compilation of signing-key DACL verification and executable
   resolution so the native MSVC CI path uses the correct Windows APIs and
   handles `.exe` candidates without platform-specific formatting errors.
