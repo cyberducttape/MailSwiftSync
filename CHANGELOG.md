@@ -14,6 +14,10 @@ All notable changes to MailSwiftSync are documented here.
   explicit `BatchExecutionMode` enum rather than independent live booleans,
   making preflight/live intent visible and consistent across controller
   boundaries.
+- Bulk imports now accept an optional `project_name` column. Customer/project
+  identity is carried into the durable batch project while the existing `name`
+  column remains the per-mailbox queue label, preventing imported migrations
+  from collapsing into generic project names.
 
 - Extracted deterministic batch plan materialization into
   `controller/batch_admission.rs`: selected durable IDs, Dovecot checkpoints,

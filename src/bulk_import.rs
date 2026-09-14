@@ -177,6 +177,12 @@ pub(crate) fn job_from_values(
     if let Some(value) = values.get("destination_credential_id") {
         form.profile.destination_credential_id = value.trim().to_owned();
     }
+    if let Some(project_name) = values.get("project_name") {
+        let project_name = project_name.trim();
+        if !project_name.is_empty() {
+            form.profile.name = project_name.chars().take(120).collect();
+        }
+    }
     form.destination_password = SecretString::new(destination_password);
     form.validate_for_import()
         .map_err(|error| format!("Row {row}: {error}"))?;
@@ -316,7 +322,9 @@ fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_workbook_input;
+    use super::{job_from_values, validate_workbook_input};
+    use crate::migration_plan::Form;
+    use std::collections::HashMap;
 
     #[test]
     fn legacy_xls_input_must_be_a_parseable_biff_workbook() {
@@ -332,5 +340,21 @@ mod tests {
         assert!(error.contains("could not be parsed as a legacy BIFF workbook"));
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn project_name_import_metadata_is_separate_from_mailbox_label() {
+        let values = HashMap::from([
+            ("project_name".into(), "Acme Corp cutover".into()),
+            ("name".into(), "finance mailbox".into()),
+            ("source_host".into(), "old.example.test".into()),
+            ("source_user".into(), "finance@old.example.test".into()),
+            ("destination_host".into(), "new.example.test".into()),
+            ("destination_user".into(), "finance@new.example.test".into()),
+        ]);
+
+        let job = job_from_values(values, &Form::default(), 2).unwrap();
+        assert_eq!(job.form.profile.name, "Acme Corp cutover");
+        assert_eq!(job.label, "finance mailbox");
     }
 }
