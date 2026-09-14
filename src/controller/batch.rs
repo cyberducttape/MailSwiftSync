@@ -17,6 +17,12 @@ pub(crate) fn batch_run_status(state: &str) -> &'static str {
 }
 
 pub(crate) fn batch_mailbox_state(state: &str, evidence: Option<&core::MailboxEvidence>) -> String {
+    // A late or malformed evidence event must never mask a failed or
+    // cancelled transfer. Only successful/continuable child states may be
+    // upgraded to an evidence-derived verification state.
+    if !matches!(state, "ready" | "completed" | "delta_required") {
+        return state.to_owned();
+    }
     evidence.map_or_else(
         || state.to_owned(),
         |value| {
@@ -231,6 +237,7 @@ mod tests {
         BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
         batch_start_decision, selected_batch_indices, suggested_batch_project_name,
     };
+    use crate::core::MailboxEvidence;
     use crate::migration_plan::Form;
     use std::collections::HashSet;
 
@@ -294,6 +301,25 @@ mod tests {
         assert_eq!(
             batch_mailbox_state("delta_required", None),
             "delta_required"
+        );
+        let exact_evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 10,
+            destination_bytes: 10,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: true,
+        };
+        assert_eq!(
+            batch_mailbox_state("failed", Some(&exact_evidence)),
+            "failed"
+        );
+        assert_eq!(
+            batch_mailbox_state("completed", Some(&exact_evidence)),
+            "verified"
         );
     }
 

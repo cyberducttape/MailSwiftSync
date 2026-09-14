@@ -47,6 +47,9 @@ All notable changes to MailSwiftSync are documented here.
   labels.
 - Expanded the distribution installation guide with release-manifest, SBOM
   checksum, and optional GitHub build-provenance verification instructions.
+- Hardened batch completion state mapping so evidence can upgrade only
+  successful/continuable child states; late evidence can no longer mask a
+  failed or cancelled transfer as `verified`.
 - Extracted typed batch-start safety decisions into the controller policy
   module. Stale durable state, profile/read-only/process-review blocks, live
   confirmation, and storage availability now share a tested ordering contract
