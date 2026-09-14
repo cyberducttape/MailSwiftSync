@@ -414,6 +414,7 @@ impl App {
             verification_filter_cache_state: String::new(),
             verification_filter_cache_offset: u32::MAX,
             verification_filter_cache_revision: None,
+            verification_filter_cache_project: None,
             activity_show_all: false,
             activity_search: String::new(),
             activity_status_filter: "all".into(),

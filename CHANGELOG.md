@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Bound the verification filter-index cache to the active project as well as
+  durable revision and page state, preventing stale row indices when switching
+  between projects with equivalent revisions.
 - The verification workspace now shows an explicit customer-proof readiness
   message, distinguishing a deliverable-ready project from a proof that is
   still gated by incomplete or stale durable state.
