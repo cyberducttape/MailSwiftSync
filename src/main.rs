@@ -1185,26 +1185,6 @@ impl App {
         }
     }
 
-    fn source_transport_warning(&mut self, ui: &mut egui::Ui) {
-        if self.form.profile.source_tls != "plain" {
-            return;
-        }
-        ui.group(|ui| {
-            ui.label(RichText::new("INSECURE SOURCE TRANSPORT").strong().color(self.theme_colors().danger));
-            ui.label("Plain IMAP can expose the source password and mailbox data in transit.");
-            let response = ui.add_enabled(
-                !self.running(),
-                egui::Checkbox::new(
-                    &mut self.form.profile.allow_insecure_source_transport,
-                    "I understand and explicitly allow cleartext source transport",
-                ),
-            );
-            response.on_hover_text(
-                "Use IMAPS or STARTTLS whenever possible. This acknowledgement is required before any authenticated operation, including dry preflight, and is included in the preflight fingerprint.",
-            );
-        });
-    }
-
     fn project_summary(&mut self, ui: &mut egui::Ui) {
         self.lifecycle_stepper(ui);
         if self.active_project_id().is_none() && self.bulk_jobs.is_empty() {

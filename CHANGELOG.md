@@ -41,6 +41,8 @@ All notable changes to MailSwiftSync are documented here.
   keeping durable project navigation with the cached workspace read model.
 - Extracted the migration lifecycle stepper into `ui/overview.rs`, keeping the
   operator-facing phase workflow separate from application composition.
+- Moved the cleartext source-transport warning into `ui/overview.rs` so the
+  first-run safety guidance remains alongside the migration lifecycle view.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
