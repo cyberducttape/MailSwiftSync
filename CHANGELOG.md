@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted batch queue replacement and destructive-action confirmations into
+  a dedicated UI module, keeping modal safety gates separate from queue
+  rendering and execution controls.
 - The batch setup dialog now previews the derived durable customer/project
   name and provides a one-click way to apply it, reducing generic project names
   in the ledger and customer evidence.
