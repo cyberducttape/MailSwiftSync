@@ -2611,6 +2611,17 @@ impl StateStore {
             })?
             .collect()
     }
+
+    /// Return the monotonic durable event position used by presentation
+    /// caches. A single cheap query lets another controller's committed work
+    /// invalidate the workspace read model without rebuilding every
+    /// projection on every refresh interval.
+    pub fn read_model_revision(&self) -> rusqlite::Result<i64> {
+        self.connection
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |row| {
+                row.get(0)
+            })
+    }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row(
@@ -5863,5 +5874,15 @@ destination_port = "000"
         assert_eq!(projects[0].name, "Second customer");
         assert_eq!(projects[0].phase, Phase::Discovery);
         assert_ne!(projects[0].id, first.id);
+    }
+
+    #[test]
+    fn read_model_revision_advances_after_durable_events() {
+        let db = StateStore::in_memory().unwrap();
+        let before = db.read_model_revision().unwrap();
+        db.create_project("Revision test", "source", "destination")
+            .unwrap();
+        let after = db.read_model_revision().unwrap();
+        assert!(after > before);
     }
 }

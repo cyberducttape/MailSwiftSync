@@ -52,6 +52,7 @@ pub(crate) struct WorkspaceSnapshot {
     pub(crate) jobs: Vec<core::MailboxJob>,
     pub(crate) mailbox_counts: core::MailboxStateCounts,
     snapshot_project_id: Option<String>,
+    durable_revision: Option<i64>,
     refreshed_at: Option<Instant>,
     last_successful_refresh: Option<Instant>,
     refresh_error: Option<String>,
@@ -63,6 +64,7 @@ impl WorkspaceSnapshot {
         self.verification_rows.clear();
         self.verification_loaded = false;
         self.verification_offset = 0;
+        self.durable_revision = None;
     }
 
     pub(crate) fn stale_notice(&self) -> Option<String> {
@@ -102,6 +104,22 @@ impl WorkspaceSnapshot {
 
         self.refreshed_at = Some(Instant::now());
         let mut refresh_errors = Vec::new();
+        let observed_revision = match store.read_model_revision() {
+            Ok(revision) => Some(revision),
+            Err(error) => {
+                refresh_errors.push(format!("read-model revision: {error}"));
+                None
+            }
+        };
+        if !project_changed
+            && !report_needs_load
+            && observed_revision.is_some()
+            && observed_revision == self.durable_revision
+        {
+            self.refresh_error = None;
+            self.last_successful_refresh = Some(Instant::now());
+            return;
+        }
         let project_limit = if all_projects_loaded { usize::MAX } else { 500 };
         match store.recent_projects(project_limit) {
             Ok(value) => {
@@ -174,6 +192,7 @@ impl WorkspaceSnapshot {
             Err(error) => refresh_errors.push(format!("run history: {error}")),
         }
         if refresh_errors.is_empty() {
+            self.durable_revision = observed_revision;
             self.last_successful_refresh = Some(Instant::now());
             self.refresh_error = None;
         } else {

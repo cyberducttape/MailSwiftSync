@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added a cheap durable read-model revision check. The workspace now polls for
+  committed event-sequence changes and skips rebuilding project, mailbox, run,
+  and verification projections when the ledger is unchanged, while preserving
+  refreshes for local invalidation and external controller activity.
 - Expanded the Dovecot pinning regression coverage to assert that both source
   and destination certificate pins are rejected rather than silently treated
   as enforced controls.
