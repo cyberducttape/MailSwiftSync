@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved single-run admission, durable preflight/live gating, command
+  preparation, and worker startup into `controller/single_start.rs`, so GUI
+  and headless callers share a controller-owned launch boundary.
 - Extracted application bootstrap, durable-state recovery, profile restore,
   and initial workspace construction into `bootstrap.rs`, leaving `main.rs`
   focused on the runtime application shell.

@@ -11,6 +11,7 @@ mod preflight;
 pub(crate) mod probe;
 mod run;
 mod single_admission;
+mod single_start;
 
 pub(crate) use batch::{
     BatchExecutionMode, BatchStartContext, BatchStartDecision, BulkConfirmationSummary,
