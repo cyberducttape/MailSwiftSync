@@ -24,6 +24,26 @@ impl PendingDbEvent {
     }
 }
 
+/// Persist structured execution events without exposing SQLite's tuple-shaped
+/// write API to the event reducer. Raw engine output is never accepted here;
+/// callers enqueue only classified, bounded durable details.
+pub(crate) fn persist_pending_events(
+    store: &core::StateStore,
+    events: &[PendingDbEvent],
+) -> rusqlite::Result<()> {
+    let batch = events
+        .iter()
+        .map(|event| {
+            (
+                event.run_id.as_str(),
+                event.kind.as_str(),
+                event.detail.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    store.record_events_for_runs_batch(&batch)
+}
+
 /// Presentation output is accepted only from the currently owned process
 /// and only until that process has emitted its terminal event.
 pub(crate) fn run_line_is_current(

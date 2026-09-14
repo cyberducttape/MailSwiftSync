@@ -23,7 +23,8 @@ pub(crate) use batch_admission::{
 pub(crate) use batch_completion::{BatchChildCompletion, finish_batch_child};
 pub(crate) use batch_worker::launch_batch_worker;
 pub(crate) use events::{
-    Event, PendingDbEvent, StreamOutcome, process_event_is_current, run_line_is_current,
+    Event, PendingDbEvent, StreamOutcome, persist_pending_events, process_event_is_current,
+    run_line_is_current,
 };
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use preflight::{

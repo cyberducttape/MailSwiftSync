@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Centralized conversion and persistence of pending structured execution
+  events in the controller event module, removing duplicate SQLite tuple
+  plumbing from `poll()` while preserving its durability retry ordering.
 - Hardened native CI with a per-job timeout and uncaptured platform test
   output, preventing an indefinitely stuck runner and making cross-platform
   failures actionable from the workflow log.

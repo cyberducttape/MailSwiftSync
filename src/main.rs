@@ -48,8 +48,8 @@ use controller::{
     admit_single_run, assess_plan, batch_mailbox_state, batch_start_decision,
     capability_observation_matches, capability_probe_result_matches,
     decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, launch_batch_worker, process_event_is_current, run_line_is_current,
-    single_start_decision, spawn_single_run_worker,
+    is_verified_terminal_state, launch_batch_worker, persist_pending_events,
+    process_event_is_current, run_line_is_current, single_start_decision, spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -3778,17 +3778,7 @@ impl App {
                         // RunLine(s) and JobFinished in one poll cycle and
                         // lose the child log to the terminal-state guard.
                         if !pending_db_events.is_empty() {
-                            let batch = pending_db_events
-                                .iter()
-                                .map(|event| {
-                                    (
-                                        event.run_id.as_str(),
-                                        event.kind.as_str(),
-                                        event.detail.as_str(),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            match self.store.record_events_for_runs_batch(&batch) {
+                            match persist_pending_events(&self.store, &pending_db_events) {
                                 Ok(()) => {
                                     pending_db_events.clear();
                                     if self.durability_recovery_pending {
@@ -3968,19 +3958,9 @@ impl App {
             self.mark_bulk_state_changed();
         }
         if !pending_db_events.is_empty() {
-            let batch = pending_db_events
-                .iter()
-                .map(|event| {
-                    (
-                        event.run_id.as_str(),
-                        event.kind.as_str(),
-                        event.detail.as_str(),
-                    )
-                })
-                .collect::<Vec<_>>();
             let result = active_run.as_ref().map_or_else(
                 || Err(rusqlite::Error::InvalidQuery),
-                |_| self.store.record_events_for_runs_batch(&batch),
+                |_| persist_pending_events(&self.store, &pending_db_events),
             );
             if let Err(error) = result {
                 self.durability_recovery_pending = true;
