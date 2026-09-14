@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted transactional project-report assembly and paged verification
+  projections into `core/reports.rs`, separating evidence read models from
+  the main SQLite state-transition implementation.
 - Moved the egui application update/render loop into `ui/app.rs`, leaving
   `main.rs` focused on application composition, state, and shared helpers.
 - Moved event polling, run-line ownership handling, durable event batching,
