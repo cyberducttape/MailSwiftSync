@@ -13,6 +13,8 @@ All notable changes to MailSwiftSync are documented here.
   keeping report assembly boundaries explicit without changing persistence.
 - Extracted durable project, mailbox, run, and batch read-model types into
   `core::models`, preserving the existing public core API.
+- Extracted IMAP capability and quota read-model parsing from the SQLite store
+  into `core::capabilities`, keeping protocol policy independently testable.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

@@ -12,10 +12,12 @@ use std::{
 };
 use uuid::Uuid;
 
+mod capabilities;
 mod engine;
 mod evidence;
 mod models;
 mod state;
+pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
 pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
@@ -173,132 +175,6 @@ pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
     let mut hasher = Crc32Hasher::new();
     hasher.update(&decoded[..checksum_offset]);
     hasher.finalize() == expected
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServerCapabilities {
-    pub values: BTreeSet<String>,
-    /// Whether the authenticated LIST response contained at least one
-    /// untagged mailbox record. A tagged OK alone does not prove discovery.
-    pub inventory_complete: bool,
-    pub mailbox_count: usize,
-    pub special_use_mailboxes: usize,
-    /// Whether a QUOTA response was observed after authentication. False is
-    /// deliberately not interpreted as “there is no quota”; many providers
-    /// do not advertise or expose a reliable quota query.
-    pub quota_observed: bool,
-    pub quota_exceeded: bool,
-}
-
-impl ServerCapabilities {
-    #[cfg(test)]
-    pub fn parse(response: &str) -> Self {
-        Self::parse_with_inventory(response, "")
-    }
-
-    /// Parse post-auth capabilities together with the authenticated LIST
-    /// response. Inventory is counted from untagged LIST records, not the
-    /// tagged completion response.
-    pub fn parse_with_inventory(capability_response: &str, list_response: &str) -> Self {
-        let mut values = BTreeSet::new();
-        for line in capability_response.lines() {
-            let mut fields = line.split_whitespace();
-            if fields.next() == Some("*")
-                && fields
-                    .next()
-                    .is_some_and(|keyword| crate::imap_protocol::atom_eq(keyword, "CAPABILITY"))
-            {
-                for token in fields {
-                    values.insert(token.to_ascii_uppercase());
-                }
-            }
-        }
-        let inventory_lines = list_response
-            .lines()
-            .filter(|line| is_untagged_list_record(line))
-            .collect::<Vec<_>>();
-        let special_use_mailboxes = inventory_lines
-            .iter()
-            .filter(|line| {
-                [
-                    r"\ALL",
-                    r"\ARCHIVE",
-                    r"\DRAFTS",
-                    r"\FLAGGED",
-                    r"\JUNK",
-                    r"\SENT",
-                    r"\TRASH",
-                ]
-                .iter()
-                .any(|attribute| crate::imap_protocol::list_has_attribute(line, attribute))
-            })
-            .count();
-        Self {
-            values,
-            inventory_complete: !inventory_lines.is_empty(),
-            mailbox_count: inventory_lines.len(),
-            special_use_mailboxes,
-            quota_observed: false,
-            quota_exceeded: false,
-        }
-    }
-
-    /// Incorporate an optional authenticated `GETQUOTAROOT` response. A
-    /// quota is considered exhausted only when a finite non-zero limit is
-    /// reported and usage is at or above that limit. Malformed or absent
-    /// quota data remains unknown instead of becoming a false success.
-    pub fn record_quota_response(&mut self, response: &str) {
-        for line in response.lines() {
-            let tokens = line.split_whitespace().collect::<Vec<_>>();
-            if !crate::imap_protocol::is_untagged_response(line, "QUOTA") {
-                continue;
-            }
-            let mut saw_valid_resource = false;
-            let mut index = 2;
-            while index + 2 < tokens.len() {
-                let resource = tokens[index].trim_matches(['(', ')']).to_ascii_uppercase();
-                if matches!(resource.as_str(), "STORAGE" | "MESSAGE" | "MESSAGES") {
-                    let usage = tokens[index + 1].parse::<u64>();
-                    let limit = tokens[index + 2].parse::<u64>();
-                    if let (Ok(usage), Ok(limit)) = (usage, limit) {
-                        saw_valid_resource = true;
-                        if limit > 0 && usage >= limit {
-                            self.quota_exceeded = true;
-                        }
-                    }
-                    index += 3;
-                } else {
-                    index += 1;
-                }
-            }
-            self.quota_observed |= saw_valid_resource;
-        }
-    }
-    pub fn supports(&self, capability: &str) -> bool {
-        self.values.contains(&capability.to_ascii_uppercase())
-    }
-    /// Describe capabilities observed during readiness probing. These are
-    /// possibilities exposed by the server, not promises about which
-    /// algorithms the selected transfer engine will invoke.
-    pub fn detected_capabilities(&self) -> Vec<&'static str> {
-        let mut capabilities = vec!["UID support advertised"];
-        if self.supports("QRESYNC") {
-            capabilities.push("QRESYNC advertised");
-        } else if self.supports("CONDSTORE") {
-            capabilities.push("CONDSTORE advertised");
-        }
-        if self.supports("SPECIAL-USE") {
-            capabilities.push("SPECIAL-USE advertised");
-        }
-        if self.supports("UIDPLUS") {
-            capabilities.push("UIDPLUS advertised");
-        }
-        capabilities
-    }
-}
-
-fn is_untagged_list_record(line: &str) -> bool {
-    crate::imap_protocol::is_untagged_response(line, "LIST")
 }
 
 pub struct StateStore {
