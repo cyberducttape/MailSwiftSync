@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Verification filter caching now keys on the loaded page row count as well as
+  project, revision, offset, search, and filter, preventing index reuse across
+  changed page payloads.
 - Bound the verification filter-index cache to the active project as well as
   durable revision and page state, preventing stale row indices when switching
   between projects with equivalent revisions.

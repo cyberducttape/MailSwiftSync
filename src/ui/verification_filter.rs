@@ -26,12 +26,13 @@ impl crate::App {
         let search = self.verification_search.trim().to_owned();
         let revision = self.ui_snapshot.durable_revision();
         let project_id = self.active_project_id().map(str::to_owned);
+        let row_count = self.ui_snapshot.verification_rows.len();
         if self.verification_filter_cache_search == search
             && self.verification_filter_cache_state == self.verification_filter
             && self.verification_filter_cache_offset == self.verification_offset
             && self.verification_filter_cache_revision == revision
             && self.verification_filter_cache_project == project_id
-            && self.verification_visible_indices.len() <= self.ui_snapshot.verification_rows.len()
+            && self.verification_filter_cache_rows == row_count
         {
             return;
         }
@@ -46,6 +47,7 @@ impl crate::App {
         self.verification_filter_cache_offset = self.verification_offset;
         self.verification_filter_cache_revision = revision;
         self.verification_filter_cache_project = project_id;
+        self.verification_filter_cache_rows = row_count;
     }
 }
 

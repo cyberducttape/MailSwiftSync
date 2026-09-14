@@ -299,6 +299,7 @@ struct App {
     verification_filter_cache_offset: u32,
     verification_filter_cache_revision: Option<i64>,
     verification_filter_cache_project: Option<String>,
+    verification_filter_cache_rows: usize,
     activity_show_all: bool,
     activity_search: String,
     activity_status_filter: String,
