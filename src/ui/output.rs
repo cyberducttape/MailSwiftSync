@@ -29,3 +29,16 @@ pub(crate) fn truncate_utf8(value: &str, limit: usize) -> String {
     }
     value[..end].to_owned()
 }
+
+/// Allocation-free matching for the ASCII identifiers used by workspace
+/// filters. The query is normalized by callers when repeated matching is
+/// needed; this helper preserves the original strings.
+pub(crate) fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}

@@ -47,6 +47,8 @@ All notable changes to MailSwiftSync are documented here.
   every SQLite detail writer uses the same explicit storage policy.
 - Extracted bounded output and Markdown-presentation helpers into `ui/output.rs`,
   reducing presentation utility code in the application composition root.
+- Consolidated allocation-free case-insensitive filtering in the shared UI
+  layer so project and mailbox search paths use one tested utility.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.

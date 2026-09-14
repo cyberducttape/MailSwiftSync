@@ -10,7 +10,9 @@ mod workspace;
 #[cfg(test)]
 pub(crate) use account::password_reveal_allowed;
 pub(crate) use account::{password_visibility_id, render_account};
-pub(crate) use output::{markdown_escape, push_visible_output, truncate_utf8};
+pub(crate) use output::{
+    contains_ascii_case_insensitive, markdown_escape, push_visible_output, truncate_utf8,
+};
 pub(crate) use settings::{SettingsAction, show as show_settings};
 pub(crate) use status::{
     StatusMessage, StatusSeverity, display_job_state, display_state_key, format_elapsed,

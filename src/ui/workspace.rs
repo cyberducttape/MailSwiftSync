@@ -5,6 +5,7 @@
 //! invalidates it immediately when the selected project changes.
 
 use crate::core::{self, StateStore};
+use crate::ui::contains_ascii_case_insensitive;
 use std::time::{Duration, Instant};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
@@ -37,13 +38,6 @@ pub(crate) fn filter_project_indices(
             visible_indices.push(index);
         }
     }
-}
-
-fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
-    value
-        .as_bytes()
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// The durable read model rendered by the workspace views. Individual read

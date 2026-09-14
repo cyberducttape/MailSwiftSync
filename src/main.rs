@@ -121,8 +121,8 @@ use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
     AppearancePreferences, SettingsAction, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
-    display_job_state, display_state_key, filter_project_indices, format_elapsed,
-    format_phase_name, job_state_badge, markdown_escape, needs_operator_review,
+    contains_ascii_case_insensitive, display_job_state, display_state_key, filter_project_indices,
+    format_elapsed, format_phase_name, job_state_badge, markdown_escape, needs_operator_review,
     password_visibility_id, project_health_state_counts, push_visible_output,
     recommended_next_action, render_account, show_settings, status_color, successful_run_severity,
     successful_run_status, truncate_utf8, workflow_step_index,
@@ -5227,20 +5227,6 @@ impl App {
             });
         self.stop_confirm_open = open && !close_requested;
     }
-}
-
-/// Case-insensitive matching for the ASCII identifiers used by project,
-/// mailbox, endpoint, and run filters. This avoids allocating a lowercase
-/// string for every candidate during each egui frame.
-fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    let needle = needle.as_bytes();
-    value
-        .as_bytes()
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 impl eframe::App for App {
