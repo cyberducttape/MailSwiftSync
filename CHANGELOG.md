@@ -18,6 +18,10 @@ All notable changes to MailSwiftSync are documented here.
   identity is carried into the durable batch project while the existing `name`
   column remains the per-mailbox queue label, preventing imported migrations
   from collapsing into generic project names.
+- Reframed the Settings dialog as workspace/operator settings and surfaced
+  engine, credentials, advanced options, and readiness controls directly on
+  the Migration plan, keeping migration configuration in the operator's main
+  workflow instead of hiding it under Settings.
 
 - Extracted deterministic batch plan materialization into
   `controller/batch_admission.rs`: selected durable IDs, Dovecot checkpoints,

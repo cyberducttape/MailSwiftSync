@@ -1488,7 +1488,7 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading("Operator settings");
-                ui.label(RichText::new("Workspace tools are grouped here so the header stays focused on project and run status.").color(self.theme_colors().text_secondary));
+                ui.label(RichText::new("Appearance and workspace tools live here. Migration connection and engine choices belong on the Migration plan so the active plan stays visible while you configure it.").color(self.theme_colors().text_secondary));
                 ui.add_space(8.0);
                 ui.group(|ui| {
                     ui.heading("Appearance");
@@ -1525,19 +1525,16 @@ impl App {
                 });
                 ui.add_space(8.0);
                 ui.group(|ui| {
-                    ui.heading("Migration configuration");
+                    ui.heading("Workspace tools");
+                    if ui.button("Open Migration plan").clicked() {
+                        self.active_view = WorkspaceView::Plan;
+                        close_requested = true;
+                    }
                     if ui.button("Project browser").clicked() {
                         self.projects_open = true;
                         close_requested = true;
                     }
-                    if ui.button("Credentials").clicked() { self.keyring_open = true; }
-                    if ui.button(format!("Engine: {}", self.form.engine().label())).clicked() { self.engine_open = true; }
-                    if ui.button("Advanced options").clicked() { self.advanced_open = true; }
-                    if ui.button("Preflight & readiness").clicked() {
-                        self.active_view = WorkspaceView::Overview;
-                        close_requested = true;
-                        self.assess_plan();
-                    }
+                    ui.label(RichText::new("Connection, credentials, engine, advanced options, and readiness are available from the Migration plan.").size(11.0).color(self.theme_colors().text_secondary));
                 });
             });
         self.settings_open = open && !close_requested;
@@ -5785,6 +5782,26 @@ impl eframe::App for App {
                             ui.heading("Migration plan");
                             ui.label(RichText::new("Set up the connection, run preflight, then deliberately promote this project through each migration phase.").color(self.theme_colors().text_secondary));
                             ui.add_space(14.0);
+                            ui.group(|ui| {
+                                ui.label(RichText::new("PLAN TOOLS").strong());
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui.button(format!("Engine: {}", self.form.engine().label())).clicked() {
+                                        self.engine_open = true;
+                                    }
+                                    if ui.button("Credentials").clicked() {
+                                        self.keyring_open = true;
+                                    }
+                                    if ui.button("Advanced options").clicked() {
+                                        self.advanced_open = true;
+                                    }
+                                    if ui.button("Readiness & preflight").clicked() {
+                                        self.active_view = WorkspaceView::Overview;
+                                        self.assess_plan();
+                                    }
+                                });
+                                ui.label(RichText::new("These controls modify the active migration plan and are included in its review and preflight gate.").size(11.0).color(self.theme_colors().text_secondary));
+                            });
+                            ui.add_space(10.0);
                             ui.horizontal(|ui| {
                                 ui.label("Project name");
                                 ui.text_edit_singleline(&mut self.form.profile.name);
