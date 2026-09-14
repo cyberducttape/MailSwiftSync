@@ -34,3 +34,4 @@ pub(crate) use theme::next_ui_scale;
 pub(crate) use theme::{AppearancePreferences, ThemeColors};
 pub(crate) use workspace::preferred_project_id;
 pub(crate) use workspace::{WorkspaceRefreshOptions, WorkspaceSnapshot, WorkspaceView};
+mod app;

@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved the egui application update/render loop into `ui/app.rs`, leaving
+  `main.rs` focused on application composition, state, and shared helpers.
 - Moved event polling, run-line ownership handling, durable event batching,
   terminal-state commits, and recovery-aware completion handling into
   `controller/poll.rs`, keeping the egui shell separate from execution
