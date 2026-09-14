@@ -8,16 +8,106 @@ use crate::atomic_artifact::write_private_atomic;
 use crate::bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
 use crate::controller::batch_admission::{apply_keyring_id, selection_value};
 use crate::controller::{
-    BatchLaunchRequest, BatchStartContext, BatchStartDecision, BulkStateSet, admit_batch_launch,
-    launch_batch_worker,
+    BatchExecutionMode, BatchLaunchRequest, BatchStartContext, BatchStartDecision, BulkRetryScope,
+    BulkStateSet, admit_batch_launch, launch_batch_worker,
 };
 use crate::ui::{contains_ascii_case_insensitive, display_state_key};
 use crate::{App, StatusSeverity};
+use crate::{core, ui::job_state_badge};
 use eframe::egui::{self, Color32, RichText};
 use std::collections::HashSet;
 use std::time::Instant;
 
 impl App {
+    pub(crate) fn bulk_dialog(&mut self, ctx: &egui::Context) {
+        let colors = self.theme_colors();
+        if !self.bulk_open {
+            return;
+        }
+        let mut open = self.bulk_open;
+        egui::Window::new("Batch migration queue")
+            .open(&mut open)
+            .default_width(850.0)
+            .default_height(540.0)
+            .show(ctx, |ui| {
+                ui.heading("Import → review → validate");
+                ui.label(RichText::new(&self.bulk_message).color(self.theme_colors().text_secondary));
+                ui.add_space(8.0);
+                let summary = self.bulk_queue_summary();
+                ui.group(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.strong(format!("{} total", summary.total));
+                        ui.label(format!("{} ready", summary.ready));
+                        ui.label(format!("{} running", summary.running));
+                        ui.label(format!("{} verified", summary.verified));
+                        if summary.failed > 0 { ui.label(RichText::new(format!("{} failed", summary.failed)).color(colors.danger)); }
+                        if summary.attention > 0 { ui.label(RichText::new(format!("{} attention", summary.attention)).color(colors.warning)); }
+                        if summary.delta_required > 0 { ui.label(format!("{} delta required", summary.delta_required)); }
+                        if summary.verification_difference > 0 { ui.label(RichText::new(format!("{} verification differences", summary.verification_difference)).color(colors.warning)); }
+                        if summary.cancelled > 0 { ui.label(RichText::new(format!("{} cancelled", summary.cancelled)).color(colors.warning)); }
+                        let unresolved_count = summary.unresolved();
+                        ui.label(RichText::new(format!("{} unresolved", unresolved_count)).color(if unresolved_count > 0 { self.theme_colors().danger } else { self.theme_colors().success }));
+                        if !self.bulk_selected_ids.is_empty() { ui.label(format!("{} selected", self.bulk_selected_ids.len())); }
+                        if ui.button("Select unresolved").clicked() { self.select_bulk_state_set(BulkStateSet::Unresolved); }
+                        if ui.button("Select failed").clicked() { self.select_bulk_state_set(BulkStateSet::Failed); }
+                        if ui.button("Select attention").clicked() { self.select_bulk_state_set(BulkStateSet::Attention); }
+                        if !self.bulk_selected_ids.is_empty() && ui.button("Clear selection").clicked() { self.bulk_selected_ids.clear(); }
+                    });
+                    ui.label(RichText::new("Focused selections apply to preflight and live scope controls below; live execution still requires matching preflight and confirmation.").size(11.0).color(self.theme_colors().text_secondary));
+                });
+                ui.add_space(8.0);
+                let previous_bulk_mode = self.bulk_mode;
+                ui.horizontal(|ui| {
+                    ui.label("Batch mode");
+                    ui.selectable_value(&mut self.bulk_mode, BatchExecutionMode::Preflight, "Preflight");
+                    ui.selectable_value(&mut self.bulk_mode, BatchExecutionMode::Live, "Live migration");
+                });
+                if self.bulk_mode != previous_bulk_mode {
+                    self.bulk_live_confirmed = false;
+                    self.bulk_confirmation_summary = None;
+                }
+                let queue_editable = !self.running();
+                ui.horizontal(|ui| {
+                    ui.label("Customer/project name");
+                    ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut self.form.profile.name).desired_width(280.0).hint_text("e.g. Acme Corp cutover"));
+                });
+                ui.label(RichText::new("Used for the durable project and customer evidence when imported rows do not provide project_name.").size(11.0).color(self.theme_colors().text_secondary));
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / Excel…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
+                    if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() { if self.bulk_jobs.is_empty() { self.clear_bulk_queue(); } else { self.bulk_clear_confirm_open = true; } }
+                    if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new("Export selected set…")).clicked() { self.bulk_message = match self.export_bulk_selection() { Ok(()) => "Selected batch rows exported without credentials or engine options.".into(), Err(error) => error }; }
+                    let live_count = self.bulk_jobs.iter().filter(|job| self.bulk_retry_scope.includes(&display_state_key(&job.state))).count();
+                    let label = if self.bulk_mode.is_preflight() { format!("Run {} preflight checks", self.bulk_jobs.len()) } else { format!("Start {live_count} live migrations") };
+                    let can_start = !self.running() && !self.bulk_jobs.is_empty() && (self.bulk_mode.is_preflight() || live_count > 0);
+                    if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.bulk_mode.is_preflight() { self.theme_colors().info } else { self.theme_colors().danger })).clicked() { self.start_bulk(); }
+                });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| { ui.label("Maximum concurrent workers"); ui.add_enabled(queue_editable, egui::Slider::new(&mut self.form.profile.batch_concurrency, 1..=16)); ui.label(RichText::new("Applies to both preflight and live migration; bounded to 1–16 workers").size(11.0).color(self.theme_colors().text_secondary)); });
+                ui.horizontal(|ui| { ui.label("Transient retries"); ui.add_enabled(queue_editable, egui::Slider::new(&mut self.form.profile.batch_retry_count, 0..=3)); ui.label(RichText::new("auth/configuration failures are never retried").size(11.0).color(self.theme_colors().text_secondary)); });
+                if self.bulk_mode.is_live() {
+                    ui.add_enabled_ui(queue_editable, |ui| { egui::ComboBox::from_id_salt("bulk_retry_scope").selected_text(self.bulk_retry_scope.label()).show_ui(ui, |ui| { for scope in [BulkRetryScope::Unresolved, BulkRetryScope::FailedAttention, BulkRetryScope::DeltaRequired, BulkRetryScope::VerificationDifference, BulkRetryScope::All] { ui.selectable_value(&mut self.bulk_retry_scope, scope, scope.label()); } }); });
+                    ui.label(RichText::new(format!("Live scope: {}. Verified rows run only with the explicit all-rows scope.", self.bulk_retry_scope.label())).size(11.0).color(self.theme_colors().text_secondary));
+                }
+                ui.label(RichText::new("Passwordless queue credentials").strong());
+                ui.label(RichText::new("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue.").size(11.0).color(self.theme_colors().text_secondary));
+                let mut apply_source = false;
+                let mut apply_destination = false;
+                ui.horizontal(|ui| { ui.label("Source keyring ID"); ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut self.bulk_source_keyring_apply).desired_width(180.0)); if ui.add_enabled(queue_editable, egui::Button::new("Apply to empty source rows")).clicked() { apply_source = true; } });
+                ui.horizontal(|ui| { ui.label("Destination keyring ID"); ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut self.bulk_destination_keyring_apply).desired_width(180.0)); if ui.add_enabled(queue_editable, egui::Button::new("Apply to empty destination rows")).clicked() { apply_destination = true; } });
+                if apply_source { self.apply_bulk_keyring_id(true); }
+                if apply_destination { self.apply_bulk_keyring_id(false); }
+                ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: project_name, source_password, destination_password, source_credential_id, destination_credential_id, name. project_name names the durable customer migration; name labels each mailbox row. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(self.theme_colors().text_secondary));
+                ui.separator();
+                egui::Grid::new("bulk_jobs").striped(true).min_col_width(120.0).show(ui, |ui| {
+                    ui.strong("#"); ui.strong("Migration"); ui.strong("Source"); ui.strong("Destination"); ui.strong("Source password"); ui.strong("Destination password"); ui.strong("Status"); ui.end_row();
+                    let row_count = self.bulk_jobs.len();
+                    egui::ScrollArea::vertical().show_rows(ui, 42.0, row_count, |ui, rows| { for index in rows { let job = &mut self.bulk_jobs[index]; ui.label((index + 1).to_string()); ui.label(&job.label); ui.label(format!("{}\n{}", job.form.profile.source_host, job.form.profile.source_user)); ui.label(format!("{}\n{}", job.form.profile.destination_host, job.form.profile.destination_user)); ui.add_enabled(queue_editable, egui::TextEdit::singleline(job.form.source_password.as_mut_string()).password(true).desired_width(120.0)); if job.form.engine() == core::Engine::Dovecot { ui.label("Not required"); } else { ui.add_enabled(queue_editable, egui::TextEdit::singleline(job.form.destination_password.as_mut_string()).password(true).desired_width(120.0)); } let (badge, color) = job_state_badge(&job.state, colors); ui.label(RichText::new(badge).color(color)); ui.end_row(); } });
+                });
+                ui.add_space(8.0); ui.label(RichText::new("Imported passwords are used only for this open queue. Saving a profile never saves them.").size(11.0).color(self.theme_colors().danger));
+            });
+        self.bulk_open = open;
+    }
+
     pub(crate) fn bulk_clear_confirmation(&mut self, ctx: &egui::Context) {
         if !self.bulk_clear_confirm_open || self.running() {
             return;
