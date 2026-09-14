@@ -47,7 +47,8 @@ pub(crate) fn run() -> eframe::Result<()> {
         let trusted_public_key = trusted_public_key
             .as_deref()
             .and_then(|value| value.to_str());
-        match verify_proof_file_with_trust(std::path::Path::new(&path), trusted_public_key) {
+        match crate::reports::signing::verify_file(std::path::Path::new(&path), trusted_public_key)
+        {
             Ok(message) => {
                 println!("{message}");
                 return Ok(());
@@ -78,7 +79,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         let report = std::path::PathBuf::from(report);
         let signing_key = std::path::PathBuf::from(signing_key);
         let key_id = key_id.to_string_lossy();
-        match sign_proof_file(&report, &signing_key, &key_id) {
+        match crate::reports::signing::sign_file(&report, &signing_key, &key_id) {
             Ok(message) => {
                 println!("{message}");
                 return Ok(());

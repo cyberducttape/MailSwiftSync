@@ -58,6 +58,8 @@ All notable changes to MailSwiftSync are documented here.
 - Expanded the batch cockpit summary to distinguish failed, attention,
   delta-required, and verification-difference rows, and to show the active
   selection scope alongside the aggregate unresolved count.
+- Removed duplicate CLI/report signing wrappers from the application shell so
+  report signing and verification are called directly through `reports`.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.

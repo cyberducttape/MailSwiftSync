@@ -234,26 +234,6 @@ fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn sign_proof_file(
-    path: &std::path::Path,
-    signing_key_path: &std::path::Path,
-    key_id: &str,
-) -> Result<String, String> {
-    reports::signing::sign_file(path, signing_key_path, key_id)
-}
-
-#[cfg(test)]
-fn verify_proof_file(path: &std::path::Path) -> Result<String, String> {
-    verify_proof_file_with_trust(path, None)
-}
-
-fn verify_proof_file_with_trust(
-    path: &std::path::Path,
-    trusted_public_key: Option<&str>,
-) -> Result<String, String> {
-    reports::signing::verify_file(path, trusted_public_key)
-}
-
 /// Decode a persisted batch row without ever substituting a default plan.
 /// A missing or corrupt plan is durable-state corruption, not a request for a
 /// new migration profile. Callers must surface the error and keep execution
@@ -5913,12 +5893,16 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("proof.json");
         std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
-        assert!(verify_proof_file(&path).unwrap().contains("verified"));
+        assert!(
+            reports::signing::verify_file(&path, None)
+                .unwrap()
+                .contains("verified")
+        );
 
         let mut tampered = proof;
         tampered["project"]["name"] = "Altered migration".into();
         std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
-        assert!(verify_proof_file(&path).is_err());
+        assert!(reports::signing::verify_file(&path, None).is_err());
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -5940,7 +5924,11 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("proof.json");
         std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
-        assert!(verify_proof_file(&path).unwrap().contains("verified"));
+        assert!(
+            reports::signing::verify_file(&path, None)
+                .unwrap()
+                .contains("verified")
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -6003,10 +5991,10 @@ mod tests {
             permissions.set_mode(0o600);
             std::fs::set_permissions(&key_path, permissions).unwrap();
         }
-        sign_proof_file(&path, &key_path, "test-key").unwrap();
+        reports::signing::sign_file(&path, &key_path, "test-key").unwrap();
         // Re-signing is a supported repair/rotation workflow. The previous
         // signature must not become part of the newly calculated digest.
-        sign_proof_file(&path, &key_path, "test-key-rotated").unwrap();
+        reports::signing::sign_file(&path, &key_path, "test-key-rotated").unwrap();
         let signed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let public_key = signed["proof_signature"]["public_key"]
@@ -6014,15 +6002,15 @@ mod tests {
             .unwrap()
             .to_owned();
         assert!(
-            verify_proof_file_with_trust(&path, Some(&public_key))
+            reports::signing::verify_file(&path, Some(&public_key))
                 .unwrap()
                 .contains("signature valid")
         );
-        assert!(verify_proof_file_with_trust(&path, Some(&"00".repeat(32))).is_err());
+        assert!(reports::signing::verify_file(&path, Some(&"00".repeat(32))).is_err());
         let mut tampered = signed;
         tampered["project"]["name"] = "Altered migration".into();
         std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
-        assert!(verify_proof_file(&path).is_err());
+        assert!(reports::signing::verify_file(&path, None).is_err());
         let _ = std::fs::remove_dir_all(directory);
     }
 
