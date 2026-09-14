@@ -5922,7 +5922,8 @@ fn markdown_escape(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('|', "\\|")
-        .replace('\n', " ")
+        .replace("\r\n", " ")
+        .replace(['\r', '\n'], " ")
 }
 
 fn push_visible_output(output: &mut BoundedLineBuffer, line: String) {
@@ -6347,7 +6348,7 @@ mod tests {
     #[test]
     fn markdown_escape_protects_report_cells_and_line_structure() {
         assert_eq!(
-            markdown_escape("folder|name\nsecond\\entry"),
+            markdown_escape("folder|name\r\nsecond\\entry"),
             "folder\\|name second\\\\entry"
         );
     }
