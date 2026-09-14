@@ -15,6 +15,7 @@ mod oauth;
 mod output;
 mod plan_identity;
 mod process;
+mod provider;
 mod reports;
 mod runner;
 mod storage_paths;
@@ -57,6 +58,7 @@ use process::{
 };
 #[cfg(test)]
 use process::{configure_process_group, process_identity};
+use provider::ProviderPreset;
 #[cfg(test)]
 use runner::{dovecot_state_candidate, record_process_tail};
 use runner::{
@@ -519,6 +521,8 @@ struct App {
     ui_snapshot: WorkspaceSnapshot,
     historical_mailbox_offset: u32,
     verification_offset: u32,
+    source_provider: ProviderPreset,
+    destination_provider: ProviderPreset,
 }
 impl Default for App {
     fn default() -> Self {
@@ -926,6 +930,8 @@ impl App {
             ui_snapshot: WorkspaceSnapshot::default(),
             historical_mailbox_offset: 0,
             verification_offset: 0,
+            source_provider: ProviderPreset::GenericImap,
+            destination_provider: ProviderPreset::GenericImap,
         }
     }
 }
@@ -1000,6 +1006,29 @@ impl App {
     fn refresh_ui_snapshot_now(&mut self) {
         self.ui_snapshot.invalidate();
         self.refresh_ui_snapshot();
+    }
+
+    fn apply_provider_preset(&mut self, source: bool, preset: ProviderPreset) {
+        let defaults = preset.defaults();
+        let (host, port, tls, auth) = if source {
+            (
+                &mut self.form.profile.source_host,
+                &mut self.form.profile.source_port,
+                &mut self.form.profile.source_tls,
+                &mut self.form.profile.source_auth,
+            )
+        } else {
+            (
+                &mut self.form.profile.destination_host,
+                &mut self.form.profile.destination_port,
+                &mut self.form.profile.destination_tls,
+                &mut self.form.profile.destination_auth,
+            )
+        };
+        *host = defaults.host.into();
+        *port = defaults.port.into();
+        *tls = defaults.tls.into();
+        *auth = defaults.auth.into();
     }
 
     fn current_editable_project_id(&self) -> Option<&str> {
@@ -6298,6 +6327,58 @@ impl eframe::App for App {
                             ui.add_space(10.0);
                             let destination_password_required =
                                 self.form.engine() != core::Engine::Dovecot;
+                            ui.group(|ui| {
+                                ui.label(RichText::new("Endpoint presets").strong());
+                                ui.label(RichText::new("These presets fill connection hints only. Discovery, provider policy, and credentials still require explicit preflight.").size(11.0).color(self.theme_colors().text_secondary));
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label("Source provider");
+                                    let mut source_changed = false;
+                                    egui::ComboBox::from_id_salt("source_provider_preset")
+                                        .selected_text(self.source_provider.label())
+                                        .show_ui(ui, |ui| {
+                                            for preset in ProviderPreset::ALL {
+                                                source_changed |= ui.selectable_value(
+                                                    &mut self.source_provider,
+                                                    preset,
+                                                    preset.label(),
+                                                ).changed();
+                                            }
+                                        });
+                                    ui.separator();
+                                    ui.label("Destination provider");
+                                    let mut destination_changed = false;
+                                    egui::ComboBox::from_id_salt("destination_provider_preset")
+                                        .selected_text(self.destination_provider.label())
+                                        .show_ui(ui, |ui| {
+                                            for preset in ProviderPreset::ALL {
+                                                destination_changed |= ui.selectable_value(
+                                                    &mut self.destination_provider,
+                                                    preset,
+                                                    preset.label(),
+                                                ).changed();
+                                            }
+                                        });
+                                    if source_changed {
+                                        self.apply_provider_preset(true, self.source_provider);
+                                    }
+                                    if destination_changed
+                                        && self.form.engine() != core::Engine::Dovecot
+                                    {
+                                        self.apply_provider_preset(false, self.destination_provider);
+                                    }
+                                });
+                                ui.label(RichText::new(format!(
+                                    "Source: {}",
+                                    self.source_provider.defaults().note
+                                )).size(11.0).color(self.theme_colors().text_secondary));
+                                if self.form.engine() != core::Engine::Dovecot {
+                                    ui.label(RichText::new(format!(
+                                        "Destination: {}",
+                                        self.destination_provider.defaults().note
+                                    )).size(11.0).color(self.theme_colors().text_secondary));
+                                }
+                            });
+                            ui.add_space(10.0);
                             if ui.available_width() > 900.0 {
                                 ui.columns(2, |c| {
                                     render_account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);

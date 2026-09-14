@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added explicit first-run provider endpoint presets for Generic IMAP, Google
+  Workspace, Microsoft 365, Fastmail, and Zoho Mail. Presets provide
+  connection hints and honest policy notes only; discovery and preflight remain
+  authoritative and no provider provisioning or OAuth lifecycle is implied.
 - Removed the unused locked dry-run flag from application execution state;
   batch mode remains owned by its explicit controller mode and single-run mode
   remains bound to the active run context.
