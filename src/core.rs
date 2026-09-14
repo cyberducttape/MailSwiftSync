@@ -3,6 +3,12 @@
 //! The GUI may be replaced, but project state and verification evidence remain
 //! portable SQLite data. No credentials or message content belong in this store.
 
+use crate::storage::bounded_event_detail as bound_event_detail;
+#[cfg(test)]
+use crate::storage::{
+    EVENT_DETAIL_TRUNCATION_SUFFIX as DURABLE_EVENT_TRUNCATION_SUFFIX,
+    MAX_EVENT_DETAIL_BYTES as MAX_DURABLE_EVENT_DETAIL_BYTES,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crc32fast::Hasher as Crc32Hasher;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, backup, params};
@@ -181,25 +187,10 @@ pub struct StateStore {
     connection: Connection,
 }
 
-/// Verbose subprocess output and error detail are diagnostic context, not the
-/// immutable audit record. Raw engine transcripts are rejected by the event
-/// writers; lifecycle, run, evidence, and phase events remain retained.
-const MAX_DURABLE_EVENT_DETAIL_BYTES: usize = 16 * 1024;
-const DURABLE_EVENT_TRUNCATION_SUFFIX: &str = " [diagnostic detail truncated by MailSwiftSync]";
+use bound_event_detail as bounded_event_detail_raw;
 
 fn bounded_event_detail(_kind: &str, detail: &str) -> String {
-    if detail.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES {
-        return detail.to_owned();
-    }
-
-    let content_limit =
-        MAX_DURABLE_EVENT_DETAIL_BYTES.saturating_sub(DURABLE_EVENT_TRUNCATION_SUFFIX.len());
-    let mut end = content_limit.min(detail.len());
-    while !detail.is_char_boundary(end) {
-        end -= 1;
-    }
-
-    format!("{}{}", &detail[..end], DURABLE_EVENT_TRUNCATION_SUFFIX)
+    bounded_event_detail_raw(detail)
 }
 
 impl StateStore {

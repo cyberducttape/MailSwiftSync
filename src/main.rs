@@ -18,6 +18,7 @@ mod process;
 mod provider;
 mod reports;
 mod runner;
+mod storage;
 mod storage_paths;
 mod ui;
 mod verification;

@@ -40,6 +40,9 @@ All notable changes to MailSwiftSync are documented here.
 - Removed obsolete durable raw-output retention/pruning code and its misleading
   retention test; the SQLite event writers now have one explicit contract that
   rejects `run_output` transcripts.
+- Extracted durable event-detail bounding into `storage.rs`, keeping SQLite
+  record-size policy separate from the core state machine and covered by a
+  storage-level UTF-8 regression test.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
