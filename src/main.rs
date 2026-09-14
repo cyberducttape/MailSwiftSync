@@ -7548,6 +7548,13 @@ mod tests {
             .unwrap();
         let source_sidecar = PathBuf::from(format!("{}-wal", source.display()));
         assert!(source_sidecar.exists());
+        let error = restore_ledger(&source, &destination).unwrap_err();
+        assert!(error.contains("live SQLite database with sidecar"));
+        source_connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+        drop(source_connection);
+        assert!(!source_sidecar.exists());
         assert!(restore_ledger(&source, &destination).unwrap().is_none());
         assert_eq!(
             core::StateStore::open_readonly(&destination)
@@ -7558,8 +7565,11 @@ mod tests {
                 .name,
             "WAL-visible restore"
         );
-        drop(source_connection);
-
+        let clean_source = directory.join("standalone-source.db");
+        core::StateStore::open(&source)
+            .unwrap()
+            .backup_to(&clean_source)
+            .unwrap();
         core::StateStore::in_memory()
             .unwrap()
             .backup_to(&destination.with_extension("replacement.db"))
@@ -7571,7 +7581,9 @@ mod tests {
             )
             .unwrap();
         }
-        let previous = restore_ledger(&source, &destination).unwrap().unwrap();
+        let previous = restore_ledger(&clean_source, &destination)
+            .unwrap()
+            .unwrap();
         for suffix in ["-wal", "-shm"] {
             assert!(std::path::Path::new(&format!("{}{}", previous.display(), suffix)).exists());
             assert!(

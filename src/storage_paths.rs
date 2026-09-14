@@ -38,6 +38,15 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
     if backup == destination {
         return Err("Restore source and destination must be different files.".into());
     }
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{}", backup.display(), suffix));
+        if sidecar.exists() {
+            return Err(format!(
+                "restore source is a live SQLite database with sidecar {}; run the backup command first to create a standalone snapshot",
+                sidecar.display()
+            ));
+        }
+    }
     let parent = destination
         .parent()
         .ok_or("Restore destination has no parent directory.")?;

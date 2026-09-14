@@ -16,6 +16,9 @@ All notable changes to MailSwiftSync are documented here.
 - Restore now snapshots its source through SQLite's backup API, preserving
   committed WAL-visible state instead of copying only the main database file.
   The standalone snapshot is integrity-checked before installation.
+- Restore now rejects live SQLite sources with `-wal` or `-shm` sidecars. This
+  prevents a changing ledger from being silently restored at an ambiguous point
+  in time; operators must first create a standalone snapshot with `backup`.
 - Expanded the Dovecot pinning regression coverage to assert that both source
   and destination certificate pins are rejected rather than silently treated
   as enforced controls.
