@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved OS-keyring credential loading out of the egui start path. Runs now
+  show an explicit loading state while the keyring is queried in a worker;
+  results are discarded if the operator edits the migration plan meanwhile.
 - Moved best-effort engine `--version` probing off the controller/UI path.
   Single and batch workers now request version metadata asynchronously, with
   content-identity keyed caching and in-flight deduplication, so an unresponsive

@@ -474,6 +474,12 @@ struct App {
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
     live_auth_receiver: Option<Receiver<Result<LiveAuthProof, String>>>,
+    /// Loading an OS-keyring credential can involve IPC and must not block an
+    /// egui frame. The cloned form is returned only after the worker has
+    /// completed the load.
+    start_credentials_receiver: Option<Receiver<Result<Form, String>>>,
+    start_credentials_plan: Option<String>,
+    credentials_ready_for_start: bool,
     live_auth_proof: Option<LiveAuthProof>,
     source_capabilities: Option<core::ServerCapabilities>,
     destination_capabilities: Option<core::ServerCapabilities>,
@@ -890,6 +896,9 @@ impl App {
             capability_probe_fingerprint: None,
             capability_observation_fingerprint: None,
             live_auth_receiver: None,
+            start_credentials_receiver: None,
+            start_credentials_plan: None,
+            credentials_ready_for_start: false,
             live_auth_proof: None,
             source_capabilities: None,
             destination_capabilities: None,
@@ -4097,6 +4106,29 @@ impl App {
         }
     }
 
+    fn start_requires_keyring_load(&self) -> bool {
+        !self.form.profile.source_credential_id.trim().is_empty()
+            || !self
+                .form
+                .profile
+                .destination_credential_id
+                .trim()
+                .is_empty()
+    }
+
+    /// Cheap marker used only to discard a keyring result if the operator
+    /// edits the form while the IPC call is in flight. The authoritative plan
+    /// fingerprint is still computed later, after the credentials are loaded;
+    /// this marker deliberately avoids hashing large executable/CA files on
+    /// the UI thread.
+    fn start_credentials_plan_marker(&self) -> String {
+        format!(
+            "dry-run={}\n{}",
+            self.form.dry_run,
+            toml::to_string(&self.form.profile).unwrap_or_default()
+        )
+    }
+
     fn start(&mut self) {
         if !self.profile_available {
             self.set_status(
@@ -4130,11 +4162,30 @@ impl App {
                 return;
             }
         }
-        let credential_load = if self.form.dry_run {
-            self.form.load_configured_keyring_credentials()
-        } else {
-            self.form.reload_configured_keyring_credentials()
-        };
+        if !self.credentials_ready_for_start && self.start_requires_keyring_load() {
+            if self.start_credentials_receiver.is_none() {
+                let mut form = self.form.clone();
+                let plan = self.start_credentials_plan_marker();
+                let (tx, rx) = mpsc::channel();
+                self.start_credentials_receiver = Some(rx);
+                self.start_credentials_plan = Some(plan);
+                self.set_status(
+                    "Loading migration credentials from the OS keyring…",
+                    StatusSeverity::Info,
+                );
+                thread::spawn(move || {
+                    let result = if form.dry_run {
+                        form.load_configured_keyring_credentials()
+                    } else {
+                        form.reload_configured_keyring_credentials()
+                    };
+                    let _ = tx.send(result.map(|()| form));
+                });
+            }
+            return;
+        }
+        self.credentials_ready_for_start = false;
+        let credential_load: Result<(), String> = Ok(());
         if let Err(error) = credential_load {
             self.set_status(error, StatusSeverity::Error);
             return;
@@ -4466,6 +4517,33 @@ impl App {
         {
             self.bulk_import_receiver = None;
             self.apply_bulk_import_result(result);
+        }
+        let start_credentials_result = self
+            .start_credentials_receiver
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        if let Some(result) = start_credentials_result {
+            self.start_credentials_receiver = None;
+            let probed_plan = self.start_credentials_plan.take();
+            let current_plan = self.start_credentials_plan_marker();
+            match result {
+                Ok(form) if probed_plan.as_deref() == Some(current_plan.as_str()) => {
+                    self.form = form;
+                    self.credentials_ready_for_start = true;
+                    self.start();
+                }
+                Ok(_) => {
+                    self.credentials_ready_for_start = false;
+                    self.set_status(
+                        "The migration plan changed while credentials were loading; review it and start again.",
+                        StatusSeverity::Warning,
+                    );
+                }
+                Err(error) => {
+                    self.credentials_ready_for_start = false;
+                    self.set_status(error, StatusSeverity::Error);
+                }
+            }
         }
         let live_auth_result = self
             .live_auth_receiver
