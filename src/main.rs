@@ -110,7 +110,8 @@ use ui::{
     AppearancePreferences, ThemeColors, WorkspaceSnapshot, display_job_state, display_state_key,
     filter_project_indices, format_elapsed, format_phase_name, job_state_badge,
     needs_operator_review, password_visibility_id, project_health_state_counts,
-    recommended_next_action, render_account, status_color, workflow_step_index,
+    recommended_next_action, render_account, status_color, successful_run_severity,
+    successful_run_status, workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -5118,13 +5119,13 @@ impl App {
             } else {
                 match r {
                     Ok(_) => (
-                        Self::successful_run_status(
+                        successful_run_status(
                             run_context.dry_run,
                             was_bulk_run,
                             direct_final_state,
                         )
                         .to_owned(),
-                        Self::successful_run_severity(
+                        successful_run_severity(
                             run_context.dry_run,
                             was_bulk_run,
                             direct_final_state,
@@ -5157,46 +5158,6 @@ impl App {
             self.live_confirmed = false;
         }
     }
-    fn successful_run_status(
-        dry_run: bool,
-        was_bulk_run: bool,
-        final_state: Option<&str>,
-    ) -> &'static str {
-        if dry_run {
-            "Preflight completed successfully"
-        } else if was_bulk_run {
-            "Batch transfer completed; review per-mailbox verification results"
-        } else {
-            match final_state {
-                Some("verified") => "Migration completed and verified",
-                Some("verified_with_exceptions") => {
-                    "Migration completed with accepted verification exceptions"
-                }
-                Some("delta_required") => "Migration completed; final delta or review required",
-                Some("verification_difference") => {
-                    "Migration completed; verification found differences requiring review"
-                }
-                _ => "Migration completed; verification requires operator review",
-            }
-        }
-    }
-
-    fn successful_run_severity(
-        dry_run: bool,
-        was_bulk_run: bool,
-        final_state: Option<&str>,
-    ) -> StatusSeverity {
-        if dry_run {
-            StatusSeverity::Success
-        } else if was_bulk_run {
-            StatusSeverity::Warning
-        } else if matches!(final_state, Some("verified")) {
-            StatusSeverity::Success
-        } else {
-            StatusSeverity::Warning
-        }
-    }
-
     fn preview(&mut self, ctx: &egui::Context) {
         if !self.preview {
             return;
@@ -7440,19 +7401,19 @@ mod tests {
     #[test]
     fn successful_live_status_never_overclaims_missing_evidence() {
         assert_eq!(
-            App::successful_run_status(false, false, Some("verified")),
+            successful_run_status(false, false, Some("verified")),
             "Migration completed and verified"
         );
         assert_eq!(
-            App::successful_run_status(false, false, Some("delta_required")),
+            successful_run_status(false, false, Some("delta_required")),
             "Migration completed; final delta or review required"
         );
         assert_eq!(
-            App::successful_run_status(false, false, None),
+            successful_run_status(false, false, None),
             "Migration completed; verification requires operator review"
         );
         assert_eq!(
-            App::successful_run_status(false, true, None),
+            successful_run_status(false, true, None),
             "Batch transfer completed; review per-mailbox verification results"
         );
     }
@@ -8651,19 +8612,19 @@ mod tests {
     #[test]
     fn run_status_severity_is_typed_and_independent_of_display_text() {
         assert_eq!(
-            App::successful_run_severity(false, false, Some("verified")),
+            successful_run_severity(false, false, Some("verified")),
             StatusSeverity::Success
         );
         assert_eq!(
-            App::successful_run_severity(false, false, Some("delta_required")),
+            successful_run_severity(false, false, Some("delta_required")),
             StatusSeverity::Warning
         );
         assert_eq!(
-            App::successful_run_severity(false, true, None),
+            successful_run_severity(false, true, None),
             StatusSeverity::Warning
         );
         assert_eq!(
-            App::successful_run_severity(true, false, None),
+            successful_run_severity(true, false, None),
             StatusSeverity::Success
         );
     }

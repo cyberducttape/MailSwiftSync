@@ -173,6 +173,46 @@ pub(crate) fn status_color(severity: StatusSeverity, colors: ThemeColors) -> Col
     }
 }
 
+pub(crate) fn successful_run_status(
+    dry_run: bool,
+    was_bulk_run: bool,
+    final_state: Option<&str>,
+) -> &'static str {
+    if dry_run {
+        "Preflight completed successfully"
+    } else if was_bulk_run {
+        "Batch transfer completed; review per-mailbox verification results"
+    } else {
+        match final_state {
+            Some("verified") => "Migration completed and verified",
+            Some("verified_with_exceptions") => {
+                "Migration completed with accepted verification exceptions"
+            }
+            Some("delta_required") => "Migration completed; final delta or review required",
+            Some("verification_difference") => {
+                "Migration completed; verification found differences requiring review"
+            }
+            _ => "Migration completed; verification requires operator review",
+        }
+    }
+}
+
+pub(crate) fn successful_run_severity(
+    dry_run: bool,
+    was_bulk_run: bool,
+    final_state: Option<&str>,
+) -> StatusSeverity {
+    if dry_run {
+        StatusSeverity::Success
+    } else if was_bulk_run {
+        StatusSeverity::Warning
+    } else if matches!(final_state, Some("verified")) {
+        StatusSeverity::Success
+    } else {
+        StatusSeverity::Warning
+    }
+}
+
 pub(crate) fn project_health_state_counts(jobs: &[core::MailboxJob]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
     for job in jobs {

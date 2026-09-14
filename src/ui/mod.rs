@@ -11,7 +11,8 @@ pub(crate) use account::{password_visibility_id, render_account};
 pub(crate) use status::{
     StatusMessage, StatusSeverity, display_job_state, display_state_key, format_elapsed,
     format_phase_name, job_state_badge, needs_operator_review, project_health_state_counts,
-    recommended_next_action, status_color, workflow_step_index,
+    recommended_next_action, status_color, successful_run_severity, successful_run_status,
+    workflow_step_index,
 };
 #[cfg(test)]
 pub(crate) use theme::contrast_ratio;

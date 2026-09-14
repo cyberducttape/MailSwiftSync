@@ -15,6 +15,8 @@ All notable changes to MailSwiftSync are documented here.
   `core::models`, preserving the existing public core API.
 - Extracted IMAP capability and quota read-model parsing from the SQLite store
   into `core::capabilities`, keeping protocol policy independently testable.
+- Moved run-completion status wording and severity policy into the shared UI
+  status module so controller polling no longer owns presentation rules.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.
