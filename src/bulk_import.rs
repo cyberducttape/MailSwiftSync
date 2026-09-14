@@ -5,7 +5,7 @@
 //! worksheet selection, row validation, and conversion into import jobs.
 
 use crate::{Form, SecretString};
-use calamine::{Reader, open_workbook_auto};
+use calamine::{Reader, Xls, open_workbook, open_workbook_auto};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -293,9 +293,10 @@ fn validate_workbook_input(path: &Path) -> Result<(), String> {
 }
 
 /// Legacy BIFF workbooks are OLE compound files, not ZIP archives.  The
-/// existing file-size limit still bounds the input before calamine opens it;
-/// this signature check prevents an arbitrary file from being handed to the
-/// legacy workbook parser under an `.xls` extension.
+/// existing file-size limit still bounds the input before calamine opens it.
+/// Check both the container signature and the actual BIFF parser here so an
+/// invalid legacy workbook fails during validation with a useful error rather
+/// than reaching the asynchronous import worker and failing later.
 fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
     const OLE_HEADER: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
     let mut file = std::fs::File::open(path)
@@ -306,7 +307,11 @@ fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
     if header != OLE_HEADER {
         return Err("The XLS workbook is not a valid legacy BIFF/OLE file.".into());
     }
-    Ok(())
+    open_workbook::<Xls<_>, _>(path)
+        .map(|_| ())
+        .map_err(|error| {
+            format!("The XLS workbook could not be parsed as a legacy BIFF workbook: {error}")
+        })
 }
 
 #[cfg(test)]
@@ -314,7 +319,7 @@ mod tests {
     use super::validate_workbook_input;
 
     #[test]
-    fn legacy_xls_input_uses_ole_validation_instead_of_zip_validation() {
+    fn legacy_xls_input_must_be_a_parseable_biff_workbook() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-legacy-xls-header-{}-{}.xls",
             std::process::id(),
@@ -323,7 +328,8 @@ mod tests {
         let ole_header = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
         std::fs::write(&path, ole_header).unwrap();
 
-        assert!(validate_workbook_input(&path).is_ok());
+        let error = validate_workbook_input(&path).expect_err("header-only input must be rejected");
+        assert!(error.contains("could not be parsed as a legacy BIFF workbook"));
 
         std::fs::remove_file(path).unwrap();
     }

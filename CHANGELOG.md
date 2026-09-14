@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Legacy `.xls` validation now opens the file with calamine's BIFF parser after
+  checking the OLE signature. Header-only or malformed legacy workbooks are
+  rejected during validation with an actionable error instead of reaching the
+  import worker and failing later.
 - Added a cheap durable read-model revision check. The workspace now polls for
   committed event-sequence changes and skips rebuilding project, mailbox, run,
   and verification projections when the ledger is unchanged, while preserving
