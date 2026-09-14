@@ -215,7 +215,7 @@ pub(crate) fn job_from_values(
             .trim()
             .to_owned()
     };
-    let mut form = base.clone();
+    let mut form = base.clone_without_credentials();
     form.profile.source_host = get("source_host");
     form.profile.source_user = get("source_user");
     if let Some(value) = values.get("source_credential_id") {
@@ -406,5 +406,25 @@ mod tests {
         let job = job_from_values(values, &Form::default(), 2).unwrap();
         assert_eq!(job.form.profile.name, "Acme Corp cutover");
         assert_eq!(job.label, "finance mailbox");
+    }
+
+    #[test]
+    fn imported_rows_do_not_copy_base_credentials() {
+        let base = Form {
+            source_password: "source-secret".into(),
+            destination_password: "destination-secret".into(),
+            ..Form::default()
+        };
+        let values = HashMap::from([
+            ("source_host".into(), "old.example.test".into()),
+            ("source_user".into(), "alice@old.example.test".into()),
+            ("destination_host".into(), "new.example.test".into()),
+            ("destination_user".into(), "alice@new.example.test".into()),
+        ]);
+
+        let job = job_from_values(values, &base, 2).unwrap();
+
+        assert!(job.form.source_password.is_empty());
+        assert!(job.form.destination_password.is_empty());
     }
 }

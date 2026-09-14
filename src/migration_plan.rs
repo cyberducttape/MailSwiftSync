@@ -306,6 +306,20 @@ impl Default for Form {
 impl Form {
     pub(crate) const KEYRING_SERVICE: &'static str = "com.mailswiftsync.mailbox";
 
+    /// Clone the non-secret migration defaults for a bulk row.
+    ///
+    /// Imported rows must provide their own credentials (or credential IDs),
+    /// so copying the base form's secret fields only creates unnecessary
+    /// transient secret material.
+    pub(crate) fn clone_without_credentials(&self) -> Self {
+        Self {
+            profile: self.profile.clone(),
+            source_password: SecretString::default(),
+            destination_password: SecretString::default(),
+            dry_run: self.dry_run,
+        }
+    }
+
     pub(crate) fn path() -> Result<std::path::PathBuf, String> {
         dirs_next::config_dir()
             .map(|directory| directory.join("mailswiftsync/profile.toml"))

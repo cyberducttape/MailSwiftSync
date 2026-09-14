@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Prevented bulk-import row construction from copying base-form passwords
+  into transient row forms before applying row credentials.
 - Centralized conversion and persistence of pending structured execution
   events in the controller event module, removing duplicate SQLite tuple
   plumbing from `poll()` while preserving its durability retry ordering.
