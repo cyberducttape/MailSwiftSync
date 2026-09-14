@@ -5,6 +5,30 @@ use super::run::{ActiveRunContext, RunKind};
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
 use std::collections::HashSet;
 
+pub(crate) struct BatchProjectIdentity {
+    pub(crate) name: String,
+    pub(crate) source_endpoint: String,
+    pub(crate) destination_endpoint: String,
+}
+
+/// Derive durable batch-project metadata from the admitted queue. Keeping
+/// this together with admission ensures GUI and headless callers use the same
+/// naming and endpoint contract.
+pub(crate) fn batch_project_identity(
+    jobs: &[BulkJob],
+    fallback_profile: &Profile,
+) -> BatchProjectIdentity {
+    let profile = jobs
+        .first()
+        .map(|job| &job.form.profile)
+        .unwrap_or(fallback_profile);
+    BatchProjectIdentity {
+        name: super::batch::suggested_batch_project_name(profile),
+        source_endpoint: profile.source_host.trim().to_owned(),
+        destination_endpoint: profile.destination_host.trim().to_owned(),
+    }
+}
+
 /// The durable batch configuration excludes free-form expert options. Those
 /// options are revalidated from the current editable profile before launch;
 /// the run snapshot records their digest instead of persisting raw text.
@@ -418,7 +442,7 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{BatchExecutionMode, prepare_selected_batch_jobs};
+    use super::{BatchExecutionMode, batch_project_identity, prepare_selected_batch_jobs};
     use crate::{bulk_import::BulkJob, migration_plan::Form};
 
     #[test]
@@ -433,5 +457,26 @@ mod tests {
                 .err()
                 .unwrap();
         assert!(error.contains("not ready for live execution"));
+    }
+
+    #[test]
+    fn batch_project_identity_uses_queue_profile_and_safe_fallback() {
+        let mut form = Form::default();
+        form.profile.source_host = " imap.source.example ".into();
+        form.profile.destination_host = "imap.destination.example".into();
+        form.profile.name = "Customer cutover".into();
+        let jobs = [BulkJob {
+            label: "mailbox".into(),
+            form: form.clone(),
+            state: "imported".into(),
+        }];
+        let identity = batch_project_identity(&jobs, &Form::default().profile);
+        assert_eq!(identity.name, "Customer cutover");
+        assert_eq!(identity.source_endpoint, "imap.source.example");
+        assert_eq!(identity.destination_endpoint, "imap.destination.example");
+
+        let fallback = batch_project_identity(&[], &form.profile);
+        assert_eq!(fallback.name, "Customer cutover");
+        assert_eq!(fallback.source_endpoint, "imap.source.example");
     }
 }

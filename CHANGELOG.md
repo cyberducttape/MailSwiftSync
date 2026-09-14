@@ -9,6 +9,9 @@ All notable changes to MailSwiftSync are documented here.
 - Moved capability-probe results and stale-result matching into the preflight
   controller module, keeping asynchronous readiness identity policy out of the
   egui composition root and covered by controller-level regression tests.
+- Centralized batch-project naming and endpoint metadata derivation in batch
+  admission, so GUI and headless queue paths share one durable project identity
+  contract.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless

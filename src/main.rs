@@ -42,11 +42,11 @@ use controller::{
     BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, CapabilityProbeResult,
     LiveAuthProof, RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext,
     SingleStartDecision, admit_batch_run, admit_single_run, assess_plan, batch_mailbox_state,
-    batch_start_decision, capability_observation_matches, capability_probe_result_matches,
-    durable_batch_profile_config, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, prepare_batch_project, prepare_batch_run,
+    batch_project_identity, batch_start_decision, capability_observation_matches,
+    capability_probe_result_matches, durable_batch_profile_config, durable_single_identity_matches,
+    finish_batch_child, is_verified_terminal_state, prepare_batch_project, prepare_batch_run,
     prepare_selected_batch_jobs, selected_batch_indices, single_start_decision, spawn_batch_worker,
-    spawn_single_run_worker, suggested_batch_project_name,
+    spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -3137,30 +3137,14 @@ impl App {
                 return;
             }
         };
-        let project_name = suggested_batch_project_name(
-            jobs.first()
-                .map(|job| &job.form.profile)
-                .unwrap_or(&self.form.profile),
-        );
-        // Keep the project browser and exported reports tied to the actual
-        // queue endpoints. The old generic "batch" metadata made every
-        // imported project indistinguishable and hid which infrastructure
-        // the batch was admitted against.
-        let batch_source_endpoint = jobs
-            .first()
-            .map(|job| job.form.profile.source_host.trim().to_owned())
-            .unwrap_or_default();
-        let batch_destination_endpoint = jobs
-            .first()
-            .map(|job| job.form.profile.destination_host.trim().to_owned())
-            .unwrap_or_default();
+        let project_identity = batch_project_identity(&jobs, &self.form.profile);
         let (project_id, job_ids) = match prepare_batch_project(
             &self.store,
             self.bulk_project_id.as_deref(),
             &mailboxes,
-            &project_name,
-            &batch_source_endpoint,
-            &batch_destination_endpoint,
+            &project_identity.name,
+            &project_identity.source_endpoint,
+            &project_identity.destination_endpoint,
         ) {
             Ok(value) => value,
             Err(error) => {
