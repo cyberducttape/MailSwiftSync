@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Local packaging now stages files in a private temporary directory and cleans
+  it on exit, preventing interrupted builds from contaminating later release
+  archives with stale bundle contents.
 - Updated the local packaging script to ship the same deployment and
   release-readiness guides as tagged release archives.
 - Release archives now include the service-manager, container deployment, and
