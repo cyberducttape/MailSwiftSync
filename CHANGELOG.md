@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted project and mailbox read-model queries—including revisions,
+  pagination, status counts, and verification status pages—into
+  `core/queries.rs`, keeping scalable presentation reads separate from
+  durable write and state-transition code.
 - Extracted durable event recording and active-run event batching into
   `core/events.rs`, keeping event transaction and detail-boundary logic
   separate from mailbox/run state transitions.
