@@ -1863,15 +1863,6 @@ impl StateStore {
         )?;
         tx.commit()
     }
-
-    fn event(&self, id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
-        let detail = bounded_event_detail(detail);
-        self.connection.execute(
-            "INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)",
-            params![id, kind, detail],
-        )?;
-        Ok(())
-    }
 }
 
 fn migration_backup_path(path: &Path, schema_version: i64) -> PathBuf {
