@@ -12,6 +12,8 @@ All notable changes to MailSwiftSync are documented here.
   batch module; durable admission and worker policy remain controller-owned.
 - Moved batch queue indexing, summary caching, and keyring-application UI
   helpers alongside the batch launch bridge, further narrowing `main.rs`.
+- Moved batch queue reset and cache-invalidation helpers into the batch UI
+  module so queue lifecycle presentation state remains localized.
 - Centralized conversion and persistence of pending structured execution
   events in the controller event module, removing duplicate SQLite tuple
   plumbing from `poll()` while preserving its durability retry ordering.

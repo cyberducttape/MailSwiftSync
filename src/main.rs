@@ -2831,28 +2831,6 @@ impl App {
         }
     }
 
-    fn clear_bulk_queue(&mut self) {
-        self.bulk_jobs.clear();
-        self.mark_bulk_jobs_changed();
-        self.bulk_selected_ids.clear();
-        if self.selected_project_id == self.bulk_project_id {
-            self.selected_project_id = None;
-        }
-        self.bulk_project_id = None;
-        self.bulk_job_ids.clear();
-        self.bulk_job_index_by_id.clear();
-        self.bulk_retry_scope = BulkRetryScope::default();
-        self.bulk_preflight_credential_fingerprints.clear();
-        self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
-    }
-
-    fn mark_bulk_jobs_changed(&mut self) {
-        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
-        self.bulk_summary = None;
-        self.bulk_search_values.clear();
-        self.bulk_filter_cache_generation = u64::MAX;
-    }
-
     fn running(&self) -> bool {
         self.receiver.is_some()
     }
