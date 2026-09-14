@@ -109,3 +109,38 @@ fn quota_summary(capabilities: &core::ServerCapabilities) -> &'static str {
         "quota status unavailable; verify capacity with the provider"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::assess_plan;
+    use crate::{Form, core};
+
+    #[test]
+    fn assessment_keeps_local_checks_separate_from_network_readiness() {
+        let form = Form::default();
+        let checks = assess_plan(&form, None, None);
+        assert_eq!(checks.len(), 6);
+        assert_eq!(checks[0].0, "Source endpoint");
+        assert_eq!(checks[1].0, "Destination endpoint");
+        assert_eq!(checks[2].0, "Execution mode");
+        assert!(!checks[0].2);
+        assert!(!checks[1].2);
+        assert!(checks[4].2);
+    }
+
+    #[test]
+    fn assessment_marks_live_imapsync_and_plain_source_as_not_ready() {
+        let mut form = Form::default();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.source_tls = "plain".into();
+        form.profile.source_host = "source.example".into();
+        form.profile.destination_host = "destination.example".into();
+        let checks = assess_plan(&form, None, None);
+        assert_eq!(
+            checks.last().map(|check| check.0.as_str()),
+            Some("Transport security")
+        );
+        assert!(!checks.last().expect("transport check").2);
+        assert!(checks[2].2);
+    }
+}
