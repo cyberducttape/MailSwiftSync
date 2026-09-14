@@ -342,6 +342,7 @@ mod tests {
     fn job_supervisor_kills_the_engine_tree_when_dropped() {
         let mut command = Command::new("cmd.exe");
         command.args(["/C", "ping.exe -t 127.0.0.1"]);
+        configure_process_group(&mut command);
         let mut child = command.spawn().expect("Windows command shell must exist");
         let supervisor = match attach_child_supervisor(&child) {
             Ok(supervisor) => supervisor,
@@ -580,6 +581,16 @@ fn wait_for_process_group_exit(process_group: u32, grace: Duration) -> bool {
 }
 
 pub(crate) fn configure_process_group(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // A hosted runner or service manager may already place the controller
+        // in a job object. Request a breakaway so the child can be assigned to
+        // MailSwiftSync's own kill-on-close job, rather than inheriting an
+        // unrelated container that cannot be safely identified by recovery.
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Windows engine launches now request breakaway from an enclosing job before
+  attaching to MailSwiftSync's own kill-on-close Job Object. The native test
+  uses the same launch configuration, allowing supervised descendants to be
+  owned and terminated correctly under hosted runners and service wrappers.
 - Windows Job Object native-test failures now print the OS attachment error
   before asserting, making nested-runner or permission failures actionable in
   CI diagnostics.
