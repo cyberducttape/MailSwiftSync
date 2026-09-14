@@ -31,23 +31,43 @@ Get-FileHash .\mailswiftsync-x86_64-pc-windows-msvc.zip -Algorithm SHA256
 Get-Content .\mailswiftsync-x86_64-pc-windows-msvc.zip.sha256
 ```
 
-3. Extract the verified archive. The release archive contains the
-   MailSwiftSync binary, README, license, and operator installation guides.
+3. For a stronger release check, download the release manifest and its
+   checksum, then verify both before extracting:
+
+```bash
+sha256sum -c mailswiftsync-release-manifest.txt.sha256
+sha256sum -c mailswiftsync-sbom.json.sha256
+```
+
+The manifest contains the digest of every release artifact. If the GitHub CLI
+is installed, also verify the build provenance attached to the manifest:
+
+```bash
+gh attestation verify mailswiftsync-release-manifest.txt \
+  --repo itchyitchy123/MailSwiftSync
+```
+
+Run the attestation command from the directory containing the downloaded
+manifest. It verifies provenance; it does not replace the adjacent checksum
+checks.
+
+4. Extract the verified archive. The release archive contains the
+  MailSwiftSync binary, README, license, and operator installation guides.
 
 ## Configure the migration engine
 
-4. Install the engine required by the migration:
+5. Install the engine required by the migration:
    - arbitrary IMAP-to-IMAP: install `imapsync` from its official distribution;
    - Dovecot destination: install `doveadm` on the destination host.
 
-5. Verify the engine in a terminal (`imapsync --version` or
+6. Verify the engine in a terminal (`imapsync --version` or
    `doveadm --version`). MailSwiftSync does not download, update, or configure
    either engine for you.
 
-6. Run the extracted `mailswiftsync` binary. On Windows, run
+7. Run the extracted `mailswiftsync` binary. On Windows, run
    `mailswiftsync-x86_64-pc-windows-msvc.exe`.
 
-7. If the engine is not on `PATH`, enter its absolute path in the migration
+8. If the engine is not on `PATH`, enter its absolute path in the migration
    plan. Keep **Preflight** selected, test with a representative destination
    mailbox, and only then approve a live pilot.
 
@@ -68,8 +88,10 @@ windows when stronger process supervision is required.
 
 Release artifacts also carry GitHub build provenance and are published with a
 release manifest. Native installers and platform code-signing/notarization are
-not published yet; the checksum and provenance checks above are the release
-verification path for portable archives.
+not published yet; the checksum, manifest, SBOM, and provenance checks above
+are the release verification path for portable archives. If `gh attestation`
+is unavailable, retain the manifest and checksum files with the installed
+archive for later independent review.
 
 For Linux headless deployments, see the [container deployment guide](../container.md)
 and the [service-manager deployment guide](SERVICE.md).
