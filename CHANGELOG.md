@@ -14,6 +14,8 @@ All notable changes to MailSwiftSync are documented here.
 - Hardened Windows-native validation by using the system command shell in
   process tests, flushing restored ledgers through a writable handle, and
   recognizing the protected Owner Rights ACE used by private-file ACLs.
+- Windows headless secret-file reads now validate the opened handle's
+  protected Owner Rights/System DACL before accepting credential material.
 - Windows CI now uses the pinned Visual Studio x64 developer-environment
   action before MSVC builds and native tests, ensuring Rust dependencies can
   locate the required `lib.exe` tool across runner image layouts.
