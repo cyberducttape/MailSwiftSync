@@ -110,7 +110,7 @@ pub(crate) fn imapsync_args(
     }
     // MailSwiftSync owns the journal and retention policy.
     args.push("--nolog".into());
-    if let Ok(extra) = crate::command::parse_shell_words(&profile.extra_options) {
+    if let Ok(extra) = canonical_extra_options(&profile.extra_options) {
         args.extend(extra);
     }
     args
@@ -148,6 +148,14 @@ fn command_endpoint_parts(host: &str, default_port: u16) -> (String, u16) {
 }
 
 pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> {
+    canonical_extra_options(extra_options).map(|_| ())
+}
+
+/// Parse the trusted tuning field once and regenerate canonical argv tokens.
+/// The returned values are the only representation that execution may use;
+/// this prevents validation from accepting one spelling while the runner
+/// launches a different literal token sequence.
+pub(crate) fn canonical_extra_options(extra_options: &str) -> Result<Vec<String>, String> {
     let options = crate::command::parse_shell_words(extra_options)
         .map_err(|error| format!("Extra options: {error}"))?;
     // This is deliberately an allowlist. The field is trusted application
@@ -233,13 +241,19 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
             },
         },
     ];
+    let mut canonical = Vec::with_capacity(options.len());
     let mut index = 0;
     while index < options.len() {
         let option = &options[index];
         let (name, inline_value) = option
             .split_once('=')
             .map_or((option.as_str(), None), |(name, value)| (name, Some(value)));
-        let normalized_name = name.trim_start_matches('-');
+        if !name.starts_with("--") || name.starts_with("---") {
+            return Err(format!(
+                "Extra options: {name} must use the canonical --option spelling"
+            ));
+        }
+        let normalized_name = &name[2..];
         let Some(spec) = OPTION_SPECS
             .iter()
             .find(|spec| spec.name == normalized_name)
@@ -256,6 +270,7 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
                 if inline_value.is_some() {
                     return Err(format!("Extra options: {name} does not accept a value."));
                 }
+                canonical.push(format!("--{}", spec.name));
             }
             OptionType::Integer { min, max } => {
                 let value = if let Some(value) = inline_value {
@@ -280,9 +295,10 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
                         "Extra options: {name} must be between {min} and {max}."
                     ));
                 }
+                canonical.extend([format!("--{}", spec.name), parsed.to_string()]);
             }
         }
         index += 1;
     }
-    Ok(())
+    Ok(canonical)
 }

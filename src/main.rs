@@ -7048,6 +7048,10 @@ mod tests {
         assert!(form.validate().is_ok());
         form.profile.extra_options = "--nofoldersizes --timeout 30".into();
         assert!(form.validate().is_ok());
+        form.profile.extra_options = "timeout=30".into();
+        assert!(form.validate().unwrap_err().contains("canonical"));
+        form.profile.extra_options = "--timeout=30".into();
+        assert!(form.validate().is_ok());
         form.profile.extra_options = "--debug --debugimap1 --debugimap2".into();
         assert!(form.validate().is_ok());
         form.profile.extra_options = "--debugimap1=1".into();

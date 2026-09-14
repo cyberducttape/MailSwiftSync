@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Canonicalized trusted extra imapsync options after validation, so execution
+  now uses the exact allowlisted `--option` spelling and typed integer values
+  that were validated. Malformed single/double-dash variants are rejected
+  instead of being passed through literally.
 - Hardened headless secret-file reads on Unix by validating the already-open
   descriptor, rejecting symlinks, requiring effective-user ownership, and
   setting close-on-exec. A single terminal CR/LF is trimmed for shell-friendly
