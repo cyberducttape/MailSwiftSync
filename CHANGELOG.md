@@ -8,6 +8,8 @@ All notable changes to MailSwiftSync are documented here.
 
 - Prevented bulk-import row construction from copying base-form passwords
   into transient row forms before applying row credentials.
+- Extracted the batch launch presentation bridge from `main.rs` into the UI
+  batch module; durable admission and worker policy remain controller-owned.
 - Centralized conversion and persistence of pending structured execution
   events in the controller event module, removing duplicate SQLite tuple
   plumbing from `poll()` while preserving its durability retry ordering.

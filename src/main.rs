@@ -41,15 +41,14 @@ use controller::failure::{
 #[cfg(test)]
 use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
-    ActiveRunContext, BatchExecutionMode, BatchLaunchRequest, BatchStartContext,
-    BatchStartDecision, BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet,
-    CapabilityProbeResult, LiveAuthProof, PendingDbEvent, RunKind, SingleRunAdmission,
-    SingleRunWorkerSpec, SingleStartContext, SingleStartDecision, admit_batch_launch,
-    admit_single_run, assess_plan, batch_mailbox_state, batch_start_decision,
-    capability_observation_matches, capability_probe_result_matches,
-    decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, launch_batch_worker, persist_pending_events,
-    process_event_is_current, run_line_is_current, single_start_decision, spawn_single_run_worker,
+    ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
+    BulkRetryScope, BulkStateSet, CapabilityProbeResult, LiveAuthProof, PendingDbEvent, RunKind,
+    SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext, SingleStartDecision,
+    admit_single_run, assess_plan, batch_mailbox_state, capability_observation_matches,
+    capability_probe_result_matches, decode_persisted_batch_profile,
+    durable_single_identity_matches, finish_batch_child, is_verified_terminal_state,
+    persist_pending_events, process_event_is_current, run_line_is_current, single_start_decision,
+    spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -2896,122 +2895,6 @@ impl App {
             "Applied the {} keyring ID to {applied} row(s) without a credential reference.",
             if source { "source" } else { "destination" }
         );
-    }
-    fn start_bulk(&mut self) {
-        let mode = self.bulk_mode;
-        let live = mode.is_live();
-        match batch_start_decision(BatchStartContext {
-            mode,
-            durable_view_stale: self.ui_snapshot.is_stale(),
-            profile_available: self.profile_available,
-            read_only_project: self.workspace_read_only,
-            process_review_required: self.process_review_required,
-            has_jobs: !self.bulk_jobs.is_empty(),
-            live_confirmed: self.bulk_live_confirmed,
-            persistence_available: self.persistence_available,
-        }) {
-            BatchStartDecision::Block(block) => {
-                self.bulk_message = block.message().into();
-                return;
-            }
-            BatchStartDecision::ConfirmLive => {
-                // Capture the durable admission facts before opening the dialog;
-                // the dialog itself is presentation-only and must not query
-                // SQLite on every repaint.
-                self.refresh_ui_snapshot_now();
-                self.bulk_live_confirm_open = true;
-                self.bulk_confirmation_summary = None;
-                return;
-            }
-            BatchStartDecision::Proceed => {}
-        }
-        if live {
-            self.bulk_live_confirmed = false;
-            if self.bulk_project_id.is_none() || self.bulk_job_ids.len() != self.bulk_jobs.len() {
-                self.bulk_message =
-                    "Run a successful preflight for this queue before starting live migrations."
-                        .into();
-                return;
-            }
-        }
-        self.durability_error = false;
-        self.durability_recovery_pending = false;
-        self.pending_batch_evidence.clear();
-        self.pending_batch_checkpoints.clear();
-        let run_id = uuid::Uuid::new_v4().to_string();
-        let admission = match admit_batch_launch(BatchLaunchRequest {
-            store: &self.store,
-            requested_project_id: self.bulk_project_id.as_deref(),
-            source_jobs: &self.bulk_jobs,
-            queue_job_ids: &self.bulk_job_ids,
-            selected_ids: &self.bulk_selected_ids,
-            retry_scope: self.bulk_retry_scope,
-            mode,
-            fallback_profile: &self.form.profile,
-            expected_credential_fingerprints: &self.bulk_preflight_credential_fingerprints,
-            run_id: &run_id,
-        }) {
-            Ok(value) => value,
-            Err(error) => {
-                self.bulk_message = error;
-                return;
-            }
-        };
-        let selected_indices = admission.selected_indices;
-        let jobs = admission.jobs;
-        let project_id = admission.project_id;
-        let job_ids = admission.job_ids;
-        let prepared = admission.prepared;
-        let active_run = admission.active_run;
-        let selected_job_ids = prepared.selected_job_ids.clone();
-        let queue_checkpoints = prepared.queue_checkpoints.clone();
-        let job_count = jobs.len();
-        let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
-        self.bulk_project_id = Some(project_id.clone());
-        self.selected_project_id = Some(project_id.clone());
-        self.bulk_job_ids = job_ids;
-        self.rebuild_bulk_job_index();
-        self.bulk_live_run = live;
-        self.run_id = Some(run_id.clone());
-        self.locked_profile = Some(self.form.profile.clone());
-        self.active_run = Some(active_run);
-        for &index in &selected_indices {
-            if let Some(job) = self.bulk_jobs.get_mut(index) {
-                job.state = "Queued".into();
-            }
-        }
-        self.mark_bulk_state_changed();
-        let worker = launch_batch_worker(
-            concurrency,
-            mode,
-            self.form.profile.batch_retry_count.min(3),
-            job_count,
-            selected_job_ids,
-            self.active_run
-                .as_ref()
-                .map(|run| run.batch_child_run_ids.clone())
-                .unwrap_or_default(),
-            queue_checkpoints,
-            project_id.clone(),
-            run_id.clone(),
-            jobs,
-        );
-        self.cancel_requested = Some(worker.cancel.clone());
-        self.receiver = Some(worker.receiver);
-        self.run_started_at = Some(std::time::Instant::now());
-        self.set_status(
-            format!(
-                "{}: {} jobs",
-                if live {
-                    "Batch migration"
-                } else {
-                    "Batch validation"
-                },
-                job_count
-            ),
-            StatusSeverity::Info,
-        );
-        self.output.clear();
     }
     fn running(&self) -> bool {
         self.receiver.is_some()
