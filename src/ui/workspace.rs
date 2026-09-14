@@ -6,7 +6,10 @@
 
 use crate::App;
 use crate::core::{self, StateStore};
-use crate::ui::{contains_ascii_case_insensitive, format_phase_name, job_state_badge};
+use crate::migration_plan::Form;
+use crate::ui::{
+    StatusSeverity, contains_ascii_case_insensitive, format_phase_name, job_state_badge,
+};
 use eframe::egui::{self, RichText};
 use std::time::{Duration, Instant};
 
@@ -276,6 +279,43 @@ impl WorkspaceSnapshot {
 }
 
 impl App {
+    pub(crate) fn start_new_migration(&mut self) {
+        if self.running() {
+            self.set_status(
+                "A migration is running; finish or stop it before starting a new workspace.",
+                StatusSeverity::Warning,
+            );
+            return;
+        }
+        self.selected_project_id = None;
+        self.workspace_read_only = false;
+        self.project_id = None;
+        self.job_id = None;
+        self.bulk_project_id = None;
+        self.bulk_job_ids.clear();
+        self.bulk_job_index_by_id.clear();
+        self.bulk_selected_ids.clear();
+        self.bulk_preflight_credential_fingerprints.clear();
+        self.bulk_jobs.clear();
+        self.mark_bulk_jobs_changed();
+        self.preflight.clear();
+        self.capability_receiver = None;
+        self.capability_probe_request_id = None;
+        self.capability_probe_fingerprint = None;
+        self.capability_observation_fingerprint = None;
+        self.source_capabilities = None;
+        self.destination_capabilities = None;
+        self.live_auth_proof = None;
+        self.live_confirmed = false;
+        self.live_confirmation_plan = None;
+        self.form = Form::default();
+        self.active_view = WorkspaceView::Plan;
+        self.set_status(
+            "New migration workspace ready; configure the endpoints before preflight.",
+            StatusSeverity::Info,
+        );
+    }
+
     /// Render a paged historical mailbox view from the cached workspace
     /// snapshot. Returning whether the view handled the request keeps the
     /// mutable Mailboxes workspace focused on live/batch actions.

@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved new-migration workspace reset and state clearing into `ui/workspace.rs`,
+  keeping project-selection lifecycle behavior together.
 - Centralized operator-output secret redaction in `ui/output.rs` so
   controller event handling uses the same sanitization boundary as bounded
   journal presentation.

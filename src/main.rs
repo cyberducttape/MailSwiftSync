@@ -857,43 +857,6 @@ impl App {
         }
     }
 
-    fn start_new_migration(&mut self) {
-        if self.running() {
-            self.set_status(
-                "A migration is running; finish or stop it before starting a new workspace.",
-                StatusSeverity::Warning,
-            );
-            return;
-        }
-        self.selected_project_id = None;
-        self.workspace_read_only = false;
-        self.project_id = None;
-        self.job_id = None;
-        self.bulk_project_id = None;
-        self.bulk_job_ids.clear();
-        self.bulk_job_index_by_id.clear();
-        self.bulk_selected_ids.clear();
-        self.bulk_preflight_credential_fingerprints.clear();
-        self.bulk_jobs.clear();
-        self.mark_bulk_jobs_changed();
-        self.preflight.clear();
-        self.capability_receiver = None;
-        self.capability_probe_request_id = None;
-        self.capability_probe_fingerprint = None;
-        self.capability_observation_fingerprint = None;
-        self.source_capabilities = None;
-        self.destination_capabilities = None;
-        self.live_auth_proof = None;
-        self.live_confirmed = false;
-        self.live_confirmation_plan = None;
-        self.form = Form::default();
-        self.active_view = WorkspaceView::Plan;
-        self.set_status(
-            "New migration workspace ready; configure the endpoints before preflight.",
-            StatusSeverity::Info,
-        );
-    }
-
     fn active_project_id(&self) -> Option<&str> {
         preferred_project_id(
             self.active_run.as_ref().map(|run| run.project_id.as_str()),
