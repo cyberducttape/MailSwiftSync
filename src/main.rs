@@ -89,8 +89,6 @@ use imap_probe::{command_endpoint_parts, command_port, imap_command_succeeded, i
 use imap_probe::{
     endpoint_for_probe, fresh_imap_authentication_applies, probe_tls_capabilities_with_transport,
 };
-#[cfg(test)]
-use migration_plan::validate_certificate_pin;
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, completeness as plan_completeness,
     default_destination_tls, default_imap_port, effective_destination_tls,
@@ -7606,15 +7604,6 @@ mod tests {
             args.windows(2)
                 .any(|pair| { pair == ["--sslargs2", "SSL_ca_file=/opt/customer trust/ca.pem"] })
         );
-    }
-
-    #[test]
-    fn certificate_pins_require_sha256_hex() {
-        assert!(validate_certificate_pin(&"ab".repeat(32), "source").is_ok());
-        assert!(validate_certificate_pin(&"AB".repeat(32), "source").is_ok());
-        assert!(validate_certificate_pin("", "source").is_ok());
-        assert!(validate_certificate_pin("not-a-pin", "source").is_err());
-        assert!(validate_certificate_pin(&"g".repeat(64), "source").is_err());
     }
 
     #[test]

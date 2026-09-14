@@ -1123,7 +1123,7 @@ pub(crate) struct PreparedCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_report_run_snapshot;
+    use super::{decode_report_run_snapshot, validate_certificate_pin};
 
     #[test]
     fn report_snapshot_decode_allows_empty_legacy_snapshots() {
@@ -1132,5 +1132,14 @@ mod tests {
             Ok(_) => panic!("malformed report snapshot was accepted"),
             Err(error) => assert!(error.contains("plan snapshot is corrupt")),
         }
+    }
+
+    #[test]
+    fn certificate_pins_require_sha256_hex() {
+        assert!(validate_certificate_pin(&"ab".repeat(32), "source").is_ok());
+        assert!(validate_certificate_pin(&"AB".repeat(32), "source").is_ok());
+        assert!(validate_certificate_pin("", "source").is_ok());
+        assert!(validate_certificate_pin("not-a-pin", "source").is_err());
+        assert!(validate_certificate_pin(&"g".repeat(64), "source").is_err());
     }
 }

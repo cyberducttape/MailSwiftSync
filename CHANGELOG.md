@@ -76,6 +76,8 @@ All notable changes to MailSwiftSync are documented here.
   is distinguishable from failed and verification-review rows.
 - Moved run-snapshot decoder coverage into `migration_plan.rs`, keeping the
   durable plan contract and its corruption test together.
+- Moved certificate-pin validation coverage into `migration_plan.rs`, keeping
+  TLS input policy and its regression tests together.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
