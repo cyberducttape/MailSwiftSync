@@ -6263,20 +6263,28 @@ impl eframe::App for App {
                                 egui::ComboBox::from_id_salt("destination_tls").selected_text(&self.form.profile.destination_tls).show_ui(ui, |ui| for mode in ["imaps", "starttls"] { ui.selectable_value(&mut self.form.profile.destination_tls, mode.into(), mode); });
                             });
                             ui.collapsing("Enterprise certificate trust (optional)", |ui| {
-                                ui.label(RichText::new("Use a PEM CA bundle for private PKI, or pin the leaf certificate's SHA-256 fingerprint. Public/system roots remain enabled.").color(self.theme_colors().text_secondary));
-                                ui.horizontal(|ui| {
-                                    ui.label("Source CA bundle");
-                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
-                                    ui.label("SHA-256 pin");
-                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_certificate_pin_sha256).desired_width(300.0).hint_text("64 hex characters"));
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label("Destination CA bundle");
-                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
-                                    ui.label("SHA-256 pin");
-                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_certificate_pin_sha256).desired_width(300.0).hint_text("64 hex characters"));
-                                });
-                                ui.label(RichText::new("Pins are checked in the authenticated readiness probe; a mismatch blocks execution. Do not use a pin as a substitute for an approved CA unless your security policy explicitly permits it.").color(self.theme_colors().text_secondary));
+                                if self.form.engine() == core::Engine::Dovecot {
+                                    ui.label(RichText::new("Dovecot mode uses the source CA bundle for local imapc TLS. Certificate pins are not enforced by Dovecot and are rejected by validation.").color(self.theme_colors().warning));
+                                    ui.horizontal(|ui| {
+                                        ui.label("Source CA bundle");
+                                        ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
+                                    });
+                                } else {
+                                    ui.label(RichText::new("Use a PEM CA bundle for private PKI, or pin the leaf certificate's SHA-256 fingerprint. Public/system roots remain enabled.").color(self.theme_colors().text_secondary));
+                                    ui.horizontal(|ui| {
+                                        ui.label("Source CA bundle");
+                                        ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
+                                        ui.label("SHA-256 pin");
+                                        ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_certificate_pin_sha256).desired_width(300.0).hint_text("64 hex characters"));
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label("Destination CA bundle");
+                                        ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_ca_bundle).desired_width(300.0).hint_text("/path/to/company-ca.pem"));
+                                        ui.label("SHA-256 pin");
+                                        ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_certificate_pin_sha256).desired_width(300.0).hint_text("64 hex characters"));
+                                    });
+                                    ui.label(RichText::new("Pins are checked in the authenticated readiness probe; a mismatch blocks execution. Do not use a pin as a substitute for an approved CA unless your security policy explicitly permits it.").color(self.theme_colors().text_secondary));
+                                }
                             });
                             ui.add_space(14.0);
                             ui.group(|ui| {
@@ -8309,6 +8317,14 @@ mod tests {
         assert!(validate_certificate_pin("", "source").is_ok());
         assert!(validate_certificate_pin("not-a-pin", "source").is_err());
         assert!(validate_certificate_pin(&"g".repeat(64), "source").is_err());
+    }
+
+    #[test]
+    fn dovecot_rejects_unenforced_certificate_pins() {
+        let mut form = dovecot_form();
+        form.profile.source_certificate_pin_sha256 = "ab".repeat(32);
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("Certificate pinning is not currently supported"));
     }
 
     #[test]

@@ -437,6 +437,19 @@ impl Form {
             &self.profile.destination_certificate_pin_sha256,
             "Destination certificate pin",
         )?;
+        if self.engine() == core::Engine::Dovecot
+            && (!self.profile.source_certificate_pin_sha256.trim().is_empty()
+                || !self
+                    .profile
+                    .destination_certificate_pin_sha256
+                    .trim()
+                    .is_empty())
+        {
+            return Err(
+                "Certificate pinning is not currently supported by the Dovecot engine; remove the pin or select imapsync."
+                    .into(),
+            );
+        }
         endpoint::parts(
             &self.profile.source_host,
             default_imap_port(&self.profile.source_tls),

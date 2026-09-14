@@ -27,6 +27,9 @@ All notable changes to MailSwiftSync are documented here.
 - Bound asynchronous IMAP capability observations to a request and plan
   fingerprint, discarding results after endpoint, trust, auth, or other plan
   edits instead of presenting stale readiness data.
+- Made certificate pinning fail closed for Dovecot plans, where the native
+  engine does not enforce application-level leaf pins, and clarified the UI
+  to expose only the applicable source CA control.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

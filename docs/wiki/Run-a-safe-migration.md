@@ -36,13 +36,15 @@ Click **Preview redacted command**. Confirm:
 - For imapsync, the generated plan explicitly forces `--ssl1`/`--ssl2` for IMAPS and `--tls1` for STARTTLS; it does not permit automatic cleartext fallback. A deliberately configured plain source is shown as an insecure-transport warning, defaults to port 143 when no port is supplied, and requires an explicit acknowledgement before any authenticated operation, including dry preflight. MailSwiftSync also passes `--nolog` so imapsync does not create an unmanaged persistent log outside the application journal.
 
 For private enterprise PKI, expand **Enterprise certificate trust** and provide a
-PEM CA bundle for either endpoint. The bundle is added to the TLS readiness
+PEM CA bundle for either endpoint. In imapsync mode, the bundle is added to the TLS readiness
 probe and to imapsync's `SSL_ca_file` setting; public roots remain enabled. An
 optional 64-character SHA-256 leaf-certificate pin is checked after the TLS
 handshake and blocks both readiness and live re-authentication on mismatch.
 Trust settings are part of the plan fingerprint, so changing them requires a
 new preflight. Never disable certificate verification to work around an
-untrusted private CA.
+untrusted private CA. Dovecot-native mode accepts a source CA bundle for its
+`imapc` source, but certificate pins are not enforced by the native engine and
+are rejected during validation.
 
 ## 5. Run validation
 
