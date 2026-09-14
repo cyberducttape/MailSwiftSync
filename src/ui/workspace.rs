@@ -20,6 +20,21 @@ pub(crate) struct WorkspaceRefreshOptions<'a> {
     pub(crate) load_runs: bool,
 }
 
+/// Resolve the project that owns the current workspace. An active run has
+/// precedence over selection because the operator must continue seeing the
+/// durable project that owns an executing process.
+pub(crate) fn preferred_project_id<'a>(
+    active_run_project: Option<&'a str>,
+    selected_project: Option<&'a str>,
+    single_project: Option<&'a str>,
+    batch_project: Option<&'a str>,
+) -> Option<&'a str> {
+    active_run_project
+        .or(selected_project)
+        .or(batch_project)
+        .or(single_project)
+}
+
 /// Rebuild the project-browser index without cloning project rows. Keeping
 /// this policy beside the workspace read model gives the UI a stable, tested
 /// searchable view over durable project metadata.
@@ -262,7 +277,7 @@ fn format_refresh_age(age: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkspaceSnapshot, filter_project_indices};
+    use super::{WorkspaceSnapshot, filter_project_indices, preferred_project_id};
     use crate::core::{Phase, ProjectListItem};
 
     #[test]
@@ -291,6 +306,27 @@ mod tests {
         assert_eq!(visible, vec![1]);
         filter_project_indices(&projects, "", &mut visible);
         assert_eq!(visible, vec![0, 1]);
+    }
+
+    #[test]
+    fn active_run_project_takes_precedence_over_workspace_selection() {
+        assert_eq!(
+            preferred_project_id(
+                Some("active"),
+                Some("selected"),
+                Some("single"),
+                Some("batch"),
+            ),
+            Some("active")
+        );
+        assert_eq!(
+            preferred_project_id(None, Some("selected"), Some("single"), Some("batch")),
+            Some("selected")
+        );
+        assert_eq!(
+            preferred_project_id(None, None, Some("single"), Some("batch")),
+            Some("batch")
+        );
     }
 
     #[test]

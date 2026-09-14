@@ -123,7 +123,7 @@ use ui::{
     AppearancePreferences, SettingsAction, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
     contains_ascii_case_insensitive, display_job_state, display_state_key, filter_project_indices,
     format_elapsed, format_phase_name, job_state_badge, markdown_escape, needs_operator_review,
-    password_visibility_id, project_health_state_counts, push_visible_output,
+    password_visibility_id, preferred_project_id, project_health_state_counts, push_visible_output,
     recommended_next_action, render_account, show_settings, status_color, successful_run_severity,
     successful_run_status, truncate_utf8, workflow_step_index,
 };
@@ -262,18 +262,6 @@ struct PendingSheetImport {
 use bulk_import::{BulkImportResult, BulkJob};
 
 type PendingDbEvent = (String, String, String, String);
-
-fn preferred_project_id<'a>(
-    active_run_project: Option<&'a str>,
-    selected_project: Option<&'a str>,
-    single_project: Option<&'a str>,
-    batch_project: Option<&'a str>,
-) -> Option<&'a str> {
-    active_run_project
-        .or(selected_project)
-        .or(batch_project)
-        .or(single_project)
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WorkspaceView {

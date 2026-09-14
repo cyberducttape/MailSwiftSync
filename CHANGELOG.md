@@ -62,6 +62,8 @@ All notable changes to MailSwiftSync are documented here.
   report signing and verification are called directly through `reports`.
 - Added a 100,000-mailbox durable read-model regression test proving workspace
   pages remain bounded while aggregate state counts cover the full project.
+- Moved workspace project-resolution policy into the UI read-model module with
+  direct tests, reducing another pure selection rule in `main.rs`.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
