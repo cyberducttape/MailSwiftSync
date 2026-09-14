@@ -1,5 +1,6 @@
 use crate::bulk_import::BulkJob;
 use crate::core;
+use std::collections::HashSet;
 
 /// Execution mode owned by the batch controller. Keeping this distinct from
 /// the single-mailbox form mode prevents a page-local UI toggle from changing
@@ -71,10 +72,36 @@ impl BulkQueueSummary {
     }
 }
 
+/// Select queue rows from durable state without coupling the policy to egui
+/// storage or widget state. Missing durable state is allowed for a first
+/// preflight; live admission performs its separate durable-fingerprint gate.
+pub(crate) fn selected_batch_indices(
+    job_count: usize,
+    job_ids: &[String],
+    durable_states: &[Option<String>],
+    selected_ids: &HashSet<String>,
+    retry_scope: BulkRetryScope,
+) -> Vec<usize> {
+    (0..job_count)
+        .filter(|index| {
+            let selected = selected_ids.is_empty()
+                || job_ids
+                    .get(*index)
+                    .is_some_and(|id| selected_ids.contains(id));
+            selected
+                && durable_states
+                    .get(*index)
+                    .and_then(Option::as_deref)
+                    .is_none_or(|state| retry_scope.includes(state))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BulkJob, BulkQueueSummary};
+    use super::{BulkJob, BulkQueueSummary, BulkRetryScope, selected_batch_indices};
     use crate::migration_plan::Form;
+    use std::collections::HashSet;
 
     fn job(state: &str) -> BulkJob {
         BulkJob {
@@ -124,6 +151,22 @@ mod tests {
             job("attention"),
         ];
         assert_eq!(BulkQueueSummary::from_jobs(&jobs).unresolved(), 2);
+    }
+
+    #[test]
+    fn selected_indices_apply_ids_and_durable_retry_scope() {
+        let ids = vec!["one".into(), "two".into(), "three".into()];
+        let states = vec![Some("failed".into()), Some("verified".into()), None];
+        let selected = HashSet::from(["one".into(), "two".into()]);
+
+        assert_eq!(
+            selected_batch_indices(3, &ids, &states, &selected, BulkRetryScope::Unresolved,),
+            vec![0]
+        );
+        assert_eq!(
+            selected_batch_indices(3, &ids, &states, &HashSet::new(), BulkRetryScope::All),
+            vec![0, 1, 2]
+        );
     }
 }
 

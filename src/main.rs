@@ -32,7 +32,8 @@ use controller::failure::{
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
-    durable_single_identity_matches, is_verified_terminal_state, spawn_single_run_worker,
+    durable_single_identity_matches, is_verified_terminal_state, selected_batch_indices,
+    spawn_single_run_worker,
 };
 use credentials::{
     CleanupGuard, SecretString, cleanup_paths, cleanup_stale_secret_directories,
@@ -3127,24 +3128,13 @@ impl App {
             .iter()
             .map(|admission| admission.as_ref().map(|value| value.state.clone()))
             .collect::<Vec<_>>();
-        let selected_indices = self
-            .bulk_jobs
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| {
-                let selected = self.bulk_selected_ids.is_empty()
-                    || self
-                        .bulk_job_ids
-                        .get(*index)
-                        .is_some_and(|id| self.bulk_selected_ids.contains(id));
-                selected
-                    && durable_states
-                        .get(*index)
-                        .and_then(Option::as_deref)
-                        .is_none_or(|state| self.bulk_retry_scope.includes(state))
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
+        let selected_indices = selected_batch_indices(
+            self.bulk_jobs.len(),
+            &self.bulk_job_ids,
+            &durable_states,
+            &self.bulk_selected_ids,
+            self.bulk_retry_scope,
+        );
         if selected_indices.is_empty() {
             self.bulk_message = format!(
                 "No mailboxes match the selected live retry scope: {}.",
