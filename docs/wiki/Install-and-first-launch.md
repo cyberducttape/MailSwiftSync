@@ -2,20 +2,35 @@
 
 ## What you need
 
-- A computer running MailSwiftSync.
-- A working `imapsync` installation.
+- A computer running a released MailSwiftSync archive or a development
+  checkout.
+- A working `imapsync` installation for arbitrary IMAP migrations, or local
+  `doveadm` access for a Dovecot destination.
 - Login details for both IMAP accounts.
 - A test mailbox at the destination, strongly recommended for the first run.
 
 ## Start MailSwiftSync
 
-Build and start from the project folder:
+For a release, verify the adjacent checksum, extract the archive, and run the
+platform binary. The exact verification commands are in the
+[distribution installation guide](../distribution/INSTALL.md).
+
+For a source checkout only, build and start with:
 
 ```bash
 cargo run --release
 ```
 
 MailSwiftSync looks for `imapsync` on your PATH. If it is installed elsewhere, enter the full path in **imapsync executable** near the bottom of the window.
+
+## Follow the safe first migration
+
+1. Configure source and destination and save the non-secret profile.
+2. Leave **Preflight** selected and run the readiness checks.
+3. Review the plan, capability results, and any Attention items.
+4. Use one representative mailbox as a pilot before selecting a larger batch.
+5. Approve live execution only after the pilot is understood, then verify and
+   export the customer-safe proof.
 
 ## Fill in the two account panels
 
