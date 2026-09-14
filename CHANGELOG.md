@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added the controller crash and engine-interruption recovery fixture to the
+  tagged release workflow, so release publication executes every evidence gate
+  claimed by the compatibility matrix.
 - Moved live IMAP authentication probe setup into `ui/plan.rs`, completing
   extraction of plan readiness probe coordination from the application shell.
 - Moved capability-probe validation and request construction into the plan UI

@@ -111,6 +111,8 @@ jobs:
         run: docker build --tag mailswiftsync:release-integration .
       - name: Run packaged IMAP transfer fixture
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+      - name: Run packaged controller recovery fixture
+        run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
 
   publish:
     needs: [build, sbom, verify, packaged-integration]
