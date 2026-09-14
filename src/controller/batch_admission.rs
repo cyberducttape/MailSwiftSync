@@ -151,6 +151,111 @@ pub(crate) fn prepare_batch_project(
     Ok((project.id, job_ids))
 }
 
+/// Validate and prepare the selected rows after durable admission facts have
+/// been read. The returned forms are the exact copies that may be handed to
+/// the worker pool; callers must not revalidate one representation and then
+/// execute another.
+pub(crate) fn prepare_selected_batch_jobs(
+    source_jobs: &[BulkJob],
+    selected_indices: &[usize],
+    durable_admissions: &[Option<core::BatchAdmissionState>],
+    live: bool,
+    expected_credential_fingerprints: &[Option<String>],
+) -> Result<Vec<BulkJob>, String> {
+    if live {
+        for &index in selected_indices {
+            let job = source_jobs
+                .get(index)
+                .ok_or_else(|| format!("Batch queue row {} no longer exists.", index + 1))?;
+            let admission = durable_admissions.get(index).and_then(Option::as_ref);
+            let state = admission.map(|value| value.state.as_str());
+            let preflight = admission.and_then(|value| value.preflight_plan.as_deref());
+            if !matches!(
+                state,
+                Some(
+                    "ready"
+                        | "delta_required"
+                        | "verification_difference"
+                        | "failed"
+                        | "attention"
+                        | "cancelled"
+                        | "completed"
+                        | "verified"
+                        | "verified_with_exceptions"
+                )
+            ) || preflight
+                != Some(
+                    crate::plan_identity::fingerprint_digest(&job.form.plan_fingerprint()).as_str(),
+                )
+            {
+                return Err(format!(
+                    "Mailbox {} is not ready for live execution. Re-run dry validation after reviewing its exact plan.",
+                    index + 1
+                ));
+            }
+        }
+    }
+    let mut jobs = selected_indices
+        .iter()
+        .map(|&index| {
+            let mut job = source_jobs
+                .get(index)
+                .cloned()
+                .ok_or_else(|| format!("Batch queue row {} no longer exists.", index + 1))?;
+            job.form.dry_run = !live;
+            Ok(job)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    for (selected_index, job) in jobs.iter_mut().enumerate() {
+        let queue_index = selected_indices[selected_index];
+        let credential_load = if live {
+            job.form.reload_configured_keyring_credentials()
+        } else {
+            job.form.load_configured_keyring_credentials()
+        };
+        if let Err(error) = credential_load {
+            return Err(format!(
+                "Could not load credentials for mailbox {} (queue row {}): {error}",
+                selected_index + 1,
+                queue_index + 1
+            ));
+        }
+        if live {
+            let current = job.form.credential_fingerprint();
+            let expected = expected_credential_fingerprints
+                .get(queue_index)
+                .and_then(Option::as_deref);
+            if expected != Some(current.as_str()) {
+                return Err(format!(
+                    "Mailbox {} credentials changed or were not retained from dry validation. Run a new dry validation before live execution.",
+                    queue_index + 1
+                ));
+            }
+        }
+    }
+    if let Some((selected_index, error)) = jobs
+        .iter()
+        .enumerate()
+        .find_map(|(index, job)| job.form.validate().err().map(|error| (index, error)))
+    {
+        return Err(format!(
+            "Mailbox {} is not ready for validation: {error}",
+            selected_indices[selected_index] + 1
+        ));
+    }
+    if live
+        && jobs
+            .iter()
+            .any(|job| job.form.requires_insecure_transport_ack())
+    {
+        return Err("Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into());
+    }
+    if live && let Some(error) = duplicate_destination(&jobs)? {
+        return Err(error);
+    }
+    Ok(jobs)
+}
+
 pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {
     let mut applied = 0;
     for job in jobs {
@@ -170,4 +275,23 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
         }
     }
     applied
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_selected_batch_jobs;
+    use crate::{bulk_import::BulkJob, migration_plan::Form};
+
+    #[test]
+    fn selected_batch_preparation_fails_closed_without_durable_live_admission() {
+        let jobs = [BulkJob {
+            label: "mailbox".into(),
+            form: Form::default(),
+            state: "imported".into(),
+        }];
+        let error = prepare_selected_batch_jobs(&jobs, &[0], &[None], true, &[])
+            .err()
+            .unwrap();
+        assert!(error.contains("not ready for live execution"));
+    }
 }

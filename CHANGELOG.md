@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted selected batch-row validation and preparation into
+  `controller/batch_admission.rs`, centralizing live durable-state checks,
+  credential fingerprints, form validation, transport acknowledgements, and
+  duplicate-destination protection outside the egui dispatcher.
 - Batch projects now persist the actual source and destination endpoints from
   the imported queue instead of generic `batch` metadata, making project
   switching and exported reports unambiguous for operators managing multiple

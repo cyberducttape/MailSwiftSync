@@ -28,10 +28,10 @@ use command::{parse_shell_words, remove_option, shell_quote};
 #[cfg(test)]
 use controller::batch_admission::canonical_destination_identity;
 #[cfg(test)]
+use controller::batch_admission::duplicate_destination;
+#[cfg(test)]
 use controller::batch_admission::matches_queue;
-use controller::batch_admission::{
-    apply_keyring_id, duplicate_destination, selection_value, validate_batch_throttle,
-};
+use controller::batch_admission::{apply_keyring_id, selection_value, validate_batch_throttle};
 use controller::failure::{
     FailureClass, classified_failure_detail, classify_failure, terminal_phase_advance_allowed,
 };
@@ -41,8 +41,8 @@ use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
     durable_single_identity_matches, is_verified_terminal_state, prepare_batch_project,
-    selected_batch_indices, spawn_batch_worker, spawn_single_run_worker,
-    suggested_batch_project_name,
+    prepare_selected_batch_jobs, selected_batch_indices, spawn_batch_worker,
+    spawn_single_run_worker, suggested_batch_project_name,
 };
 #[cfg(test)]
 use credentials::CleanupGuard;
@@ -3249,111 +3249,19 @@ impl App {
             );
             return;
         }
-        if live {
-            for &index in &selected_indices {
-                let job = &self.bulk_jobs[index];
-                let state = durable_states[index].as_deref();
-                let preflight = durable_admissions
-                    .get(index)
-                    .and_then(|admission| admission.as_ref())
-                    .and_then(|admission| admission.preflight_plan.as_deref());
-                if !matches!(
-                    state,
-                    Some(
-                        "ready"
-                            | "delta_required"
-                            | "verification_difference"
-                            | "failed"
-                            | "attention"
-                            | "cancelled"
-                            | "completed"
-                            | "verified"
-                            | "verified_with_exceptions"
-                    )
-                ) || preflight
-                    != Some(plan_fingerprint_digest(&job.form.plan_fingerprint()).as_str())
-                {
-                    self.bulk_message = format!(
-                        "Mailbox {} is not ready for live execution. Re-run dry validation after reviewing its exact plan.",
-                        index + 1
-                    );
-                    return;
-                }
-            }
-        }
-        let jobs = selected_indices
-            .iter()
-            .map(|&index| {
-                let mut job = self.bulk_jobs[index].clone();
-                job.form.dry_run = !live;
-                job
-            })
-            .collect::<Vec<_>>();
-        let mut jobs = jobs;
-        for (selected_index, job) in jobs.iter_mut().enumerate() {
-            let credential_load = if live {
-                job.form.reload_configured_keyring_credentials()
-            } else {
-                job.form.load_configured_keyring_credentials()
-            };
-            if let Err(error) = credential_load {
-                self.bulk_message = format!(
-                    "Could not load credentials for mailbox {} (queue row {}): {error}",
-                    selected_index + 1,
-                    selected_indices[selected_index] + 1
-                );
+        let jobs = match prepare_selected_batch_jobs(
+            &self.bulk_jobs,
+            &selected_indices,
+            &durable_admissions,
+            live,
+            &self.bulk_preflight_credential_fingerprints,
+        ) {
+            Ok(jobs) => jobs,
+            Err(error) => {
+                self.bulk_message = error;
                 return;
             }
-            if live {
-                let queue_index = selected_indices[selected_index];
-                let current = job.form.credential_fingerprint();
-                let expected = self
-                    .bulk_preflight_credential_fingerprints
-                    .get(queue_index)
-                    .and_then(Option::as_deref);
-                if expected != Some(current.as_str()) {
-                    self.bulk_message = format!(
-                        "Mailbox {} credentials changed or were not retained from dry validation. Run a new dry validation before live execution.",
-                        queue_index + 1
-                    );
-                    return;
-                }
-            }
-        }
-        if let Some((selected_index, error)) = jobs
-            .iter()
-            .enumerate()
-            .find_map(|(index, job)| job.form.validate().err().map(|error| (index, error)))
-        {
-            self.bulk_message = format!(
-                "Mailbox {} is not ready for validation: {error}",
-                selected_indices[selected_index] + 1
-            );
-            return;
-        }
-        if live
-            && jobs
-                .iter()
-                .any(|job| job.form.requires_insecure_transport_ack())
-        {
-            self.bulk_message = "Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into();
-            return;
-        }
-        if live {
-            match duplicate_destination(&jobs) {
-                Ok(Some(error)) => {
-                    self.bulk_message = error;
-                    return;
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    self.bulk_message = format!(
-                        "Live batch blocked because a destination endpoint is invalid: {error}"
-                    );
-                    return;
-                }
-            }
-        }
+        };
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         if let Err(error) = validate_batch_throttle(&self.form.profile, concurrency) {
             self.bulk_message = error;
