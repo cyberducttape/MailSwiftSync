@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Cached project-browser filter indices and render rows from the durable
+  snapshot without cloning the full project list on every repaint, preserving
+  searchable project selection for large operator portfolios.
 - Moved elapsed-time presentation into `ui::status` with focused formatting tests, further reducing pure UI formatting logic in `main.rs`.
 - Extracted plan assessment and capability/quota presentation policy into `controller::preflight`, reducing `App` responsibility while keeping the explicit network readiness gate separate.
 - Moved the local plan-completeness calculation into `migration_plan`, reducing UI-controller responsibility while keeping network readiness checks in the explicit preflight path.

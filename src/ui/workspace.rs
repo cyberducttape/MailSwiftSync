@@ -15,6 +15,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Default)]
 pub(crate) struct WorkspaceSnapshot {
     pub(crate) projects: Vec<core::ProjectListItem>,
+    pub(crate) projects_revision: u64,
     pub(crate) runs: Vec<core::RunListItem>,
     pub(crate) report: Option<core::ProjectReportSnapshot>,
     pub(crate) project: Option<core::Project>,
@@ -48,8 +49,11 @@ impl WorkspaceSnapshot {
 
         self.refreshed_at = Some(Instant::now());
         let project_limit = if all_projects_loaded { usize::MAX } else { 500 };
-        if let Ok(value) = store.recent_projects(project_limit) {
+        if let Ok(value) = store.recent_projects(project_limit)
+            && self.projects != value
+        {
             self.projects = value;
+            self.projects_revision = self.projects_revision.wrapping_add(1);
         }
 
         if project_changed {
@@ -76,6 +80,7 @@ impl WorkspaceSnapshot {
                     destination_endpoint: value.destination_endpoint.clone(),
                     phase: value.phase,
                 });
+                self.projects_revision = self.projects_revision.wrapping_add(1);
             }
         }
         if let Ok(value) = store.mailboxes(&project_id) {

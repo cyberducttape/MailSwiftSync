@@ -491,6 +491,11 @@ struct App {
     workspace_read_only: bool,
     projects_open: bool,
     project_search: String,
+    /// Cached project-browser matches. The browser is repainted frequently;
+    /// filtering by index avoids cloning every project on every frame.
+    project_filter_query: String,
+    project_filter_source_revision: u64,
+    project_visible_indices: Vec<usize>,
     project_id: Option<String>,
     job_id: Option<String>,
     /// Process-local credential material used by the last successful dry
@@ -911,6 +916,9 @@ impl App {
             workspace_read_only: false,
             projects_open: false,
             project_search: String::new(),
+            project_filter_query: String::new(),
+            project_filter_source_revision: u64::MAX,
+            project_visible_indices: Vec::new(),
             project_id,
             job_id,
             preflight_credential_fingerprint: None,
@@ -1337,11 +1345,37 @@ impl App {
             ),
         }
     }
+    fn refresh_project_filter_cache(&mut self) {
+        let query = self.project_search.trim().to_owned();
+        let source_revision = self.ui_snapshot.projects_revision;
+        if self.project_filter_query == query
+            && self.project_filter_source_revision == source_revision
+        {
+            return;
+        }
+
+        self.project_filter_query = query.clone();
+        self.project_filter_source_revision = source_revision;
+        self.project_visible_indices.clear();
+        for (index, project) in self.ui_snapshot.projects.iter().enumerate() {
+            if query.is_empty()
+                || contains_ascii_case_insensitive(&project.name, &query)
+                || contains_ascii_case_insensitive(&project.source_endpoint, &query)
+                || contains_ascii_case_insensitive(&project.destination_endpoint, &query)
+            {
+                self.project_visible_indices.push(index);
+            }
+        }
+    }
+
     fn projects_dialog(&mut self, ctx: &egui::Context) {
         if !self.projects_open {
             return;
         }
+        self.refresh_project_filter_cache();
         let mut open = self.projects_open;
+        let mut selected_project = None;
+        let mut new_migration_requested = false;
         egui::Window::new("Projects")
             .open(&mut open)
             .default_width(760.0)
@@ -1358,45 +1392,46 @@ impl App {
                         .desired_width(320.0));
                 });
                 ui.add_space(8.0);
-                let search = self.project_search.trim();
-                {
-                    let projects = self.ui_snapshot.projects.clone();
-                        let visible = projects.into_iter().filter(|project| {
-                            search.is_empty()
-                                || contains_ascii_case_insensitive(&project.name, search)
-                                || contains_ascii_case_insensitive(&project.source_endpoint, search)
-                                || contains_ascii_case_insensitive(&project.destination_endpoint, search)
-                        }).collect::<Vec<_>>();
-                        ui.label(RichText::new(format!("{} project(s)", visible.len())).color(self.theme_colors().text_secondary));
-                        egui::ScrollArea::vertical()
-                            .max_height(360.0)
-                            .show(ui, |ui| {
-                                egui::Grid::new("project_browser").striped(true).show(ui, |ui| {
-                                    ui.strong("Project");
-                                    ui.strong("Phase");
-                                    ui.strong("Source");
-                                    ui.strong("Destination");
-                                    ui.end_row();
-                                    for project in visible {
-                                        let selected = self.selected_project_id.as_deref() == Some(project.id.as_str());
-                                        if ui.selectable_label(selected, &project.name).clicked() {
-                                            self.select_workspace_project(project.id.clone());
-                                            self.projects_open = false;
-                                        }
-                                        ui.label(format_phase_name(project.phase));
-                                        ui.label(&project.source_endpoint);
-                                        ui.label(&project.destination_endpoint);
-                                        ui.end_row();
-                                    }
-                                });
-                            });
-                    }
+                ui.label(RichText::new(format!(
+                    "{} project(s)",
+                    self.project_visible_indices.len()
+                )).color(self.theme_colors().text_secondary));
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("project_browser").striped(true).show(ui, |ui| {
+                            ui.strong("Project");
+                            ui.strong("Phase");
+                            ui.strong("Source");
+                            ui.strong("Destination");
+                            ui.end_row();
+                            for &index in &self.project_visible_indices {
+                                let project = &self.ui_snapshot.projects[index];
+                                let selected = self.selected_project_id.as_deref()
+                                    == Some(project.id.as_str());
+                                if ui.selectable_label(selected, &project.name).clicked() {
+                                    selected_project = Some(project.id.clone());
+                                }
+                                ui.label(format_phase_name(project.phase));
+                                ui.label(&project.source_endpoint);
+                                ui.label(&project.destination_endpoint);
+                                ui.end_row();
+                            }
+                        });
+                    });
                 ui.add_space(8.0);
                 if ui.button("New migration plan").clicked() {
-                    self.start_new_migration();
-                    self.projects_open = false;
+                    new_migration_requested = true;
                 }
             });
+        if let Some(project_id) = selected_project {
+            self.select_workspace_project(project_id);
+            open = false;
+        }
+        if new_migration_requested {
+            self.start_new_migration();
+            open = false;
+        }
         self.projects_open = open && self.projects_open;
     }
 
