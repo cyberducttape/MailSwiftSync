@@ -13,6 +13,9 @@ All notable changes to MailSwiftSync are documented here.
 - Added project-scoped revisions and conditional run-history loading so activity
   in another project, or an inactive Activity view, does not rebuild the
   selected project's mailbox and run projections.
+- Restore now snapshots its source through SQLite's backup API, preserving
+  committed WAL-visible state instead of copying only the main database file.
+  The standalone snapshot is integrity-checked before installation.
 - Expanded the Dovecot pinning regression coverage to assert that both source
   and destination certificate pins are rejected rather than silently treated
   as enforced controls.

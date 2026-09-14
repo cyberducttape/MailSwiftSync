@@ -293,6 +293,40 @@ impl StateStore {
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(())
     }
+
+    /// Snapshot an on-disk ledger through SQLite's backup API. Unlike a file
+    /// copy, this includes committed pages currently visible through a WAL
+    /// and produces a standalone database without `-wal`/`-shm` sidecars.
+    pub fn snapshot_to(source: &Path, destination: &Path) -> rusqlite::Result<()> {
+        if destination.exists() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let source_connection =
+            Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        source_connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+        let integrity: String =
+            source_connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+
+        let mut destination_connection = Connection::open(destination)?;
+        {
+            let backup = backup::Backup::new(&source_connection, &mut destination_connection)?;
+            backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
+        }
+        let integrity: String =
+            destination_connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        if integrity != "ok" {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        drop(destination_connection);
+        restrict_database_permissions(destination)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        restrict_database_sidecars(destination)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        Ok(())
+    }
     fn migrate(&self) -> rusqlite::Result<()> {
         // Version 2 adds the durable endpoint-qualified destination identity;
         // version 3 records lifecycle provenance for each admitted run;

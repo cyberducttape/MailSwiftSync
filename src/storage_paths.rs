@@ -38,17 +38,6 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
     if backup == destination {
         return Err("Restore source and destination must be different files.".into());
     }
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = PathBuf::from(format!("{}{}", backup.display(), suffix));
-        if sidecar.exists() {
-            return Err(format!(
-                "restore source has a SQLite sidecar {}; use the backup command to create a standalone snapshot before restoring",
-                sidecar.display()
-            ));
-        }
-    }
-    core::StateStore::open_readonly(backup)
-        .map_err(|error| format!("restore source is not a valid current ledger: {error}"))?;
     let parent = destination
         .parent()
         .ok_or("Restore destination has no parent directory.")?;
@@ -75,8 +64,14 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
             .unwrap_or("state.db"),
         uuid::Uuid::new_v4()
     ));
-    std::fs::copy(backup, &temporary)
-        .map_err(|error| format!("could not copy restore source: {error}"))?;
+    if let Err(error) = core::StateStore::snapshot_to(backup, &temporary) {
+        let _ = std::fs::remove_file(&temporary);
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{}", temporary.display(), suffix));
+            let _ = std::fs::remove_file(sidecar);
+        }
+        return Err(format!("could not snapshot restore source: {error}"));
+    }
     if let Err(error) = restrict_file_permissions(&temporary) {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("could not secure restored ledger: {error}"));

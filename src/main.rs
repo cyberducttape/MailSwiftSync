@@ -7515,10 +7515,11 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let source = directory.join("backup.db");
         let destination = directory.join("state.db");
-        core::StateStore::in_memory()
-            .unwrap()
-            .backup_to(&source)
+        let source_store = core::StateStore::in_memory().unwrap();
+        source_store
+            .create_project("restore source", "source", "destination")
             .unwrap();
+        source_store.backup_to(&source).unwrap();
 
         assert!(restore_ledger(&source, &destination).unwrap().is_none());
         core::StateStore::open_readonly(&destination).unwrap();
@@ -7528,12 +7529,36 @@ mod tests {
         assert!(restore_ledger(&source, &destination).is_err());
         std::fs::remove_file(orphaned_sidecar).unwrap();
         assert!(restore_ledger(&source, &destination).unwrap().is_none());
+        std::fs::remove_file(&destination).unwrap();
 
+        let project = core::StateStore::open(&source)
+            .unwrap()
+            .latest_project()
+            .unwrap()
+            .unwrap();
+        let source_connection = rusqlite::Connection::open(&source).unwrap();
+        source_connection
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+            .unwrap();
+        source_connection
+            .execute(
+                "UPDATE projects SET name=?1 WHERE id=?2",
+                rusqlite::params!["WAL-visible restore", project.id],
+            )
+            .unwrap();
         let source_sidecar = PathBuf::from(format!("{}-wal", source.display()));
-        std::fs::write(&source_sidecar, b"live sqlite sidecar").unwrap();
-        let error = restore_ledger(&source, &destination).unwrap_err();
-        assert!(error.contains("restore source has a SQLite sidecar"));
-        std::fs::remove_file(source_sidecar).unwrap();
+        assert!(source_sidecar.exists());
+        assert!(restore_ledger(&source, &destination).unwrap().is_none());
+        assert_eq!(
+            core::StateStore::open_readonly(&destination)
+                .unwrap()
+                .latest_project()
+                .unwrap()
+                .unwrap()
+                .name,
+            "WAL-visible restore"
+        );
+        drop(source_connection);
 
         core::StateStore::in_memory()
             .unwrap()
@@ -7547,14 +7572,14 @@ mod tests {
             .unwrap();
         }
         let previous = restore_ledger(&source, &destination).unwrap().unwrap();
-        core::StateStore::open_readonly(&previous).unwrap();
-        core::StateStore::open_readonly(&destination).unwrap();
         for suffix in ["-wal", "-shm"] {
             assert!(std::path::Path::new(&format!("{}{}", previous.display(), suffix)).exists());
             assert!(
                 !std::path::Path::new(&format!("{}{}", destination.display(), suffix)).exists()
             );
         }
+        core::StateStore::open_readonly(&previous).unwrap();
+        core::StateStore::open_readonly(&destination).unwrap();
         std::fs::remove_dir_all(directory).unwrap();
     }
 
