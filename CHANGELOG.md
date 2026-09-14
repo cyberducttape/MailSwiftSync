@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved failure classification, retry eligibility, retry backoff, and durable
+  attention-detail formatting into `controller::failure` so controller policy
+  is independent of the egui dispatcher.
 - Extracted the migration profile, form validation, engine-plan construction,
   credential preparation, and immutable run-plan snapshot logic into the
   dedicated `migration_plan` module so GUI and headless callers share one

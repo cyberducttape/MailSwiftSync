@@ -2,6 +2,7 @@
 
 mod batch;
 pub(crate) mod batch_admission;
+pub(crate) mod failure;
 mod orchestrator;
 mod run;
 
