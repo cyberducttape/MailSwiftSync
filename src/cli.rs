@@ -186,12 +186,14 @@ pub(crate) fn run() -> eframe::Result<()> {
             None => None,
         };
         let result = if summary {
-            headless_status_summary(&state, project_id).map(|status| {
-                serde_json::to_string_pretty(&status).expect("headless status is serializable")
+            headless_status_summary(&state, project_id).and_then(|status| {
+                serde_json::to_string_pretty(&status)
+                    .map_err(|error| format!("could not serialize migration status: {error}"))
             })
         } else {
-            headless_status(&state, project_id).map(|status| {
-                serde_json::to_string_pretty(&status).expect("headless status is serializable")
+            headless_status(&state, project_id).and_then(|status| {
+                serde_json::to_string_pretty(&status)
+                    .map_err(|error| format!("could not serialize migration status: {error}"))
             })
         };
         match result {
