@@ -223,7 +223,132 @@ fn open_secret_read_handle(path: &Path) -> Result<fs::File, String> {
     if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err("secret-file path must not refer to a symlink or reparse point".into());
     }
+    verify_windows_secret_acl(&file)?;
     Ok(file)
+}
+
+#[cfg(windows)]
+fn verify_windows_secret_acl(file: &fs::File) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use std::ptr;
+    use windows_sys::Win32::{
+        Foundation::{HLOCAL, LocalFree},
+        Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT},
+        Security::{
+            ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
+            EqualSid, GetAce, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+            PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_MAX_SID_SIZE,
+            WinCreatorOwnerRightsSid, WinLocalSystemSid,
+        },
+        System::SystemServices::ACCESS_ALLOWED_ACE_TYPE,
+    };
+
+    let mut owner: PSID = ptr::null_mut();
+    let mut dacl: *mut ACL = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle() as _,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            &mut dacl,
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(format!(
+            "could not inspect secret-file DACL (Windows error {status})"
+        ));
+    }
+    let result = (|| {
+        if owner.is_null() || dacl.is_null() || descriptor.is_null() {
+            return Err("secret file must have an explicit owner and DACL".into());
+        }
+        let mut control = 0_u16;
+        let mut revision = 0_u32;
+        let valid_control =
+            unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) };
+        if valid_control == 0 || control & SE_DACL_PROTECTED == 0 {
+            return Err("secret-file DACL must be protected from inheritance".into());
+        }
+        let mut dacl_present = 0;
+        let mut dacl_defaulted = 0;
+        let mut checked_dacl = ptr::null_mut();
+        let valid_dacl = unsafe {
+            GetSecurityDescriptorDacl(
+                descriptor,
+                &mut dacl_present,
+                &mut checked_dacl,
+                &mut dacl_defaulted,
+            )
+        };
+        if valid_dacl == 0 || dacl_present == 0 || checked_dacl.is_null() || checked_dacl != dacl {
+            return Err("secret file must have a present, stable DACL".into());
+        }
+
+        let mut local_system_sid = [0_u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut local_system_sid_size = local_system_sid.len() as u32;
+        let local_system_sid = local_system_sid.as_mut_ptr() as PSID;
+        if unsafe {
+            CreateWellKnownSid(
+                WinLocalSystemSid,
+                ptr::null_mut(),
+                local_system_sid,
+                &mut local_system_sid_size,
+            )
+        } == 0
+        {
+            return Err("could not construct the LocalSystem SID".into());
+        }
+        let mut owner_rights_sid = [0_u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut owner_rights_sid_size = owner_rights_sid.len() as u32;
+        let owner_rights_sid = owner_rights_sid.as_mut_ptr() as PSID;
+        if unsafe {
+            CreateWellKnownSid(
+                WinCreatorOwnerRightsSid,
+                ptr::null_mut(),
+                owner_rights_sid,
+                &mut owner_rights_sid_size,
+            )
+        } == 0
+        {
+            return Err("could not construct the Owner Rights SID".into());
+        }
+
+        let ace_count = unsafe { (*dacl).AceCount };
+        let mut owner_rights_seen = false;
+        let mut system_seen = false;
+        for index in 0..u32::from(ace_count) {
+            let mut ace_pointer = ptr::null_mut();
+            if unsafe { GetAce(dacl, index, &mut ace_pointer) } == 0 || ace_pointer.is_null() {
+                return Err("could not inspect a secret-file DACL entry".into());
+            }
+            let header = unsafe { &*(ace_pointer as *const ACE_HEADER) };
+            if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE || header.AceFlags != 0 {
+                return Err("secret-file DACL contains an unsupported or inherited ACE".into());
+            }
+            let ace = unsafe { &*(ace_pointer as *const ACCESS_ALLOWED_ACE) };
+            let sid = (&ace.SidStart as *const u32).cast_mut().cast();
+            if unsafe { EqualSid(sid, owner_rights_sid) } != 0 {
+                owner_rights_seen = true;
+            } else if unsafe { EqualSid(sid, local_system_sid) } != 0 {
+                system_seen = true;
+            } else {
+                return Err("secret-file DACL grants access to an unapproved identity".into());
+            }
+        }
+        if ace_count != 2 || !owner_rights_seen || !system_seen {
+            return Err("secret-file DACL must contain only Owner Rights and LocalSystem".into());
+        }
+        Ok(())
+    })();
+    unsafe {
+        LocalFree(descriptor as HLOCAL);
+    }
+    result
 }
 
 #[cfg(all(not(unix), not(windows)))]
@@ -478,6 +603,7 @@ mod tests {
         // this test on Windows; the secret is removed even if later checks
         // fail.
         assert_eq!(fs::read_to_string(&secret).unwrap(), "test-secret");
+        assert_eq!(read_secret_file(&secret).unwrap().as_str(), "test-secret");
         fs::remove_dir_all(base).unwrap();
     }
 }
