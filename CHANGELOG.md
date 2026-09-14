@@ -31,6 +31,8 @@ All notable changes to MailSwiftSync are documented here.
 - Moved durable attention categories and their stable labels/actions into
   `core/state.rs`, preserving wire values while further reducing policy in the
   ledger implementation.
+- Extracted durable transfer-engine selection and descriptions into
+  `core/engine.rs`, preserving the `core::Engine` API and serialized values.
 - Extracted batch row selection by durable state and operator scope into the
   batch controller, with focused coverage for selected IDs and retry policy.
 - Moved elapsed-time presentation into `ui::status` with focused formatting tests, further reducing pure UI formatting logic in `main.rs`.

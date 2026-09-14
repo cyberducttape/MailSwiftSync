@@ -13,7 +13,9 @@ use std::{
 };
 use uuid::Uuid;
 
+mod engine;
 mod state;
+pub use engine::Engine;
 pub use state::{AttentionReason, MailboxState, Phase};
 
 fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
@@ -162,41 +164,6 @@ pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
     let mut hasher = Crc32Hasher::new();
     hasher.update(&decoded[..checksum_offset]);
     hasher.finalize() == expected
-}
-
-/// The transfer engine is a policy decision, not an implementation detail.
-/// Dovecot destinations should use the destination server's own dsync engine;
-/// imapsync remains available for arbitrary IMAP destinations.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub enum Engine {
-    #[default]
-    Auto,
-    Dovecot,
-    ImapSync,
-}
-
-impl Engine {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "Conservative default",
-            Self::Dovecot => "Dovecot native",
-            Self::ImapSync => "imapsync fallback",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Auto => {
-                "Use imapsync as the conservative default; select Dovecot native explicitly when appropriate."
-            }
-            Self::Dovecot => {
-                "Use destination-side doveadm/dsync when the destination is Dovecot and admin access is available."
-            }
-            Self::ImapSync => {
-                "Use imapsync when both ends are arbitrary IMAP servers or no destination admin stack is available."
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
