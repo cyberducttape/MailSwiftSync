@@ -6,6 +6,12 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added an explicit `status --summary` headless projection that uses exact
+  SQLite mailbox state counts without materializing mailbox rows, while
+  preserving the existing detailed status output for callers that need it.
+- Added an explicit `status --summary` headless projection that uses exact
+  SQLite mailbox state counts without materializing mailbox rows, while
+  preserving the existing detailed status output for callers that need it.
 - Removed per-row lowercase string allocation while calculating large batch
   queue summaries; imported display-case states are now classified directly
   through the shared allocation-free state parser.

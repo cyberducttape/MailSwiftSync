@@ -194,7 +194,9 @@ The image uses `/var/lib/mailswiftsync` for durable state and an isolated
 `/run/user/10001` runtime volume for short-lived secrets.
 
 `status` emits secret-free JSON containing project/mailbox states and recorded
-process identities. `recover` takes the application lock, verifies recorded
+process identities. For large ledgers, `status --summary` emits a bounded
+projection with exact per-project mailbox state counts and no mailbox rows.
+`recover` takes the application lock, verifies recorded
 process ownership before signalling anything, preserves identities it cannot
 prove, and applies the same conservative recovery transition as GUI startup.
 `support-bundle` emits a private, sanitized JSON artifact for incident triage;

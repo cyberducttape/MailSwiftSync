@@ -33,7 +33,7 @@ pub struct MailboxJob {
     pub config: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct MailboxStateCounts {
     pub total: usize,
     pub ready: usize,

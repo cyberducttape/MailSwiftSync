@@ -8045,6 +8045,11 @@ mod tests {
         assert_eq!(status.projects[0].mailboxes[0].state, "queued");
         let serialized = serde_json::to_string(&status).unwrap();
         assert!(!serialized.contains("password"));
+        let summary = headless::headless_status_summary(&state, Some(&project.id)).unwrap();
+        assert_eq!(summary.projects[0].mailbox_state_counts.total, 1);
+        assert_eq!(summary.projects[0].mailbox_state_counts.ready, 0);
+        let summary_json = serde_json::to_string(&summary).unwrap();
+        assert!(!summary_json.contains("mailboxes"));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

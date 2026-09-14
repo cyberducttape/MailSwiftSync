@@ -1,7 +1,8 @@
 use crate::credentials::read_secret_file;
 use crate::headless::{
     HeadlessCredentials, export_support_bundle, headless_batch_execute,
-    headless_execute_with_credentials, headless_recover, headless_status, headless_supervise,
+    headless_execute_with_credentials, headless_recover, headless_status, headless_status_summary,
+    headless_supervise,
 };
 use crate::*;
 use eframe::egui;
@@ -158,13 +159,20 @@ pub(crate) fn run() -> eframe::Result<()> {
     }
     if command == std::ffi::OsStr::new("status") {
         let Some(state) = arguments.next() else {
-            eprintln!("Usage: mailswiftsync status <state.db> [project-id]");
+            eprintln!("Usage: mailswiftsync status <state.db> [project-id] [--summary]");
             std::process::exit(2);
         };
-        let project_id = arguments.next();
-        if arguments.next().is_some() {
-            eprintln!("Usage: mailswiftsync status <state.db> [project-id]");
-            std::process::exit(2);
+        let mut project_id = None;
+        let mut summary = false;
+        for argument in arguments {
+            if argument == std::ffi::OsStr::new("--summary") && !summary {
+                summary = true;
+            } else if project_id.is_none() {
+                project_id = Some(argument);
+            } else {
+                eprintln!("Usage: mailswiftsync status <state.db> [project-id] [--summary]");
+                std::process::exit(2);
+            }
         }
         let state = std::path::PathBuf::from(state);
         let project_id = match project_id.as_deref() {
@@ -177,13 +185,18 @@ pub(crate) fn run() -> eframe::Result<()> {
             },
             None => None,
         };
-        match headless_status(&state, project_id) {
+        let result = if summary {
+            headless_status_summary(&state, project_id).map(|status| {
+                serde_json::to_string_pretty(&status).expect("headless status is serializable")
+            })
+        } else {
+            headless_status(&state, project_id).map(|status| {
+                serde_json::to_string_pretty(&status).expect("headless status is serializable")
+            })
+        };
+        match result {
             Ok(status) => {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&status)
-                        .expect("headless status is always serializable")
-                );
+                println!("{status}");
                 return Ok(());
             }
             Err(error) => {
@@ -465,11 +478,14 @@ pub(crate) fn run() -> eframe::Result<()> {
 }
 
 fn print_cli_help() {
+    println!("MailSwiftSync — durable, evidence-first mailbox migration control plane");
     println!(
-        "MailSwiftSync — durable, evidence-first mailbox migration control plane\n\n\
-Usage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation\n\n\
-Commands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit secret-free JSON status\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  supervise <state> [poll] [n]   Run automation-safe supervision\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n\n\
-Options:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\n\
-Headless live operations fail nonzero for unresolved verification, delta,\noperator-attention, or durability states."
+        "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
+    );
+    println!(
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  supervise <state> [poll] [n]   Run automation-safe supervision\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
+    );
+    println!(
+        "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
     );
 }

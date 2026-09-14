@@ -36,6 +36,23 @@ pub(crate) struct HeadlessMailboxStatus {
     pub(crate) attention_reason: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct HeadlessStatusSummary {
+    pub(crate) schema_version: i64,
+    pub(crate) active_processes: Vec<core::ActiveProcess>,
+    pub(crate) projects: Vec<HeadlessProjectSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct HeadlessProjectSummary {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) source_endpoint: String,
+    pub(crate) destination_endpoint: String,
+    pub(crate) phase: String,
+    pub(crate) mailbox_state_counts: core::MailboxStateCounts,
+}
+
 pub(crate) struct HeadlessCredentials {
     pub(crate) source: SecretString,
     pub(crate) destination: SecretString,
@@ -211,6 +228,57 @@ pub(crate) fn headless_status(
         schema_version: core::CURRENT_SCHEMA_VERSION,
         active_processes,
         projects: result,
+    })
+}
+
+/// Emit a bounded status projection for large ledgers. Unlike detailed
+/// `status`, this path never loads individual mailbox rows; state counts are
+/// computed by SQLite and remain exact.
+pub(crate) fn headless_status_summary(
+    state_path: &std::path::Path,
+    selected_project_id: Option<&str>,
+) -> Result<HeadlessStatusSummary, String> {
+    let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let projects = if let Some(project_id) = selected_project_id {
+        store
+            .project(project_id)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        store
+            .recent_projects(1_000)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|project| core::Project {
+                id: project.id,
+                name: project.name,
+                source_endpoint: project.source_endpoint,
+                destination_endpoint: project.destination_endpoint,
+                phase: project.phase,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut summaries = Vec::with_capacity(projects.len());
+    for project in projects {
+        let mailbox_state_counts = store
+            .mailbox_state_counts(&project.id)
+            .map_err(|error| error.to_string())?;
+        summaries.push(HeadlessProjectSummary {
+            id: project.id,
+            name: project.name,
+            source_endpoint: project.source_endpoint,
+            destination_endpoint: project.destination_endpoint,
+            phase: project.phase.as_str().to_owned(),
+            mailbox_state_counts,
+        });
+    }
+    Ok(HeadlessStatusSummary {
+        schema_version: core::CURRENT_SCHEMA_VERSION,
+        active_processes: store
+            .active_processes()
+            .map_err(|error| error.to_string())?,
+        projects: summaries,
     })
 }
 
