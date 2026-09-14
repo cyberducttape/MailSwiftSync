@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted batch-child terminal-state policy into the controller module. Run
+  status and mailbox verification-state mapping now have one tested contract
+  instead of being embedded in the egui event loop, reducing GUI/headless
+  divergence risk during batch orchestration changes.
+
 - Extracted deterministic batch plan materialization into
   `controller/batch_admission.rs`: selected durable IDs, Dovecot checkpoints,
   plan fingerprints, run snapshots, and child plans are now produced by one

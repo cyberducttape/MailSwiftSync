@@ -3,6 +3,34 @@ use crate::bulk_import::BulkJob;
 use crate::core;
 use std::collections::HashSet;
 
+/// Durable outcomes produced when a batch child finishes. Keeping this policy
+/// separate from event transport makes the GUI and headless controllers use
+/// the same terminal-state rules.
+pub(crate) fn batch_run_status(state: &str) -> &'static str {
+    if matches!(state, "ready" | "completed" | "delta_required") {
+        "completed"
+    } else if state == "cancelled" {
+        "cancelled"
+    } else {
+        "failed"
+    }
+}
+
+pub(crate) fn batch_mailbox_state(state: &str, evidence: Option<&core::MailboxEvidence>) -> String {
+    evidence.map_or_else(
+        || state.to_owned(),
+        |value| {
+            if value.is_exact_match() && state != "delta_required" {
+                "verified".into()
+            } else if state == "delta_required" {
+                "delta_required".into()
+            } else {
+                "verification_difference".into()
+            }
+        },
+    )
+}
+
 /// Execution mode owned by the batch controller. Keeping this distinct from
 /// the single-mailbox form mode prevents a page-local UI toggle from changing
 /// the meaning of a restored or headless batch.
@@ -124,8 +152,8 @@ pub(crate) fn selected_batch_indices(
 #[cfg(test)]
 mod tests {
     use super::{
-        BulkJob, BulkQueueSummary, BulkRetryScope, selected_batch_indices,
-        suggested_batch_project_name,
+        BulkJob, BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
+        selected_batch_indices, suggested_batch_project_name,
     };
     use crate::migration_plan::Form;
     use std::collections::HashSet;
@@ -178,6 +206,19 @@ mod tests {
             job("attention"),
         ];
         assert_eq!(BulkQueueSummary::from_jobs(&jobs).unresolved(), 2);
+    }
+
+    #[test]
+    fn batch_terminal_policy_maps_states_consistently() {
+        assert_eq!(batch_run_status("ready"), "completed");
+        assert_eq!(batch_run_status("delta_required"), "completed");
+        assert_eq!(batch_run_status("cancelled"), "cancelled");
+        assert_eq!(batch_run_status("attention"), "failed");
+        assert_eq!(batch_mailbox_state("ready", None), "ready");
+        assert_eq!(
+            batch_mailbox_state("delta_required", None),
+            "delta_required"
+        );
     }
 
     #[test]

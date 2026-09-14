@@ -10,7 +10,8 @@ mod run;
 
 pub(crate) use batch::{
     BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet,
-    is_verified_terminal_state, selected_batch_indices, suggested_batch_project_name,
+    batch_mailbox_state, batch_run_status, is_verified_terminal_state, selected_batch_indices,
+    suggested_batch_project_name,
 };
 pub(crate) use batch_admission::{
     durable_batch_profile_config, durable_single_identity_matches, prepare_batch_project,

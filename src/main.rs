@@ -40,9 +40,10 @@ use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
-    durable_batch_profile_config, durable_single_identity_matches, is_verified_terminal_state,
-    prepare_batch_project, prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices,
-    spawn_batch_worker, spawn_single_run_worker, suggested_batch_project_name,
+    batch_mailbox_state, batch_run_status, durable_batch_profile_config,
+    durable_single_identity_matches, is_verified_terminal_state, prepare_batch_project,
+    prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices, spawn_batch_worker,
+    spawn_single_run_worker, suggested_batch_project_name,
 };
 #[cfg(test)]
 use credentials::CleanupGuard;
@@ -4250,26 +4251,9 @@ impl App {
                             && matches!(run.kind, RunKind::Batch)
                             && let Some(index) = run.batch_child_index(&job_id, &child_run_id)
                         {
-                            let run_status = if matches!(
-                                state.as_str(),
-                                "ready" | "completed" | "delta_required"
-                            ) {
-                                "completed"
-                            } else if state == "cancelled" {
-                                "cancelled"
-                            } else {
-                                "failed"
-                            };
+                            let run_status = batch_run_status(&state);
                             let evidence = self.pending_batch_evidence.get(&child_run_id);
-                            let final_state = evidence.map_or(state.clone(), |value| {
-                                if value.is_exact_match() && state != "delta_required" {
-                                    "verified".into()
-                                } else if state == "delta_required" {
-                                    "delta_required".into()
-                                } else {
-                                    "verification_difference".into()
-                                }
-                            });
+                            let final_state = batch_mailbox_state(&state, evidence);
                             let checkpoint = self
                                 .pending_batch_checkpoints
                                 .get(&child_run_id)
