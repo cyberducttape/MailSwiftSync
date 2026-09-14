@@ -6,6 +6,16 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- An optional maintenance window for `supervise`: a fourth
+  `HH:MM-HH:MM[@Mon,Tue,...]` argument (the time range may wrap past
+  midnight) confines new batch passes to a local time-of-day/day-of-week
+  range. A batch already admitted before the window closes still runs to
+  completion; being outside the window counts toward the same idle-poll
+  limit as having no actionable work, so a bounded, scheduler-launched
+  invocation exits at the end of its window instead of running through every
+  subsequent one. Implemented in the new `src/maintenance_window.rs` with 7
+  unit tests covering same-day and midnight-wrapping windows, day-of-week
+  restriction on both sides of a wrap, and malformed input.
 - A controller chaos lab (`scripts/controller-chaos-smoke.sh`), run in CI
   alongside the existing recovery lab, covering two ledger-level storage
   fault classes with no root privileges and no real full disk required: a
@@ -24,6 +34,11 @@ All notable changes to MailSwiftSync are documented here.
   and persists refresh-token rotation. This does not add a provider consent
   flow; the operator still obtains the initial refresh token through the
   provider's own tooling.
+
+### Fixed
+
+- Bumped `rustls` to 0.23.45, resolving RUSTSEC-2026-0285 (TLS 1.3 handshake
+  messages incorrectly accepted across encryption level boundaries).
 
 ### Changed
 

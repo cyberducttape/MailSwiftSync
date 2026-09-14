@@ -36,11 +36,14 @@ Stable today:
 
 Experimental or planned:
 
-- Interactive provider authorization, token refresh, and unattended secret
-  brokering (the current imapsync path accepts operator-supplied OAuth 2.0
-  access tokens through the OS keyring or session form).
+- Interactive provider consent/authorization and unattended secret brokering
+  (the imapsync path accepts operator-supplied OAuth 2.0 access tokens
+  through the OS keyring or session form, and can automatically refresh them
+  from an operator-supplied refresh token; it still does not implement an
+  authorization flow, so the operator obtains that refresh token through the
+  provider's own tooling).
 - Native installers, signed releases, and cross-platform binary distribution.
-- Maintenance windows, scheduler/API operation, and message-level verification for live batches.
+- A scheduler/API that can survive the desktop closing, and message-level verification for live batches. (`supervise` provides a foreground, maintenance-window-aware batch controller; see below.)
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
 - Published large-scale migration case studies and compatibility matrix.
 
@@ -177,7 +180,7 @@ mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
 mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
-mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls]
+mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls] [maintenance-window]
 mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
 mailswiftsync headless /path/to/state.db batch-preflight
@@ -214,8 +217,15 @@ It excludes internal topology and forensic detail; sign it separately with
 only automation-safe queued/retryable work, waits through GUI lock ownership,
 and leaves Attention and verification-difference rows untouched. The optional
 `idle-polls` value defaults to one quiet poll; set it to `0` for continuous
-watching of a maintenance window. It is a supervisor process, not a remote API
-or a replacement for an external service manager.
+watching. An optional fourth argument, `maintenance-window`, confines new
+batch passes to a `HH:MM-HH:MM` local time-of-day range (which may wrap past
+midnight, for example `22:00-06:00`) and, with an `@Mon,Tue,...` suffix, to
+specific days; a batch already admitted before the window closes still runs
+to completion. Outside the window `supervise` only waits and re-checks the
+clock, so a bounded (`idle-polls` != 0) invocation launched by an external
+scheduler at the start of each window still exits at the end of it rather
+than running through every subsequent one. It is a supervisor process, not a
+remote API or a replacement for an external service manager.
 For single-mailbox headless runs, credentials can be supplied through paired
 owner-only secret files rather than a profile or command line:
 

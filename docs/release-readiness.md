@@ -122,9 +122,17 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   primitives, and `headless preflight|live` now drives the existing controller
   without a window. `headless live` always performs a fresh preflight before
   promotion and refuses restored batch queues. `headless batch-preflight|batch-live`
-  drives a complete durable queue without silently narrowing its scope; a
-  long-lived scheduler/supervisor is still required for overnight unattended
-  operation.
+  drives a complete durable queue without silently narrowing its scope.
+  `supervise` now accepts an optional `HH:MM-HH:MM[@Mon,Tue,...]` maintenance
+  window (may wrap past midnight) that confines new batch passes to that
+  local time-of-day/day-of-week range without abandoning a batch already
+  admitted before the window closes; being outside the window counts toward
+  the same idle-poll limit as having no actionable work, so a
+  scheduler-launched, bounded invocation still exits instead of running
+  through every subsequent window. This is a foreground process-level
+  building block, not a persistent service; an external service
+  manager/scheduler (systemd timer, cron, Task Scheduler) is still required
+  to relaunch it, and a long-lived remote API remains outstanding.
 - A Linux headless `Dockerfile` provides explicit durable-state and per-user
   runtime volumes, non-root execution, pinned packaged
   `imapsync`/`dovecot`/`doveadm` dependencies, and the real IMAP transfer
@@ -188,7 +196,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   destination readiness remain explicit unknowns where the server cannot
   provide a reliable query.
 - Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints remain engine resume tokens, not UIDVALIDITY-aware message proof.
-- Bounded concurrency, throttling, maintenance windows, and a scheduler/API that can survive the desktop closing.
+- Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
 - Independent message-level mismatch reporting and reconciliation; current reports are aggregate/engine evidence plus durable exception acceptance.
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is not yet covered.

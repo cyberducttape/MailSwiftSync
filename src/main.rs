@@ -11,6 +11,7 @@ mod engine;
 mod headless;
 mod imap_probe;
 mod imap_protocol;
+mod maintenance_window;
 mod migration_plan;
 mod oauth;
 mod oauth_refresh;

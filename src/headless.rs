@@ -1,5 +1,6 @@
 use crate::atomic_artifact::write_private_atomic;
 use crate::credentials::SecretString;
+use crate::maintenance_window::MaintenanceWindow;
 use crate::{
     App, BatchExecutionMode, BulkRetryScope, cleanup_stale_secret_directories, core,
     is_verified_terminal_state, plan_fingerprint_digest, recorded_process_matches,
@@ -572,15 +573,40 @@ pub(crate) fn headless_batch_execute(
 /// intentionally conservative: it only selects automation-safe rows and
 /// leaves Attention/verification-difference rows for an operator. A zero
 /// idle-poll limit keeps watching for work; a non-zero limit makes a one-shot
-/// maintenance-window invocation terminate after the requested quiet period.
+/// invocation terminate after the requested quiet period. An optional
+/// `maintenance_window` additionally confines new batch passes to a
+/// time-of-day (and optionally day-of-week) range: outside the window the
+/// loop only waits and re-checks the clock rather than admitting new work, so
+/// a batch already admitted before the window closes is not abandoned
+/// mid-run. Being outside the window counts toward the same idle-poll limit
+/// as having no actionable work, so a `max_idle_polls`-bounded invocation
+/// (for example one launched by an external scheduler at the start of each
+/// window) still terminates instead of running through every future window;
+/// a continuous (`max_idle_polls == 0`) invocation instead just waits for the
+/// window to reopen.
 pub(crate) fn headless_supervise(
     state_path: &std::path::Path,
     poll_interval: Duration,
     max_idle_polls: usize,
+    maintenance_window: Option<MaintenanceWindow>,
 ) -> Result<String, String> {
     let mut idle_polls = 0_usize;
     let mut completed_passes = 0_usize;
     loop {
+        // Checked before `headless_status` so a closed window costs nothing
+        // beyond the wall-clock check itself.
+        if let Some(window) = &maintenance_window
+            && !window.contains_now()
+        {
+            idle_polls = idle_polls.saturating_add(1);
+            if max_idle_polls != 0 && idle_polls >= max_idle_polls {
+                return Ok(format!(
+                    "Migration supervisor stopped after {idle_polls} poll(s) outside the configured maintenance window; completed {completed_passes} batch pass(es). Operator-review rows were left untouched."
+                ));
+            }
+            thread::sleep(poll_interval);
+            continue;
+        }
         let status = headless_status(state_path, None)?;
         let actionable = status
             .projects
