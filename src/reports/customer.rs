@@ -1,4 +1,8 @@
-use crate::{core, evidence_digest, with_proof_digest, write_private_atomic};
+use crate::{
+    core,
+    reports::integrity::{evidence_digest, with_proof_digest},
+    write_private_atomic,
+};
 use std::path::Path;
 
 /// Write customer-safe evidence for one durable project. This function has no

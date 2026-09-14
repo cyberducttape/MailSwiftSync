@@ -4,5 +4,6 @@
 //! boundary explicit makes the GUI and CLI callers interchangeable.
 
 pub(crate) mod customer;
+pub(crate) mod integrity;
 pub(crate) mod operator;
 pub(crate) mod signing;

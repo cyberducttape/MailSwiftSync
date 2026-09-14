@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved proof digests, canonical signed-payload handling, and hexadecimal
+  artifact encoding into `reports::integrity`; plan fingerprint digesting now
+  lives in `plan_identity` rather than the application composition root.
 - Documented the extracted migration-plan, controller-policy, and bounded
   output boundaries in the architecture guide, and linked the compatibility
   matrix from the README with its release-gate meaning.
