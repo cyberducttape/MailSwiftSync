@@ -32,7 +32,7 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
             EqualSid, GetAce, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
             OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
-            SECURITY_MAX_SID_SIZE, WinLocalSystemSid,
+            SECURITY_MAX_SID_SIZE, WinCreatorOwnerRightsSid, WinLocalSystemSid,
         },
         System::SystemServices::ACCESS_ALLOWED_ACE_TYPE,
     };
@@ -110,6 +110,20 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
         if valid_system_sid == 0 {
             return Err("could not construct the LocalSystem SID".into());
         }
+        let mut owner_rights_sid = [0_u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut owner_rights_sid_size = owner_rights_sid.len() as u32;
+        let owner_rights_sid = owner_rights_sid.as_mut_ptr() as PSID;
+        let valid_owner_rights_sid = unsafe {
+            CreateWellKnownSid(
+                WinCreatorOwnerRightsSid,
+                ptr::null_mut(),
+                owner_rights_sid,
+                &mut owner_rights_sid_size,
+            )
+        };
+        if valid_owner_rights_sid == 0 {
+            return Err("could not construct the Owner Rights SID".into());
+        }
 
         let mut owner_seen = false;
         let mut system_seen = false;
@@ -125,7 +139,9 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
             }
             let ace = unsafe { &*(ace_pointer as *const ACCESS_ALLOWED_ACE) };
             let sid = (&ace.SidStart as *const u32).cast_mut().cast();
-            if unsafe { EqualSid(sid, owner) } != 0 {
+            if unsafe { EqualSid(sid, owner) } != 0
+                || unsafe { EqualSid(sid, owner_rights_sid) } != 0
+            {
                 owner_seen = true;
             } else if unsafe { EqualSid(sid, local_system_sid) } != 0 {
                 system_seen = true;
