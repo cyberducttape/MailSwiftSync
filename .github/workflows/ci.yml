@@ -68,6 +68,10 @@ jobs:
           set +e
           cargo build --locked --release --all-features --target "${{ matrix.target }}" 2>&1 | tee cross-build.log
           status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "windows-latest" ]; then
+            failures=$(sed -n 's/.*error\[[A-Z0-9]*\]:[[:space:]]*//p' cross-build.log | head -5 | paste -sd '; ' -)
+            echo "::error title=Windows cross-build failure::${failures:-cargo build failed; inspect cross-build.log artifact}"
+          fi
           exit "$status"
       - name: Upload cross-platform build log
         if: failure() && matrix.os == 'windows-latest'
@@ -99,6 +103,10 @@ jobs:
           set +e
           cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture 2>&1 | tee native-test.log
           status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "windows-latest" ]; then
+            failures=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' native-test.log | paste -sd ', ' -)
+            echo "::error title=Windows native test failure::${failures:-cargo test failed; inspect native-test.log artifact}"
+          fi
           exit "$status"
       - name: Upload Windows native test log
         if: failure() && matrix.os == 'windows-latest'

@@ -11,6 +11,8 @@ All notable changes to MailSwiftSync are documented here.
   become operator-attention states.
 - Improved failed product-integration diagnostics with secret-free durable status
   and disposable Dovecot logs before the lab workspace is cleaned up.
+- Improved Windows CI failure annotations so cross-build errors and failed native
+  tests are visible in check metadata without requiring artifact access.
 - Extracted per-mailbox batch execution—durable claim coordination, retries,
   engine invocation, evidence/checkpoint staging, cancellation, and terminal
   events—into `controller/batch_work_item.rs`, leaving the batch scheduler
