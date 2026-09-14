@@ -6161,6 +6161,8 @@ impl eframe::App for App {
         v.widgets.hovered.bg_fill = colors.selection;
         v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, colors.border);
         ctx.set_visuals(v);
+        let mut header_project_selection = None;
+        let mut header_all_projects_requested = false;
         egui::TopBottomPanel::top("header")
             .frame(
                 egui::Frame::new()
@@ -6183,7 +6185,7 @@ impl eframe::App for App {
                     // The full project browser is available from the header,
                     // so the switcher must not silently hide older projects
                     // once the ledger grows beyond the first page.
-                    let projects = self.ui_snapshot.projects.clone();
+                    let projects = &self.ui_snapshot.projects;
                     if !projects.is_empty() || self.selected_project_id.is_some() {
                         let selected_name = self
                             .selected_project_id
@@ -6218,14 +6220,12 @@ impl eframe::App for App {
                                             )
                                             .clicked()
                                         {
-                                            self.select_workspace_project(project.id.clone());
+                                            header_project_selection = Some(project.id.clone());
                                         }
                                     }
                                     ui.separator();
                                     if ui.selectable_label(false, "All projects…").clicked() {
-                                        self.ui_all_projects_loaded = true;
-                                        self.refresh_ui_snapshot_now();
-                                        self.projects_open = true;
+                                        header_all_projects_requested = true;
                                     }
                                 });
                         });
@@ -6265,6 +6265,14 @@ impl eframe::App for App {
                     });
                 });
             });
+        if let Some(project_id) = header_project_selection {
+            self.select_workspace_project(project_id);
+        }
+        if header_all_projects_requested {
+            self.ui_all_projects_loaded = true;
+            self.refresh_ui_snapshot_now();
+            self.projects_open = true;
+        }
         egui::SidePanel::left("workspace_nav")
             .resizable(false)
             .default_width(185.0)
