@@ -18,6 +18,8 @@ All notable changes to MailSwiftSync are documented here.
   module; imported rows use credential-free form defaults throughout dispatch.
 - Moved batch filtering, selection, and bounded selection export beside the
   batch workspace state and launch actions.
+- Extracted batch queue, worksheet, and live-migration confirmation dialogs
+  into the batch UI module, keeping destructive prompts localized.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
