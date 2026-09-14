@@ -46,7 +46,8 @@ use controller::{
     SingleStartContext, SingleStartDecision, admit_batch_launch, admit_single_run, assess_plan,
     batch_mailbox_state, batch_start_decision, capability_observation_matches,
     capability_probe_result_matches, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, single_start_decision, spawn_batch_worker, spawn_single_run_worker,
+    is_verified_terminal_state, run_line_is_current, single_start_decision, spawn_batch_worker,
+    spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -3798,10 +3799,12 @@ impl App {
                         job_id,
                         text,
                     } => {
-                        let owns_line = active_run
-                            .as_ref()
-                            .is_some_and(|run| run.owns_line(&run_id, &job_id))
-                            && !ended_processes.contains(&(run_id.clone(), job_id.clone()));
+                        let owns_line = run_line_is_current(
+                            active_run.as_ref(),
+                            &ended_processes,
+                            &run_id,
+                            &job_id,
+                        );
                         if !owns_line {
                             // RunLine is an asynchronous presentation event;
                             // never let a delayed or foreign worker append

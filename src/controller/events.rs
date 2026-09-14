@@ -1,7 +1,20 @@
 //! Execution events exchanged between controller workers and the shell.
 
+use super::run::ActiveRunContext;
 use crate::core;
-use std::sync::mpsc;
+use std::{collections::HashSet, sync::mpsc};
+
+/// Presentation output is accepted only from the currently owned process
+/// and only until that process has emitted its terminal event.
+pub(crate) fn run_line_is_current(
+    active_run: Option<&ActiveRunContext>,
+    ended_processes: &HashSet<(String, String)>,
+    run_id: &str,
+    job_id: &str,
+) -> bool {
+    active_run.is_some_and(|run| run.owns_line(run_id, job_id))
+        && !ended_processes.contains(&(run_id.to_owned(), job_id.to_owned()))
+}
 
 pub(crate) enum Event {
     Line(String),
@@ -67,4 +80,56 @@ pub(crate) enum Event {
 pub(crate) enum StreamOutcome {
     Completed,
     DeltaRequired,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_line_is_current;
+    use crate::controller::run::{ActiveRunContext, RunKind};
+    use crate::core;
+    use std::collections::{HashMap, HashSet};
+
+    fn single_context() -> ActiveRunContext {
+        ActiveRunContext {
+            run_id: "run-a".into(),
+            project_id: "project-a".into(),
+            job_id: Some("job-a".into()),
+            batch_job_ids: Vec::new(),
+            batch_child_run_ids: Vec::new(),
+            batch_child_indices: HashMap::new(),
+            batch_plan_fingerprints: Vec::new(),
+            kind: RunKind::Single,
+            dry_run: true,
+            engine: core::Engine::ImapSync,
+            plan_fingerprint: "plan-a".into(),
+            credential_fingerprint: "credential-a".into(),
+        }
+    }
+
+    #[test]
+    fn run_line_policy_rejects_foreign_and_ended_processes() {
+        let context = single_context();
+        let ended = HashSet::new();
+        assert!(run_line_is_current(
+            Some(&context),
+            &ended,
+            "run-a",
+            "job-a"
+        ));
+        assert!(!run_line_is_current(
+            Some(&context),
+            &ended,
+            "run-other",
+            "job-a"
+        ));
+
+        let ended = HashSet::from([("run-a".into(), "job-a".into())]);
+        assert!(!run_line_is_current(
+            Some(&context),
+            &ended,
+            "run-a",
+            "job-a"
+        ));
+        assert!(!run_line_is_current(None, &ended, "run-a", "job-a"));
+    }
 }

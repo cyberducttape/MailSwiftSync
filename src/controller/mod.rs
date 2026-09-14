@@ -21,7 +21,7 @@ pub(crate) use batch_admission::{
 };
 pub(crate) use batch_completion::{BatchChildCompletion, finish_batch_child};
 pub(crate) use batch_worker::spawn_batch_worker;
-pub(crate) use events::{Event, StreamOutcome};
+pub(crate) use events::{Event, StreamOutcome, run_line_is_current};
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use preflight::{
     CapabilityProbeResult, assess_plan, capability_observation_matches,

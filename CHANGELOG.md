@@ -15,6 +15,9 @@ All notable changes to MailSwiftSync are documented here.
 - Consolidated batch queue selection, durable admission, project preparation,
   plan materialization, and active-run creation behind one controller launch
   API, reducing policy and persistence coordination in `start_bulk()`.
+- Centralized active-run output ownership checks in the controller event
+  contract, with coverage for foreign and post-terminal process lines before
+  they can enter the operator journal.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless
