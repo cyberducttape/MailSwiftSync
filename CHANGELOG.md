@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed duplicate first-run instructions from the Overview while retaining
+  the shared onboarding panel on the other workspace views.
 - Overview evidence status now distinguishes a ready customer proof from a
   merely complete or review-required project, matching the durable export gate.
 - Batch health summaries now expose queued and preflight rows explicitly,
