@@ -89,12 +89,12 @@ use imap_probe::{command_endpoint_parts, command_port, imap_command_succeeded, i
 use imap_probe::{
     endpoint_for_probe, fresh_imap_authentication_applies, probe_tls_capabilities_with_transport,
 };
+#[cfg(test)]
+use migration_plan::validate_certificate_pin;
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, completeness as plan_completeness,
     default_destination_tls, default_imap_port, effective_destination_tls,
 };
-#[cfg(test)]
-use migration_plan::{decode_report_run_snapshot, validate_certificate_pin};
 #[cfg(test)]
 use oauth::xoauth2_payload;
 use plan_identity::{
@@ -5741,15 +5741,6 @@ mod tests {
         assert_eq!(reference, plan_snapshot_sha256(snapshot));
         assert!(!reference.contains("old.example"));
         assert_ne!(reference, plan_snapshot_sha256("dry_run = true"));
-    }
-
-    #[test]
-    fn report_snapshot_decode_only_allows_empty_legacy_snapshots() {
-        assert!(decode_report_run_snapshot("  \n").unwrap().is_none());
-        match decode_report_run_snapshot("not a run snapshot") {
-            Ok(_) => panic!("malformed report snapshot was accepted"),
-            Err(error) => assert!(error.contains("plan snapshot is corrupt")),
-        }
     }
 
     #[test]

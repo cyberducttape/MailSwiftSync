@@ -1120,3 +1120,17 @@ pub(crate) struct PreparedCommand {
     pub(crate) cleanup: Vec<PathBuf>,
     pub(crate) env: Vec<(String, credentials::SecretString)>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::decode_report_run_snapshot;
+
+    #[test]
+    fn report_snapshot_decode_allows_empty_legacy_snapshots() {
+        assert!(decode_report_run_snapshot("  \n").unwrap().is_none());
+        match decode_report_run_snapshot("not a run snapshot") {
+            Ok(_) => panic!("malformed report snapshot was accepted"),
+            Err(error) => assert!(error.contains("plan snapshot is corrupt")),
+        }
+    }
+}
