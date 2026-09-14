@@ -9,6 +9,7 @@ pub(crate) mod failure;
 mod orchestrator;
 mod poll;
 mod poll_completion;
+mod poll_events;
 mod preflight;
 pub(crate) mod probe;
 mod run;

@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted bounded worker-event consumption, process ownership handling,
+  batch evidence/checkpoint staging, and deferred-event retry handling into
+  `controller/poll_events.rs`, leaving `poll.rs` focused on cycle setup,
+  durability bookkeeping, and completion dispatch.
 - Moved application-state helpers for status reporting, theme selection,
   workspace snapshot refresh, project selection, provider presets, and
   credential-load markers into `ui/app_state.rs`, reducing composition-root
