@@ -3933,37 +3933,6 @@ impl App {
             self.live_confirmed = false;
         }
     }
-    fn preview(&mut self, ctx: &egui::Context) {
-        if !self.preview {
-            return;
-        }
-        let colors = self.theme_colors();
-        egui::Window::new("Execution plan")
-            .open(&mut self.preview)
-            .default_width(670.0)
-            .show(ctx, |ui| {
-                ui.label(
-                    RichText::new(
-                        "Passwords are redacted. This is an argument list for review, not a shell command to paste.",
-                    )
-                    .color(colors.text_secondary),
-                );
-                let (exe, args) = self.form.command(true);
-                ui.label(RichText::new(format!("Executable: {exe}")).monospace());
-                egui::ScrollArea::vertical()
-                    .max_height(360.0)
-                    .show(ui, |ui| {
-                        for (index, argument) in args.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(format!("[{index:>3}]")).monospace().color(colors.text_secondary),
-                                );
-                                ui.label(RichText::new(argument).monospace());
-                            });
-                        }
-                    });
-            });
-    }
     fn live_confirmation(&mut self, ctx: &egui::Context) {
         if !self.live_confirm_open {
             return;

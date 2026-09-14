@@ -28,6 +28,8 @@ All notable changes to MailSwiftSync are documented here.
   credential presentation and storage controls out of `main.rs`.
 - Extracted engine selection and local Dovecot execution settings into
   `ui/engine.rs`, keeping migration-engine presentation out of `main.rs`.
+- Moved the redacted execution-plan preview into `ui/plan.rs` alongside the
+  migration-plan controls.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
