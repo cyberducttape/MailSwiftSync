@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted single-run and batch-run durable lifecycle transitions—including
+  claims, retries, checkpoint handling, evidence-bound completion, and
+  terminal state commits—into `core/runs.rs`.
 - Extracted evidence persistence, verification-exception acceptance, and
   engine-version metadata operations into `core/evidence_ops.rs`, separating
   the evidence lifecycle from the main durable state implementation.
