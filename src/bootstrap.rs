@@ -17,12 +17,37 @@ impl App {
                 .as_ref()
                 .and_then(|path| path.parent())
                 .and_then(|parent| {
-                    std::fs::create_dir_all(parent)
-                        .and_then(|_| restrict_directory_permissions(parent))
-                        .err()
-                        .map(|error| {
-                            format!("Could not secure persistent state directory: {error}")
-                        })
+                    // Security boundary: only restrict permissions on directories we create.
+                    // If the parent already exists, verify its permissions rather than mutating them.
+                    // This prevents privilege-escalation attacks where a malicious state_path
+                    // could cause MailSwiftSync to chmod /tmp, /var/lib, or other system directories.
+                    match std::fs::metadata(parent) {
+                        Ok(_) => {
+                            // Parent exists. Verify we can write to it, but do NOT chmod it.
+                            match std::fs::OpenOptions::new().create(true).write(true).open(
+                                parent.join(".mailswiftsync_test_write"),
+                            ) {
+                                Ok(f) => {
+                                    let _ = std::fs::remove_file(parent.join(".mailswiftsync_test_write"));
+                                    drop(f);
+                                    None
+                                }
+                                Err(e) => Some(format!(
+                                    "State directory exists but is not writable: {e}"
+                                )),
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            // Parent does not exist. Create it and restrict permissions.
+                            std::fs::create_dir_all(parent)
+                                .and_then(|_| restrict_directory_permissions(parent))
+                                .err()
+                                .map(|error| {
+                                    format!("Could not create and secure persistent state directory: {error}")
+                                })
+                        }
+                        Err(e) => Some(format!("Could not access state directory parent: {e}")),
+                    }
                 });
         let instance_lock = state_path
             .as_ref()
