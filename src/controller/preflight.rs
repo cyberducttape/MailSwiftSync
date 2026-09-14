@@ -2,6 +2,30 @@
 
 use crate::{Form, core};
 
+pub(crate) struct CapabilityProbeResult {
+    pub(crate) request_id: String,
+    pub(crate) plan_fingerprint: String,
+    pub(crate) result: Result<(core::ServerCapabilities, core::ServerCapabilities), String>,
+}
+
+pub(crate) fn capability_observation_matches(
+    observed_plan_fingerprint: Option<&str>,
+    current_plan_fingerprint: &str,
+) -> bool {
+    observed_plan_fingerprint == Some(current_plan_fingerprint)
+}
+
+pub(crate) fn capability_probe_result_matches(
+    result: &CapabilityProbeResult,
+    expected_request_id: &str,
+    expected_plan_fingerprint: &str,
+    current_plan_fingerprint: &str,
+) -> bool {
+    result.request_id == expected_request_id
+        && result.plan_fingerprint == expected_plan_fingerprint
+        && result.plan_fingerprint == current_plan_fingerprint
+}
+
 pub(crate) fn assess_plan(
     form: &Form,
     source_capabilities: Option<&core::ServerCapabilities>,
@@ -112,8 +136,41 @@ fn quota_summary(capabilities: &core::ServerCapabilities) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::assess_plan;
+    use super::{
+        CapabilityProbeResult, assess_plan, capability_observation_matches,
+        capability_probe_result_matches,
+    };
     use crate::{Form, core};
+
+    #[test]
+    fn capability_probe_results_are_bound_to_request_and_current_plan() {
+        let result = CapabilityProbeResult {
+            request_id: "request-a".into(),
+            plan_fingerprint: "plan-a".into(),
+            result: Err("not used".into()),
+        };
+        assert!(capability_probe_result_matches(
+            &result,
+            "request-a",
+            "plan-a",
+            "plan-a"
+        ));
+        assert!(!capability_probe_result_matches(
+            &result,
+            "request-b",
+            "plan-a",
+            "plan-a"
+        ));
+        assert!(!capability_probe_result_matches(
+            &result,
+            "request-a",
+            "plan-a",
+            "plan-b"
+        ));
+        assert!(capability_observation_matches(Some("plan-a"), "plan-a"));
+        assert!(!capability_observation_matches(Some("plan-a"), "plan-b"));
+        assert!(!capability_observation_matches(None, "plan-a"));
+    }
 
     #[test]
     fn assessment_keeps_local_checks_separate_from_network_readiness() {

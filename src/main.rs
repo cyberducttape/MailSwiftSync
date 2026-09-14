@@ -39,9 +39,10 @@ use controller::failure::{
 use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BatchStartContext, BatchStartDecision,
-    BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, LiveAuthProof,
-    RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext, SingleStartDecision,
-    admit_batch_run, admit_single_run, assess_plan, batch_mailbox_state, batch_start_decision,
+    BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, CapabilityProbeResult,
+    LiveAuthProof, RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext,
+    SingleStartDecision, admit_batch_run, admit_single_run, assess_plan, batch_mailbox_state,
+    batch_start_decision, capability_observation_matches, capability_probe_result_matches,
     durable_batch_profile_config, durable_single_identity_matches, finish_batch_child,
     is_verified_terminal_state, prepare_batch_project, prepare_batch_run,
     prepare_selected_batch_jobs, selected_batch_indices, single_start_decision, spawn_batch_worker,
@@ -273,30 +274,6 @@ fn decode_report_run_snapshot(snapshot: &str) -> Result<Option<RunPlanSnapshot>,
 struct PendingSheetImport {
     path: std::path::PathBuf,
     sheets: Vec<String>,
-}
-
-struct CapabilityProbeResult {
-    request_id: String,
-    plan_fingerprint: String,
-    result: Result<(core::ServerCapabilities, core::ServerCapabilities), String>,
-}
-
-fn capability_observation_matches(
-    observed_plan_fingerprint: Option<&str>,
-    current_plan_fingerprint: &str,
-) -> bool {
-    observed_plan_fingerprint == Some(current_plan_fingerprint)
-}
-
-fn capability_probe_result_matches(
-    result: &CapabilityProbeResult,
-    expected_request_id: &str,
-    expected_plan_fingerprint: &str,
-    current_plan_fingerprint: &str,
-) -> bool {
-    result.request_id == expected_request_id
-        && result.plan_fingerprint == expected_plan_fingerprint
-        && result.plan_fingerprint == current_plan_fingerprint
 }
 
 use bulk_import::{BulkImportResult, BulkJob};
@@ -5864,36 +5841,6 @@ mod tests {
         assert!(!contains_ascii_case_insensitive(value, "customer-10"));
         assert!(contains_ascii_case_insensitive(value, ""));
         assert_eq!(value, "Customer-09@Example.Test");
-    }
-
-    #[test]
-    fn capability_probe_results_are_bound_to_request_and_current_plan() {
-        let result = CapabilityProbeResult {
-            request_id: "request-a".into(),
-            plan_fingerprint: "plan-a".into(),
-            result: Err("not used".into()),
-        };
-        assert!(capability_probe_result_matches(
-            &result,
-            "request-a",
-            "plan-a",
-            "plan-a"
-        ));
-        assert!(!capability_probe_result_matches(
-            &result,
-            "request-b",
-            "plan-a",
-            "plan-a"
-        ));
-        assert!(!capability_probe_result_matches(
-            &result,
-            "request-a",
-            "plan-a",
-            "plan-b"
-        ));
-        assert!(capability_observation_matches(Some("plan-a"), "plan-a"));
-        assert!(!capability_observation_matches(Some("plan-a"), "plan-b"));
-        assert!(!capability_observation_matches(None, "plan-a"));
     }
 
     #[test]
