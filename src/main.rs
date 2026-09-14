@@ -102,9 +102,9 @@ use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
     AppearancePreferences, ThemeColors, WorkspaceSnapshot, display_job_state, display_state_key,
-    format_phase_name, job_state_badge, needs_operator_review, password_visibility_id,
-    project_health_state_counts, recommended_next_action, render_account, status_color,
-    workflow_step_index,
+    format_elapsed, format_phase_name, job_state_badge, needs_operator_review,
+    password_visibility_id, project_health_state_counts, recommended_next_action, render_account,
+    status_color, workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -972,18 +972,6 @@ impl App {
             reopen_reason: String::new(),
             ui_snapshot: WorkspaceSnapshot::default(),
         }
-    }
-}
-
-fn format_elapsed(elapsed: std::time::Duration) -> String {
-    let seconds = elapsed.as_secs();
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-    let seconds = seconds % 60;
-    if hours > 0 {
-        format!("{hours:02}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
     }
 }
 

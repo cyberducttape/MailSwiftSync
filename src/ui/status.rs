@@ -1,6 +1,6 @@
 //! Shared semantic status and phase presentation helpers.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 use eframe::egui::Color32;
 
@@ -18,6 +18,18 @@ pub(crate) fn format_phase_name(phase: core::Phase) -> &'static str {
         core::Phase::Verification => "Verification",
         core::Phase::Complete => "Complete",
         core::Phase::Attention => "Attention",
+    }
+}
+
+pub(crate) fn format_elapsed(elapsed: Duration) -> String {
+    let seconds = elapsed.as_secs();
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+    if hours > 0 {
+        format!("{hours:02}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes:02}:{seconds:02}")
     }
 }
 
@@ -194,5 +206,11 @@ mod tests {
             4
         );
         assert_eq!(workflow_step_index(core::Phase::Complete, true, true), 5);
+    }
+
+    #[test]
+    fn elapsed_time_uses_compact_minutes_and_full_hours() {
+        assert_eq!(format_elapsed(Duration::from_secs(125)), "02:05");
+        assert_eq!(format_elapsed(Duration::from_secs(3723)), "01:02:03");
     }
 }
