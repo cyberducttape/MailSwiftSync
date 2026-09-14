@@ -1964,7 +1964,7 @@ impl App {
                 if ui.button("Open migration plan").clicked() {
                     self.active_view = WorkspaceView::Plan;
                 }
-                if ui.button("Import CSV / XLSX…").clicked() {
+                if ui.button("Import CSV / Excel…").clicked() {
                     self.bulk_open = true;
                 }
             });
@@ -5295,7 +5295,7 @@ impl App {
             }
             let queue_editable = !self.running();
             ui.horizontal(|ui| {
-                if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
+                if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / Excel…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {
                     if self.bulk_jobs.is_empty() {
                         self.clear_bulk_queue();

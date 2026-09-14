@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Fixed legacy `.xls` batch imports: BIFF/OLE workbooks now use a format-
+  appropriate signature check instead of being sent through the `.xlsx` ZIP
+  validator, while the existing input-size limit remains in force. Updated
+  the import controls and guide to describe CSV/Excel support consistently.
 - Moved mailbox evidence values, evidence-scope semantics, and verification
   acceptance records into a dedicated durable-core module while preserving the
   existing `core::*` API.

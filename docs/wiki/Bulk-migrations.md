@@ -29,7 +29,7 @@ Optional columns are `source_password`, `destination_password`, `source_credenti
 ## Import and review
 
 1. Open **Mailboxes** and choose **Import / edit queue**.
-2. Click **Import CSV / XLSX…** and select the file.
+2. Click **Import CSV / Excel…** and select the file.
 3. If the file is XLS or XLSX, choose the worksheet containing the migration headers; MailSwiftSync does not assume the first worksheet.
 4. Review each source and destination in the queue table and enter any missing credentials in the masked fields.
 5. Correct the spreadsheet and import it again if any account is wrong.

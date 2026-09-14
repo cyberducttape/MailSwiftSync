@@ -7,6 +7,7 @@
 use crate::{Form, SecretString};
 use calamine::{Reader, open_workbook_auto};
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
@@ -57,8 +58,7 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
 }
 
 pub(crate) fn workbook_sheets(path: &Path) -> Result<Vec<String>, String> {
-    validate_bulk_import_file(path)?;
-    validate_xlsx_container(path)?;
+    validate_workbook_input(path)?;
     let book = open_workbook_auto(path).map_err(|error| error.to_string())?;
     let sheets = book.sheet_names().to_vec();
     if sheets.is_empty() {
@@ -73,8 +73,7 @@ pub(crate) fn read_sheet(
     base: &Form,
     sheet_index: usize,
 ) -> Result<Vec<BulkJob>, String> {
-    validate_bulk_import_file(path)?;
-    validate_xlsx_container(path)?;
+    validate_workbook_input(path)?;
     let mut book = open_workbook_auto(path).map_err(|error| error.to_string())?;
     let range = book
         .worksheet_range_at(sheet_index)
@@ -274,6 +273,38 @@ fn validate_xlsx_container(path: &Path) -> Result<(), String> {
             .size();
         uncompressed_bytes = uncompressed_bytes.saturating_add(entry_size);
         validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
+    }
+    Ok(())
+}
+
+fn validate_workbook_input(path: &Path) -> Result<(), String> {
+    validate_bulk_import_file(path)?;
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "xlsx" => validate_xlsx_container(path),
+        "xls" => validate_legacy_xls_header(path),
+        _ => Err("Choose a .xls or .xlsx workbook.".into()),
+    }
+}
+
+/// Legacy BIFF workbooks are OLE compound files, not ZIP archives.  The
+/// existing file-size limit still bounds the input before calamine opens it;
+/// this signature check prevents an arbitrary file from being handed to the
+/// legacy workbook parser under an `.xls` extension.
+fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
+    const OLE_HEADER: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("Could not open XLS import file: {error}"))?;
+    let mut header = [0_u8; OLE_HEADER.len()];
+    file.read_exact(&mut header)
+        .map_err(|error| format!("Could not read XLS import header: {error}"))?;
+    if header != OLE_HEADER {
+        return Err("The XLS workbook is not a valid legacy BIFF/OLE file.".into());
     }
     Ok(())
 }
