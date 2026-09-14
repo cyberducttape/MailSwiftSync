@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted destination-identity normalization, Dovecot checkpoint validation,
+  attention classification, and phase/mailbox transition policy into
+  `core/policy.rs`, centralizing cross-cutting durable invariants.
 - Extracted terminal run completion reduction—durable terminal commits,
   evidence/checkpoint handling, phase advancement, and final UI cleanup—into
   `controller/poll_completion.rs`, leaving event ingestion in `poll.rs`.
