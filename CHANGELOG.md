@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Windows CI now imports the Visual Studio x64 developer environment before
+  MSVC builds and native tests, ensuring Rust dependencies can locate the
+  required `lib.exe` tool.
 - Added regression coverage for workspace refresh skipping, ensuring a
   previously failed projection is retried even when durable revisions match.
 - Workspace refreshes now retry previously failed projections even when the
