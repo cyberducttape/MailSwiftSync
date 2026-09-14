@@ -63,7 +63,19 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Compile release target
-        run: cargo build --locked --release --all-features --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          set +e
+          cargo build --locked --release --all-features --target "${{ matrix.target }}" 2>&1 | tee cross-build.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+      - name: Upload cross-platform build log
+        if: failure() && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cross-build-log
+          path: cross-build.log
+          if-no-files-found: error
 
   native-runtime-tests:
     name: Native runtime tests (${{ matrix.os }})
@@ -82,7 +94,19 @@ jobs:
         if: matrix.os != 'macos-latest'
         env:
           RUST_BACKTRACE: full
-        run: cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture
+        shell: bash
+        run: |
+          set +e
+          cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture 2>&1 | tee native-test.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+      - name: Upload Windows native test log
+        if: failure() && matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-test-log
+          path: native-test.log
+          if-no-files-found: error
       - name: Run macOS core tests
         if: matrix.os == 'macos-latest'
         env:
