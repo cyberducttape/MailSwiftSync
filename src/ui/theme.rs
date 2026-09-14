@@ -118,7 +118,8 @@ impl AppearancePreferences {
             crate::restrict_directory_permissions(parent).map_err(|error| error.to_string())?;
         }
         let content = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
-        crate::write_private_atomic(&path, &content).map_err(|error| error.to_string())
+        crate::atomic_artifact::write_private_atomic(&path, &content)
+            .map_err(|error| error.to_string())
     }
 }
 

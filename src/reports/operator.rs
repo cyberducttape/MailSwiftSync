@@ -1,6 +1,7 @@
+use crate::atomic_artifact::write_private_atomic;
 use crate::{
     core, decode_report_run_snapshot, evidence_digest, markdown_escape, needs_operator_review,
-    plan_snapshot_sha256, project_health_state_counts, with_proof_digest, write_private_atomic,
+    plan_snapshot_sha256, project_health_state_counts, with_proof_digest,
 };
 use std::path::Path;
 

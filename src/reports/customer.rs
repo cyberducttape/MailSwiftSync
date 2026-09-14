@@ -1,7 +1,7 @@
+use crate::atomic_artifact::write_private_atomic;
 use crate::{
     core,
     reports::integrity::{evidence_digest, with_proof_digest},
-    write_private_atomic,
 };
 use std::path::Path;
 

@@ -1,9 +1,9 @@
+use crate::atomic_artifact::write_private_atomic;
 use crate::{
     plan_identity::snapshot_sha256 as plan_snapshot_sha256,
     reports::integrity::{
         canonical_signed_proof_payload, hex_decode, hex_encode, with_proof_digest,
     },
-    write_private_atomic,
 };
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use std::path::Path;
