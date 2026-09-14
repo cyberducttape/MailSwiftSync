@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Bound successful capability observations to the plan fingerprint that
+  produced them. Editing an endpoint, account, transport, trust setting, or
+  other fingerprinted plan input now clears both cached capabilities and the
+  derived readiness assessment, including after an asynchronous probe has
+  completed.
 - Added explicit first-run provider endpoint presets for Generic IMAP, Google
   Workspace, Microsoft 365, Fastmail, and Zoho Mail. Presets provide
   connection hints and honest policy notes only; discovery and preflight remain

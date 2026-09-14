@@ -346,6 +346,13 @@ struct CapabilityProbeResult {
     result: Result<(core::ServerCapabilities, core::ServerCapabilities), String>,
 }
 
+fn capability_observation_matches(
+    observed_plan_fingerprint: Option<&str>,
+    current_plan_fingerprint: &str,
+) -> bool {
+    observed_plan_fingerprint == Some(current_plan_fingerprint)
+}
+
 fn capability_probe_result_matches(
     result: &CapabilityProbeResult,
     expected_request_id: &str,
@@ -460,6 +467,7 @@ struct App {
     capability_receiver: Option<Receiver<CapabilityProbeResult>>,
     capability_probe_request_id: Option<String>,
     capability_probe_fingerprint: Option<String>,
+    capability_observation_fingerprint: Option<String>,
     /// Fresh authentication completed immediately before an IMAPS live run.
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
@@ -881,6 +889,7 @@ impl App {
             capability_receiver: None,
             capability_probe_request_id: None,
             capability_probe_fingerprint: None,
+            capability_observation_fingerprint: None,
             live_auth_receiver: None,
             live_auth_proof: None,
             source_capabilities: None,
@@ -1056,6 +1065,7 @@ impl App {
         self.capability_receiver = None;
         self.capability_probe_request_id = None;
         self.capability_probe_fingerprint = None;
+        self.capability_observation_fingerprint = None;
         // Selection changes must invalidate the throttled read-model refresh
         // immediately. Otherwise the header can render the new selection
         // while still holding the previous project's cached rows.
@@ -1094,6 +1104,7 @@ impl App {
         self.capability_receiver = None;
         self.capability_probe_request_id = None;
         self.capability_probe_fingerprint = None;
+        self.capability_observation_fingerprint = None;
         self.source_capabilities = None;
         self.destination_capabilities = None;
         self.live_auth_proof = None;
@@ -1311,7 +1322,32 @@ impl App {
             let _ = tx.send(result);
         });
     }
+    fn invalidate_stale_capability_observation(&mut self) -> bool {
+        let current = plan_fingerprint_digest(&self.form.plan_fingerprint());
+        let in_flight_stale = self
+            .capability_probe_fingerprint
+            .as_deref()
+            .is_some_and(|fingerprint| fingerprint != current);
+        let observation_stale = self.capability_observation_fingerprint.is_some()
+            && !capability_observation_matches(
+                self.capability_observation_fingerprint.as_deref(),
+                &current,
+            );
+        if !(in_flight_stale || observation_stale) {
+            return false;
+        }
+        self.capability_receiver = None;
+        self.capability_probe_request_id = None;
+        self.capability_probe_fingerprint = None;
+        self.capability_observation_fingerprint = None;
+        self.source_capabilities = None;
+        self.destination_capabilities = None;
+        self.preflight.clear();
+        true
+    }
+
     fn assess_plan(&mut self) {
+        self.invalidate_stale_capability_observation();
         self.preflight = assess_plan(
             &self.form,
             self.source_capabilities.as_ref(),
@@ -1658,6 +1694,12 @@ impl App {
     }
 
     fn overview_readiness_controls(&mut self, ui: &mut egui::Ui) {
+        if self.invalidate_stale_capability_observation() {
+            self.set_status(
+                "Readiness observations expired because the migration plan changed; run discovery again.",
+                StatusSeverity::Warning,
+            );
+        }
         ui.group(|ui| {
             ui.heading("Preflight & readiness");
             ui.label(RichText::new("Plan completeness is separate from live network checks. Run the authenticated probe before live migration.").color(self.theme_colors().text_secondary));
@@ -4449,19 +4491,11 @@ impl App {
     }
     fn poll(&mut self) {
         self.refresh_ui_snapshot();
-        if let Some(expected_fingerprint) = self.capability_probe_fingerprint.clone() {
-            let current_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
-            if current_fingerprint != expected_fingerprint {
-                self.capability_receiver = None;
-                self.capability_probe_request_id = None;
-                self.capability_probe_fingerprint = None;
-                self.source_capabilities = None;
-                self.destination_capabilities = None;
-                self.set_status(
-                    "Readiness observations expired because the migration plan changed; run discovery again.",
-                    StatusSeverity::Warning,
-                );
-            }
+        if self.invalidate_stale_capability_observation() {
+            self.set_status(
+                "Readiness observations expired because the migration plan changed; run discovery again.",
+                StatusSeverity::Warning,
+            );
         }
         if let Some(receiver) = &self.bulk_import_receiver
             && let Ok(result) = receiver.try_recv()
@@ -4519,6 +4553,7 @@ impl App {
                     Ok((source, destination)) => {
                         self.source_capabilities = Some(source);
                         self.destination_capabilities = Some(destination);
+                        self.capability_observation_fingerprint = Some(result.plan_fingerprint);
                         self.set_status("Capability discovery complete", StatusSeverity::Success);
                         self.assess_plan();
                     }
@@ -6583,6 +6618,9 @@ mod tests {
             "plan-a",
             "plan-b"
         ));
+        assert!(capability_observation_matches(Some("plan-a"), "plan-a"));
+        assert!(!capability_observation_matches(Some("plan-a"), "plan-b"));
+        assert!(!capability_observation_matches(None, "plan-a"));
     }
 
     #[test]
