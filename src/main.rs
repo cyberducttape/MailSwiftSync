@@ -30,8 +30,8 @@ use controller::failure::{
 };
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkRetryScope, BulkStateSet,
-    LiveAuthProof, RunKind, SingleRunWorkerSpec, is_verified_terminal_state,
-    spawn_single_run_worker,
+    LiveAuthProof, RunKind, SingleRunWorkerSpec, durable_single_identity_matches,
+    is_verified_terminal_state, spawn_single_run_worker,
 };
 use credentials::{
     CleanupGuard, SecretString, cleanup_paths, cleanup_stale_secret_directories,
@@ -1003,17 +1003,6 @@ fn terminal_phase_advance_allowed(
     durability_error: bool,
 ) -> bool {
     external_succeeded && terminal_write_ok && !durability_error
-}
-
-fn durable_single_identity_matches(
-    project: &core::Project,
-    mailbox: &core::MailboxJob,
-    profile: &Profile,
-) -> bool {
-    project.source_endpoint == profile.source_host
-        && project.destination_endpoint == profile.destination_host
-        && mailbox.source_mailbox == profile.source_user
-        && mailbox.destination_mailbox == profile.destination_user
 }
 
 /// Pre-live readiness and quota checks remain in `imap_probe`; this root module

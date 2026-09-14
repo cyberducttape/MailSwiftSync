@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved single-mailbox durable identity admission into the controller admission module so GUI and headless execution share one project/mailbox identity check.
 - Extracted the cached workspace read-model refresh into `ui::workspace`, keeping database-backed presentation loading behind one throttled UI boundary while preserving live action-time storage checks.
 
 - Moved the pre-live dual IMAP authentication/quota gate into `imap_probe` so

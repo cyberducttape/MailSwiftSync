@@ -10,5 +10,6 @@ pub(crate) use batch::{
     BatchExecutionMode, BulkConfirmationSummary, BulkRetryScope, BulkStateSet,
     is_verified_terminal_state,
 };
+pub(crate) use batch_admission::durable_single_identity_matches;
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use run::{ActiveRunContext, LiveAuthProof, RunKind};

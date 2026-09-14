@@ -46,6 +46,21 @@ pub(crate) fn canonical_destination_identity(profile: &Profile) -> Result<String
     .map_err(|error| format!("Invalid destination endpoint: {error}"))
 }
 
+/// Verify that an editable single-mailbox profile still names the durable
+/// project and mailbox it is about to execute. Keeping this beside batch
+/// admission prevents GUI and headless callers from inventing separate
+/// identity rules.
+pub(crate) fn durable_single_identity_matches(
+    project: &core::Project,
+    mailbox: &core::MailboxJob,
+    profile: &Profile,
+) -> bool {
+    project.source_endpoint == profile.source_host
+        && project.destination_endpoint == profile.destination_host
+        && mailbox.source_mailbox == profile.source_user
+        && mailbox.destination_mailbox == profile.destination_user
+}
+
 pub(crate) fn duplicate_destination(jobs: &[BulkJob]) -> Result<Option<String>, String> {
     let mut destinations = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
