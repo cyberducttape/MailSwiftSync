@@ -11,7 +11,7 @@ CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --locked --release
 target_name="mailswiftsync-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 mkdir -p dist/package
 cp target/release/mailswiftsync dist/package/mailswiftsync
-cp README.md LICENSE docs/distribution/INSTALL.md docs/wiki/Install-and-first-launch.md dist/package/
+cp README.md LICENSE docs/distribution/INSTALL.md docs/distribution/SERVICE.md docs/container.md docs/release-readiness.md docs/wiki/Install-and-first-launch.md dist/package/
 chmod 0755 dist/package/mailswiftsync
 archive="dist/${target_name}.tar.gz"
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
