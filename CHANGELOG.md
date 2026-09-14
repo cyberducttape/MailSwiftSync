@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Windows CI now publishes the tail of native-test and cross-build logs in the
+  GitHub job summary when those gates fail, making platform regressions
+  diagnosable without requiring artifact-download credentials.
 - Extracted batch queue replacement and destructive-action confirmations into
   a dedicated UI module, keeping modal safety gates separate from queue
   rendering and execution controls.
