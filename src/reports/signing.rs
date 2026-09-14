@@ -113,7 +113,8 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
 
         let mut owner_seen = false;
         let mut system_seen = false;
-        for index in 0..u32::from((*dacl).AceCount) {
+        let ace_count = unsafe { (*dacl).AceCount };
+        for index in 0..u32::from(ace_count) {
             let mut ace_pointer = ptr::null_mut();
             if unsafe { GetAce(dacl, index, &mut ace_pointer) } == 0 || ace_pointer.is_null() {
                 return Err("could not inspect a signing key DACL entry".into());
@@ -132,7 +133,7 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
                 return Err("signing key DACL grants access to an unapproved identity".into());
             }
         }
-        if (*dacl).AceCount != 2 || !owner_seen || !system_seen {
+        if ace_count != 2 || !owner_seen || !system_seen {
             return Err("signing key DACL must contain only owner and LocalSystem entries".into());
         }
         Ok(())

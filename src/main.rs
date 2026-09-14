@@ -75,11 +75,11 @@ use process::{
 #[cfg(all(test, unix))]
 use process::{configure_process_group, process_identity};
 use provider::ProviderPreset;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use runner::run_streaming;
 #[cfg(test)]
 use runner::{dovecot_state_candidate, record_process_tail};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use std::process::Command;
 
 use eframe::{
