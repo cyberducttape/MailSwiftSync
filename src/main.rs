@@ -48,8 +48,8 @@ use controller::{
     admit_single_run, assess_plan, batch_mailbox_state, batch_start_decision,
     capability_observation_matches, capability_probe_result_matches,
     decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, process_event_is_current, run_line_is_current,
-    single_start_decision, spawn_batch_worker, spawn_single_run_worker,
+    is_verified_terminal_state, launch_batch_worker, process_event_is_current, run_line_is_current,
+    single_start_decision, spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -2986,6 +2986,7 @@ impl App {
         let active_run = admission.active_run;
         let selected_job_ids = prepared.selected_job_ids.clone();
         let queue_checkpoints = prepared.queue_checkpoints.clone();
+        let job_count = jobs.len();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         self.bulk_project_id = Some(project_id.clone());
         self.selected_project_id = Some(project_id.clone());
@@ -3001,10 +3002,23 @@ impl App {
             }
         }
         self.mark_bulk_state_changed();
-        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.cancel_requested = Some(cancel.clone());
-        self.receiver = Some(rx);
+        let worker = launch_batch_worker(
+            concurrency,
+            mode,
+            self.form.profile.batch_retry_count.min(3),
+            job_count,
+            selected_job_ids,
+            self.active_run
+                .as_ref()
+                .map(|run| run.batch_child_run_ids.clone())
+                .unwrap_or_default(),
+            queue_checkpoints,
+            project_id.clone(),
+            run_id.clone(),
+            jobs,
+        );
+        self.cancel_requested = Some(worker.cancel.clone());
+        self.receiver = Some(worker.receiver);
         self.run_started_at = Some(std::time::Instant::now());
         self.set_status(
             format!(
@@ -3014,35 +3028,11 @@ impl App {
                 } else {
                     "Batch validation"
                 },
-                jobs.len()
+                job_count
             ),
             StatusSeverity::Info,
         );
         self.output.clear();
-        let retry_count = self.form.profile.batch_retry_count.min(3);
-        let job_count = jobs.len();
-        let queue_job_ids = selected_job_ids;
-        let child_run_ids = self
-            .active_run
-            .as_ref()
-            .map(|run| run.batch_child_run_ids.clone())
-            .unwrap_or_default();
-        let batch_project_id = project_id.clone();
-        let batch_run_id = run_id.clone();
-        spawn_batch_worker(
-            concurrency,
-            tx,
-            cancel,
-            mode,
-            retry_count,
-            job_count,
-            queue_job_ids,
-            child_run_ids,
-            queue_checkpoints,
-            batch_project_id,
-            batch_run_id,
-            jobs,
-        );
     }
     fn running(&self) -> bool {
         self.receiver.is_some()

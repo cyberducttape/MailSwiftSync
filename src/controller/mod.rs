@@ -21,7 +21,7 @@ pub(crate) use batch_admission::{
     durable_single_identity_matches,
 };
 pub(crate) use batch_completion::{BatchChildCompletion, finish_batch_child};
-pub(crate) use batch_worker::spawn_batch_worker;
+pub(crate) use batch_worker::launch_batch_worker;
 pub(crate) use events::{
     Event, PendingDbEvent, StreamOutcome, process_event_is_current, run_line_is_current,
 };

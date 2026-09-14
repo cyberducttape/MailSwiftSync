@@ -24,8 +24,50 @@ use std::{
 };
 
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
+const MAX_BATCH_PENDING_EVENTS: usize = 4_096;
 
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
+
+pub(crate) struct BatchWorkerLaunch {
+    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) receiver: mpsc::Receiver<Event>,
+}
+
+/// Create the bounded event channel, cancellation token, and batch worker as
+/// one controller-owned operation. Callers only retain the handles needed to
+/// render state and request cancellation; channel sizing and worker startup
+/// policy do not leak into the egui composition root.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn launch_batch_worker(
+    concurrency: usize,
+    mode: BatchExecutionMode,
+    retry_count: usize,
+    job_count: usize,
+    queue_job_ids: Vec<String>,
+    child_run_ids: Vec<String>,
+    queue_checkpoints: Vec<Option<String>>,
+    batch_project_id: String,
+    batch_run_id: String,
+    jobs: Vec<BulkJob>,
+) -> BatchWorkerLaunch {
+    let (tx, receiver) = mpsc::sync_channel(MAX_BATCH_PENDING_EVENTS);
+    let cancel = Arc::new(AtomicBool::new(false));
+    spawn_batch_worker(
+        concurrency,
+        tx,
+        Arc::clone(&cancel),
+        mode,
+        retry_count,
+        job_count,
+        queue_job_ids,
+        child_run_ids,
+        queue_checkpoints,
+        batch_project_id,
+        batch_run_id,
+        jobs,
+    );
+    BatchWorkerLaunch { cancel, receiver }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_batch_worker(

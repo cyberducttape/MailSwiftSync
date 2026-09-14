@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved batch event-channel creation, cancellation ownership, and worker
+  startup behind the controller boundary so the egui shell retains only the
+  handles needed to render and cancel an admitted batch.
 - Bounded support-bundle mailbox data to a 1,000-row status sample while
   retaining exact mailbox totals and state counts, so incident exports remain
   usable for large projects without materializing the full queue in memory.
