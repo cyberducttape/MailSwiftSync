@@ -66,7 +66,8 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - A headless `support-bundle <state.db> <output.json>` export provides a
   sanitized incident artifact containing platform/schema/health facts without
   credentials, endpoints, plans, command paths, mailbox content, or diagnostic
-  text.
+  text. Large projects retain exact mailbox totals and state counts while
+  limiting detailed mailbox statuses to an explicitly marked 1,000-row sample.
 - A headless `customer-proof <state.db> <output.json>` export uses the same
   redacted customer artifact as the GUI, so automation can produce a proof
   without depending on a file dialog. It requires durable project completion

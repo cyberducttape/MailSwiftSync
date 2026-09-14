@@ -200,7 +200,8 @@ prove, and applies the same conservative recovery transition as GUI startup.
 `support-bundle` emits a private, sanitized JSON artifact for incident triage;
 it excludes endpoints, credentials, plan snapshots, command paths, mailbox
 content, and diagnostic text while retaining schema, platform, health, and
-bounded run metadata.
+bounded run metadata. For large projects it includes exact mailbox totals and
+state counts plus a clearly marked sample of at most 1,000 mailbox statuses.
 `customer-proof` emits the same customer-safe proof artifact available from the
 GUI and refuses to export until the selected project is durably complete with
 verified mailbox evidence. For an explicitly labeled progress artifact only,
