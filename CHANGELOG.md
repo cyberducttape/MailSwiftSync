@@ -37,6 +37,9 @@ All notable changes to MailSwiftSync are documented here.
 - Clarified the README’s audit-storage wording: the durable ledger contains
   structured lifecycle/evidence events, while raw engine transcripts remain
   process-local diagnostics.
+- Removed obsolete durable raw-output retention/pruning code and its misleading
+  retention test; the SQLite event writers now have one explicit contract that
+  rejects `run_output` transcripts.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.

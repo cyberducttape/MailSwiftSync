@@ -182,11 +182,8 @@ pub struct StateStore {
 }
 
 /// Verbose subprocess output and error detail are diagnostic context, not the
-/// immutable audit record. Keep a bounded per-project tail and cap every
-/// individual event detail so pathological engine output cannot create an
-/// oversized SQLite record; lifecycle, run, evidence, and phase events remain
-/// retained.
-const MAX_DURABLE_RUN_OUTPUT_EVENTS: i64 = 10_000;
+/// immutable audit record. Raw engine transcripts are rejected by the event
+/// writers; lifecycle, run, evidence, and phase events remain retained.
 const MAX_DURABLE_EVENT_DETAIL_BYTES: usize = 16 * 1024;
 const DURABLE_EVENT_TRUNCATION_SUFFIX: &str = " [diagnostic detail truncated by MailSwiftSync]";
 
@@ -1294,16 +1291,6 @@ impl StateStore {
                 statement.execute(params![project_id, kind, detail])?;
             }
         }
-        let projects = events
-            .iter()
-            .map(|(project_id, _, _)| *project_id)
-            .collect::<BTreeSet<_>>();
-        for project_id in projects {
-            tx.execute(
-                "DELETE FROM events WHERE project_id=?1 AND kind='run_output' AND id NOT IN (SELECT id FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id DESC LIMIT ?2)",
-                params![project_id, MAX_DURABLE_RUN_OUTPUT_EVENTS],
-            )?;
-        }
         tx.commit()
     }
 
@@ -1338,10 +1325,6 @@ impl StateStore {
                 statement.execute(params![project_id, run_id, kind, detail])?;
             }
         }
-        tx.execute(
-            "DELETE FROM events WHERE project_id=?1 AND kind='run_output' AND id NOT IN (SELECT id FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id DESC LIMIT ?2)",
-            params![project_id, MAX_DURABLE_RUN_OUTPUT_EVENTS],
-        )?;
         tx.commit()
     }
 
@@ -1358,8 +1341,6 @@ impl StateStore {
         let mut statement = tx.prepare_cached(
             "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))) ",
         )?;
-        let mut projects = BTreeSet::new();
-        let mut project_by_run = HashMap::new();
         for (run_id, kind, detail) in events {
             if *kind == "run_output" {
                 let valid: bool = tx.query_row(
@@ -1377,24 +1358,8 @@ impl StateStore {
             if changed != 1 {
                 return Err(rusqlite::Error::InvalidQuery);
             }
-            if !project_by_run.contains_key(*run_id) {
-                let project_id: String =
-                    tx.query_row("SELECT project_id FROM runs WHERE id=?1", [run_id], |row| {
-                        row.get(0)
-                    })?;
-                project_by_run.insert((*run_id).to_owned(), project_id);
-            }
-            if let Some(project_id) = project_by_run.get(*run_id) {
-                projects.insert(project_id.clone());
-            }
         }
         drop(statement);
-        for project_id in projects {
-            tx.execute(
-                "DELETE FROM events WHERE project_id=?1 AND kind='run_output' AND id NOT IN (SELECT id FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id DESC LIMIT ?2)",
-                params![project_id, MAX_DURABLE_RUN_OUTPUT_EVENTS],
-            )?;
-        }
         tx.commit()
     }
     #[cfg(test)]
@@ -5747,51 +5712,6 @@ destination_port = "000"
             )
             .unwrap();
         assert_eq!(stored, 0);
-    }
-
-    #[test]
-    fn verbose_output_is_retained_as_a_bounded_project_tail() {
-        let db = StateStore::in_memory().unwrap();
-        let project = db
-            .create_project("retention", "source", "destination")
-            .unwrap();
-        let details = (0..=MAX_DURABLE_RUN_OUTPUT_EVENTS as usize)
-            .map(|index| format!("line-{index}"))
-            .collect::<Vec<_>>();
-        let batch = details
-            .iter()
-            .map(|detail| (project.id.as_str(), "run_output", detail.as_str()))
-            .collect::<Vec<_>>();
-
-        db.record_events_batch(&batch).unwrap();
-
-        let count: i64 = db
-            .connection
-            .query_row(
-                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='run_output'",
-                [&project.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let oldest: rusqlite::Result<String> = db
-            .connection
-            .query_row(
-                "SELECT detail FROM events WHERE project_id=?1 AND kind='run_output' ORDER BY id ASC LIMIT 1",
-                [&project.id],
-                |row| row.get(0),
-            );
-        let audit_count: i64 = db
-            .connection
-            .query_row(
-                "SELECT COUNT(*) FROM events WHERE project_id=?1 AND kind='project_created'",
-                [&project.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-
-        assert_eq!(count, 0);
-        assert!(oldest.is_err());
-        assert_eq!(audit_count, 1);
     }
 
     #[test]
