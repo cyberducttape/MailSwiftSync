@@ -45,6 +45,17 @@ impl StateStore {
             |row| row.get(0),
         )
     }
+
+    /// Batch admission persists a secret-free mailbox configuration for each
+    /// imported row. Use that durable marker instead of guessing from the
+    /// human-facing project endpoints.
+    pub fn project_has_mailbox_configs(&self, project_id: &str) -> rusqlite::Result<bool> {
+        self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE project_id=?1 AND config IS NOT NULL AND length(trim(config)) > 0)",
+            [project_id],
+            |row| row.get(0),
+        )
+    }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row(
