@@ -2,7 +2,10 @@
 
 use crate::App;
 use crate::StatusSeverity;
-use crate::controller::{CapabilityProbeSpec, ImapProbeEndpoint, spawn_capability_probe};
+use crate::controller::{
+    CapabilityProbeSpec, ImapProbeEndpoint, LiveAuthProbeSpec, spawn_capability_probe,
+    spawn_live_auth_probe,
+};
 use crate::imap_probe::endpoint_for_probe;
 use crate::plan_identity::fingerprint_digest as plan_fingerprint_digest;
 use eframe::egui::{self, RichText};
@@ -76,6 +79,72 @@ impl App {
         self.capability_receiver = Some(spawn_capability_probe(CapabilityProbeSpec {
             request_id,
             plan_fingerprint,
+            source: ImapProbeEndpoint {
+                endpoint: source,
+                user: self.form.profile.source_user.clone(),
+                password: self.form.source_password.clone(),
+                auth: self.form.profile.source_auth.clone(),
+                tls: self.form.profile.source_tls.clone(),
+                ca_bundle: self.form.profile.source_ca_bundle.clone(),
+                certificate_pin_sha256: self.form.profile.source_certificate_pin_sha256.clone(),
+            },
+            destination: ImapProbeEndpoint {
+                endpoint: destination,
+                user: self.form.profile.destination_user.clone(),
+                password: self.form.destination_password.clone(),
+                auth: self.form.profile.destination_auth.clone(),
+                tls: self.form.profile.destination_tls.clone(),
+                ca_bundle: self.form.profile.destination_ca_bundle.clone(),
+                certificate_pin_sha256: self
+                    .form
+                    .profile
+                    .destination_certificate_pin_sha256
+                    .clone(),
+            },
+        }));
+    }
+
+    pub(crate) fn start_live_imaps_auth_probe(
+        &mut self,
+        plan_fingerprint: String,
+        credential_fingerprint: String,
+    ) {
+        if self.live_auth_receiver.is_some() {
+            return;
+        }
+        let source = match endpoint_for_probe(
+            &self.form.profile.source_host,
+            &self.form.profile.source_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.set_status(
+                    format!("Live authentication probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
+                return;
+            }
+        };
+        let destination = match endpoint_for_probe(
+            &self.form.profile.destination_host,
+            &self.form.profile.destination_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.set_status(
+                    format!("Live authentication probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
+                return;
+            }
+        };
+        self.set_status(
+            "Re-authenticating encrypted IMAP endpoints before live execution…",
+            StatusSeverity::Info,
+        );
+        self.live_auth_receiver = Some(spawn_live_auth_probe(LiveAuthProbeSpec {
+            plan_fingerprint,
+            credential_fingerprint,
             source: ImapProbeEndpoint {
                 endpoint: source,
                 user: self.form.profile.source_user.clone(),

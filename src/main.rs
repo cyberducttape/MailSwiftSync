@@ -46,13 +46,13 @@ use controller::failure::{
 use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
-    BulkRetryScope, CapabilityProbeResult, ImapProbeEndpoint, LiveAuthProbeSpec, LiveAuthProof,
-    PendingDbEvent, RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext,
-    SingleStartDecision, admit_single_run, assess_plan, batch_mailbox_state,
-    capability_observation_matches, capability_probe_result_matches,
-    decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, persist_pending_events, process_event_is_current,
-    run_line_is_current, single_start_decision, spawn_live_auth_probe, spawn_single_run_worker,
+    BulkRetryScope, CapabilityProbeResult, LiveAuthProof, PendingDbEvent, RunKind,
+    SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext, SingleStartDecision,
+    admit_single_run, assess_plan, batch_mailbox_state, capability_observation_matches,
+    capability_probe_result_matches, decode_persisted_batch_profile,
+    durable_single_identity_matches, finish_batch_child, is_verified_terminal_state,
+    persist_pending_events, process_event_is_current, run_line_is_current, single_start_decision,
+    spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -88,8 +88,10 @@ use eframe::{
 };
 use egui_extras::{Column, TableBuilder};
 #[cfg(test)]
-use imap_probe::{command_endpoint_parts, command_port, imap_command_succeeded, imap_quote};
-use imap_probe::{endpoint_for_probe, fresh_imap_authentication_applies};
+use imap_probe::{
+    command_endpoint_parts, command_port, endpoint_for_probe, imap_command_succeeded, imap_quote,
+};
+use imap_probe::fresh_imap_authentication_applies;
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, default_destination_tls, default_imap_port,
     effective_destination_tls,
@@ -905,71 +907,6 @@ impl App {
         fresh_imap_authentication_applies(&self.form)
     }
 
-    fn start_live_imaps_auth_probe(
-        &mut self,
-        plan_fingerprint: String,
-        credential_fingerprint: String,
-    ) {
-        if self.live_auth_receiver.is_some() {
-            return;
-        }
-        let source = match endpoint_for_probe(
-            &self.form.profile.source_host,
-            &self.form.profile.source_port,
-        ) {
-            Ok(endpoint) => endpoint,
-            Err(error) => {
-                self.set_status(
-                    format!("Live authentication probe blocked: {error}"),
-                    StatusSeverity::Error,
-                );
-                return;
-            }
-        };
-        let destination = match endpoint_for_probe(
-            &self.form.profile.destination_host,
-            &self.form.profile.destination_port,
-        ) {
-            Ok(endpoint) => endpoint,
-            Err(error) => {
-                self.set_status(
-                    format!("Live authentication probe blocked: {error}"),
-                    StatusSeverity::Error,
-                );
-                return;
-            }
-        };
-        self.set_status(
-            "Re-authenticating encrypted IMAP endpoints before live execution…",
-            StatusSeverity::Info,
-        );
-        self.live_auth_receiver = Some(spawn_live_auth_probe(LiveAuthProbeSpec {
-            plan_fingerprint,
-            credential_fingerprint,
-            source: ImapProbeEndpoint {
-                endpoint: source,
-                user: self.form.profile.source_user.clone(),
-                password: self.form.source_password.clone(),
-                auth: self.form.profile.source_auth.clone(),
-                tls: self.form.profile.source_tls.clone(),
-                ca_bundle: self.form.profile.source_ca_bundle.clone(),
-                certificate_pin_sha256: self.form.profile.source_certificate_pin_sha256.clone(),
-            },
-            destination: ImapProbeEndpoint {
-                endpoint: destination,
-                user: self.form.profile.destination_user.clone(),
-                password: self.form.destination_password.clone(),
-                auth: self.form.profile.destination_auth.clone(),
-                tls: self.form.profile.destination_tls.clone(),
-                ca_bundle: self.form.profile.destination_ca_bundle.clone(),
-                certificate_pin_sha256: self
-                    .form
-                    .profile
-                    .destination_certificate_pin_sha256
-                    .clone(),
-            },
-        }));
-    }
     fn invalidate_stale_capability_observation(&mut self) -> bool {
         let current = plan_fingerprint_digest(&self.form.plan_fingerprint());
         let in_flight_stale = self

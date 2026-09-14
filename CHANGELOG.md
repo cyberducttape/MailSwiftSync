@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved live IMAP authentication probe setup into `ui/plan.rs`, completing
+  extraction of plan readiness probe coordination from the application shell.
 - Moved capability-probe validation and request construction into the plan UI
   module, reducing controller/UI coordination in `main.rs`.
 - Extracted capability and live IMAP authentication probe workers into the
