@@ -34,6 +34,9 @@ All notable changes to MailSwiftSync are documented here.
   the SQLite evidence ledger.
 - Locked the batch customer/project identity field while a batch is running so
   the displayed name cannot diverge from the already-admitted durable project.
+- Centralized ownership checks for asynchronous process lifecycle and engine
+  metadata events, extending the tested controller event contract beyond output
+  lines and reducing duplicated safety predicates in `poll()`.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless

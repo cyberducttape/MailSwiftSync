@@ -46,8 +46,8 @@ use controller::{
     SingleStartContext, SingleStartDecision, admit_batch_launch, admit_single_run, assess_plan,
     batch_mailbox_state, batch_start_decision, capability_observation_matches,
     capability_probe_result_matches, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, run_line_is_current, single_start_decision, spawn_batch_worker,
-    spawn_single_run_worker,
+    is_verified_terminal_state, process_event_is_current, run_line_is_current,
+    single_start_decision, spawn_batch_worker, spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -3825,9 +3825,8 @@ impl App {
                         job_id,
                         version,
                     } => {
-                        let owns_version = active_run
-                            .as_ref()
-                            .is_some_and(|run| run.owns_line(&run_id, &job_id));
+                        let owns_version =
+                            process_event_is_current(active_run.as_ref(), &run_id, &job_id);
                         if owns_version {
                             // Version probing is advisory metadata. A
                             // storage failure must not turn a successful
@@ -3841,10 +3840,7 @@ impl App {
                         }
                     }
                     Event::ProcessEnded { run_id, job_id } => {
-                        if active_run
-                            .as_ref()
-                            .is_some_and(|run| run.owns_process(&run_id, &job_id))
-                        {
+                        if process_event_is_current(active_run.as_ref(), &run_id, &job_id) {
                             ended_processes.insert((run_id.clone(), job_id.clone()));
                             if let Err(error) = self.store.clear_processes(&run_id) {
                                 durability_errors.push(format!(

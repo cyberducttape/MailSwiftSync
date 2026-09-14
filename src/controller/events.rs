@@ -16,6 +16,16 @@ pub(crate) fn run_line_is_current(
         && !ended_processes.contains(&(run_id.to_owned(), job_id.to_owned()))
 }
 
+/// Process lifecycle metadata is accepted only for a process owned by the
+/// active single run or one of its batch children.
+pub(crate) fn process_event_is_current(
+    active_run: Option<&ActiveRunContext>,
+    run_id: &str,
+    job_id: &str,
+) -> bool {
+    active_run.is_some_and(|run| run.owns_process(run_id, job_id))
+}
+
 pub(crate) enum Event {
     Line(String),
     RunLine {
@@ -84,7 +94,7 @@ pub(crate) enum StreamOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::run_line_is_current;
+    use super::{process_event_is_current, run_line_is_current};
     use crate::controller::run::{ActiveRunContext, RunKind};
     use crate::core;
     use std::collections::{HashMap, HashSet};
@@ -131,5 +141,11 @@ mod tests {
             "job-a"
         ));
         assert!(!run_line_is_current(None, &ended, "run-a", "job-a"));
+        assert!(process_event_is_current(Some(&context), "run-a", "job-a"));
+        assert!(!process_event_is_current(
+            Some(&context),
+            "run-other",
+            "job-a"
+        ));
     }
 }
