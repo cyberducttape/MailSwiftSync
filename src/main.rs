@@ -1922,7 +1922,7 @@ impl App {
                 ui.label("No historical project is selected.");
                 return;
             }
-            let jobs = self.ui_snapshot.jobs.clone();
+            let jobs = &self.ui_snapshot.jobs;
             ui.label(
                 RichText::new(format!(
                     "{} durable mailbox record(s) · read-only",
@@ -6212,6 +6212,10 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin::same(24)),
             )
             .show(ctx, |ui| {
+                if let Some(notice) = self.ui_snapshot.stale_notice() {
+                    ui.colored_label(colors.warning, format!("⚠ {notice}"));
+                    ui.add_space(8.0);
+                }
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {

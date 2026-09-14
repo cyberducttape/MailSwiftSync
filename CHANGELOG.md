@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Exposed stale workspace snapshots to the operator: failed durable refreshes
+  retain the last good projection for resilience but now show a warning with
+  the age of that projection and the failed read boundary. The historical
+  mailbox view also avoids cloning the complete durable mailbox collection.
 - Canonicalized trusted extra imapsync options after validation, so execution
   now uses the exact allowlisted `--option` spelling and typed integer values
   that were validated. Malformed single/double-dash variants are rejected
