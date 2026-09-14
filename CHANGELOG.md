@@ -20,6 +20,8 @@ All notable changes to MailSwiftSync are documented here.
   the DACL, ensuring the handle-based check validates the complete security
   descriptor it relies on.
 - Documented the protected Windows ACL requirement for headless secret files.
+- Headless status serialization now reports an actionable error instead of
+  panicking if a future status-model change becomes non-serializable.
 - Windows CI now uses the pinned Visual Studio x64 developer-environment
   action before MSVC builds and native tests, ensuring Rust dependencies can
   locate the required `lib.exe` tool across runner image layouts.
