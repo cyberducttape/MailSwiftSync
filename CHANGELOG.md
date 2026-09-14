@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Hardened headless secret-file reads on Unix by validating the already-open
+  descriptor, rejecting symlinks, requiring effective-user ownership, and
+  setting close-on-exec. A single terminal CR/LF is trimmed for shell-friendly
+  secret files without changing embedded credential whitespace.
 - Fixed legacy `.xls` batch imports: BIFF/OLE workbooks now use a format-
   appropriate signature check instead of being sent through the `.xlsx` ZIP
   validator, while the existing input-size limit remains in force. Updated

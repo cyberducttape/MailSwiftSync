@@ -1,7 +1,7 @@
 use std::{
     fmt,
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
@@ -150,8 +150,24 @@ pub fn write_secret_file(path: &Path, secret: &str) -> std::io::Result<()> {
 /// ordinary owned string after the file read completes.
 pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
     const MAX_SECRET_FILE_BYTES: u64 = 64 * 1024;
-    let metadata =
-        fs::metadata(path).map_err(|error| format!("could not inspect secret file: {error}"))?;
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|error| format!("could not open secret file: {error}"))?
+    };
+    #[cfg(not(unix))]
+    let mut file =
+        fs::File::open(path).map_err(|error| format!("could not open secret file: {error}"))?;
+
+    // Inspect the already-open handle so validation and reading refer to the
+    // same file. On Unix this also avoids following a symlink at open time.
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("could not inspect secret file: {error}"))?;
     if !metadata.is_file() {
         return Err("secret-file path must refer to a regular file".into());
     }
@@ -162,13 +178,24 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err("secret file must be owner-only (0600 or stricter)".into());
         }
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("secret file must be owned by the effective user".into());
+        }
     }
-    let contents =
-        fs::read_to_string(path).map_err(|error| format!("could not read secret file: {error}"))?;
+    let mut contents = Vec::with_capacity(metadata.len().min(MAX_SECRET_FILE_BYTES) as usize);
+    file.read_to_end(&mut contents)
+        .map_err(|error| format!("could not read secret file: {error}"))?;
+    if contents.ends_with(b"\r\n") {
+        contents.truncate(contents.len() - 2);
+    } else if contents.ends_with(b"\n") || contents.ends_with(b"\r") {
+        contents.truncate(contents.len() - 1);
+    }
+    let contents = String::from_utf8(contents)
+        .map_err(|_| "secret file must contain valid UTF-8 text".to_owned())?;
     Ok(SecretString::new(contents))
 }
 
@@ -322,7 +349,7 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SecretString, cleanup_stale_secret_directories_at};
+    use super::{SecretString, cleanup_stale_secret_directories_at, read_secret_file};
     use std::{
         fs,
         path::PathBuf,
@@ -335,6 +362,31 @@ mod tests {
         let debug = format!("{secret:?}");
         assert_eq!(debug, "SecretString(REDACTED)");
         assert!(!debug.contains("customer-password"));
+    }
+
+    #[test]
+    fn secret_file_reader_strips_one_terminal_line_ending() {
+        let path =
+            std::env::temp_dir().join(format!("mailswiftsync-secret-{}", uuid::Uuid::new_v4()));
+        super::write_secret_file(&path, "operator-secret\n").unwrap();
+        let secret = read_secret_file(&path).unwrap();
+        assert_eq!(secret.as_str(), "operator-secret");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_reader_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+        let suffix = uuid::Uuid::new_v4();
+        let target = std::env::temp_dir().join(format!("mailswiftsync-secret-target-{suffix}"));
+        let link = std::env::temp_dir().join(format!("mailswiftsync-secret-link-{suffix}"));
+        super::write_secret_file(&target, "operator-secret").unwrap();
+        symlink(&target, &link).unwrap();
+        let error = read_secret_file(&link).unwrap_err();
+        assert!(error.contains("secret file"));
+        fs::remove_file(link).unwrap();
+        fs::remove_file(target).unwrap();
     }
 
     #[cfg(unix)]
