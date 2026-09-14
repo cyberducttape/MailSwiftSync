@@ -24,6 +24,9 @@ All notable changes to MailSwiftSync are documented here.
   shell.
 - Hardened Markdown operator reports by escaping durable identifiers, states,
   timestamps, and plan-fence delimiters before rendering untrusted values.
+- Bound asynchronous IMAP capability observations to a request and plan
+  fingerprint, discarding results after endpoint, trust, auth, or other plan
+  edits instead of presenting stale readiness data.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

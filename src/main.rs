@@ -338,6 +338,23 @@ struct PendingSheetImport {
     sheets: Vec<String>,
 }
 
+struct CapabilityProbeResult {
+    request_id: String,
+    plan_fingerprint: String,
+    result: Result<(core::ServerCapabilities, core::ServerCapabilities), String>,
+}
+
+fn capability_probe_result_matches(
+    result: &CapabilityProbeResult,
+    expected_request_id: &str,
+    expected_plan_fingerprint: &str,
+    current_plan_fingerprint: &str,
+) -> bool {
+    result.request_id == expected_request_id
+        && result.plan_fingerprint == expected_plan_fingerprint
+        && result.plan_fingerprint == current_plan_fingerprint
+}
+
 use bulk_import::{BulkImportResult, BulkJob};
 
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
@@ -439,8 +456,9 @@ struct App {
     /// validation for each durable queue row. Restored queues start empty.
     bulk_preflight_credential_fingerprints: Vec<Option<String>>,
     preflight: Vec<(String, String, bool)>,
-    capability_receiver:
-        Option<Receiver<Result<(core::ServerCapabilities, core::ServerCapabilities), String>>>,
+    capability_receiver: Option<Receiver<CapabilityProbeResult>>,
+    capability_probe_request_id: Option<String>,
+    capability_probe_fingerprint: Option<String>,
     /// Fresh authentication completed immediately before an IMAPS live run.
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
@@ -856,6 +874,8 @@ impl App {
             bulk_preflight_credential_fingerprints: restored_bulk_preflight_credential_fingerprints,
             preflight: Vec::new(),
             capability_receiver: None,
+            capability_probe_request_id: None,
+            capability_probe_fingerprint: None,
             live_auth_receiver: None,
             live_auth_proof: None,
             source_capabilities: None,
@@ -976,6 +996,9 @@ impl App {
         self.workspace_read_only = editable_id.as_deref() != Some(project_id.as_str());
         self.selected_project_id = Some(project_id);
         self.active_view = WorkspaceView::Overview;
+        self.capability_receiver = None;
+        self.capability_probe_request_id = None;
+        self.capability_probe_fingerprint = None;
         // Selection changes must invalidate the throttled read-model refresh
         // immediately. Otherwise the header can render the new selection
         // while still holding the previous project's cached rows.
@@ -1011,6 +1034,9 @@ impl App {
         self.bulk_jobs.clear();
         self.mark_bulk_jobs_changed();
         self.preflight.clear();
+        self.capability_receiver = None;
+        self.capability_probe_request_id = None;
+        self.capability_probe_fingerprint = None;
         self.source_capabilities = None;
         self.destination_capabilities = None;
         self.live_auth_proof = None;
@@ -1092,6 +1118,10 @@ impl App {
         };
         let (tx, rx) = mpsc::channel();
         self.capability_receiver = Some(rx);
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
+        self.capability_probe_request_id = Some(request_id.clone());
+        self.capability_probe_fingerprint = Some(plan_fingerprint.clone());
         self.set_status(
             "Authenticating and inspecting IMAPS readiness…",
             StatusSeverity::Info,
@@ -1131,7 +1161,11 @@ impl App {
                 )
                 .map(|right| (left, right))
             });
-            let _ = tx.send(result);
+            let _ = tx.send(CapabilityProbeResult {
+                request_id,
+                plan_fingerprint,
+                result,
+            });
         });
     }
 
@@ -4332,6 +4366,20 @@ impl App {
     }
     fn poll(&mut self) {
         self.refresh_ui_snapshot();
+        if let Some(expected_fingerprint) = self.capability_probe_fingerprint.clone() {
+            let current_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
+            if current_fingerprint != expected_fingerprint {
+                self.capability_receiver = None;
+                self.capability_probe_request_id = None;
+                self.capability_probe_fingerprint = None;
+                self.source_capabilities = None;
+                self.destination_capabilities = None;
+                self.set_status(
+                    "Readiness observations expired because the migration plan changed; run discovery again.",
+                    StatusSeverity::Warning,
+                );
+            }
+        }
         if let Some(receiver) = &self.bulk_import_receiver
             && let Ok(result) = receiver.try_recv()
         {
@@ -4362,22 +4410,41 @@ impl App {
                 }
             }
         }
-        if let Some(receiver) = &self.capability_receiver
-            && let Ok(result) = receiver.try_recv()
-        {
-            match result {
-                Ok((source, destination)) => {
-                    self.source_capabilities = Some(source);
-                    self.destination_capabilities = Some(destination);
-                    self.set_status("Capability discovery complete", StatusSeverity::Success);
-                    self.assess_plan();
-                }
-                Err(error) => self.set_status(
-                    format!("Preflight discovery failed: {error}"),
-                    StatusSeverity::Error,
-                ),
-            }
+        let capability_result = self
+            .capability_receiver
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        if let Some(result) = capability_result {
+            let current_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
+            let matches = self
+                .capability_probe_request_id
+                .as_deref()
+                .zip(self.capability_probe_fingerprint.as_deref())
+                .is_some_and(|(request_id, fingerprint)| {
+                    capability_probe_result_matches(
+                        &result,
+                        request_id,
+                        fingerprint,
+                        &current_fingerprint,
+                    )
+                });
             self.capability_receiver = None;
+            self.capability_probe_request_id = None;
+            self.capability_probe_fingerprint = None;
+            if matches {
+                match result.result {
+                    Ok((source, destination)) => {
+                        self.source_capabilities = Some(source);
+                        self.destination_capabilities = Some(destination);
+                        self.set_status("Capability discovery complete", StatusSeverity::Success);
+                        self.assess_plan();
+                    }
+                    Err(error) => self.set_status(
+                        format!("Preflight discovery failed: {error}"),
+                        StatusSeverity::Error,
+                    ),
+                }
+            }
         }
         let mut done = None;
         let mut pending_db_events = std::mem::take(&mut self.pending_db_events);
@@ -6343,6 +6410,33 @@ mod tests {
         assert!(!contains_ascii_case_insensitive(value, "customer-10"));
         assert!(contains_ascii_case_insensitive(value, ""));
         assert_eq!(value, "Customer-09@Example.Test");
+    }
+
+    #[test]
+    fn capability_probe_results_are_bound_to_request_and_current_plan() {
+        let result = CapabilityProbeResult {
+            request_id: "request-a".into(),
+            plan_fingerprint: "plan-a".into(),
+            result: Err("not used".into()),
+        };
+        assert!(capability_probe_result_matches(
+            &result,
+            "request-a",
+            "plan-a",
+            "plan-a"
+        ));
+        assert!(!capability_probe_result_matches(
+            &result,
+            "request-b",
+            "plan-a",
+            "plan-a"
+        ));
+        assert!(!capability_probe_result_matches(
+            &result,
+            "request-a",
+            "plan-a",
+            "plan-b"
+        ));
     }
 
     #[test]
