@@ -18,4 +18,4 @@ pub(crate) use theme::contrast_ratio;
 #[cfg(test)]
 pub(crate) use theme::next_ui_scale;
 pub(crate) use theme::{AppearancePreferences, ThemeColors};
-pub(crate) use workspace::{WorkspaceSnapshotRefs, refresh_workspace_snapshot};
+pub(crate) use workspace::WorkspaceSnapshot;

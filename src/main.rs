@@ -101,10 +101,10 @@ use std::{ffi::OsString, path::PathBuf};
 use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
-    AppearancePreferences, ThemeColors, WorkspaceSnapshotRefs, display_job_state,
-    display_state_key, format_phase_name, job_state_badge, needs_operator_review,
-    password_visibility_id, project_health_state_counts, recommended_next_action,
-    refresh_workspace_snapshot, render_account, status_color, workflow_step_index,
+    AppearancePreferences, ThemeColors, WorkspaceSnapshot, display_job_state, display_state_key,
+    format_phase_name, job_state_badge, needs_operator_review, password_visibility_id,
+    project_health_state_counts, recommended_next_action, render_account, status_color,
+    workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -567,13 +567,7 @@ struct App {
     reopen_reason: String,
     /// Database-backed UI read model. Rendering consumes this cache instead
     /// of issuing SQLite queries on every egui repaint.
-    ui_projects: Vec<core::ProjectListItem>,
-    ui_runs: Vec<core::RunListItem>,
-    ui_report: Option<core::ProjectReportSnapshot>,
-    ui_project: Option<core::Project>,
-    ui_jobs: Vec<core::MailboxJob>,
-    ui_snapshot_project_id: Option<String>,
-    ui_snapshot_refreshed_at: Option<std::time::Instant>,
+    ui_snapshot: WorkspaceSnapshot,
 }
 impl Default for App {
     fn default() -> Self {
@@ -974,13 +968,7 @@ impl App {
             activity_search: String::new(),
             activity_status_filter: "all".into(),
             reopen_reason: String::new(),
-            ui_projects: Vec::new(),
-            ui_runs: Vec::new(),
-            ui_report: None,
-            ui_project: None,
-            ui_jobs: Vec::new(),
-            ui_snapshot_project_id: None,
-            ui_snapshot_refreshed_at: None,
+            ui_snapshot: WorkspaceSnapshot::default(),
         }
     }
 }
@@ -1042,7 +1030,8 @@ impl App {
     }
 
     fn cached_report_mailbox(&self, job_id: &str) -> Option<&core::ReportMailboxSnapshot> {
-        self.ui_report
+        self.ui_snapshot
+            .report
             .as_ref()?
             .mailboxes
             .iter()
@@ -1054,24 +1043,15 @@ impl App {
     /// those repaints must not turn into repeated SQLite reads.
     fn refresh_ui_snapshot(&mut self) {
         let project_id = self.active_project_id().map(str::to_owned);
-        refresh_workspace_snapshot(
+        self.ui_snapshot.refresh(
             &self.store,
             project_id.as_deref(),
             self.ui_all_projects_loaded,
-            WorkspaceSnapshotRefs {
-                refreshed_at: &mut self.ui_snapshot_refreshed_at,
-                snapshot_project_id: &mut self.ui_snapshot_project_id,
-                projects: &mut self.ui_projects,
-                runs: &mut self.ui_runs,
-                report: &mut self.ui_report,
-                project: &mut self.ui_project,
-                jobs: &mut self.ui_jobs,
-            },
         );
     }
 
     fn refresh_ui_snapshot_now(&mut self) {
-        self.ui_snapshot_refreshed_at = None;
+        self.ui_snapshot.invalidate();
         self.refresh_ui_snapshot();
     }
 
@@ -1489,7 +1469,7 @@ impl App {
                 ui.add_space(8.0);
                 let search = self.project_search.trim();
                 {
-                    let projects = self.ui_projects.clone();
+                    let projects = self.ui_snapshot.projects.clone();
                         let visible = projects.into_iter().filter(|project| {
                             search.is_empty()
                                 || contains_ascii_case_insensitive(&project.name, search)
@@ -1627,7 +1607,8 @@ impl App {
         let current = match self.active_project_id() {
             None => core::Phase::Discovery,
             Some(_) => self
-                .ui_project
+                .ui_snapshot
+                .project
                 .as_ref()
                 .map(|project| project.phase)
                 .unwrap_or(core::Phase::Discovery),
@@ -1807,7 +1788,8 @@ impl App {
             }
         });
         if let Some(project) = self
-            .ui_project
+            .ui_snapshot
+            .project
             .as_ref()
             .filter(|project| project.phase == core::Phase::Complete)
         {
@@ -1846,12 +1828,12 @@ impl App {
                 .color(self.theme_colors().text_secondary),
         );
         ui.add_space(16.0);
-        let project = self.ui_project.clone();
+        let project = self.ui_snapshot.project.clone();
         let phase = project
             .as_ref()
             .map(|value| value.phase)
             .unwrap_or(core::Phase::Discovery);
-        let durable_jobs = self.ui_jobs.clone();
+        let durable_jobs = self.ui_snapshot.jobs.clone();
         let attention_count = durable_jobs
             .iter()
             .filter(|job| needs_operator_review(&job.state))
@@ -2083,11 +2065,11 @@ impl App {
         ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         if self.workspace_read_only {
-            if self.active_project_id().is_none() || self.ui_project.is_none() {
+            if self.active_project_id().is_none() || self.ui_snapshot.project.is_none() {
                 ui.label("No historical project is selected.");
                 return;
             }
-            let jobs = self.ui_jobs.clone();
+            let jobs = self.ui_snapshot.jobs.clone();
             ui.label(
                 RichText::new(format!(
                     "{} durable mailbox record(s) · read-only",
@@ -2483,7 +2465,7 @@ impl App {
         if !self.workspace_read_only
             && let Some(job) = self.job_id.as_deref()
         {
-            let state = self.ui_report.as_ref().and_then(|report| {
+            let state = self.ui_snapshot.report.as_ref().and_then(|report| {
                 report
                     .mailboxes
                     .iter()
@@ -2600,7 +2582,8 @@ impl App {
                 });
         });
         let runs = self
-            .ui_runs
+            .ui_snapshot
+            .runs
             .iter()
             .take(run_limit as usize)
             .cloned()
@@ -3132,7 +3115,7 @@ impl App {
             }
             let selected_project = self.active_project_id().map(str::to_owned);
             if selected_project.is_some() {
-                match self.ui_report.clone() {
+                match self.ui_snapshot.report.clone() {
                     Some(snapshot) => {
                         let verified = snapshot
                             .mailboxes
@@ -3238,7 +3221,7 @@ impl App {
                 .as_deref()
                 .and_then(|job_id| self.cached_report_mailbox(job_id))
                 .filter(|_| {
-                    self.ui_report.as_ref().is_some_and(|report| {
+                    self.ui_snapshot.report.as_ref().is_some_and(|report| {
                         selected_project.as_deref() == Some(report.project.id.as_str())
                     })
                 })
@@ -6591,7 +6574,7 @@ impl eframe::App for App {
                     // The full project browser is available from the header,
                     // so the switcher must not silently hide older projects
                     // once the ledger grows beyond the first page.
-                    let projects = self.ui_projects.clone();
+                    let projects = self.ui_snapshot.projects.clone();
                     if !projects.is_empty() || self.selected_project_id.is_some() {
                         let selected_name = self
                             .selected_project_id
@@ -6599,7 +6582,7 @@ impl eframe::App for App {
                             .and_then(|id| projects.iter().find(|project| project.id == id))
                             .map(|project| project.name.clone())
                             .or_else(|| {
-                                self.ui_project.as_ref().and_then(|project| {
+                                self.ui_snapshot.project.as_ref().and_then(|project| {
                                     self.selected_project_id
                                         .as_deref()
                                         .filter(|id| *id == project.id)

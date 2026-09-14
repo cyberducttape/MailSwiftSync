@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Consolidated the database-backed UI read model into an owned `WorkspaceSnapshot`, reducing `App` state surface and making snapshot-only rendering an explicit boundary.
 - Added a structural compatibility-matrix release gate and run it in CI and tagged-release verification, requiring a reviewable data row with all provider, engine, execution, recovery, and evidence columns populated without overstating support.
 - Moved single-mailbox durable identity admission into the controller admission module so GUI and headless execution share one project/mailbox identity check.
 - Extracted the cached workspace read-model refresh into `ui::workspace`, keeping database-backed presentation loading behind one throttled UI boundary while preserving live action-time storage checks.
