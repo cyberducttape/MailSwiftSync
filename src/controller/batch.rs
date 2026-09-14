@@ -162,6 +162,8 @@ pub(crate) fn suggested_batch_project_name(profile: &Profile) -> String {
 pub(crate) struct BulkQueueSummary {
     pub(crate) total: usize,
     pub(crate) imported: usize,
+    pub(crate) queued: usize,
+    pub(crate) preflight: usize,
     pub(crate) ready: usize,
     pub(crate) running: usize,
     pub(crate) verified: usize,
@@ -184,6 +186,8 @@ impl BulkQueueSummary {
                 continue;
             }
             match core::MailboxState::parse_ascii_case_insensitive(&job.state) {
+                Some(core::MailboxState::Queued) => summary.queued += 1,
+                Some(core::MailboxState::Preflight) => summary.preflight += 1,
                 Some(core::MailboxState::Ready) => summary.ready += 1,
                 Some(core::MailboxState::Running) => summary.running += 1,
                 Some(state) if state.is_verified() => summary.verified += 1,
@@ -273,6 +277,8 @@ mod tests {
             BulkQueueSummary {
                 total: 10,
                 imported: 1,
+                queued: 0,
+                preflight: 0,
                 ready: 1,
                 running: 1,
                 verified: 2,
