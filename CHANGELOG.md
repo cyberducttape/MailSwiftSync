@@ -26,6 +26,8 @@ All notable changes to MailSwiftSync are documented here.
   `v4.6.0` commit, closing the workflow supply-chain pinning gap.
 - Fixed headless supervision to identify imported batches from durable mailbox
   configuration instead of obsolete literal `batch` endpoint values.
+- Added headless status regression coverage for distinguishing ordinary
+  projects from configured batch projects.
 - Windows CI now uses the pinned Visual Studio x64 developer-environment
   action before MSVC builds and native tests, ensuring Rust dependencies can
   locate the required `lib.exe` tool across runner image layouts.
