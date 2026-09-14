@@ -4,6 +4,16 @@ use super::run::ActiveRunContext;
 use crate::core;
 use std::{collections::HashSet, sync::mpsc};
 
+/// A structured durable event waiting for the next controller commit. Named
+/// fields make the project/run/detail relationship explicit while poll()
+/// batches events around terminal state transitions.
+#[derive(Clone, Debug)]
+pub(crate) struct PendingDbEvent {
+    pub(crate) run_id: String,
+    pub(crate) kind: String,
+    pub(crate) detail: String,
+}
+
 /// Presentation output is accepted only from the currently owned process
 /// and only until that process has emitted its terminal event.
 pub(crate) fn run_line_is_current(

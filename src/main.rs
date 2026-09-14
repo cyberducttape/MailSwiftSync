@@ -43,13 +43,13 @@ use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BatchLaunchRequest, BatchStartContext,
     BatchStartDecision, BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet,
-    CapabilityProbeResult, LiveAuthProof, RunKind, SingleRunAdmission, SingleRunWorkerSpec,
-    SingleStartContext, SingleStartDecision, admit_batch_launch, admit_single_run, assess_plan,
-    batch_mailbox_state, batch_start_decision, capability_observation_matches,
-    capability_probe_result_matches, decode_persisted_batch_profile,
-    durable_single_identity_matches, finish_batch_child, is_verified_terminal_state,
-    process_event_is_current, run_line_is_current, single_start_decision, spawn_batch_worker,
-    spawn_single_run_worker,
+    CapabilityProbeResult, LiveAuthProof, PendingDbEvent, RunKind, SingleRunAdmission,
+    SingleRunWorkerSpec, SingleStartContext, SingleStartDecision, admit_batch_launch,
+    admit_single_run, assess_plan, batch_mailbox_state, batch_start_decision,
+    capability_observation_matches, capability_probe_result_matches,
+    decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
+    is_verified_terminal_state, process_event_is_current, run_line_is_current,
+    single_start_decision, spawn_batch_worker, spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -153,8 +153,6 @@ const MIN_UI_SCALE: f32 = 0.90;
 const MAX_UI_SCALE: f32 = 1.50;
 
 use bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
-
-type PendingDbEvent = (String, String, String, String);
 
 struct App {
     form: Form,
@@ -3813,8 +3811,12 @@ impl App {
                         if !pending_db_events.is_empty() {
                             let batch = pending_db_events
                                 .iter()
-                                .map(|(_, run_id, kind, detail)| {
-                                    (run_id.as_str(), kind.as_str(), detail.as_str())
+                                .map(|event| {
+                                    (
+                                        event.run_id.as_str(),
+                                        event.kind.as_str(),
+                                        event.detail.as_str(),
+                                    )
                                 })
                                 .collect::<Vec<_>>();
                             match self.store.record_events_for_runs_batch(&batch) {
@@ -3966,31 +3968,29 @@ impl App {
                         // evidence-backed running -> verified transition
                         // without weakening ordinary state transitions.
                         self.pending_evidence = Some(evidence);
-                        if let Some(project) =
+                        if let Some(_project) =
                             active_run.as_ref().map(|run| run.project_id.as_str())
                             && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
-                            pending_db_events.push((
-                                project.to_owned(),
-                                run_id.to_owned(),
-                                "verification_evidence".into(),
-                                format!("evidence level: {evidence_level}"),
-                            ));
+                            pending_db_events.push(PendingDbEvent {
+                                run_id: run_id.to_owned(),
+                                kind: "verification_evidence".into(),
+                                detail: format!("evidence level: {evidence_level}"),
+                            });
                         }
                     }
                     Event::VerificationFailed(detail) => {
                         let safe = self.redact_output(&detail);
                         push_visible_output(&mut self.output, format!("[verification] {safe}"));
-                        if let Some(project) =
+                        if let Some(_project) =
                             active_run.as_ref().map(|run| run.project_id.as_str())
                             && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
-                            pending_db_events.push((
-                                project.to_owned(),
-                                run_id.to_owned(),
-                                "verification_pending".into(),
-                                safe,
-                            ));
+                            pending_db_events.push(PendingDbEvent {
+                                run_id: run_id.to_owned(),
+                                kind: "verification_pending".into(),
+                                detail: safe,
+                            });
                         }
                     }
                     Event::Finished(r) => done = Some(r),
@@ -4003,7 +4003,13 @@ impl App {
         if !pending_db_events.is_empty() {
             let batch = pending_db_events
                 .iter()
-                .map(|(_, run_id, kind, detail)| (run_id.as_str(), kind.as_str(), detail.as_str()))
+                .map(|event| {
+                    (
+                        event.run_id.as_str(),
+                        event.kind.as_str(),
+                        event.detail.as_str(),
+                    )
+                })
                 .collect::<Vec<_>>();
             let result = active_run.as_ref().map_or_else(
                 || Err(rusqlite::Error::InvalidQuery),

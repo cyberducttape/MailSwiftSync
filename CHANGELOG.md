@@ -82,6 +82,8 @@ All notable changes to MailSwiftSync are documented here.
   bulk-import and UI modules, reducing workflow declarations in `main.rs`.
 - Moved process-registration timeout and output-observer types into
   `runner.rs`, keeping child-supervision policy with execution code.
+- Replaced the poller’s positional pending-event tuples with named durable
+  event records, making run/event ownership explicit during commit batching.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
