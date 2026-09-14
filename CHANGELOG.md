@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- The primary Mailboxes workspace now surfaces queue-health totals and
+  unresolved work alongside its filters, making large-batch readiness visible
+  before operators select an action.
 - The Verification workspace now disables customer-proof export until the
   durable project is complete, all mailboxes are verified, and the cached state
   view is current, matching the existing proof-readiness explanation.

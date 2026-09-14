@@ -43,6 +43,29 @@ impl App {
                     self.bulk_open = true;
                 }
             });
+            let summary = self.bulk_queue_summary();
+            ui.group(|ui| {
+                ui.label(RichText::new("QUEUE HEALTH").strong().size(11.0));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("{} ready", summary.ready));
+                    ui.label(format!("{} running", summary.running));
+                    ui.label(format!("{} verified", summary.verified));
+                    if summary.attention > 0 {
+                        ui.label(RichText::new(format!("{} attention", summary.attention)).color(colors.warning));
+                    }
+                    if summary.failed > 0 {
+                        ui.label(RichText::new(format!("{} failed", summary.failed)).color(colors.danger));
+                    }
+                    if summary.delta_required > 0 {
+                        ui.label(format!("{} delta required", summary.delta_required));
+                    }
+                    let unresolved = summary.unresolved();
+                    ui.label(RichText::new(format!("{} unresolved", unresolved)).color(
+                        if unresolved == 0 { colors.success } else { colors.danger },
+                    ));
+                });
+                ui.label(RichText::new("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.").size(11.0).color(colors.text_secondary));
+            });
             ui.horizontal_wrapped(|ui| {
                 ui.label("Search");
                 ui.add(
