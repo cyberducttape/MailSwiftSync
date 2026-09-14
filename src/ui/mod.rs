@@ -2,6 +2,7 @@
 
 mod account;
 mod activity;
+mod app_state;
 mod batch;
 mod engine;
 mod output;

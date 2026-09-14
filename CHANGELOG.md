@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved application-state helpers for status reporting, theme selection,
+  workspace snapshot refresh, project selection, provider presets, and
+  credential-load markers into `ui/app_state.rs`, reducing composition-root
+  responsibilities in `main.rs`.
 - Extracted destination-identity normalization, Dovecot checkpoint validation,
   attention classification, and phase/mailbox transition policy into
   `core/policy.rs`, centralizing cross-cutting durable invariants.
