@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved batch launch orchestration out of the egui batch view into
+  `controller/batch_start.rs`, keeping admission, durable ownership, worker
+  startup, and run-state locking in the controller layer.
 - Fixed imapsync verification for the packaged engine's documented human-readable
   byte-size suffix, so valid `Total size: ... bytes (...)` summaries no longer
   become operator-attention states.

@@ -3,6 +3,7 @@
 mod batch;
 pub(crate) mod batch_admission;
 mod batch_completion;
+mod batch_start;
 mod batch_work_item;
 mod batch_worker;
 mod events;
