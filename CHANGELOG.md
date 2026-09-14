@@ -24,6 +24,8 @@ All notable changes to MailSwiftSync are documented here.
   panicking if a future status-model change becomes non-serializable.
 - Pinned CI artifact uploads to the reviewed `actions/upload-artifact`
   `v4.6.0` commit, closing the workflow supply-chain pinning gap.
+- Fixed headless supervision to identify imported batches from durable mailbox
+  configuration instead of obsolete literal `batch` endpoint values.
 - Windows CI now uses the pinned Visual Studio x64 developer-environment
   action before MSVC builds and native tests, ensuring Rust dependencies can
   locate the required `lib.exe` tool across runner image layouts.

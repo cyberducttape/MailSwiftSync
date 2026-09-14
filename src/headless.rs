@@ -21,6 +21,7 @@ pub(crate) struct HeadlessStatus {
 pub(crate) struct HeadlessProjectStatus {
     pub(crate) id: String,
     pub(crate) name: String,
+    pub(crate) batch: bool,
     pub(crate) source_endpoint: String,
     pub(crate) destination_endpoint: String,
     pub(crate) phase: String,
@@ -47,6 +48,7 @@ pub(crate) struct HeadlessStatusSummary {
 pub(crate) struct HeadlessProjectSummary {
     pub(crate) id: String,
     pub(crate) name: String,
+    pub(crate) batch: bool,
     pub(crate) source_endpoint: String,
     pub(crate) destination_endpoint: String,
     pub(crate) phase: String,
@@ -202,6 +204,9 @@ pub(crate) fn headless_status(
     };
     let mut result = Vec::with_capacity(projects.len());
     for project in projects {
+        let batch = store
+            .project_has_mailbox_configs(&project.id)
+            .map_err(|error| error.to_string())?;
         let attention_reasons = store
             .mailbox_attention_reasons(&project.id)
             .map_err(|error| error.to_string())?;
@@ -223,6 +228,7 @@ pub(crate) fn headless_status(
         result.push(HeadlessProjectStatus {
             id: project.id,
             name: project.name,
+            batch,
             source_endpoint: project.source_endpoint,
             destination_endpoint: project.destination_endpoint,
             phase: project.phase.as_str().to_owned(),
@@ -269,12 +275,16 @@ pub(crate) fn headless_status_summary(
     };
     let mut summaries = Vec::with_capacity(projects.len());
     for project in projects {
+        let batch = store
+            .project_has_mailbox_configs(&project.id)
+            .map_err(|error| error.to_string())?;
         let mailbox_state_counts = store
             .mailbox_state_counts(&project.id)
             .map_err(|error| error.to_string())?;
         summaries.push(HeadlessProjectSummary {
             id: project.id,
             name: project.name,
+            batch,
             source_endpoint: project.source_endpoint,
             destination_endpoint: project.destination_endpoint,
             phase: project.phase.as_str().to_owned(),
@@ -575,9 +585,7 @@ pub(crate) fn headless_supervise(
         let actionable = status
             .projects
             .iter()
-            .filter(|project| {
-                project.source_endpoint == "batch" && project.destination_endpoint == "batch"
-            })
+            .filter(|project| project.batch)
             .flat_map(|project| project.mailboxes.iter())
             .any(|mailbox| {
                 BulkRetryScope::Automation.includes_automation(
