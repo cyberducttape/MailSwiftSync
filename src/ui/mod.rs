@@ -12,6 +12,6 @@ pub(crate) use status::{
     job_state_badge, needs_operator_review, project_health_state_counts, recommended_next_action,
     status_color, workflow_step_index,
 };
-pub(crate) use theme::ThemeColors;
 #[cfg(test)]
 pub(crate) use theme::contrast_ratio;
+pub(crate) use theme::{AppearancePreferences, ThemeColors};

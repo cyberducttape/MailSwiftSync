@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved persisted appearance preferences into the UI theme module so
+  application startup retains only workspace and execution state.
 - Moved proof digests, canonical signed-payload handling, and hexadecimal
   artifact encoding into `reports::integrity`; plan fingerprint digesting now
   lives in `plan_identity` rather than the application composition root.

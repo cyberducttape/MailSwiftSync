@@ -68,3 +68,56 @@ pub(crate) fn contrast_ratio(foreground: Color32, background: Color32) -> f32 {
     let background = luminance(background);
     (foreground.max(background) + 0.05) / (foreground.min(background) + 0.05)
 }
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct AppearancePreferences {
+    pub(crate) dark_mode: bool,
+    pub(crate) ui_scale: f32,
+}
+
+impl Default for AppearancePreferences {
+    fn default() -> Self {
+        Self {
+            dark_mode: true,
+            ui_scale: crate::DEFAULT_UI_SCALE,
+        }
+    }
+}
+
+impl AppearancePreferences {
+    pub(crate) fn path() -> PathBuf {
+        dirs_next::config_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("mailswiftsync/appearance.toml")
+    }
+
+    pub(crate) fn load() -> Self {
+        let preferences = std::fs::read_to_string(Self::path())
+            .ok()
+            .and_then(|text| toml::from_str::<Self>(&text).ok())
+            .unwrap_or_default();
+        let ui_scale = if preferences.ui_scale.is_finite() {
+            preferences
+                .ui_scale
+                .clamp(crate::MIN_UI_SCALE, crate::MAX_UI_SCALE)
+        } else {
+            crate::DEFAULT_UI_SCALE
+        };
+        Self {
+            dark_mode: preferences.dark_mode,
+            ui_scale,
+        }
+    }
+
+    pub(crate) fn save(&self) -> Result<(), String> {
+        let path = Self::path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            crate::restrict_directory_permissions(parent).map_err(|error| error.to_string())?;
+        }
+        let content = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
+        crate::write_private_atomic(&path, &content).map_err(|error| error.to_string())
+    }
+}

@@ -92,12 +92,12 @@ use std::{
     thread,
     time::Duration,
 };
-use ui::{StatusMessage, StatusSeverity};
 use ui::{
-    ThemeColors, display_job_state, display_state_key, format_phase_name, job_state_badge,
-    needs_operator_review, password_visibility_id, project_health_state_counts,
+    AppearancePreferences, ThemeColors, display_job_state, display_state_key, format_phase_name,
+    job_state_badge, needs_operator_review, password_visibility_id, project_health_state_counts,
     recommended_next_action, render_account, status_color, workflow_step_index,
 };
+use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
 use ui::{contrast_ratio, password_reveal_allowed};
 
@@ -124,55 +124,6 @@ const MIN_UI_SCALE: f32 = 0.90;
 const MAX_UI_SCALE: f32 = 1.50;
 
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct AppearancePreferences {
-    dark_mode: bool,
-    ui_scale: f32,
-}
-
-impl Default for AppearancePreferences {
-    fn default() -> Self {
-        Self {
-            dark_mode: true,
-            ui_scale: DEFAULT_UI_SCALE,
-        }
-    }
-}
-
-impl AppearancePreferences {
-    fn path() -> PathBuf {
-        dirs_next::config_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("mailswiftsync/appearance.toml")
-    }
-
-    fn load() -> Self {
-        let preferences = std::fs::read_to_string(Self::path())
-            .ok()
-            .and_then(|text| toml::from_str::<Self>(&text).ok())
-            .unwrap_or_default();
-        let ui_scale = if preferences.ui_scale.is_finite() {
-            preferences.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE)
-        } else {
-            DEFAULT_UI_SCALE
-        };
-        Self {
-            dark_mode: preferences.dark_mode,
-            ui_scale,
-        }
-    }
-
-    fn save(&self) -> Result<(), String> {
-        let path = Self::path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            restrict_directory_permissions(parent).map_err(|error| error.to_string())?;
-        }
-        let content = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
-        write_private_atomic(&path, &content).map_err(|error| error.to_string())
-    }
-}
 
 /// The durable run snapshot deliberately does not serialize `Profile`.
 /// Operator-supplied extra options are retained only as a digest so a
