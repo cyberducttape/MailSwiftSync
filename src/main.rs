@@ -2122,17 +2122,14 @@ impl App {
                 }
             });
             if run_preflight {
-                self.form.dry_run = true;
                 self.bulk_mode = BatchExecutionMode::Preflight;
                 self.bulk_retry_scope = BulkRetryScope::All;
                 self.start_bulk();
             } else if run_live {
-                self.form.dry_run = false;
                 self.bulk_mode = BatchExecutionMode::Live;
                 self.bulk_retry_scope = BulkRetryScope::All;
                 self.start_bulk();
             } else if run_delta {
-                self.form.dry_run = false;
                 self.bulk_mode = BatchExecutionMode::Live;
                 self.bulk_retry_scope = BulkRetryScope::DeltaRequired;
                 self.start_bulk();
