@@ -4,6 +4,18 @@ All notable changes to MailSwiftSync are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Automatic OAuth 2.0 access-token refresh for the imapsync XOAUTH2 path. An
+  operator who has registered their own OAuth application and obtained a
+  refresh token can store the token endpoint, client ID/secret, and refresh
+  token under an OS-keyring ID (in the OS keyring dialog's new "Automatic
+  OAuth refresh" section); MailSwiftSync then exchanges it for a fresh access
+  token before each live launch, including each mailbox in a batch queue,
+  and persists refresh-token rotation. This does not add a provider consent
+  flow; the operator still obtains the initial refresh token through the
+  provider's own tooling.
+
 ### Changed
 
 - The application state struct (`App`) moved from `main.rs` into
