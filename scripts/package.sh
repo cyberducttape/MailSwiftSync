@@ -16,11 +16,9 @@ cleanup() {
 trap cleanup EXIT
 
 cp target/release/mailswiftsync "$package_dir/mailswiftsync"
-mkdir -p "$package_dir/docs/distribution" "$package_dir/docs/wiki"
+mkdir -p "$package_dir/docs"
 cp README.md LICENSE "$package_dir/"
-cp docs/distribution/INSTALL.md docs/distribution/SERVICE.md "$package_dir/docs/distribution/"
-cp docs/container.md docs/release-readiness.md "$package_dir/docs/"
-cp docs/wiki/Install-and-first-launch.md "$package_dir/docs/wiki/"
+cp -R docs/. "$package_dir/docs/"
 chmod 0755 "$package_dir/mailswiftsync"
 archive="dist/${target_name}.tar.gz"
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then

@@ -60,11 +60,9 @@ jobs:
           mkdir -p dist
           mkdir -p bundle
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}
-          mkdir -p bundle/docs/distribution bundle/docs/wiki
+          mkdir -p bundle/docs
           cp README.md LICENSE bundle/
-          cp docs/distribution/INSTALL.md docs/distribution/SERVICE.md bundle/docs/distribution/
-          cp docs/container.md docs/release-readiness.md bundle/docs/
-          cp docs/wiki/Install-and-first-launch.md bundle/docs/wiki/
+          cp -R docs/. bundle/docs/
           chmod 0755 bundle/mailswiftsync-${{ matrix.target }}
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
           tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -C bundle -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz .
@@ -76,11 +74,9 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           New-Item -ItemType Directory -Force bundle | Out-Null
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}.exe
-          New-Item -ItemType Directory -Force bundle/docs/distribution,bundle/docs/wiki | Out-Null
+          New-Item -ItemType Directory -Force bundle/docs | Out-Null
           Copy-Item README.md,LICENSE bundle/
-          Copy-Item docs/distribution/INSTALL.md,docs/distribution/SERVICE.md bundle/docs/distribution/
-          Copy-Item docs/container.md,docs/release-readiness.md bundle/docs/
-          Copy-Item docs/wiki/Install-and-first-launch.md bundle/docs/wiki/
+          Copy-Item docs/* bundle/docs/ -Recurse -Force
           Compress-Archive -Path bundle/* -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
           (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
       - name: Attest release artifacts
