@@ -40,11 +40,11 @@ use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BatchStartContext, BatchStartDecision,
     BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, LiveAuthProof,
-    RunKind, SingleRunWorkerSpec, admit_batch_run, assess_plan, batch_mailbox_state,
-    batch_run_status, batch_start_decision, durable_batch_profile_config,
-    durable_single_identity_matches, is_verified_terminal_state, prepare_batch_project,
-    prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices, spawn_batch_worker,
-    spawn_single_run_worker, suggested_batch_project_name,
+    RunKind, SingleRunAdmission, SingleRunWorkerSpec, admit_batch_run, admit_single_run,
+    assess_plan, batch_mailbox_state, batch_run_status, batch_start_decision,
+    durable_batch_profile_config, durable_single_identity_matches, is_verified_terminal_state,
+    prepare_batch_project, prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices,
+    spawn_batch_worker, spawn_single_run_worker, suggested_batch_project_name,
 };
 #[cfg(test)]
 use credentials::CleanupGuard;
@@ -3736,40 +3736,33 @@ impl App {
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
         let run_id = uuid::Uuid::new_v4().to_string();
-        if let Err(error) = self.store.begin_run_with_snapshot(
-            &run_project_id,
-            &run_job_id,
-            &run_id,
-            run_engine.label(),
-            &plan_snapshot,
+        let active_run = match admit_single_run(
+            &self.store,
+            SingleRunAdmission {
+                project_id: run_project_id,
+                job_id: run_job_id.clone(),
+                run_id: run_id.clone(),
+                engine: run_engine,
+                dry_run: run_dry_run,
+                plan_fingerprint,
+                credential_fingerprint,
+                plan_snapshot,
+            },
         ) {
-            cleanup_paths(&cleanup);
-            self.set_status(
-                format!("Could not record durable run; nothing was started: {error}"),
-                StatusSeverity::Error,
-            );
-            return;
-        }
+            Ok(context) => context,
+            Err(error) => {
+                cleanup_paths(&cleanup);
+                self.set_status(error, StatusSeverity::Error);
+                return;
+            }
+        };
         self.locked_profile = Some(self.form.profile.clone());
         self.live_auth_proof = None;
         self.live_confirmed = false;
         self.live_confirmation_plan = None;
         self.pending_checkpoint = None;
         self.run_id = Some(run_id.clone());
-        self.active_run = Some(ActiveRunContext {
-            run_id: run_id.clone(),
-            project_id: run_project_id,
-            job_id: Some(run_job_id.clone()),
-            batch_job_ids: Vec::new(),
-            batch_child_run_ids: Vec::new(),
-            batch_child_indices: HashMap::new(),
-            batch_plan_fingerprints: Vec::new(),
-            kind: RunKind::Single,
-            dry_run: run_dry_run,
-            engine: run_engine,
-            plan_fingerprint,
-            credential_fingerprint,
-        });
+        self.active_run = Some(active_run);
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_requested = Some(cancel.clone());

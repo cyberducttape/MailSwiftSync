@@ -7,6 +7,7 @@ pub(crate) mod failure;
 mod orchestrator;
 mod preflight;
 mod run;
+mod single_admission;
 
 pub(crate) use batch::{
     BatchExecutionMode, BatchStartContext, BatchStartDecision, BulkConfirmationSummary,
@@ -22,3 +23,4 @@ pub(crate) use batch_worker::spawn_batch_worker;
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use preflight::assess_plan;
 pub(crate) use run::{ActiveRunContext, LiveAuthProof, RunKind};
+pub(crate) use single_admission::{SingleRunAdmission, admit_single_run};

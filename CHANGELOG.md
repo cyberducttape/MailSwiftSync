@@ -29,6 +29,10 @@ All notable changes to MailSwiftSync are documented here.
   module. Stale durable state, profile/read-only/process-review blocks, live
   confirmation, and storage availability now share a tested ordering contract
   before the GUI opens dialogs or launches work.
+- Moved single-run durable admission and active ownership-context construction
+  into `controller::admit_single_run`, aligning single-mailbox startup with
+  the batch controller boundary and reducing state-machine assembly in
+  `main.rs`.
 - Extracted typed batch-start safety decisions into the controller policy
   module. Stale durable state, profile/read-only/process-review blocks, live
   confirmation, and storage availability now share a tested ordering contract
