@@ -10,6 +10,15 @@ use std::time::{Duration, Instant};
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const MAILBOX_PAGE_SIZE: u32 = 200;
 
+pub(crate) struct WorkspaceRefreshOptions<'a> {
+    pub(crate) active_project_id: Option<&'a str>,
+    pub(crate) all_projects_loaded: bool,
+    pub(crate) mailbox_offset: u32,
+    pub(crate) verification_offset: u32,
+    pub(crate) load_report: bool,
+    pub(crate) load_runs: bool,
+}
+
 /// Rebuild the project-browser index without cloning project rows. Keeping
 /// this policy beside the workspace read model gives the UI a stable, tested
 /// searchable view over durable project metadata.
@@ -53,6 +62,9 @@ pub(crate) struct WorkspaceSnapshot {
     pub(crate) mailbox_counts: core::MailboxStateCounts,
     snapshot_project_id: Option<String>,
     durable_revision: Option<i64>,
+    project_revision: Option<i64>,
+    mailbox_offset: Option<u32>,
+    runs_revision: Option<i64>,
     refreshed_at: Option<Instant>,
     last_successful_refresh: Option<Instant>,
     refresh_error: Option<String>,
@@ -65,6 +77,9 @@ impl WorkspaceSnapshot {
         self.verification_loaded = false;
         self.verification_offset = 0;
         self.durable_revision = None;
+        self.project_revision = None;
+        self.mailbox_offset = None;
+        self.runs_revision = None;
     }
 
     pub(crate) fn stale_notice(&self) -> Option<String> {
@@ -80,19 +95,13 @@ impl WorkspaceSnapshot {
 
     /// Refresh the UI's durable read model when it is stale or the selected
     /// project changed. Rendering itself never calls SQLite.
-    pub(crate) fn refresh(
-        &mut self,
-        store: &StateStore,
-        active_project_id: Option<&str>,
-        all_projects_loaded: bool,
-        mailbox_offset: u32,
-        verification_offset: u32,
-        load_report: bool,
-    ) {
-        let project_id = active_project_id.map(str::to_owned);
+    pub(crate) fn refresh(&mut self, store: &StateStore, options: WorkspaceRefreshOptions<'_>) {
+        let project_id = options.active_project_id.map(str::to_owned);
         let project_changed = project_id.as_deref() != self.snapshot_project_id.as_deref();
-        let report_needs_load = load_report
-            && (!self.verification_loaded || self.verification_offset != verification_offset);
+        let report_needs_load = options.load_report
+            && (!self.verification_loaded
+                || self.verification_offset != options.verification_offset);
+        let runs_need_load = options.load_runs && self.runs_revision != self.project_revision;
         if !project_changed
             && !report_needs_load
             && self
@@ -111,16 +120,32 @@ impl WorkspaceSnapshot {
                 None
             }
         };
+        let observed_project_revision =
+            project_id
+                .as_deref()
+                .and_then(|id| match store.project_read_model_revision(id) {
+                    Ok(revision) => Some(revision),
+                    Err(error) => {
+                        refresh_errors.push(format!("project read-model revision: {error}"));
+                        None
+                    }
+                });
         if !project_changed
             && !report_needs_load
+            && !runs_need_load
             && observed_revision.is_some()
             && observed_revision == self.durable_revision
+            && observed_project_revision == self.project_revision
         {
             self.refresh_error = None;
             self.last_successful_refresh = Some(Instant::now());
             return;
         }
-        let project_limit = if all_projects_loaded { usize::MAX } else { 500 };
+        let project_limit = if options.all_projects_loaded {
+            usize::MAX
+        } else {
+            500
+        };
         match store.recent_projects(project_limit) {
             Ok(value) => {
                 if self.projects != value {
@@ -137,6 +162,7 @@ impl WorkspaceSnapshot {
             self.verification_loaded = false;
             self.verification_offset = 0;
             self.runs.clear();
+            self.runs_revision = None;
             self.project = None;
             self.jobs.clear();
         }
@@ -152,48 +178,67 @@ impl WorkspaceSnapshot {
             return;
         };
 
-        match store.project(&project_id) {
-            Ok(value) => {
-                self.project = value;
-                if let Some(value) = self.project.as_ref()
-                    && !self.projects.iter().any(|item| item.id == value.id)
-                {
-                    self.projects.push(core::ProjectListItem {
-                        id: value.id.clone(),
-                        name: value.name.clone(),
-                        source_endpoint: value.source_endpoint.clone(),
-                        destination_endpoint: value.destination_endpoint.clone(),
-                        phase: value.phase,
-                    });
-                    self.projects_revision = self.projects_revision.wrapping_add(1);
+        let project_data_changed = project_changed
+            || observed_project_revision != self.project_revision
+            || self.project.is_none()
+            || self.mailbox_offset != Some(options.mailbox_offset);
+        if project_data_changed {
+            match store.project(&project_id) {
+                Ok(value) => {
+                    self.project = value;
+                    if let Some(value) = self.project.as_ref()
+                        && !self.projects.iter().any(|item| item.id == value.id)
+                    {
+                        self.projects.push(core::ProjectListItem {
+                            id: value.id.clone(),
+                            name: value.name.clone(),
+                            source_endpoint: value.source_endpoint.clone(),
+                            destination_endpoint: value.destination_endpoint.clone(),
+                            phase: value.phase,
+                        });
+                        self.projects_revision = self.projects_revision.wrapping_add(1);
+                    }
                 }
+                Err(error) => refresh_errors.push(format!("selected project: {error}")),
             }
-            Err(error) => refresh_errors.push(format!("selected project: {error}")),
+            match store.mailbox_page(&project_id, options.mailbox_offset, MAILBOX_PAGE_SIZE) {
+                Ok(value) => {
+                    self.jobs = value;
+                    self.mailbox_offset = Some(options.mailbox_offset);
+                }
+                Err(error) => refresh_errors.push(format!("mailboxes: {error}")),
+            }
+            match store.mailbox_state_counts(&project_id) {
+                Ok(value) => self.mailbox_counts = value,
+                Err(error) => refresh_errors.push(format!("mailbox counts: {error}")),
+            }
         }
-        match store.mailbox_page(&project_id, mailbox_offset, MAILBOX_PAGE_SIZE) {
-            Ok(value) => self.jobs = value,
-            Err(error) => refresh_errors.push(format!("mailboxes: {error}")),
-        }
-        match store.mailbox_state_counts(&project_id) {
-            Ok(value) => self.mailbox_counts = value,
-            Err(error) => refresh_errors.push(format!("mailbox counts: {error}")),
-        }
-        if load_report {
-            match store.verification_rows(&project_id, verification_offset, MAILBOX_PAGE_SIZE) {
+        if options.load_report {
+            match store.verification_rows(
+                &project_id,
+                options.verification_offset,
+                MAILBOX_PAGE_SIZE,
+            ) {
                 Ok(value) => {
                     self.verification_rows = value;
                     self.verification_loaded = true;
-                    self.verification_offset = verification_offset;
+                    self.verification_offset = options.verification_offset;
                 }
                 Err(error) => refresh_errors.push(format!("verification rows: {error}")),
             }
         }
-        match store.recent_run_list(&project_id, crate::MAX_ACTIVITY_HISTORY_ROWS) {
-            Ok(value) => self.runs = value,
-            Err(error) => refresh_errors.push(format!("run history: {error}")),
+        if options.load_runs {
+            match store.recent_run_list(&project_id, crate::MAX_ACTIVITY_HISTORY_ROWS) {
+                Ok(value) => self.runs = value,
+                Err(error) => refresh_errors.push(format!("run history: {error}")),
+            }
+            if refresh_errors.is_empty() {
+                self.runs_revision = observed_project_revision;
+            }
         }
         if refresh_errors.is_empty() {
             self.durable_revision = observed_revision;
+            self.project_revision = observed_project_revision;
             self.last_successful_refresh = Some(Instant::now());
             self.refresh_error = None;
         } else {

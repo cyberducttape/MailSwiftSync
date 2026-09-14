@@ -10,6 +10,9 @@ All notable changes to MailSwiftSync are documented here.
   committed event-sequence changes and skips rebuilding project, mailbox, run,
   and verification projections when the ledger is unchanged, while preserving
   refreshes for local invalidation and external controller activity.
+- Added project-scoped revisions and conditional run-history loading so activity
+  in another project, or an inactive Activity view, does not rebuild the
+  selected project's mailbox and run projections.
 - Expanded the Dovecot pinning regression coverage to assert that both source
   and destination certificate pins are rejected rather than silently treated
   as enforced controls.

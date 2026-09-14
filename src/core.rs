@@ -2622,6 +2622,17 @@ impl StateStore {
                 row.get(0)
             })
     }
+
+    /// Return the durable event position for one project. This lets the
+    /// workspace avoid rebuilding the selected project's projections when a
+    /// different project changes.
+    pub fn project_read_model_revision(&self, project_id: &str) -> rusqlite::Result<i64> {
+        self.connection.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM events WHERE project_id=?1",
+            [project_id],
+            |row| row.get(0),
+        )
+    }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row(
@@ -5884,5 +5895,20 @@ destination_port = "000"
             .unwrap();
         let after = db.read_model_revision().unwrap();
         assert!(after > before);
+    }
+
+    #[test]
+    fn project_read_model_revision_ignores_unrelated_projects() {
+        let db = StateStore::in_memory().unwrap();
+        let first = db
+            .create_project("First revision test", "source", "destination")
+            .unwrap();
+        let first_revision = db.project_read_model_revision(&first.id).unwrap();
+        db.create_project("Second revision test", "source", "destination")
+            .unwrap();
+        assert_eq!(
+            db.project_read_model_revision(&first.id).unwrap(),
+            first_revision
+        );
     }
 }

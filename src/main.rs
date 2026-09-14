@@ -109,11 +109,11 @@ use std::{ffi::OsString, path::PathBuf};
 use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
-    AppearancePreferences, ThemeColors, WorkspaceSnapshot, display_job_state, display_state_key,
-    filter_project_indices, format_elapsed, format_phase_name, job_state_badge,
-    needs_operator_review, password_visibility_id, project_health_state_counts,
-    recommended_next_action, render_account, status_color, successful_run_severity,
-    successful_run_status, workflow_step_index,
+    AppearancePreferences, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
+    display_job_state, display_state_key, filter_project_indices, format_elapsed,
+    format_phase_name, job_state_badge, needs_operator_review, password_visibility_id,
+    project_health_state_counts, recommended_next_action, render_account, status_color,
+    successful_run_severity, successful_run_status, workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -997,18 +997,21 @@ impl App {
         let project_id = self.active_project_id().map(str::to_owned);
         self.ui_snapshot.refresh(
             &self.store,
-            project_id.as_deref(),
-            self.ui_all_projects_loaded,
-            if self.workspace_read_only {
-                self.historical_mailbox_offset
-            } else {
-                0
+            WorkspaceRefreshOptions {
+                active_project_id: project_id.as_deref(),
+                all_projects_loaded: self.ui_all_projects_loaded,
+                mailbox_offset: if self.workspace_read_only {
+                    self.historical_mailbox_offset
+                } else {
+                    0
+                },
+                verification_offset: self.verification_offset,
+                load_report: matches!(
+                    self.active_view,
+                    WorkspaceView::Activity | WorkspaceView::Verification
+                ),
+                load_runs: self.active_view == WorkspaceView::Activity,
             },
-            self.verification_offset,
-            matches!(
-                self.active_view,
-                WorkspaceView::Activity | WorkspaceView::Verification
-            ),
         );
     }
 
