@@ -5,6 +5,7 @@ mod activity;
 mod batch;
 mod engine;
 mod output;
+mod overview;
 mod plan;
 mod reports;
 mod settings;

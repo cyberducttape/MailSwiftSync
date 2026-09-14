@@ -39,6 +39,8 @@ All notable changes to MailSwiftSync are documented here.
   boundary while leaving artifact construction in `reports/`.
 - Moved project-browser filtering and project selection into `ui/workspace.rs`,
   keeping durable project navigation with the cached workspace read model.
+- Extracted the migration lifecycle stepper into `ui/overview.rs`, keeping the
+  operator-facing phase workflow separate from application composition.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
