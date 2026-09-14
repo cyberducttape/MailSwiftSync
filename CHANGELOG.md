@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted guarded project phase transitions and explicit project reopening
+  into `core/phases.rs`, isolating lifecycle policy from mailbox and run
+  persistence.
 - Extracted atomic project creation and mailbox-configuration persistence
   helpers into `core/projects.rs`, separating project admission writes from
   phase and execution state transitions.
