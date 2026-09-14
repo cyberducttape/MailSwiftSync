@@ -1,7 +1,10 @@
 use crate::{
     Event, core,
     credentials::{CleanupGuard, SecretString},
-    runner::{run_dovecot_destination_preflight, run_dovecot_verification, run_streaming},
+    runner::{
+        request_engine_version_probe, run_dovecot_destination_preflight, run_dovecot_verification,
+        run_streaming,
+    },
 };
 use std::{
     path::PathBuf,
@@ -53,6 +56,11 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             timeout,
         } = spec;
         let _cleanup_guard = CleanupGuard::new(cleanup);
+        // Version metadata is best effort and must never delay admission or
+        // block the UI. Probe it alongside the actual worker instead of on
+        // the controller/render thread; the durable event is applied if the
+        // probe finishes while this run is still active.
+        request_engine_version_probe(&executable, &tx, &run_id, &job_id);
         let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut result = run_streaming(
                 &executable,

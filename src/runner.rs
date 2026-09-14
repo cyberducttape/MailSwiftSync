@@ -1,7 +1,8 @@
 use std::{
+    collections::{HashMap, HashSet},
     process::{Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -511,6 +512,77 @@ pub(crate) fn probe_engine_version(executable: &str) -> Option<String> {
     None
 }
 
+#[derive(Default)]
+struct EngineVersionProbeCache {
+    completed: HashMap<String, Option<String>>,
+    in_flight: HashSet<String>,
+}
+
+fn engine_version_probe_cache() -> &'static Mutex<EngineVersionProbeCache> {
+    static CACHE: OnceLock<Mutex<EngineVersionProbeCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(EngineVersionProbeCache::default()))
+}
+
+/// Schedule best-effort version metadata without blocking the controller.
+/// The key includes executable contents so replacing a binary at the same
+/// path gets a fresh probe. Completed and in-flight entries are shared across
+/// workers, which keeps a large batch from spawning one metadata process per
+/// mailbox.
+pub(crate) fn request_engine_version_probe(
+    executable: &str,
+    tx: &mpsc::SyncSender<crate::Event>,
+    run_id: &str,
+    job_id: &str,
+) {
+    let key = format!(
+        "{}\0{}",
+        executable,
+        crate::plan_identity::executable_content_identity(executable)
+    );
+    let cached = {
+        let Ok(mut cache) = engine_version_probe_cache().lock() else {
+            return;
+        };
+        if let Some(version) = cache.completed.get(&key) {
+            Some(version.clone())
+        } else if cache.in_flight.insert(key.clone()) {
+            None
+        } else {
+            return;
+        }
+    };
+    if let Some(Some(version)) = cached {
+        let _ = tx.try_send(crate::Event::EngineVersion {
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+            version,
+        });
+        return;
+    }
+    if cached.is_some() {
+        return;
+    }
+
+    let executable = executable.to_owned();
+    let run_id = run_id.to_owned();
+    let job_id = job_id.to_owned();
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let version = probe_engine_version(&executable);
+        if let Ok(mut cache) = engine_version_probe_cache().lock() {
+            cache.in_flight.remove(&key);
+            cache.completed.insert(key, version.clone());
+        }
+        if let Some(version) = version {
+            let _ = tx.try_send(crate::Event::EngineVersion {
+                run_id,
+                job_id,
+                version,
+            });
+        }
+    });
+}
+
 pub(crate) fn run_dovecot_destination_preflight(
     commands: &[(String, Vec<String>)],
     tx: &mpsc::SyncSender<crate::Event>,
@@ -606,4 +678,44 @@ pub(crate) fn run_dovecot_verification(
     }
     verification::dovecot_evidence_from_accumulators(&reports[0].1, &reports[1].1)
         .ok_or_else(|| "Dovecot status output was incomplete".into())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::request_engine_version_probe;
+    use crate::Event;
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn engine_version_probe_is_asynchronous() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-version-probe-{}-{}.sh",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(&path, "#!/bin/sh\nsleep 1\nprintf 'test-engine 1.0\\n'\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        let (tx, rx) = mpsc::sync_channel(2);
+
+        let started = Instant::now();
+        request_engine_version_probe(&path.to_string_lossy(), &tx, "run", "job");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "version probe blocked the caller"
+        );
+
+        let event = rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("asynchronous version result");
+        assert!(matches!(
+            event,
+            Event::EngineVersion { version, .. } if version == "test-engine 1.0"
+        ));
+        fs::remove_file(path).unwrap();
+    }
 }

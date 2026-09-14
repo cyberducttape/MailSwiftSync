@@ -61,10 +61,7 @@ use process::{configure_process_group, process_identity};
 use provider::ProviderPreset;
 #[cfg(test)]
 use runner::{dovecot_state_candidate, record_process_tail};
-use runner::{
-    probe_engine_version, run_dovecot_destination_preflight, run_dovecot_verification,
-    run_streaming,
-};
+use runner::{run_dovecot_destination_preflight, run_dovecot_verification, run_streaming};
 #[cfg(test)]
 use std::process::Command;
 
@@ -280,6 +277,11 @@ pub(crate) enum Event {
         run_id: String,
         job_id: String,
         text: String,
+    },
+    EngineVersion {
+        run_id: String,
+        job_id: String,
+        version: String,
     },
     ProcessStarted(
         String,
@@ -521,9 +523,6 @@ struct App {
     activity_search: String,
     activity_status_filter: String,
     reopen_reason: String,
-    /// Best-effort engine metadata is cached by executable content identity;
-    /// replacing a binary at the same path therefore gets a fresh probe.
-    engine_version_cache: HashMap<String, Option<String>>,
     /// Database-backed UI read model. Rendering consumes this cache instead
     /// of issuing SQLite queries on every egui repaint.
     ui_snapshot: WorkspaceSnapshot,
@@ -935,7 +934,6 @@ impl App {
             activity_search: String::new(),
             activity_status_filter: "all".into(),
             reopen_reason: String::new(),
-            engine_version_cache: HashMap::new(),
             ui_snapshot: WorkspaceSnapshot::default(),
             historical_mailbox_offset: 0,
             verification_offset: 0,
@@ -967,20 +965,6 @@ impl App {
         } else {
             ThemeColors::light()
         }
-    }
-
-    fn cached_engine_version(&mut self, executable: &str) -> Option<String> {
-        let key = format!(
-            "{}\0{}",
-            executable,
-            plan_identity::executable_content_identity(executable)
-        );
-        if let Some(version) = self.engine_version_cache.get(&key) {
-            return version.clone();
-        }
-        let version = probe_engine_version(executable);
-        self.engine_version_cache.insert(key, version.clone());
-        version
     }
 
     fn cached_report_mailbox(&self, job_id: &str) -> Option<&core::ReportMailboxSnapshot> {
@@ -3462,17 +3446,14 @@ impl App {
             .iter()
             .zip(queue_checkpoints.iter())
             .map(|(job, checkpoint)| {
-                let executable = match job.form.engine() {
-                    core::Engine::Dovecot => &job.form.profile.doveadm_path,
-                    core::Engine::Auto | core::Engine::ImapSync => &job.form.profile.imapsync_path,
-                };
-                let engine_version = self.cached_engine_version(executable);
                 job.form
                     .plan_snapshot_with_checkpoint(checkpoint.as_deref())
                     .map(|plan_snapshot| core::BatchChildPlan {
                         engine: job.form.engine().label().to_owned(),
                         plan_snapshot,
-                        engine_version,
+                        // Version metadata is recorded asynchronously by the
+                        // shared worker after durable admission.
+                        engine_version: None,
                     })
             })
             .collect::<Result<Vec<_>, _>>();
@@ -4370,7 +4351,6 @@ impl App {
         let args = prepared.args;
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
-        let observed_engine_version = self.cached_engine_version(&exe);
         let run_id = uuid::Uuid::new_v4().to_string();
         if let Err(error) = self.store.begin_run_with_snapshot(
             &run_project_id,
@@ -4382,25 +4362,6 @@ impl App {
             cleanup_paths(&cleanup);
             self.set_status(
                 format!("Could not record durable run; nothing was started: {error}"),
-                StatusSeverity::Error,
-            );
-            return;
-        }
-        if let Some(version) = observed_engine_version
-            && let Err(error) = self.store.record_engine_version(&run_id, &version)
-        {
-            cleanup_paths(&cleanup);
-            let _ = self.store.finish_run_for_mailbox_with_checkpoint(
-                &run_project_id,
-                &run_job_id,
-                &run_id,
-                "failed",
-                "attention",
-                &format!("could not persist engine version metadata: {error}"),
-                None,
-            );
-            self.set_status(
-                format!("Could not persist engine version metadata: {error}"),
                 StatusSeverity::Error,
             );
             return;
@@ -4699,6 +4660,26 @@ impl App {
                             // message-derived text, so retain it only in the
                             // bounded process-local journal.
                             push_visible_output(&mut self.output, text);
+                        }
+                    }
+                    Event::EngineVersion {
+                        run_id,
+                        job_id,
+                        version,
+                    } => {
+                        let owns_version = active_run
+                            .as_ref()
+                            .is_some_and(|run| run.owns_line(&run_id, &job_id));
+                        if owns_version {
+                            // Version probing is advisory metadata. A
+                            // storage failure must not turn a successful
+                            // migration into a false execution failure.
+                            if let Err(error) = self.store.record_engine_version(&run_id, &version)
+                            {
+                                durability_errors.push(format!(
+                                    "could not persist engine version metadata for {run_id}: {error}"
+                                ));
+                            }
                         }
                     }
                     Event::ProcessEnded { run_id, job_id } => {

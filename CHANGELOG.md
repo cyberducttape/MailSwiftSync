@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved best-effort engine `--version` probing off the controller/UI path.
+  Single and batch workers now request version metadata asynchronously, with
+  content-identity keyed caching and in-flight deduplication, so an unresponsive
+  wrapper cannot stall a launch for its five-second probe timeout or spawn one
+  probe per mailbox.
 - Hardened Windows headless secret-file reads against reparse-point
   substitution by validating the already-open handle with
   `FILE_FLAG_OPEN_REPARSE_POINT`; validation and reading now use the same
