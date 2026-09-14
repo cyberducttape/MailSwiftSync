@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Verification mailbox filtering now reuses a revision/search/filter keyed
+  index cache instead of allocating filtered indices on every egui repaint.
 - Added regression coverage for verification filters, including typed result
   states, review classification, differences, and mailbox search matching.
 - Centralized verification mailbox filtering in a pure presentation-policy

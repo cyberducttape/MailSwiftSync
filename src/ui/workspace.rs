@@ -123,6 +123,10 @@ impl WorkspaceSnapshot {
         self.refresh_error.is_some()
     }
 
+    pub(crate) fn durable_revision(&self) -> Option<i64> {
+        self.durable_revision
+    }
+
     /// Refresh the UI's durable read model when it is stale or the selected
     /// project changed. Rendering itself never calls SQLite.
     pub(crate) fn refresh(&mut self, store: &StateStore, options: WorkspaceRefreshOptions<'_>) {

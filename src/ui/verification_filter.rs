@@ -21,6 +21,31 @@ pub(crate) fn verification_row_matches(
     result_match && text_match
 }
 
+impl crate::App {
+    pub(crate) fn refresh_verification_filter_cache(&mut self) {
+        let search = self.verification_search.trim().to_owned();
+        let revision = self.ui_snapshot.durable_revision();
+        if self.verification_filter_cache_search == search
+            && self.verification_filter_cache_state == self.verification_filter
+            && self.verification_filter_cache_offset == self.verification_offset
+            && self.verification_filter_cache_revision == revision
+            && self.verification_visible_indices.len() <= self.ui_snapshot.verification_rows.len()
+        {
+            return;
+        }
+        self.verification_visible_indices.clear();
+        for (index, mailbox) in self.ui_snapshot.verification_rows.iter().enumerate() {
+            if verification_row_matches(mailbox, &self.verification_filter, &search) {
+                self.verification_visible_indices.push(index);
+            }
+        }
+        self.verification_filter_cache_search = search;
+        self.verification_filter_cache_state = self.verification_filter.clone();
+        self.verification_filter_cache_offset = self.verification_offset;
+        self.verification_filter_cache_revision = revision;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

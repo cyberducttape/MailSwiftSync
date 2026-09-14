@@ -1,7 +1,7 @@
 //! Verification workspace and evidence-review presentation.
 
 use crate::App;
-use crate::ui::{StatusSeverity, job_state_badge, verification_row_matches};
+use crate::ui::{StatusSeverity, job_state_badge};
 use eframe::egui::{self, RichText};
 
 impl App {
@@ -23,7 +23,6 @@ impl App {
             let selected_project = self.active_project_id().map(str::to_owned);
             if selected_project.is_some() {
                 if self.ui_snapshot.verification_loaded {
-                    let verification_rows = &self.ui_snapshot.verification_rows;
                     let mailbox_counts = self.ui_snapshot.mailbox_counts;
                     ui.separator();
                     ui.heading("Mailbox evidence");
@@ -39,19 +38,9 @@ impl App {
                                 }
                             });
                     });
-                    let search = self.verification_search.trim();
-                    let visible = verification_rows
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, mailbox)| {
-                            verification_row_matches(
-                                mailbox,
-                                &self.verification_filter,
-                                search,
-                            )
-                        })
-                        .map(|(index, _)| index)
-                        .collect::<Vec<_>>();
+                    self.refresh_verification_filter_cache();
+                    let verification_rows = &self.ui_snapshot.verification_rows;
+                    let visible = &self.verification_visible_indices;
                     ui.label(RichText::new(format!("{} visible on page · showing {}–{} of {}", visible.len(), self.verification_offset + 1, (self.verification_offset as usize + verification_rows.len()).min(mailbox_counts.total), mailbox_counts.total)).color(self.theme_colors().text_secondary));
                     egui::ScrollArea::vertical().id_salt("verification_mailbox_list").max_height(360.0).show_rows(ui, 32.0, visible.len(), |ui, visible_rows| {
                         egui::Grid::new("verification_mailboxes").striped(true).min_col_width(140.0).show(ui, |ui| {
