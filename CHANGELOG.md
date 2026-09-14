@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved event polling, run-line ownership handling, durable event batching,
+  terminal-state commits, and recovery-aware completion handling into
+  `controller/poll.rs`, keeping the egui shell separate from execution
+  reduction.
 - Moved single-run admission, durable preflight/live gating, command
   preparation, and worker startup into `controller/single_start.rs`, so GUI
   and headless callers share a controller-owned launch boundary.

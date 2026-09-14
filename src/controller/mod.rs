@@ -7,6 +7,7 @@ mod batch_worker;
 mod events;
 pub(crate) mod failure;
 mod orchestrator;
+mod poll;
 mod preflight;
 pub(crate) mod probe;
 mod run;
