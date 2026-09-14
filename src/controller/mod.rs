@@ -17,7 +17,8 @@ pub(crate) use batch::{
     is_verified_terminal_state,
 };
 pub(crate) use batch_admission::{
-    BatchLaunchRequest, admit_batch_launch, durable_single_identity_matches,
+    BatchLaunchRequest, admit_batch_launch, decode_persisted_batch_profile,
+    durable_single_identity_matches,
 };
 pub(crate) use batch_completion::{BatchChildCompletion, finish_batch_child};
 pub(crate) use batch_worker::spawn_batch_worker;

@@ -34,6 +34,19 @@ pub(crate) struct BatchLaunchRequest<'a> {
     pub(crate) run_id: &'a str,
 }
 
+/// Decode a persisted batch row without ever substituting a default plan.
+/// Missing or corrupt durable configuration is state corruption, not a
+/// request for a new migration profile.
+pub(crate) fn decode_persisted_batch_profile(
+    config: Option<&str>,
+    job_id: &str,
+) -> Result<Profile, String> {
+    let config =
+        config.ok_or_else(|| format!("Saved batch mailbox {job_id} has no migration plan"))?;
+    toml::from_str(config)
+        .map_err(|error| format!("Saved batch mailbox {job_id} is corrupt: {error}"))
+}
+
 /// Perform the complete durable batch admission sequence before the UI owns
 /// any worker or process state. This is the shared controller boundary for
 /// GUI and headless batch launches.
@@ -588,7 +601,7 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
 mod tests {
     use super::{
         BatchExecutionMode, BatchLaunchRequest, admit_batch_launch, batch_project_identity,
-        prepare_selected_batch_jobs,
+        decode_persisted_batch_profile, prepare_selected_batch_jobs,
     };
     use crate::{bulk_import::BulkJob, migration_plan::Form};
     use std::collections::HashSet;
@@ -660,5 +673,22 @@ mod tests {
         .expect("empty queue must be rejected");
         assert!(error.contains("No mailboxes match"));
         assert!(store.latest_project().unwrap().is_none());
+    }
+
+    #[test]
+    fn persisted_batch_profile_decoding_rejects_missing_or_corrupt_plans() {
+        let missing = decode_persisted_batch_profile(None, "job-missing")
+            .err()
+            .expect("missing plan must be rejected");
+        assert!(missing.contains("job-missing"));
+
+        let corrupt = decode_persisted_batch_profile(Some("not = valid = toml"), "job-corrupt")
+            .err()
+            .expect("corrupt plan must be rejected");
+        assert!(corrupt.contains("job-corrupt"));
+
+        let profile = Form::default().profile;
+        let encoded = toml::to_string(&profile).unwrap();
+        assert!(decode_persisted_batch_profile(Some(&encoded), "job-valid").is_ok());
     }
 }

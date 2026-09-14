@@ -64,6 +64,8 @@ All notable changes to MailSwiftSync are documented here.
   pages remain bounded while aggregate state counts cover the full project.
 - Moved workspace project-resolution policy into the UI read-model module with
   direct tests, reducing another pure selection rule in `main.rs`.
+- Moved persisted batch-plan decoding into batch admission so corrupt or
+  missing queue configuration has one controller-owned failure policy.
 - Corrected the architecture documentation to state that raw engine
   transcripts are process-local diagnostics, not durable ledger data.
 - Centralized ownership checks for asynchronous process lifecycle and engine

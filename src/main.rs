@@ -46,9 +46,10 @@ use controller::{
     CapabilityProbeResult, LiveAuthProof, RunKind, SingleRunAdmission, SingleRunWorkerSpec,
     SingleStartContext, SingleStartDecision, admit_batch_launch, admit_single_run, assess_plan,
     batch_mailbox_state, batch_start_decision, capability_observation_matches,
-    capability_probe_result_matches, durable_single_identity_matches, finish_batch_child,
-    is_verified_terminal_state, process_event_is_current, run_line_is_current,
-    single_start_decision, spawn_batch_worker, spawn_single_run_worker,
+    capability_probe_result_matches, decode_persisted_batch_profile,
+    durable_single_identity_matches, finish_batch_child, is_verified_terminal_state,
+    process_event_is_current, run_line_is_current, single_start_decision, spawn_batch_worker,
+    spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -232,17 +233,6 @@ fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-/// Decode a persisted batch row without ever substituting a default plan.
-/// A missing or corrupt plan is durable-state corruption, not a request for a
-/// new migration profile. Callers must surface the error and keep execution
-/// disabled until the row is repaired or discarded deliberately.
-fn decode_persisted_batch_profile(config: Option<&str>, job_id: &str) -> Result<Profile, String> {
-    let config =
-        config.ok_or_else(|| format!("Saved batch mailbox {job_id} has no migration plan"))?;
-    toml::from_str(config)
-        .map_err(|error| format!("Saved batch mailbox {job_id} is corrupt: {error}"))
 }
 
 fn decode_report_run_snapshot(snapshot: &str) -> Result<Option<RunPlanSnapshot>, String> {
