@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved migration-plan readiness invalidation, assessment, and project creation
+  into `ui/plan.rs`, further reducing plan orchestration in `main.rs`.
 - Added the controller crash and engine-interruption recovery fixture to the
   tagged release workflow, so release publication executes every evidence gate
   claimed by the compatibility matrix.

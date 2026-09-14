@@ -3,14 +3,85 @@
 use crate::App;
 use crate::StatusSeverity;
 use crate::controller::{
-    CapabilityProbeSpec, ImapProbeEndpoint, LiveAuthProbeSpec, spawn_capability_probe,
-    spawn_live_auth_probe,
+    CapabilityProbeSpec, ImapProbeEndpoint, LiveAuthProbeSpec, assess_plan,
+    capability_observation_matches, spawn_capability_probe, spawn_live_auth_probe,
 };
 use crate::imap_probe::endpoint_for_probe;
 use crate::plan_identity::fingerprint_digest as plan_fingerprint_digest;
 use eframe::egui::{self, RichText};
 
 impl App {
+    pub(crate) fn requires_live_imaps_auth_probe(&self) -> bool {
+        crate::imap_probe::fresh_imap_authentication_applies(&self.form)
+    }
+
+    pub(crate) fn invalidate_stale_capability_observation(&mut self) -> bool {
+        let current = plan_fingerprint_digest(&self.form.plan_fingerprint());
+        let in_flight_stale = self
+            .capability_probe_fingerprint
+            .as_deref()
+            .is_some_and(|fingerprint| fingerprint != current);
+        let observation_stale = self.capability_observation_fingerprint.is_some()
+            && !capability_observation_matches(
+                self.capability_observation_fingerprint.as_deref(),
+                &current,
+            );
+        if !(in_flight_stale || observation_stale) {
+            return false;
+        }
+        self.capability_receiver = None;
+        self.capability_probe_request_id = None;
+        self.capability_probe_fingerprint = None;
+        self.capability_observation_fingerprint = None;
+        self.source_capabilities = None;
+        self.destination_capabilities = None;
+        self.preflight.clear();
+        true
+    }
+
+    pub(crate) fn assess_plan(&mut self) {
+        self.invalidate_stale_capability_observation();
+        self.preflight = assess_plan(
+            &self.form,
+            self.source_capabilities.as_ref(),
+            self.destination_capabilities.as_ref(),
+        );
+    }
+
+    pub(crate) fn create_project(&mut self) {
+        self.assess_plan();
+        if self.form.profile.source_host.trim().is_empty()
+            || self.form.profile.destination_host.trim().is_empty()
+        {
+            self.set_status(
+                "Enter source and destination hosts before creating a project.",
+                StatusSeverity::Warning,
+            );
+            return;
+        }
+        match self.store.create_project_with_mailbox(
+            &self.form.profile.name,
+            &self.form.profile.source_host,
+            &self.form.profile.destination_host,
+            &self.form.profile.source_user,
+            &self.form.profile.destination_user,
+        ) {
+            Ok((project, job)) => {
+                self.selected_project_id = Some(project.id.clone());
+                self.project_id = Some(project.id);
+                self.job_id = Some(job);
+                self.set_status(
+                    "Project created; ready for preflight review",
+                    StatusSeverity::Success,
+                );
+            }
+            Err(error) => self.set_status(
+                format!("Could not create project: {error}"),
+                StatusSeverity::Error,
+            ),
+        }
+    }
+
     pub(crate) fn start_capability_probe(&mut self) {
         let credential_load = if self.form.dry_run {
             self.form.load_configured_keyring_credentials()

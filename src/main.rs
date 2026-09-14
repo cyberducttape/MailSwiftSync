@@ -48,11 +48,10 @@ use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, CapabilityProbeResult, LiveAuthProof, PendingDbEvent, RunKind,
     SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext, SingleStartDecision,
-    admit_single_run, assess_plan, batch_mailbox_state, capability_observation_matches,
-    capability_probe_result_matches, decode_persisted_batch_profile,
-    durable_single_identity_matches, finish_batch_child, is_verified_terminal_state,
-    persist_pending_events, process_event_is_current, run_line_is_current, single_start_decision,
-    spawn_single_run_worker,
+    admit_single_run, batch_mailbox_state, capability_probe_result_matches,
+    decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
+    is_verified_terminal_state, persist_pending_events, process_event_is_current,
+    run_line_is_current, single_start_decision, spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -89,9 +88,9 @@ use eframe::{
 use egui_extras::{Column, TableBuilder};
 #[cfg(test)]
 use imap_probe::{
-    command_endpoint_parts, command_port, endpoint_for_probe, imap_command_succeeded, imap_quote,
+    command_endpoint_parts, command_port, endpoint_for_probe, fresh_imap_authentication_applies,
+    imap_command_succeeded, imap_quote,
 };
-use imap_probe::fresh_imap_authentication_applies;
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, default_destination_tls, default_imap_port,
     effective_destination_tls,
@@ -903,75 +902,6 @@ impl App {
         )
     }
 
-    fn requires_live_imaps_auth_probe(&self) -> bool {
-        fresh_imap_authentication_applies(&self.form)
-    }
-
-    fn invalidate_stale_capability_observation(&mut self) -> bool {
-        let current = plan_fingerprint_digest(&self.form.plan_fingerprint());
-        let in_flight_stale = self
-            .capability_probe_fingerprint
-            .as_deref()
-            .is_some_and(|fingerprint| fingerprint != current);
-        let observation_stale = self.capability_observation_fingerprint.is_some()
-            && !capability_observation_matches(
-                self.capability_observation_fingerprint.as_deref(),
-                &current,
-            );
-        if !(in_flight_stale || observation_stale) {
-            return false;
-        }
-        self.capability_receiver = None;
-        self.capability_probe_request_id = None;
-        self.capability_probe_fingerprint = None;
-        self.capability_observation_fingerprint = None;
-        self.source_capabilities = None;
-        self.destination_capabilities = None;
-        self.preflight.clear();
-        true
-    }
-
-    fn assess_plan(&mut self) {
-        self.invalidate_stale_capability_observation();
-        self.preflight = assess_plan(
-            &self.form,
-            self.source_capabilities.as_ref(),
-            self.destination_capabilities.as_ref(),
-        );
-    }
-    fn create_project(&mut self) {
-        self.assess_plan();
-        if self.form.profile.source_host.trim().is_empty()
-            || self.form.profile.destination_host.trim().is_empty()
-        {
-            self.set_status(
-                "Enter source and destination hosts before creating a project.",
-                StatusSeverity::Warning,
-            );
-            return;
-        }
-        match self.store.create_project_with_mailbox(
-            &self.form.profile.name,
-            &self.form.profile.source_host,
-            &self.form.profile.destination_host,
-            &self.form.profile.source_user,
-            &self.form.profile.destination_user,
-        ) {
-            Ok((project, job)) => {
-                self.selected_project_id = Some(project.id.clone());
-                self.project_id = Some(project.id);
-                self.job_id = Some(job);
-                self.set_status(
-                    "Project created; ready for preflight review",
-                    StatusSeverity::Success,
-                );
-            }
-            Err(e) => self.set_status(
-                format!("Could not create project: {e}"),
-                StatusSeverity::Error,
-            ),
-        }
-    }
     fn overview_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Migration overview");
         ui.label(
