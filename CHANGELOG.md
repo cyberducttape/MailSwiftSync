@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the migration profile, form validation, engine-plan construction,
+  credential preparation, and immutable run-plan snapshot logic into the
+  dedicated `migration_plan` module so GUI and headless callers share one
+  tested plan boundary.
 - Removed the direct unmaintained `rustls-pemfile` dependency and now load
   additional CA bundles through Rustls's maintained PEM certificate API.
 - Replaced the headless module’s wildcard crate import with explicit
