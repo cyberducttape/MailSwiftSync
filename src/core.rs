@@ -24,8 +24,8 @@ pub use evidence::{
     ReportRunSnapshot, VerificationAcceptance,
 };
 pub use models::{
-    ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, Project, ProjectListItem,
-    RunListItem, RunSummary,
+    ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,
+    ProjectListItem, RunListItem, RunSummary,
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
@@ -2579,6 +2579,47 @@ impl StateStore {
                 })
             })?
             .collect()
+    }
+
+    /// Load only one presentation page. Durable callers that need every row
+    /// should continue using `mailboxes`; the workspace must not materialize a
+    /// 100,000-row queue merely to render its historical view.
+    pub fn mailbox_page(
+        &self,
+        project_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> rusqlite::Result<Vec<MailboxJob>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
+        )?;
+        statement
+            .query_map(params![project_id, limit, offset], |row| {
+                Ok(MailboxJob {
+                    id: row.get(0)?,
+                    source_mailbox: row.get(1)?,
+                    destination_mailbox: row.get(2)?,
+                    state: row.get(3)?,
+                    config: row.get(4)?,
+                })
+            })?
+            .collect()
+    }
+
+    pub fn mailbox_state_counts(&self, project_id: &str) -> rusqlite::Result<MailboxStateCounts> {
+        self.connection.query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            [project_id],
+            |row| {
+                Ok(MailboxStateCounts {
+                    total: row.get::<_, i64>(0)? as usize,
+                    ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize,
+                    running: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
+                    verified: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize,
+                    needs_review: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize,
+                })
+            },
+        )
     }
     pub fn all_mailboxes_verified(&self, project_id: &str) -> rusqlite::Result<bool> {
         let (total, verified): (i64, i64) = self.connection.query_row(

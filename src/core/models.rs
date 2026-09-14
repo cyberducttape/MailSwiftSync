@@ -33,6 +33,15 @@ pub struct MailboxJob {
     pub config: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MailboxStateCounts {
+    pub total: usize,
+    pub ready: usize,
+    pub running: usize,
+    pub verified: usize,
+    pub needs_review: usize,
+}
+
 /// Immutable durable facts needed to admit a selected batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchAdmissionState {

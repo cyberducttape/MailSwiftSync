@@ -515,6 +515,7 @@ struct App {
     /// Database-backed UI read model. Rendering consumes this cache instead
     /// of issuing SQLite queries on every egui repaint.
     ui_snapshot: WorkspaceSnapshot,
+    historical_mailbox_offset: u32,
 }
 impl Default for App {
     fn default() -> Self {
@@ -922,6 +923,7 @@ impl App {
             activity_status_filter: "all".into(),
             reopen_reason: String::new(),
             ui_snapshot: WorkspaceSnapshot::default(),
+            historical_mailbox_offset: 0,
         }
     }
 }
@@ -968,6 +970,11 @@ impl App {
             &self.store,
             project_id.as_deref(),
             self.ui_all_projects_loaded,
+            if self.workspace_read_only {
+                self.historical_mailbox_offset
+            } else {
+                0
+            },
         );
     }
 
@@ -995,6 +1002,7 @@ impl App {
         let editable_id = self.current_editable_project_id().map(str::to_owned);
         self.workspace_read_only = editable_id.as_deref() != Some(project_id.as_str());
         self.selected_project_id = Some(project_id);
+        self.historical_mailbox_offset = 0;
         self.active_view = WorkspaceView::Overview;
         self.capability_receiver = None;
         self.capability_probe_request_id = None;
@@ -1686,11 +1694,9 @@ impl App {
             .as_ref()
             .map(|value| value.phase)
             .unwrap_or(core::Phase::Discovery);
-        let durable_jobs = self.ui_snapshot.jobs.clone();
-        let attention_count = durable_jobs
-            .iter()
-            .filter(|job| needs_operator_review(&job.state))
-            .count();
+        let attention_count = self.ui_snapshot.mailbox_counts.needs_review;
+        let mailbox_counts = self.ui_snapshot.mailbox_counts;
+        let has_durable_jobs = mailbox_counts.total > 0;
         let next_action = recommended_next_action(
             phase,
             !self.preflight.is_empty(),
@@ -1702,7 +1708,7 @@ impl App {
         let workflow_index = workflow_step_index(
             phase,
             !self.preflight.is_empty(),
-            !durable_jobs.is_empty() || !self.bulk_jobs.is_empty(),
+            has_durable_jobs || !self.bulk_jobs.is_empty(),
         );
         ui.group(|ui| {
             ui.label(RichText::new("MIGRATION WORKFLOW").strong().size(11.0));
@@ -1814,19 +1820,14 @@ impl App {
                         .size(11.0)
                         .color(self.theme_colors().text_secondary),
                 );
-                if durable_jobs.is_empty() {
+                if !has_durable_jobs {
                     ui.heading("None configured");
                     ui.label("Use Mailboxes to review scope before running anything.");
                 } else {
-                    let counts = project_health_state_counts(&durable_jobs);
-                    ui.heading(format!("{} total", durable_jobs.len()));
-                    let verified_count = counts.get("verified").copied().unwrap_or(0)
-                        + counts.get("verified_with_exceptions").copied().unwrap_or(0);
+                    ui.heading(format!("{} total", mailbox_counts.total));
                     ui.label(format!(
                         "{} ready · {} running · {} verified",
-                        counts.get("ready").copied().unwrap_or(0),
-                        counts.get("running").copied().unwrap_or(0),
-                        verified_count,
+                        mailbox_counts.ready, mailbox_counts.running, mailbox_counts.verified,
                     ));
                     if attention_count > 0 {
                         ui.label(
@@ -1922,39 +1923,68 @@ impl App {
                 ui.label("No historical project is selected.");
                 return;
             }
-            let jobs = &self.ui_snapshot.jobs;
+            let page_len = self.ui_snapshot.jobs.len();
+            let total_jobs = self.ui_snapshot.mailbox_counts.total;
             ui.label(
                 RichText::new(format!(
-                    "{} durable mailbox record(s) · read-only",
-                    jobs.len()
+                    "Showing {}–{} of {total_jobs} durable mailbox record(s) · read-only",
+                    self.historical_mailbox_offset + 1,
+                    (self.historical_mailbox_offset as usize + page_len).min(total_jobs)
                 ))
                 .strong(),
             );
-            egui::ScrollArea::vertical().max_height(520.0).show_rows(
-                ui,
-                32.0,
-                jobs.len(),
-                |ui, rows| {
-                    egui::Grid::new("historical_mailboxes")
-                        .striped(true)
-                        .show(ui, |ui| {
-                            if rows.start == 0 {
-                                ui.strong("Source");
-                                ui.strong("Destination");
-                                ui.strong("State");
-                                ui.end_row();
-                            }
-                            for index in rows {
-                                let job = &jobs[index];
-                                ui.label(&job.source_mailbox);
-                                ui.label(&job.destination_mailbox);
-                                let (badge, color) = job_state_badge(&job.state, colors);
-                                ui.label(RichText::new(badge).color(color));
-                                ui.end_row();
-                            }
-                        });
-                },
-            );
+            {
+                let jobs = &self.ui_snapshot.jobs;
+                egui::ScrollArea::vertical().max_height(520.0).show_rows(
+                    ui,
+                    32.0,
+                    jobs.len(),
+                    |ui, rows| {
+                        egui::Grid::new("historical_mailboxes")
+                            .striped(true)
+                            .show(ui, |ui| {
+                                if rows.start == 0 {
+                                    ui.strong("Source");
+                                    ui.strong("Destination");
+                                    ui.strong("State");
+                                    ui.end_row();
+                                }
+                                for index in rows {
+                                    let job = &jobs[index];
+                                    ui.label(&job.source_mailbox);
+                                    ui.label(&job.destination_mailbox);
+                                    let (badge, color) = job_state_badge(&job.state, colors);
+                                    ui.label(RichText::new(badge).color(color));
+                                    ui.end_row();
+                                }
+                            });
+                    },
+                );
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        self.historical_mailbox_offset > 0,
+                        egui::Button::new("← Previous 200"),
+                    )
+                    .clicked()
+                {
+                    self.historical_mailbox_offset =
+                        self.historical_mailbox_offset.saturating_sub(200);
+                    self.refresh_ui_snapshot_now();
+                }
+                if ui
+                    .add_enabled(
+                        self.historical_mailbox_offset as usize + page_len < total_jobs,
+                        egui::Button::new("Next 200 →"),
+                    )
+                    .clicked()
+                {
+                    self.historical_mailbox_offset =
+                        self.historical_mailbox_offset.saturating_add(200);
+                    self.refresh_ui_snapshot_now();
+                }
+            });
             return;
         }
         if self.bulk_jobs.is_empty() {

@@ -6,6 +6,13 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added aggregate mailbox state counts for overview health cards. Large
+  durable queues no longer require loading every mailbox record just to render
+  total, ready, running, verified, and attention counts.
+- Added compact durable mailbox state counts and a 200-row historical mailbox
+  page. Workspace refreshes no longer materialize every durable mailbox row
+  for overview/history rendering, and large historical projects can be browsed
+  with explicit paging controls.
 - Exposed stale workspace snapshots to the operator: failed durable refreshes
   retain the last good projection for resilience but now show a warning with
   the age of that projection and the failed read boundary. The historical

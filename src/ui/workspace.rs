@@ -8,6 +8,7 @@ use crate::core::{self, StateStore};
 use std::time::{Duration, Instant};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+const MAILBOX_PAGE_SIZE: u32 = 200;
 
 /// Rebuild the project-browser index without cloning project rows. Keeping
 /// this policy beside the workspace read model gives the UI a stable, tested
@@ -47,6 +48,7 @@ pub(crate) struct WorkspaceSnapshot {
     pub(crate) report: Option<core::ProjectReportSnapshot>,
     pub(crate) project: Option<core::Project>,
     pub(crate) jobs: Vec<core::MailboxJob>,
+    pub(crate) mailbox_counts: core::MailboxStateCounts,
     snapshot_project_id: Option<String>,
     refreshed_at: Option<Instant>,
     last_successful_refresh: Option<Instant>,
@@ -76,6 +78,7 @@ impl WorkspaceSnapshot {
         store: &StateStore,
         active_project_id: Option<&str>,
         all_projects_loaded: bool,
+        mailbox_offset: u32,
     ) {
         let project_id = active_project_id.map(str::to_owned);
         let project_changed = project_id.as_deref() != self.snapshot_project_id.as_deref();
@@ -130,9 +133,13 @@ impl WorkspaceSnapshot {
             }
             Err(error) => refresh_errors.push(format!("selected project: {error}")),
         }
-        match store.mailboxes(&project_id) {
+        match store.mailbox_page(&project_id, mailbox_offset, MAILBOX_PAGE_SIZE) {
             Ok(value) => self.jobs = value,
             Err(error) => refresh_errors.push(format!("mailboxes: {error}")),
+        }
+        match store.mailbox_state_counts(&project_id) {
+            Ok(value) => self.mailbox_counts = value,
+            Err(error) => refresh_errors.push(format!("mailbox counts: {error}")),
         }
         match store.project_report_snapshot(&project_id) {
             Ok(Some(value)) => self.report = Some(value),
