@@ -49,6 +49,9 @@ All notable changes to MailSwiftSync are documented here.
   reducing presentation utility code in the application composition root.
 - Consolidated allocation-free case-insensitive filtering in the shared UI
   layer so project and mailbox search paths use one tested utility.
+- Invalidated capability observations before each UI frame so edited plans
+  cannot briefly display readiness results from an older endpoint or trust
+  configuration.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.

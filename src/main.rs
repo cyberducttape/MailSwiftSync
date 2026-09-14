@@ -5237,6 +5237,16 @@ impl eframe::App for App {
         // for a future persisted Appearance preference.
         ctx.set_zoom_factor(self.ui_scale);
         self.poll();
+        // Capability observations are only meaningful for the exact plan that
+        // produced them. Re-check before rendering every frame so editing the
+        // migration plan cannot leave a stale readiness result visible until
+        // the operator opens the readiness view or another event arrives.
+        if self.invalidate_stale_capability_observation() {
+            self.set_status(
+                "Readiness observations expired because the migration plan changed; run discovery again.",
+                StatusSeverity::Warning,
+            );
+        }
         let colors = self.theme_colors();
         let plan_controls_enabled =
             !self.running() && !self.workspace_read_only && !self.ui_snapshot.is_stale();
