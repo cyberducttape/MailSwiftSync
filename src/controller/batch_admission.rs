@@ -46,6 +46,24 @@ pub(crate) fn canonical_destination_identity(profile: &Profile) -> Result<String
     .map_err(|error| format!("Invalid destination endpoint: {error}"))
 }
 
+/// Validate shared batch throughput constraints before any durable run is
+/// created. This policy belongs to admission rather than the egui dispatcher
+/// so GUI and headless callers cannot diverge.
+pub(crate) fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), String> {
+    let workers = concurrency.max(1);
+    if profile.max_messages_per_second > 0 && profile.max_messages_per_second < workers as u32 {
+        return Err(format!(
+            "Messages/second target must be at least the batch concurrency ({workers}), or reduce concurrency."
+        ));
+    }
+    if profile.max_bytes_per_second > 0 && profile.max_bytes_per_second < workers as u64 {
+        return Err(format!(
+            "Bytes/second target must be at least the batch concurrency ({workers}), or reduce concurrency."
+        ));
+    }
+    Ok(())
+}
+
 /// Verify that an editable single-mailbox profile still names the durable
 /// project and mailbox it is about to execute. Keeping this beside batch
 /// admission prevents GUI and headless callers from inventing separate

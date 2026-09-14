@@ -23,6 +23,7 @@ mod verification;
 use controller::batch_admission::canonical_destination_identity;
 use controller::batch_admission::{
     apply_keyring_id, duplicate_destination, matches_queue, selection_value,
+    validate_batch_throttle,
 };
 use controller::failure::{
     FailureClass, classified_failure_detail, classify_failure, is_transient_batch_error,
@@ -232,24 +233,6 @@ fn verify_proof_file_with_trust(
     trusted_public_key: Option<&str>,
 ) -> Result<String, String> {
     reports::signing::verify_file(path, trusted_public_key)
-}
-
-/// Persist only an opaque identity for a preflighted plan. The full
-/// canonical fingerprint is used in memory for the live gate, but the
-/// database only needs equality and should not retain generated arguments.
-fn validate_batch_throttle(profile: &Profile, concurrency: usize) -> Result<(), String> {
-    let workers = concurrency.max(1);
-    if profile.max_messages_per_second > 0 && profile.max_messages_per_second < workers as u32 {
-        return Err(format!(
-            "Messages/second target must be at least the batch concurrency ({workers}), or reduce concurrency."
-        ));
-    }
-    if profile.max_bytes_per_second > 0 && profile.max_bytes_per_second < workers as u64 {
-        return Err(format!(
-            "Bytes/second target must be at least the batch concurrency ({workers}), or reduce concurrency."
-        ));
-    }
-    Ok(())
 }
 
 /// Serialize the durable queue configuration without retaining free-form
