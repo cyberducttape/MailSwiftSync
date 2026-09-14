@@ -68,6 +68,8 @@ All notable changes to MailSwiftSync are documented here.
   missing queue configuration has one controller-owned failure policy.
 - Moved the durable run-snapshot schema and decoder into `migration_plan.rs`,
   so plan serialization and report reconstruction share one domain owner.
+- Moved certificate-pin validation into the migration-plan domain so TLS
+  policy validation is no longer implemented by the application shell.
 - Corrected the architecture documentation to state that raw engine
   transcripts are process-local diagnostics, not durable ledger data.
 - Centralized ownership checks for asynchronous process lifecycle and engine

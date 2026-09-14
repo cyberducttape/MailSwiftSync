@@ -89,12 +89,12 @@ use imap_probe::{command_endpoint_parts, command_port, imap_command_succeeded, i
 use imap_probe::{
     endpoint_for_probe, fresh_imap_authentication_applies, probe_tls_capabilities_with_transport,
 };
-#[cfg(test)]
-use migration_plan::decode_report_run_snapshot;
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, completeness as plan_completeness,
     default_destination_tls, default_imap_port, effective_destination_tls,
 };
+#[cfg(test)]
+use migration_plan::{decode_report_run_snapshot, validate_certificate_pin};
 #[cfg(test)]
 use oauth::xoauth2_payload;
 use plan_identity::{
@@ -155,19 +155,6 @@ const MIN_UI_SCALE: f32 = 0.90;
 const MAX_UI_SCALE: f32 = 1.50;
 
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
-
-fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
-    let pin = value.trim();
-    if pin.is_empty() {
-        return Ok(());
-    }
-    if pin.len() != 64 || !pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!(
-            "{label} must be a 64-character SHA-256 certificate fingerprint"
-        ));
-    }
-    Ok(())
-}
 
 struct PendingSheetImport {
     path: std::path::PathBuf,

@@ -8,7 +8,7 @@ use crate::{
     plan_identity::{
         configured_file_content_identity, executable_content_identity, snapshot_sha256,
     },
-    restrict_directory_permissions, validate_certificate_pin, write_secret_file,
+    restrict_directory_permissions, write_secret_file,
 };
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,19 @@ pub(crate) fn decode_report_run_snapshot(
     toml::from_str(snapshot)
         .map(Some)
         .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
+}
+
+pub(crate) fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
+    let pin = value.trim();
+    if pin.is_empty() {
+        return Ok(());
+    }
+    if pin.len() != 64 || !pin.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{label} must be a 64-character SHA-256 certificate fingerprint"
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
