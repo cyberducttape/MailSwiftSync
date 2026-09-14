@@ -2760,6 +2760,7 @@ mod tests {
         let status = headless_status(&state, Some(&project.id)).unwrap();
         assert_eq!(status.schema_version, core::CURRENT_SCHEMA_VERSION);
         assert_eq!(status.projects.len(), 1);
+        assert!(!status.projects[0].batch);
         assert_eq!(status.projects[0].mailboxes.len(), 1);
         assert_eq!(status.projects[0].mailboxes[0].state, "queued");
         let serialized = serde_json::to_string(&status).unwrap();
@@ -2767,8 +2768,38 @@ mod tests {
         let summary = headless::headless_status_summary(&state, Some(&project.id)).unwrap();
         assert_eq!(summary.projects[0].mailbox_state_counts.total, 1);
         assert_eq!(summary.projects[0].mailbox_state_counts.ready, 0);
+        assert!(!summary.projects[0].batch);
         let summary_json = serde_json::to_string(&summary).unwrap();
         assert!(!summary_json.contains("mailboxes"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn headless_status_identifies_configured_batch_projects() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-headless-batch-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let state = directory.join("state.db");
+        let db = core::StateStore::open(&state).unwrap();
+        let project = db
+            .create_project_with_mailbox_configs(
+                "Acme cutover",
+                "imap.source.example",
+                "imap.destination.example",
+                &[(
+                    "source-user".into(),
+                    "destination-user".into(),
+                    "engine = \"imapsync\"".into(),
+                )],
+            )
+            .unwrap()
+            .0;
+        drop(db);
+
+        let status = headless_status(&state, Some(&project.id)).unwrap();
+        assert!(status.projects[0].batch);
+        let summary = headless::headless_status_summary(&state, Some(&project.id)).unwrap();
+        assert!(summary.projects[0].batch);
         std::fs::remove_dir_all(directory).unwrap();
     }
 
