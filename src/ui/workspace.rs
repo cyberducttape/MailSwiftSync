@@ -46,6 +46,9 @@ pub(crate) struct WorkspaceSnapshot {
     pub(crate) projects_revision: u64,
     pub(crate) runs: Vec<core::RunListItem>,
     pub(crate) report: Option<core::ProjectReportSnapshot>,
+    pub(crate) verification_rows: Vec<core::ReportMailboxSnapshot>,
+    pub(crate) verification_loaded: bool,
+    verification_offset: u32,
     pub(crate) project: Option<core::Project>,
     pub(crate) jobs: Vec<core::MailboxJob>,
     pub(crate) mailbox_counts: core::MailboxStateCounts,
@@ -59,6 +62,9 @@ impl WorkspaceSnapshot {
     pub(crate) fn invalidate(&mut self) {
         self.refreshed_at = None;
         self.report = None;
+        self.verification_rows.clear();
+        self.verification_loaded = false;
+        self.verification_offset = 0;
     }
 
     pub(crate) fn stale_notice(&self) -> Option<String> {
@@ -80,11 +86,13 @@ impl WorkspaceSnapshot {
         active_project_id: Option<&str>,
         all_projects_loaded: bool,
         mailbox_offset: u32,
+        verification_offset: u32,
         load_report: bool,
     ) {
         let project_id = active_project_id.map(str::to_owned);
         let project_changed = project_id.as_deref() != self.snapshot_project_id.as_deref();
-        let report_needs_load = load_report && self.report.is_none();
+        let report_needs_load = load_report
+            && (!self.verification_loaded || self.verification_offset != verification_offset);
         if !project_changed
             && !report_needs_load
             && self
@@ -110,6 +118,9 @@ impl WorkspaceSnapshot {
         if project_changed {
             self.snapshot_project_id = project_id.clone();
             self.report = None;
+            self.verification_rows.clear();
+            self.verification_loaded = false;
+            self.verification_offset = 0;
             self.runs.clear();
             self.project = None;
             self.jobs.clear();
@@ -152,10 +163,13 @@ impl WorkspaceSnapshot {
             Err(error) => refresh_errors.push(format!("mailbox counts: {error}")),
         }
         if load_report {
-            match store.project_report_snapshot(&project_id) {
-                Ok(Some(value)) => self.report = Some(value),
-                Ok(None) => {}
-                Err(error) => refresh_errors.push(format!("evidence report: {error}")),
+            match store.verification_rows(&project_id, verification_offset, MAILBOX_PAGE_SIZE) {
+                Ok(value) => {
+                    self.verification_rows = value;
+                    self.verification_loaded = true;
+                    self.verification_offset = verification_offset;
+                }
+                Err(error) => refresh_errors.push(format!("verification rows: {error}")),
             }
         }
         match store.recent_run_list(&project_id, crate::MAX_ACTIVITY_HISTORY_ROWS) {

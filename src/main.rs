@@ -519,6 +519,7 @@ struct App {
     /// of issuing SQLite queries on every egui repaint.
     ui_snapshot: WorkspaceSnapshot,
     historical_mailbox_offset: u32,
+    verification_offset: u32,
 }
 impl Default for App {
     fn default() -> Self {
@@ -926,6 +927,7 @@ impl App {
             engine_version_cache: HashMap::new(),
             ui_snapshot: WorkspaceSnapshot::default(),
             historical_mailbox_offset: 0,
+            verification_offset: 0,
         }
     }
 }
@@ -970,9 +972,7 @@ impl App {
 
     fn cached_report_mailbox(&self, job_id: &str) -> Option<&core::ReportMailboxSnapshot> {
         self.ui_snapshot
-            .report
-            .as_ref()?
-            .mailboxes
+            .verification_rows
             .iter()
             .find(|mailbox| mailbox.job.id == job_id)
     }
@@ -991,6 +991,7 @@ impl App {
             } else {
                 0
             },
+            self.verification_offset,
             matches!(
                 self.active_view,
                 WorkspaceView::Activity | WorkspaceView::Verification
@@ -1023,6 +1024,7 @@ impl App {
         self.workspace_read_only = editable_id.as_deref() != Some(project_id.as_str());
         self.selected_project_id = Some(project_id);
         self.historical_mailbox_offset = 0;
+        self.verification_offset = 0;
         self.active_view = WorkspaceView::Overview;
         self.capability_receiver = None;
         self.capability_probe_request_id = None;
@@ -2365,13 +2367,12 @@ impl App {
         if !self.workspace_read_only
             && let Some(job) = self.job_id.as_deref()
         {
-            let state = self.ui_snapshot.report.as_ref().and_then(|report| {
-                report
-                    .mailboxes
-                    .iter()
-                    .find(|mailbox| mailbox.job.id == job)
-                    .map(|mailbox| mailbox.job.state.clone())
-            });
+            let state = self
+                .ui_snapshot
+                .verification_rows
+                .iter()
+                .find(|mailbox| mailbox.job.id == job)
+                .map(|mailbox| mailbox.job.state.clone());
             match state.as_deref() {
                 Some(state) if needs_operator_review(state) => {
                     if ui.button("Prepare safe retry  →").clicked() {
@@ -2714,23 +2715,16 @@ impl App {
             }
             let selected_project = self.active_project_id().map(str::to_owned);
             if selected_project.is_some() {
-                match self.ui_snapshot.report.clone() {
-                    Some(snapshot) => {
-                        let verified = snapshot
-                            .mailboxes
-                            .iter()
-                            .filter(|mailbox| matches!(mailbox.job.state.as_str(), "verified" | "verified_with_exceptions"))
-                            .count();
-                        let review = snapshot
-                            .mailboxes
-                            .iter()
-                            .filter(|mailbox| needs_operator_review(&mailbox.job.state))
-                            .count();
+                if self.ui_snapshot.verification_loaded {
+                    let verification_rows = &self.ui_snapshot.verification_rows;
+                    let mailbox_counts = self.ui_snapshot.mailbox_counts;
                         ui.separator();
                         ui.heading("Mailbox evidence");
                         ui.label(format!(
                             "{verified} of {} verified · {review} require review",
-                            snapshot.mailboxes.len()
+                            mailbox_counts.total,
+                            verified = mailbox_counts.verified,
+                            review = mailbox_counts.needs_review,
                         ));
                         ui.horizontal_wrapped(|ui| {
                             ui.label("Search");
@@ -2751,8 +2745,7 @@ impl App {
                                 });
                         });
                         let search = self.verification_search.trim();
-                        let visible = snapshot
-                            .mailboxes
+                        let visible = verification_rows
                             .iter()
                             .enumerate()
                             .filter(|(_, mailbox)| {
@@ -2770,23 +2763,29 @@ impl App {
                             })
                             .map(|(index, _)| index)
                             .collect::<Vec<_>>();
-                        ui.label(RichText::new(format!("{} visible", visible.len())).color(self.theme_colors().text_secondary));
+                        ui.label(RichText::new(format!(
+                            "{} visible on page · showing {}–{} of {}",
+                            visible.len(),
+                            self.verification_offset + 1,
+                            (self.verification_offset as usize + verification_rows.len()).min(mailbox_counts.total),
+                            mailbox_counts.total,
+                        )).color(self.theme_colors().text_secondary));
                         egui::ScrollArea::vertical()
                             .id_salt("verification_mailbox_list")
                             .max_height(360.0)
-                            .show_rows(ui, 32.0, visible.len(), |ui, rows| {
+                            .show_rows(ui, 32.0, visible.len(), |ui, visible_rows| {
                                 egui::Grid::new("verification_mailboxes")
                                     .striped(true)
                                     .min_col_width(140.0)
                                     .show(ui, |ui| {
-                                        if rows.start == 0 {
+                                        if visible_rows.start == 0 {
                                             ui.strong("Mailbox");
                                             ui.strong("Evidence");
                                             ui.strong("Result");
                                             ui.end_row();
                                         }
-                                        for row in rows {
-                                            let mailbox = &snapshot.mailboxes[visible[row]];
+                                        for row in visible_rows {
+                                            let mailbox = &verification_rows[visible[row]];
                                             let evidence_label = mailbox
                                                 .evidence
                                                 .as_ref()
@@ -2808,22 +2807,31 @@ impl App {
                                         }
                                     });
                             });
-                    }
-                    None => {
-                        ui.separator();
-                        ui.label(RichText::new("The selected project no longer exists.").color(self.theme_colors().danger));
-                    }
+                        ui.horizontal(|ui| {
+                            let previous = ui
+                                .add_enabled(self.verification_offset > 0, egui::Button::new("← Previous"))
+                                .clicked();
+                            let next = ui
+                                .add_enabled(
+                                    self.verification_offset as usize + verification_rows.len() < mailbox_counts.total,
+                                    egui::Button::new("Next →"),
+                                )
+                                .clicked();
+                            if previous {
+                                self.verification_offset = self.verification_offset.saturating_sub(200);
+                            } else if next {
+                                self.verification_offset = self.verification_offset.saturating_add(200);
+                            }
+                        });
+                } else {
+                    ui.separator();
+                    ui.label(RichText::new("Loading mailbox verification…").color(self.theme_colors().text_secondary));
                 }
             }
             let selected_mailbox = self
                 .job_id
                 .as_deref()
                 .and_then(|job_id| self.cached_report_mailbox(job_id))
-                .filter(|_| {
-                    self.ui_snapshot.report.as_ref().is_some_and(|report| {
-                        selected_project.as_deref() == Some(report.project.id.as_str())
-                    })
-                })
                 .cloned();
             if let Some(mailbox) = selected_mailbox {
                 match mailbox.evidence.as_ref() {

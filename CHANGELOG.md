@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Replaced the workspace Verification refresh's full project report load with
+  a paged compact mailbox/evidence projection. Interactive verification now
+  reads at most 200 rows at a time, uses grouped durable counts for totals, and
+  retains acceptance metadata for selected rows; full reports remain available
+  through explicit export paths.
 - Cached best-effort engine version probes by executable content identity for
   both single and batch starts. Repeated launches no longer pay the blocking
   probe timeout, while replacing an executable invalidates the cache key.

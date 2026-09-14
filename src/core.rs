@@ -2325,6 +2325,74 @@ impl StateStore {
         Ok(Some(snapshot))
     }
 
+    /// Compact verification projection for interactive views. It omits saved
+    /// mailbox configuration and run-plan snapshots; full report assembly
+    /// remains an explicit export/detail operation.
+    pub fn verification_rows(
+        &self,
+        project_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> rusqlite::Result<Vec<ReportMailboxSnapshot>> {
+        let tx = self.connection.unchecked_transaction()?;
+        let mut statement = tx.prepare(
+            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,eh.run_id,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence_history eh ON eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=j.id) WHERE j.project_id=?1 ORDER BY j.rowid LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = statement
+            .query_map(rusqlite::params![project_id, limit, offset], |row| {
+                let acceptance_run_id: Option<String> = row.get(5)?;
+                let acceptance = acceptance_run_id
+                    .map(|run_id| -> rusqlite::Result<VerificationAcceptance> {
+                        Ok(VerificationAcceptance {
+                            job_id: row.get(0)?,
+                            run_id,
+                            operator: row.get(6)?,
+                            reason: row.get(7)?,
+                            accepted_at: row.get(8)?,
+                        })
+                    })
+                    .transpose()?;
+                let evidence = row
+                    .get::<_, Option<String>>(9)?
+                    .map(|run_id| {
+                        Ok::<_, rusqlite::Error>((
+                            run_id,
+                            MailboxEvidence {
+                                source_messages: row.get(10)?,
+                                destination_messages: row.get(11)?,
+                                source_bytes: row.get(12)?,
+                                destination_bytes: row.get(13)?,
+                                unmatched_messages: row.get(14)?,
+                                failed_messages: row.get(15)?,
+                                source_folders: row.get(16)?,
+                                destination_folders: row.get(17)?,
+                                authoritative: row.get::<_, i64>(18)? != 0,
+                            },
+                            None,
+                        ))
+                    })
+                    .transpose()?;
+                Ok(ReportMailboxSnapshot {
+                    job: MailboxJob {
+                        id: row.get(0)?,
+                        source_mailbox: row.get(1)?,
+                        destination_mailbox: row.get(2)?,
+                        state: row.get(3)?,
+                        config: None,
+                    },
+                    attention_reason: row.get::<_, Option<String>>(4)?.map(|reason| {
+                        AttentionReason::parse(&reason).unwrap_or(AttentionReason::Unknown)
+                    }),
+                    acceptance,
+                    evidence,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        tx.commit()?;
+        Ok(rows)
+    }
+
     pub fn recent_run_list(
         &self,
         project_id: &str,
