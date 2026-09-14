@@ -43,6 +43,8 @@ All notable changes to MailSwiftSync are documented here.
 - Extracted durable event-detail bounding into `storage.rs`, keeping SQLite
   record-size policy separate from the core state machine and covered by a
   storage-level UTF-8 regression test.
+- Removed the obsolete event-kind parameter from durable detail bounding so
+  every SQLite detail writer uses the same explicit storage policy.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.

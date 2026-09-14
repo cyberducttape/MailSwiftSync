@@ -3,7 +3,7 @@
 //! The GUI may be replaced, but project state and verification evidence remain
 //! portable SQLite data. No credentials or message content belong in this store.
 
-use crate::storage::bounded_event_detail as bound_event_detail;
+use crate::storage::bounded_event_detail;
 #[cfg(test)]
 use crate::storage::{
     EVENT_DETAIL_TRUNCATION_SUFFIX as DURABLE_EVENT_TRUNCATION_SUFFIX,
@@ -185,12 +185,6 @@ pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
 
 pub struct StateStore {
     connection: Connection,
-}
-
-use bound_event_detail as bounded_event_detail_raw;
-
-fn bounded_event_detail(_kind: &str, detail: &str) -> String {
-    bounded_event_detail_raw(detail)
 }
 
 impl StateStore {
@@ -1278,7 +1272,7 @@ impl StateStore {
                 if *kind == "run_output" {
                     continue;
                 }
-                let detail = bounded_event_detail(kind, detail);
+                let detail = bounded_event_detail(detail);
                 statement.execute(params![project_id, kind, detail])?;
             }
         }
@@ -1312,7 +1306,7 @@ impl StateStore {
                 if *kind == "run_output" {
                     continue;
                 }
-                let detail = bounded_event_detail(kind, detail);
+                let detail = bounded_event_detail(detail);
                 statement.execute(params![project_id, run_id, kind, detail])?;
             }
         }
@@ -1344,8 +1338,7 @@ impl StateStore {
                 }
                 continue;
             }
-            let changed =
-                statement.execute(params![run_id, kind, bounded_event_detail(kind, detail)])?;
+            let changed = statement.execute(params![run_id, kind, bounded_event_detail(detail)])?;
             if changed != 1 {
                 return Err(rusqlite::Error::InvalidQuery);
             }
@@ -2522,7 +2515,7 @@ impl StateStore {
         }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'verification_exception_accepted',?2)",
-            params![project_id, bounded_event_detail("verification_exception_accepted", &format!("{job_id}: accepted by {operator}: {reason}"))],
+            params![project_id, bounded_event_detail(&format!("{job_id}: accepted by {operator}: {reason}"))],
         )?;
         tx.commit()
     }
@@ -2710,7 +2703,7 @@ impl StateStore {
         Ok(total > 0 && total == verified)
     }
     fn event(&self, id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
-        let detail = bounded_event_detail(kind, detail);
+        let detail = bounded_event_detail(detail);
         self.connection.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,?2,?3)",
             params![id, kind, detail],
