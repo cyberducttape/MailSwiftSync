@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Replaced per-frame batch state-count allocation with a typed, generation-cached queue summary, reducing large-batch UI repaint overhead while preserving immediate invalidation on queue or state changes.
 - Updated the distributed installation and first-launch guides with platform-specific checksum verification, release-versus-source startup instructions, engine prerequisites, and the recommended first migration sequence.
 - Consolidated the database-backed UI read model into an owned `WorkspaceSnapshot`, reducing `App` state surface and making snapshot-only rendering an explicit boundary.
 - Added a structural compatibility-matrix release gate and run it in CI and tagged-release verification, requiring a reviewable data row with all provider, engine, execution, recovery, and evidence columns populated without overstating support.

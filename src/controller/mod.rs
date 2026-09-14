@@ -7,7 +7,7 @@ mod orchestrator;
 mod run;
 
 pub(crate) use batch::{
-    BatchExecutionMode, BulkConfirmationSummary, BulkRetryScope, BulkStateSet,
+    BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet,
     is_verified_terminal_state,
 };
 pub(crate) use batch_admission::durable_single_identity_matches;

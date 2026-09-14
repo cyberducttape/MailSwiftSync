@@ -29,9 +29,9 @@ use controller::failure::{
     transient_retry_delay,
 };
 use controller::{
-    ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkRetryScope, BulkStateSet,
-    LiveAuthProof, RunKind, SingleRunWorkerSpec, durable_single_identity_matches,
-    is_verified_terminal_state, spawn_single_run_worker,
+    ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
+    BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec,
+    durable_single_identity_matches, is_verified_terminal_state, spawn_single_run_worker,
 };
 use credentials::{
     CleanupGuard, SecretString, cleanup_paths, cleanup_stale_secret_directories,
@@ -545,6 +545,7 @@ struct App {
     bulk_live_confirm_open: bool,
     bulk_live_confirmed: bool,
     bulk_confirmation_summary: Option<BulkConfirmationSummary>,
+    bulk_summary: Option<(u64, BulkQueueSummary)>,
     bulk_mode: BatchExecutionMode,
     bulk_clear_confirm_open: bool,
     pending_bulk_import: Option<std::path::PathBuf>,
@@ -950,6 +951,7 @@ impl App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
+            bulk_summary: None,
             bulk_mode: BatchExecutionMode::Preflight,
             bulk_clear_confirm_open: false,
             pending_bulk_import: None,
@@ -3428,13 +3430,26 @@ impl App {
 
     fn mark_bulk_jobs_changed(&mut self) {
         self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
+        self.bulk_summary = None;
         self.bulk_search_values.clear();
         self.bulk_filter_cache_generation = u64::MAX;
     }
 
     fn mark_bulk_state_changed(&mut self) {
         self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
+        self.bulk_summary = None;
         self.bulk_filter_cache_generation = u64::MAX;
+    }
+
+    fn bulk_queue_summary(&mut self) -> BulkQueueSummary {
+        if let Some((generation, summary)) = self.bulk_summary
+            && generation == self.bulk_jobs_generation
+        {
+            return summary;
+        }
+        let summary = BulkQueueSummary::from_jobs(&self.bulk_jobs);
+        self.bulk_summary = Some((self.bulk_jobs_generation, summary));
+        summary
     }
 
     fn apply_bulk_keyring_id(&mut self, source: bool) {
@@ -5714,21 +5729,14 @@ impl App {
             ui.heading("Import → review → validate");
             ui.label(RichText::new(&self.bulk_message).color(self.theme_colors().text_secondary));
             ui.add_space(8.0);
-            let mut state_counts = HashMap::new();
-            for job in &self.bulk_jobs {
-                *state_counts.entry(display_state_key(&job.state)).or_insert(0_usize) += 1;
-            }
-            let count_state = |state: &str| state_counts.get(state).copied().unwrap_or(0);
-            let unresolved_count = ["failed", "attention", "cancelled", "delta_required", "verification_difference"]
-                .iter()
-                .map(|state| count_state(state))
-                .sum::<usize>();
+            let summary = self.bulk_queue_summary();
             ui.group(|ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.strong(format!("{} total", self.bulk_jobs.len()));
-                    ui.label(format!("{} ready", count_state("ready")));
-                    ui.label(format!("{} running", count_state("running")));
-                    ui.label(format!("{} verified", count_state("verified") + count_state("verified_with_exceptions")));
+                    ui.strong(format!("{} total", summary.total));
+                    ui.label(format!("{} ready", summary.ready));
+                    ui.label(format!("{} running", summary.running));
+                    ui.label(format!("{} verified", summary.verified));
+                    let unresolved_count = summary.unresolved();
                     ui.label(RichText::new(format!("{} unresolved", unresolved_count)).color(if unresolved_count > 0 { self.theme_colors().danger } else { self.theme_colors().success }));
                     if ui.button("Select unresolved").clicked() { self.select_bulk_state_set(BulkStateSet::Unresolved); }
                     if ui.button("Select failed").clicked() { self.select_bulk_state_set(BulkStateSet::Failed); }
