@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted mailbox creation, state transitions, attention and checkpoint
+  reads, batch admission, and preflight-plan persistence into
+  `core/mailboxes.rs`, isolating mailbox admission policy from the remaining
+  ledger implementation.
 - Extracted guarded project phase transitions and explicit project reopening
   into `core/phases.rs`, isolating lifecycle policy from mailbox and run
   persistence.
