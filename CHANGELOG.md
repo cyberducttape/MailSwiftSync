@@ -22,6 +22,9 @@ All notable changes to MailSwiftSync are documented here.
 - Immutable run-plan snapshots now hash the canonical typed imapsync option
   sequence, keeping plan identity aligned with the exact arguments generated
   after validation (for example, `--timeout=30` and `--timeout 30`).
+- Command preparation now rechecks the canonical extra-option validator at the
+  engine boundary, preventing an invalid profile from reaching a prepared
+  imapsync or Dovecot invocation even when called outside normal admission.
 - Expanded the Dovecot pinning regression coverage to assert that both source
   and destination certificate pins are rejected rather than silently treated
   as enforced controls.

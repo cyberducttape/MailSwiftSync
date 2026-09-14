@@ -580,6 +580,11 @@ impl Form {
         throttle_divisor: usize,
         checkpoint: Option<&str>,
     ) -> Result<PreparedCommand, String> {
+        // Keep command preparation as a hard validation boundary. The
+        // low-level builder emits canonical options, but it must never be
+        // possible to prepare an engine invocation from a profile that has
+        // not passed the same validator used by admission.
+        self.extra_options_valid()?;
         if self.engine() == core::Engine::Dovecot {
             if !self.local_doveadm() {
                 return Err("Remote Dovecot execution is not available: the current SSH compatibility path would expose the source password to destination-host process inspection. Use local doveadm or imapsync until a secret broker is implemented.".into());

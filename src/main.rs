@@ -7274,6 +7274,18 @@ mod tests {
     }
 
     #[test]
+    fn command_preparation_rejects_unvalidated_extra_options() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.extra_options = "--timeout nope".into();
+        let error = match form.prepared_command() {
+            Ok(_) => panic!("invalid extra options were prepared"),
+            Err(error) => error,
+        };
+        assert!(error.contains("requires an integer"));
+    }
+
+    #[test]
     fn validation_rejects_imap_command_control_characters() {
         let mut form = dovecot_form();
         form.profile.source_user = "user\r\nNOOP".into();
