@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted atomic project creation and mailbox-configuration persistence
+  helpers into `core/projects.rs`, separating project admission writes from
+  phase and execution state transitions.
 - Extracted single-run and batch-run durable lifecycle transitions—including
   claims, retries, checkpoint handling, evidence-bound completion, and
   terminal state commits—into `core/runs.rs`.
