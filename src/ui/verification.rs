@@ -1,7 +1,7 @@
 //! Verification workspace and evidence-review presentation.
 
 use crate::App;
-use crate::ui::{StatusSeverity, job_state_badge};
+use crate::ui::{StatusSeverity, customer_proof_ready, job_state_badge};
 use eframe::egui::{self, RichText};
 
 impl App {
@@ -14,16 +14,18 @@ impl App {
             ui.heading("Verification and audit report");
             ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(self.theme_colors().text_secondary));
             if self.active_project_id().is_some() {
-                let customer_proof_ready = self.ui_snapshot.project.as_ref().is_some_and(|project| {
-                    project.phase == crate::core::Phase::Complete
-                        && self.ui_snapshot.mailbox_counts.needs_review == 0
-                        && !self.ui_snapshot.is_stale()
+                let proof_ready = self.ui_snapshot.project.as_ref().is_some_and(|project| {
+                    customer_proof_ready(
+                        project.phase,
+                        self.ui_snapshot.mailbox_counts.needs_review,
+                        self.ui_snapshot.is_stale(),
+                    )
                 });
                 if ui.button("Export project report…").clicked() { self.report_export_result("Project report", self.export_project_report()); }
                 if ui.button("Export project JSON…").clicked() { self.report_export_result("Project JSON", self.export_project_json()); }
                 if ui
                     .add_enabled(
-                        customer_proof_ready,
+                        proof_ready,
                         egui::Button::new("Export customer proof JSON…"),
                     )
                     .on_disabled_hover_text(
@@ -36,9 +38,11 @@ impl App {
                 if ui.button("Export support bundle…").clicked() { self.report_export_result("Support bundle", self.export_support_bundle_dialog()); }
                 if ui.button("Export project health…").clicked() { self.report_export_result("Project health export", self.export_project_health()); }
                 if let Some(project) = self.ui_snapshot.project.as_ref() {
-                    if project.phase == crate::core::Phase::Complete
-                        && self.ui_snapshot.mailbox_counts.needs_review == 0
-                        && !self.ui_snapshot.is_stale()
+                    if customer_proof_ready(
+                        project.phase,
+                        self.ui_snapshot.mailbox_counts.needs_review,
+                        self.ui_snapshot.is_stale(),
+                    )
                     {
                         ui.label(
                             RichText::new(

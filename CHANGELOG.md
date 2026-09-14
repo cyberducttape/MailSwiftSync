@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Centralized the Verification UI customer-proof readiness predicate so export
+  enablement and readiness messaging use the same completion, review, and
+  durable-view gate.
 - Added fast unresolved and attention selection actions to the primary
   Mailboxes workspace, keeping remediation discoverable without opening the
   secondary batch queue dialog.
