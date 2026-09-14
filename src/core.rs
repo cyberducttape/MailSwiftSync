@@ -4423,6 +4423,55 @@ mod tests {
     }
 
     #[test]
+    fn paged_workspace_reads_keep_large_mailbox_projects_bounded() {
+        const MAILBOX_COUNT: usize = 100_000;
+        const PAGE_SIZE: u32 = 200;
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("large-workspace", "source", "destination")
+            .unwrap();
+        {
+            let tx = db.connection.unchecked_transaction().unwrap();
+            for index in 0..MAILBOX_COUNT {
+                let mailbox = format!("user-{index}@source.example");
+                let destination = format!("user-{index}@destination.example");
+                tx.execute(
+                    "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')",
+                    rusqlite::params![
+                        format!("job-{index}"),
+                        project.id,
+                        mailbox,
+                        destination,
+                        destination.to_ascii_lowercase(),
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        let first_page = db.mailbox_page(&project.id, 0, PAGE_SIZE).unwrap();
+        let last_page = db
+            .mailbox_page(
+                &project.id,
+                (MAILBOX_COUNT as u32).saturating_sub(PAGE_SIZE),
+                PAGE_SIZE,
+            )
+            .unwrap();
+        assert_eq!(first_page.len(), PAGE_SIZE as usize);
+        assert_eq!(last_page.len(), PAGE_SIZE as usize);
+        assert_eq!(first_page[0].source_mailbox, "user-0@source.example");
+        assert_eq!(last_page[0].source_mailbox, "user-99800@source.example");
+
+        let counts = db.mailbox_state_counts(&project.id).unwrap();
+        assert_eq!(counts.total, MAILBOX_COUNT);
+        assert_eq!(counts.ready, 0);
+        assert_eq!(counts.running, 0);
+        assert_eq!(counts.verified, 0);
+        assert_eq!(counts.needs_review, 0);
+    }
+
+    #[test]
     fn run_captures_project_phase_at_admission() {
         let db = StateStore::in_memory().unwrap();
         let project = db
