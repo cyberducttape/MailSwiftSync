@@ -8511,6 +8511,11 @@ mod tests {
         form.profile.source_certificate_pin_sha256 = "ab".repeat(32);
         let error = form.validate_internal(false).unwrap_err();
         assert!(error.contains("Certificate pinning is not currently supported"));
+
+        let mut form = dovecot_form();
+        form.profile.destination_certificate_pin_sha256 = "cd".repeat(32);
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("Certificate pinning is not currently supported"));
     }
 
     #[test]

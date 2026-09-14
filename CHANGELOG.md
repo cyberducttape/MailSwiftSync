@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Expanded the Dovecot pinning regression coverage to assert that both source
+  and destination certificate pins are rejected rather than silently treated
+  as enforced controls.
 - Bound successful capability observations to the plan fingerprint that
   produced them. Editing an endpoint, account, transport, trust setting, or
   other fingerprinted plan input now clears both cached capabilities and the
