@@ -143,6 +143,7 @@ impl WorkspaceSnapshot {
 
         let Some(project_id) = project_id else {
             if refresh_errors.is_empty() {
+                self.durable_revision = observed_revision;
                 self.last_successful_refresh = Some(Instant::now());
                 self.refresh_error = None;
             } else {
