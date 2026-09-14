@@ -1137,7 +1137,7 @@ pub(crate) struct PreparedCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_report_run_snapshot, validate_certificate_pin};
+    use super::{Form, decode_report_run_snapshot, validate_certificate_pin};
 
     #[test]
     fn report_snapshot_decode_allows_empty_legacy_snapshots() {
@@ -1155,5 +1155,24 @@ mod tests {
         assert!(validate_certificate_pin("", "source").is_ok());
         assert!(validate_certificate_pin("not-a-pin", "source").is_err());
         assert!(validate_certificate_pin(&"g".repeat(64), "source").is_err());
+    }
+
+    #[test]
+    fn credential_free_form_clone_preserves_plan_defaults() {
+        let base = Form {
+            source_password: "source-secret".into(),
+            destination_password: "destination-secret".into(),
+            dry_run: false,
+            ..Form::default()
+        };
+
+        let clone = base.clone_without_credentials();
+
+        assert_eq!(clone.profile.name, base.profile.name);
+        assert_eq!(clone.profile.source_tls, base.profile.source_tls);
+        assert_eq!(clone.profile.destination_tls, base.profile.destination_tls);
+        assert!(!clone.dry_run);
+        assert!(clone.source_password.is_empty());
+        assert!(clone.destination_password.is_empty());
     }
 }

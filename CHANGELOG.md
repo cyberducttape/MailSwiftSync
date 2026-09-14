@@ -16,6 +16,8 @@ All notable changes to MailSwiftSync are documented here.
   module so queue lifecycle presentation state remains localized.
 - Moved bulk import result application and worker dispatch into the batch UI
   module; imported rows use credential-free form defaults throughout dispatch.
+- Added regression coverage proving credential-free bulk form clones preserve
+  plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
   events in the controller event module, removing duplicate SQLite tuple
   plumbing from `poll()` while preserving its durability retry ordering.
