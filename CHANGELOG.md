@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Centralized operator-output secret redaction in `ui/output.rs` so
+  controller event handling uses the same sanitization boundary as bounded
+  journal presentation.
 - Extracted the live-migration confirmation dialog into `ui/plan.rs`, keeping
   destructive plan controls together with the plan workflow.
 - Extracted the mailbox batch-cockpit renderer into `ui/batch.rs`, removing

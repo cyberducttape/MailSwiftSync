@@ -18,7 +18,8 @@ mod workspace;
 pub(crate) use account::password_reveal_allowed;
 pub(crate) use account::{password_visibility_id, render_account};
 pub(crate) use output::{
-    contains_ascii_case_insensitive, markdown_escape, push_visible_output, truncate_utf8,
+    contains_ascii_case_insensitive, markdown_escape, push_visible_output, redact_secrets,
+    truncate_utf8,
 };
 pub(crate) use status::{
     StatusMessage, StatusSeverity, display_job_state, display_state_key, format_elapsed,

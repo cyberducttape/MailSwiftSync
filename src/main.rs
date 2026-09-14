@@ -906,18 +906,6 @@ impl App {
     fn running(&self) -> bool {
         self.receiver.is_some()
     }
-    fn redact_output(&self, line: &str) -> String {
-        let mut safe = line.to_owned();
-        for secret in [
-            self.form.source_password.as_str(),
-            self.form.destination_password.as_str(),
-        ] {
-            if !secret.is_empty() {
-                safe = safe.replace(secret, "[REDACTED]");
-            }
-        }
-        safe
-    }
     fn report_store_error<E: Display>(&mut self, operation: &str, result: Result<(), E>) {
         if let Err(error) = result {
             self.durability_error = true;
@@ -1828,7 +1816,13 @@ impl App {
                         }
                     }
                     Event::VerificationFailed(detail) => {
-                        let safe = self.redact_output(&detail);
+                        let safe = ui::redact_secrets(
+                            &detail,
+                            [
+                                self.form.source_password.as_str(),
+                                self.form.destination_password.as_str(),
+                            ],
+                        );
                         push_visible_output(&mut self.output, format!("[verification] {safe}"));
                         if active_run.is_some()
                             && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
