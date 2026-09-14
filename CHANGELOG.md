@@ -22,6 +22,9 @@ All notable changes to MailSwiftSync are documented here.
   engine, credentials, advanced options, and readiness controls directly on
   the Migration plan, keeping migration configuration in the operator's main
   workflow instead of hiding it under Settings.
+- Moved durable parent/child batch-run admission and active ownership-context
+  construction into `controller::admit_batch_run`, reducing persistence and
+  process-ownership assembly in the egui start path.
 
 - Extracted deterministic batch plan materialization into
   `controller/batch_admission.rs`: selected durable IDs, Dovecot checkpoints,

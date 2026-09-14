@@ -14,8 +14,8 @@ pub(crate) use batch::{
     suggested_batch_project_name,
 };
 pub(crate) use batch_admission::{
-    durable_batch_profile_config, durable_single_identity_matches, prepare_batch_project,
-    prepare_batch_run, prepare_selected_batch_jobs,
+    admit_batch_run, durable_batch_profile_config, durable_single_identity_matches,
+    prepare_batch_project, prepare_batch_run, prepare_selected_batch_jobs,
 };
 pub(crate) use batch_worker::spawn_batch_worker;
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};

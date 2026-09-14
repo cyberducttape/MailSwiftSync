@@ -39,8 +39,8 @@ use controller::failure::{
 use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
-    BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
-    batch_mailbox_state, batch_run_status, durable_batch_profile_config,
+    BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, admit_batch_run,
+    assess_plan, batch_mailbox_state, batch_run_status, durable_batch_profile_config,
     durable_single_identity_matches, is_verified_terminal_state, prepare_batch_project,
     prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices, spawn_batch_worker,
     spawn_single_run_worker, suggested_batch_project_name,
@@ -3325,53 +3325,27 @@ impl App {
                 return;
             }
         };
-        let selected_job_ids = prepared.selected_job_ids;
-        let queue_checkpoints = prepared.queue_checkpoints;
-        let expected_plans = prepared.expected_plans;
-        let batch_plan_fingerprints = prepared.batch_plan_fingerprints;
-        let plan_snapshot = prepared.plan_snapshot;
-        let child_plans = prepared.child_plans;
+        let selected_job_ids = prepared.selected_job_ids.clone();
+        let queue_checkpoints = prepared.queue_checkpoints.clone();
         self.bulk_live_run = live;
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
-        let child_run_ids = match self.store.begin_batch_run_with_children(
+        let active_run = match admit_batch_run(
+            &self.store,
             &project_id,
-            &selected_job_ids,
             &run_id,
-            if live {
-                "batch migration"
-            } else {
-                "batch validation"
-            },
-            &expected_plans,
-            &plan_snapshot,
-            &child_plans,
+            mode,
+            self.form.engine(),
+            prepared,
         ) {
-            Ok(ids) => ids,
+            Ok(context) => context,
             Err(error) => {
-                self.bulk_message = format!("Could not start durable batch run: {error}");
+                self.bulk_message = error;
                 return;
             }
         };
         self.locked_profile = Some(self.form.profile.clone());
-        self.active_run = Some(ActiveRunContext {
-            run_id: run_id.clone(),
-            project_id: project_id.clone(),
-            job_id: None,
-            batch_job_ids: selected_job_ids.clone(),
-            batch_child_indices: child_run_ids
-                .iter()
-                .enumerate()
-                .map(|(index, id)| (id.clone(), index))
-                .collect(),
-            batch_child_run_ids: child_run_ids,
-            batch_plan_fingerprints,
-            kind: RunKind::Batch,
-            dry_run: !live,
-            engine: self.form.engine(),
-            plan_fingerprint: String::new(),
-            credential_fingerprint: String::new(),
-        });
+        self.active_run = Some(active_run);
         for &index in &selected_indices {
             if let Some(job) = self.bulk_jobs.get_mut(index) {
                 job.state = "Queued".into();

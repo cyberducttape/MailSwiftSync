@@ -1,6 +1,7 @@
 //! Batch admission and queue policy shared by GUI and headless callers.
 
 use super::batch::BatchExecutionMode;
+use super::run::{ActiveRunContext, RunKind};
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
 use std::collections::HashSet;
 
@@ -276,6 +277,53 @@ pub(crate) struct PreparedBatchRun {
     pub(crate) batch_plan_fingerprints: Vec<String>,
     pub(crate) plan_snapshot: String,
     pub(crate) child_plans: Vec<core::BatchChildPlan>,
+}
+
+/// Persist the admitted parent/child run set and return the ownership context
+/// used by the batch worker and event reducer. Durable admission and the
+/// in-memory ownership map are created together so callers cannot launch a
+/// worker with a context that does not describe committed child runs.
+pub(crate) fn admit_batch_run(
+    store: &core::StateStore,
+    project_id: &str,
+    run_id: &str,
+    mode: BatchExecutionMode,
+    engine: core::Engine,
+    prepared: PreparedBatchRun,
+) -> Result<ActiveRunContext, String> {
+    let child_run_ids = store
+        .begin_batch_run_with_children(
+            project_id,
+            &prepared.selected_job_ids,
+            run_id,
+            if mode.is_live() {
+                "batch migration"
+            } else {
+                "batch validation"
+            },
+            &prepared.expected_plans,
+            &prepared.plan_snapshot,
+            &prepared.child_plans,
+        )
+        .map_err(|error| format!("Could not start durable batch run: {error}"))?;
+    Ok(ActiveRunContext {
+        run_id: run_id.to_owned(),
+        project_id: project_id.to_owned(),
+        job_id: None,
+        batch_job_ids: prepared.selected_job_ids,
+        batch_child_indices: child_run_ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.clone(), index))
+            .collect(),
+        batch_child_run_ids: child_run_ids,
+        batch_plan_fingerprints: prepared.batch_plan_fingerprints,
+        kind: RunKind::Batch,
+        dry_run: mode.is_preflight(),
+        engine,
+        plan_fingerprint: String::new(),
+        credential_fingerprint: String::new(),
+    })
 }
 
 /// Materialize the exact durable inputs for an admitted batch. This is a
