@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Batch projects now persist the actual source and destination endpoints from
+  the imported queue instead of generic `batch` metadata, making project
+  switching and exported reports unambiguous for operators managing multiple
+  migrations.
 - Moved durable batch project reuse/creation policy into
   `controller/batch_admission.rs`, keeping exact queue matching and atomic
   project creation outside the egui dispatcher.

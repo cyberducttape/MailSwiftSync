@@ -724,11 +724,27 @@ impl App {
         } else {
             None
         };
+        // Batch projects now retain their real endpoints, so identify them by
+        // their durable per-mailbox configuration rather than the old
+        // sentinel endpoint values. This also prevents a restored batch from
+        // being mistaken for the editable single-mailbox workspace.
+        let restored_project_is_batch = restored_project.as_ref().is_some_and(
+            |project| match store.mailboxes(&project.id) {
+                Ok(jobs) => !jobs.is_empty() && jobs.iter().all(|job| job.config.is_some()),
+                Err(error) => {
+                    persistence_warning = Some(format!(
+                        "Persistent project classification failed; execution is blocked: {error}"
+                    ));
+                    false
+                }
+            },
+        );
         let (project_id, job_id) = restored_project
             .as_ref()
             .filter(|project| {
                 project.source_endpoint == form.profile.source_host
                     && project.destination_endpoint == form.profile.destination_host
+                    && !restored_project_is_batch
             })
             .map(|project| {
                 let job_id = match store.first_mailbox(&project.id) {
@@ -767,10 +783,7 @@ impl App {
         let mut restored_bulk_jobs = Vec::new();
         let mut restored_bulk_job_ids = Vec::new();
         let restored_bulk_project_id = restored_project.as_ref().and_then(|project| {
-            if project.name.trim().is_empty()
-                || project.source_endpoint != "batch"
-                || project.destination_endpoint != "batch"
-            {
+            if project.name.trim().is_empty() || !restored_project_is_batch {
                 return None;
             }
             let jobs = match store.mailboxes(&project.id) {
@@ -3373,13 +3386,25 @@ impl App {
                 .map(|job| &job.form.profile)
                 .unwrap_or(&self.form.profile),
         );
+        // Keep the project browser and exported reports tied to the actual
+        // queue endpoints. The old generic "batch" metadata made every
+        // imported project indistinguishable and hid which infrastructure
+        // the batch was admitted against.
+        let batch_source_endpoint = jobs
+            .first()
+            .map(|job| job.form.profile.source_host.trim().to_owned())
+            .unwrap_or_default();
+        let batch_destination_endpoint = jobs
+            .first()
+            .map(|job| job.form.profile.destination_host.trim().to_owned())
+            .unwrap_or_default();
         let (project_id, job_ids) = match prepare_batch_project(
             &self.store,
             self.bulk_project_id.as_deref(),
             &mailboxes,
             &project_name,
-            "batch",
-            "batch",
+            &batch_source_endpoint,
+            &batch_destination_endpoint,
         ) {
             Ok(value) => value,
             Err(error) => {
