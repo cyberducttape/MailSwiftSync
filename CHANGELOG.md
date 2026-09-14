@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added a job-level timeout to the scheduled and pull-request integration lab
+  so disposable-server failures cannot leave CI running indefinitely.
 - Added a job-level timeout to the packaged release integration gate so a
   hung disposable server or controller cannot consume a release runner
   indefinitely.
