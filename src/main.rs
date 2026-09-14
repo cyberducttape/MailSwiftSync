@@ -4872,7 +4872,7 @@ impl App {
             if apply_destination {
                 self.apply_bulk_keyring_id(false);
             }
-            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: source_password, destination_password, source_credential_id, destination_credential_id, name. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(self.theme_colors().text_secondary));
+            ui.label(RichText::new("Required columns: source_host, source_user, destination_host, destination_user. Optional: project_name, source_password, destination_password, source_credential_id, destination_credential_id, name. project_name names the durable customer migration; name labels each mailbox row. Engine options remain trusted application settings and cannot be imported from a spreadsheet. Enter missing credentials in the masked fields below.").size(11.0).color(self.theme_colors().text_secondary));
             ui.separator();
             egui::Grid::new("bulk_jobs")
                 .striped(true)
