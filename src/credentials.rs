@@ -237,8 +237,8 @@ fn verify_windows_secret_acl(file: &fs::File) -> Result<(), String> {
         Security::{
             ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
             EqualSid, GetAce, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
-            PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED, SECURITY_MAX_SID_SIZE,
-            WinCreatorOwnerRightsSid, WinLocalSystemSid,
+            OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+            SECURITY_MAX_SID_SIZE, WinCreatorOwnerRightsSid, WinLocalSystemSid,
         },
         System::SystemServices::ACCESS_ALLOWED_ACE_TYPE,
     };
@@ -250,7 +250,7 @@ fn verify_windows_secret_acl(file: &fs::File) -> Result<(), String> {
         GetSecurityInfo(
             file.as_raw_handle() as _,
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &mut owner,
             ptr::null_mut(),
             &mut dacl,
