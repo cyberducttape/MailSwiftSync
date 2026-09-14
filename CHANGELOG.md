@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Batch project classification now uses a bounded SQLite existence query at
+  startup instead of loading every mailbox configuration twice, keeping large
+  restored queues from multiplying startup memory and I/O.
 - Portable bundles now include the complete `docs/` tree, including the
   compatibility matrix, architecture notes, wiki assets, and all operator
   guides referenced by the README.

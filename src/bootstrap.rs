@@ -181,8 +181,8 @@ impl App {
         // sentinel endpoint values. This also prevents a restored batch from
         // being mistaken for the editable single-mailbox workspace.
         let restored_project_is_batch = restored_project.as_ref().is_some_and(
-            |project| match store.mailboxes(&project.id) {
-                Ok(jobs) => !jobs.is_empty() && jobs.iter().all(|job| job.config.is_some()),
+            |project| match store.project_has_complete_mailbox_configs(&project.id) {
+                Ok(is_batch) => is_batch,
                 Err(error) => {
                     persistence_warning = Some(format!(
                         "Persistent project classification failed; execution is blocked: {error}"

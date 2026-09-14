@@ -1674,6 +1674,34 @@ mod tests {
     }
 
     #[test]
+    fn batch_classification_checks_configuration_completeness_without_loading_rows() {
+        let db = StateStore::in_memory().unwrap();
+        let single = db
+            .create_project("single", "source", "destination")
+            .unwrap();
+        db.add_mailbox(&single.id, "source", "destination").unwrap();
+        assert!(!db.project_has_complete_mailbox_configs(&single.id).unwrap());
+
+        let (batch, jobs) = db
+            .create_project_with_mailbox_configs(
+                "batch",
+                "source",
+                "destination",
+                &[("one".into(), "one".into(), "engine = \"imap\"".into())],
+            )
+            .unwrap();
+        assert!(db.project_has_complete_mailbox_configs(&batch.id).unwrap());
+
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET config=NULL WHERE id=?1",
+                [&jobs[0]],
+            )
+            .unwrap();
+        assert!(!db.project_has_complete_mailbox_configs(&batch.id).unwrap());
+    }
+
+    #[test]
     fn latest_run_summary_is_queryable_for_audit_reports() {
         let db = StateStore::in_memory().unwrap();
         let project = db.create_project("audit", "source", "destination").unwrap();

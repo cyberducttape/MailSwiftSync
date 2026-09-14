@@ -56,6 +56,18 @@ impl StateStore {
             |row| row.get(0),
         )
     }
+
+    /// Identify a durable imported batch without loading every mailbox
+    /// configuration into memory. A batch marker is valid only when the
+    /// project has at least one mailbox and every mailbox has a non-empty
+    /// secret-free configuration.
+    pub fn project_has_complete_mailbox_configs(&self, project_id: &str) -> rusqlite::Result<bool> {
+        self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE project_id=?1) AND NOT EXISTS(SELECT 1 FROM mailbox_jobs WHERE project_id=?1 AND (config IS NULL OR length(trim(config)) = 0))",
+            [project_id],
+            |row| row.get(0),
+        )
+    }
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row(
