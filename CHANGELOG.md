@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted application bootstrap, durable-state recovery, profile restore,
+  and initial workspace construction into `bootstrap.rs`, leaving `main.rs`
+  focused on the runtime application shell.
 - Moved new-migration workspace reset and state clearing into `ui/workspace.rs`,
   keeping project-selection lifecycle behavior together.
 - Centralized operator-output secret redaction in `ui/output.rs` so
