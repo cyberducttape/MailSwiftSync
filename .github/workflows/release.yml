@@ -60,7 +60,7 @@ jobs:
           mkdir -p dist
           mkdir -p bundle
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}
-          cp README.md LICENSE docs/distribution/INSTALL.md docs/wiki/Install-and-first-launch.md bundle/
+          cp README.md LICENSE docs/distribution/INSTALL.md docs/distribution/SERVICE.md docs/container.md docs/release-readiness.md docs/wiki/Install-and-first-launch.md bundle/
           chmod 0755 bundle/mailswiftsync-${{ matrix.target }}
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
           tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -C bundle -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz .
@@ -72,7 +72,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           New-Item -ItemType Directory -Force bundle | Out-Null
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}.exe
-          Copy-Item README.md,LICENSE,docs/distribution/INSTALL.md,docs/wiki/Install-and-first-launch.md bundle/
+          Copy-Item README.md,LICENSE,docs/distribution/INSTALL.md,docs/distribution/SERVICE.md,docs/container.md,docs/release-readiness.md,docs/wiki/Install-and-first-launch.md bundle/
           Compress-Archive -Path bundle/* -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
           (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
       - name: Attest release artifacts

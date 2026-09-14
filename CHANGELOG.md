@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Release archives now include the service-manager, container deployment, and
+  release-readiness guides alongside the installation documentation, so an
+  operator can deploy and verify the portable bundle without returning to the
+  source tree.
 - Headless CLI dispatch now uses a typed mode parser instead of validating a
   string and later relying on `unreachable!`; all single and batch modes have
   direct regression coverage.
