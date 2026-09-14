@@ -38,11 +38,15 @@ pub(crate) struct RunProfileSnapshot {
     #[serde(default = "default_auth_method")]
     pub(crate) source_auth: String,
     pub(crate) source_credential_id: String,
+    #[serde(default)]
+    pub(crate) source_oauth_refresh_credential_id: String,
     pub(crate) destination_host: String,
     pub(crate) destination_user: String,
     #[serde(default = "default_auth_method")]
     pub(crate) destination_auth: String,
     pub(crate) destination_credential_id: String,
+    #[serde(default)]
+    pub(crate) destination_oauth_refresh_credential_id: String,
     pub(crate) destination_port: String,
     pub(crate) destination_tls: String,
     pub(crate) destination_ca_bundle: String,
@@ -129,12 +133,20 @@ pub(crate) struct Profile {
     pub(crate) source_auth: String,
     #[serde(default)]
     pub(crate) source_credential_id: String,
+    /// Keyring reference for an optional automatic-refresh configuration
+    /// (token endpoint, operator-registered client ID/secret, refresh
+    /// token). Empty means the operator supplies a fresh access token by
+    /// hand, as before.
+    #[serde(default)]
+    pub(crate) source_oauth_refresh_credential_id: String,
     pub(crate) destination_host: String,
     pub(crate) destination_user: String,
     #[serde(default = "default_auth_method")]
     pub(crate) destination_auth: String,
     #[serde(default)]
     pub(crate) destination_credential_id: String,
+    #[serde(default)]
+    pub(crate) destination_oauth_refresh_credential_id: String,
     #[serde(default)]
     pub(crate) destination_port: String,
     #[serde(default = "default_destination_tls")]
@@ -232,6 +244,15 @@ pub(crate) fn auth_method_is_oauth(method: &str) -> bool {
     method == "oauth2"
 }
 
+/// The result of an attempted automatic OAuth refresh, distinguishing "this
+/// side is not using OAuth, or has no refresh configuration" (a no-op) from
+/// an actual successful exchange, so callers can report a meaningful status
+/// message rather than a bare boolean.
+pub(crate) enum OAuthRefreshOutcome {
+    NotConfigured,
+    Refreshed { expires_in: Option<u64> },
+}
+
 pub(crate) fn default_destination_tls() -> String {
     "imaps".into()
 }
@@ -305,6 +326,11 @@ impl Default for Form {
 }
 impl Form {
     pub(crate) const KEYRING_SERVICE: &'static str = "com.mailswiftsync.mailbox";
+    /// Deliberately a distinct keyring service from `KEYRING_SERVICE`, even
+    /// though an operator may reuse the same ID string for both entries: a
+    /// refresh configuration carries a client secret and refresh token, not
+    /// an access token, and must never be returned by a plain password load.
+    const OAUTH_REFRESH_KEYRING_SERVICE: &'static str = "com.mailswiftsync.oauth-refresh";
 
     /// Clone the non-secret migration defaults for a bulk row.
     ///
@@ -427,7 +453,11 @@ impl Form {
     /// Reload configured references immediately before live admission. The
     /// ordinary loader intentionally preserves a password typed into the
     /// current form; live promotion must instead use the current keyring
-    /// value when a credential reference is authoritative.
+    /// value when a credential reference is authoritative. When automatic
+    /// OAuth refresh is configured for a side, this also exchanges the
+    /// stored refresh token for a fresh access token, so a batch queue or a
+    /// resumed single mailbox does not launch with a token that expired
+    /// while it waited.
     pub(crate) fn reload_configured_keyring_credentials(&mut self) -> Result<(), String> {
         if !self.profile.source_credential_id.trim().is_empty() {
             self.load_keyring_password(true)?;
@@ -435,7 +465,106 @@ impl Form {
         if !self.profile.destination_credential_id.trim().is_empty() {
             self.load_keyring_password(false)?;
         }
+        self.refresh_oauth_access_token(true)?;
+        self.refresh_oauth_access_token(false)?;
         Ok(())
+    }
+
+    fn oauth_refresh_keyring_entry(&self, source: bool) -> Result<Option<Entry>, String> {
+        let id = if source {
+            self.profile.source_oauth_refresh_credential_id.trim()
+        } else {
+            self.profile.destination_oauth_refresh_credential_id.trim()
+        };
+        if id.is_empty() {
+            return Ok(None);
+        }
+        Entry::new(Self::OAUTH_REFRESH_KEYRING_SERVICE, id)
+            .map(Some)
+            .map_err(|error| format!("Could not open OS keyring entry `{id}`: {error}"))
+    }
+
+    /// Store an automatic-refresh configuration (token endpoint, registered
+    /// client credentials, and refresh token) under the keyring ID already
+    /// entered for this side. The ID itself is a non-secret profile field,
+    /// exactly like the existing password credential ID.
+    pub(crate) fn store_oauth_refresh_config(
+        &self,
+        source: bool,
+        config: &crate::oauth_refresh::OAuthRefreshConfig,
+    ) -> Result<(), String> {
+        let entry = self
+            .oauth_refresh_keyring_entry(source)?
+            .ok_or("Enter an OAuth refresh keyring ID before storing a refresh configuration.")?;
+        entry
+            .set_password(&crate::oauth_refresh::encode_refresh_config(config))
+            .map_err(|error| {
+                format!(
+                    "Could not store the OAuth refresh configuration in the OS keyring: {error}"
+                )
+            })
+    }
+
+    pub(crate) fn load_oauth_refresh_config(
+        &self,
+        source: bool,
+    ) -> Result<Option<crate::oauth_refresh::OAuthRefreshConfig>, String> {
+        let Some(entry) = self.oauth_refresh_keyring_entry(source)? else {
+            return Ok(None);
+        };
+        let stored = entry.get_password().map_err(|error| {
+            format!("Could not load the OAuth refresh configuration from the OS keyring: {error}")
+        })?;
+        crate::oauth_refresh::decode_refresh_config(&stored).map(Some)
+    }
+
+    pub(crate) fn delete_oauth_refresh_config(&self, source: bool) -> Result<(), String> {
+        let entry = self
+            .oauth_refresh_keyring_entry(source)?
+            .ok_or("Enter an OAuth refresh keyring ID before deleting a refresh configuration.")?;
+        entry.delete_credential().map_err(|error| {
+            format!("Could not delete the OS keyring OAuth refresh configuration: {error}")
+        })
+    }
+
+    /// Exchange a configured refresh token for a fresh access token and
+    /// install it as the session credential for this side. Returns
+    /// `Ok(OAuthRefreshOutcome::NotConfigured)` without any network activity
+    /// when the side is not using OAuth or has no refresh configuration, so
+    /// ordinary password-auth plans and operator-typed one-off tokens are
+    /// entirely unaffected.
+    pub(crate) fn refresh_oauth_access_token(
+        &mut self,
+        source: bool,
+    ) -> Result<OAuthRefreshOutcome, String> {
+        let auth_method = if source {
+            &self.profile.source_auth
+        } else {
+            &self.profile.destination_auth
+        };
+        if !auth_method_is_oauth(auth_method) {
+            return Ok(OAuthRefreshOutcome::NotConfigured);
+        }
+        let Some(config) = self.load_oauth_refresh_config(source)? else {
+            return Ok(OAuthRefreshOutcome::NotConfigured);
+        };
+        let side = if source { "source" } else { "destination" };
+        let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
+            .map_err(|error| format!("Could not refresh the {side} OAuth access token: {error}"))?;
+        let expires_in = refreshed.expires_in;
+        if source {
+            self.source_password = refreshed.access_token;
+        } else {
+            self.destination_password = refreshed.access_token;
+        }
+        if let Some(rotated_refresh_token) = refreshed.refresh_token {
+            let rotated = crate::oauth_refresh::OAuthRefreshConfig {
+                refresh_token: rotated_refresh_token,
+                ..config
+            };
+            self.store_oauth_refresh_config(source, &rotated)?;
+        }
+        Ok(OAuthRefreshOutcome::Refreshed { expires_in })
     }
 
     /// A process-local comparison value for the credential material used by
@@ -833,10 +962,16 @@ impl Form {
                 source_user: profile.source_user.clone(),
                 source_auth: profile.source_auth.clone(),
                 source_credential_id: profile.source_credential_id.clone(),
+                source_oauth_refresh_credential_id: profile
+                    .source_oauth_refresh_credential_id
+                    .clone(),
                 destination_host: profile.destination_host.clone(),
                 destination_user: profile.destination_user.clone(),
                 destination_auth: profile.destination_auth.clone(),
                 destination_credential_id: profile.destination_credential_id.clone(),
+                destination_oauth_refresh_credential_id: profile
+                    .destination_oauth_refresh_credential_id
+                    .clone(),
                 destination_port: profile.destination_port.clone(),
                 destination_tls: profile.destination_tls.clone(),
                 destination_ca_bundle: profile.destination_ca_bundle.clone(),
@@ -1137,7 +1272,7 @@ pub(crate) struct PreparedCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{Form, decode_report_run_snapshot, validate_certificate_pin};
+    use super::{Form, OAuthRefreshOutcome, decode_report_run_snapshot, validate_certificate_pin};
 
     #[test]
     fn report_snapshot_decode_allows_empty_legacy_snapshots() {
@@ -1174,5 +1309,27 @@ mod tests {
         assert!(!clone.dry_run);
         assert!(clone.source_password.is_empty());
         assert!(clone.destination_password.is_empty());
+    }
+
+    #[test]
+    fn oauth_refresh_is_a_no_op_for_password_authentication() {
+        let mut form = Form::default();
+        form.profile.source_auth = "password".into();
+        form.profile.source_oauth_refresh_credential_id = "some-id".into();
+        assert!(matches!(
+            form.refresh_oauth_access_token(true).unwrap(),
+            OAuthRefreshOutcome::NotConfigured
+        ));
+    }
+
+    #[test]
+    fn oauth_refresh_is_a_no_op_without_a_configured_refresh_credential_id() {
+        let mut form = Form::default();
+        form.profile.source_auth = "oauth2".into();
+        form.profile.source_oauth_refresh_credential_id = "   ".into();
+        assert!(matches!(
+            form.refresh_oauth_access_token(true).unwrap(),
+            OAuthRefreshOutcome::NotConfigured
+        ));
     }
 }

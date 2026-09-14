@@ -130,6 +130,17 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Saved migration profiles use the OS configuration directory and fail
   explicitly when it cannot be resolved; endpoint configuration is never
   silently persisted under a temporary path.
+- The imapsync OAuth 2.0 path now supports automatic access-token refresh.
+  An operator who has registered their own OAuth application with the
+  provider and obtained a refresh token can store the token endpoint,
+  client ID/secret, and refresh token under an OS-keyring ID; MailSwiftSync
+  exchanges it for a fresh access token immediately before each live launch
+  (single mailbox or each mailbox in a batch queue), follows refresh-token
+  rotation, and only performs `https://` token-endpoint requests over a
+  certificate-validated TLS connection built the same way as the IMAP
+  readiness probe. This remains provider-consent-free: MailSwiftSync still
+  does not implement an OAuth authorization flow, so the operator must
+  obtain the initial refresh token through the provider's own tooling.
 
 ## Available in 0.1
 
@@ -144,13 +155,17 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 
 ## Required before calling it production-ready
 
-- Provider consent flows, automatic OAuth token refresh, and equivalent unattended
-  secret-broker delivery remain outstanding. The imapsync path now supports
-  operator-supplied OAuth 2.0 access tokens with XOAUTH2, including keyring
-  references, private token-file delivery, redacted previews, and fresh
-  pre-live authentication. Remote Dovecot execution is deliberately disabled
-  until the application has a delivery mechanism that cannot expose credentials
-  through destination-host process inspection.
+- Provider consent flows and equivalent unattended secret-broker delivery
+  remain outstanding: MailSwiftSync still does not implement an OAuth
+  authorization flow, so an operator must register their own application and
+  obtain the initial refresh token through the provider's own tooling. The
+  imapsync path now supports operator-supplied OAuth 2.0 access tokens with
+  XOAUTH2, including keyring references, private token-file delivery,
+  redacted previews, fresh pre-live authentication, and (once a refresh
+  token is stored) automatic access-token refresh before each live launch.
+  Remote Dovecot execution is deliberately disabled until the application has
+  a delivery mechanism that cannot expose credentials through
+  destination-host process inspection.
 - Signed installers for Linux, Windows, and macOS, with checksums and reproducible release instructions. Artifact provenance exists, but native installer signing/notarization is still outstanding.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
 - Preflight checks for DNS, TCP/TLS, authentication, folder inventory, and

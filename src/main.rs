@@ -13,6 +13,7 @@ mod imap_probe;
 mod imap_protocol;
 mod migration_plan;
 mod oauth;
+mod oauth_refresh;
 mod output;
 mod plan_identity;
 mod process;
