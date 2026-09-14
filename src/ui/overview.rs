@@ -22,7 +22,10 @@ impl App {
             .unwrap_or(core::Phase::Discovery);
         let attention_count = self.ui_snapshot.mailbox_counts.needs_review;
         let mailbox_counts = self.ui_snapshot.mailbox_counts;
+        let batch_summary = self.bulk_queue_summary();
+        let has_bulk_jobs = batch_summary.total > 0;
         let has_durable_jobs = mailbox_counts.total > 0;
+        let has_mailboxes = has_durable_jobs || has_bulk_jobs;
         let next_action = recommended_next_action(
             phase,
             !self.preflight.is_empty(),
@@ -31,11 +34,7 @@ impl App {
         );
         self.overview_readiness_controls(ui);
         ui.add_space(14.0);
-        let workflow_index = workflow_step_index(
-            phase,
-            !self.preflight.is_empty(),
-            has_durable_jobs || !self.bulk_jobs.is_empty(),
-        );
+        let workflow_index = workflow_step_index(phase, !self.preflight.is_empty(), has_mailboxes);
         ui.group(|ui| {
             ui.label(RichText::new("MIGRATION WORKFLOW").strong().size(11.0));
             ui.horizontal_wrapped(|ui| {
@@ -131,11 +130,15 @@ impl App {
                 );
                 ui.heading(if project.is_some() {
                     "Project created"
+                } else if has_bulk_jobs {
+                    "Batch queue loaded"
                 } else {
                     "No project yet"
                 });
                 ui.label(if project.is_some() {
                     "State is durable and ready for review."
+                } else if has_bulk_jobs {
+                    "Review the imported rows, then run a durable preflight."
                 } else {
                     "Start by configuring endpoints or importing a mailbox list."
                 });
@@ -146,9 +149,18 @@ impl App {
                         .size(11.0)
                         .color(self.theme_colors().text_secondary),
                 );
-                if !has_durable_jobs {
+                if !has_mailboxes {
                     ui.heading("None configured");
                     ui.label("Use Mailboxes to review scope before running anything.");
+                } else if !has_durable_jobs {
+                    ui.heading(format!("{} queued", batch_summary.total));
+                    ui.label(format!(
+                        "{} ready · {} attention · {} unresolved",
+                        batch_summary.ready,
+                        batch_summary.attention,
+                        batch_summary.unresolved(),
+                    ));
+                    ui.label("Imported rows are not durable until preflight admission succeeds.");
                 } else {
                     ui.heading(format!("{} total", mailbox_counts.total));
                     ui.label(format!(
