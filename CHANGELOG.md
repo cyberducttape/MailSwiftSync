@@ -28,6 +28,9 @@ All notable changes to MailSwiftSync are documented here.
 - Extracted durable `MailboxState` and `Phase` wire/state definitions into
   `core/state.rs`, preserving the `core` API while reducing the ledger module's
   state-machine concentration.
+- Moved durable attention categories and their stable labels/actions into
+  `core/state.rs`, preserving wire values while further reducing policy in the
+  ledger implementation.
 - Extracted batch row selection by durable state and operator scope into the
   batch controller, with focused coverage for selected IDs and retry policy.
 - Moved elapsed-time presentation into `ui::status` with focused formatting tests, further reducing pure UI formatting logic in `main.rs`.

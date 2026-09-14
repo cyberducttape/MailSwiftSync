@@ -14,7 +14,7 @@ use std::{
 use uuid::Uuid;
 
 mod state;
-pub use state::{MailboxState, Phase};
+pub use state::{AttentionReason, MailboxState, Phase};
 
 fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
     if let Some(config) = config
@@ -52,98 +52,6 @@ fn normalized_destination_identity(destination_mailbox: &str, config: Option<&st
 
 const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;
 pub const CURRENT_SCHEMA_VERSION: i64 = 6;
-
-/// Durable operator-review categories. These are intentionally stable wire
-/// values: reports, automation, and future UI versions can classify a row
-/// without parsing human-facing run output.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum AttentionReason {
-    Interrupted,
-    VerificationIncomplete,
-    VerificationDifference,
-    ProcessIdentityUnverified,
-    AuthenticationFailed,
-    TransportFailed,
-    PolicyBlocked,
-    ConfigurationInvalid,
-    CapacityLimited,
-    MessageRejected,
-    Unknown,
-}
-
-impl AttentionReason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Interrupted => "interrupted",
-            Self::VerificationIncomplete => "verification_incomplete",
-            Self::VerificationDifference => "verification_difference",
-            Self::ProcessIdentityUnverified => "process_identity_unverified",
-            Self::AuthenticationFailed => "authentication_failed",
-            Self::TransportFailed => "transport_failed",
-            Self::PolicyBlocked => "policy_blocked",
-            Self::ConfigurationInvalid => "configuration_invalid",
-            Self::CapacityLimited => "capacity_limited",
-            Self::MessageRejected => "message_rejected",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Some(match value {
-            "interrupted" => Self::Interrupted,
-            "verification_incomplete" => Self::VerificationIncomplete,
-            "verification_difference" => Self::VerificationDifference,
-            "process_identity_unverified" => Self::ProcessIdentityUnverified,
-            "authentication_failed" => Self::AuthenticationFailed,
-            "transport_failed" => Self::TransportFailed,
-            "policy_blocked" => Self::PolicyBlocked,
-            "configuration_invalid" => Self::ConfigurationInvalid,
-            "capacity_limited" => Self::CapacityLimited,
-            "message_rejected" => Self::MessageRejected,
-            "unknown" => Self::Unknown,
-            _ => return None,
-        })
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Interrupted => "Interrupted; recovery review required",
-            Self::VerificationIncomplete => "Verification evidence is incomplete",
-            Self::VerificationDifference => "Verification found differences",
-            Self::ProcessIdentityUnverified => "Process ownership could not be verified",
-            Self::AuthenticationFailed => "Authentication failed",
-            Self::TransportFailed => "Network or remote-service failure",
-            Self::PolicyBlocked => "Blocked by migration policy",
-            Self::ConfigurationInvalid => "Configuration is invalid",
-            Self::CapacityLimited => "Capacity or rate limit reached",
-            Self::MessageRejected => "A message was rejected by the destination",
-            Self::Unknown => "Operator review required",
-        }
-    }
-
-    pub fn recommended_action(self) -> &'static str {
-        match self {
-            Self::Interrupted | Self::ProcessIdentityUnverified => {
-                "Confirm no migration process remains, then retry"
-            }
-            Self::VerificationIncomplete | Self::VerificationDifference => {
-                "Review the evidence and reconcile before retrying or completing"
-            }
-            Self::AuthenticationFailed => {
-                "Verify credentials and endpoint permissions before retrying"
-            }
-            Self::TransportFailed => "Check endpoint health and retry with bounded backoff",
-            Self::PolicyBlocked | Self::ConfigurationInvalid => {
-                "Correct the migration configuration or policy, then rerun preflight"
-            }
-            Self::CapacityLimited => "Reduce concurrency or rate and retry after capacity recovers",
-            Self::MessageRejected => {
-                "Review rejected-message detail and destination policy before retrying"
-            }
-            Self::Unknown => "Inspect the durable run detail before choosing an action",
-        }
-    }
-}
 
 fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionReason> {
     if mailbox_state == "verification_difference" {
