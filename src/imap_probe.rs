@@ -81,6 +81,112 @@ fn read_imap_tagged<S: Read>(
     }
 }
 
+const MAX_IMAP_LIST_LINE_BYTES: usize = 64 * 1024;
+const MAX_IMAP_LIST_LITERAL_BYTES: usize = 1024 * 1024;
+const MAX_IMAP_LIST_MAILBOXES: usize = 100_000;
+const MAX_IMAP_LIST_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ListInventorySummary {
+    mailbox_count: usize,
+    special_use_mailboxes: usize,
+}
+
+/// Consume an authenticated LIST response without retaining the complete
+/// inventory. LIST may contain literals and arbitrarily many folders, so the
+/// safety limits apply to individual records, literals, total bytes processed,
+/// and mailbox count rather than to one growing response string.
+fn read_imap_list_response<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    buffer: &mut [u8; 4096],
+) -> Result<ListInventorySummary, String> {
+    let mut line = Vec::new();
+    let mut total_bytes = 0_u64;
+    let mut literal_remaining = 0_usize;
+    let mut literal_separator_remaining = 0_u8;
+    let mut summary = ListInventorySummary::default();
+    loop {
+        let count = stream.read(buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            return Err(format!("IMAP connection closed before {tag} completed"));
+        }
+        total_bytes = total_bytes.saturating_add(count as u64);
+        if total_bytes > MAX_IMAP_LIST_TOTAL_BYTES {
+            return Err("IMAP LIST response exceeded the processing limit".into());
+        }
+        let mut offset = 0;
+        while offset < count {
+            if literal_remaining > 0 {
+                let consumed = literal_remaining.min(count - offset);
+                literal_remaining -= consumed;
+                offset += consumed;
+                if literal_remaining == 0 {
+                    literal_separator_remaining = 2;
+                }
+                continue;
+            }
+            if literal_separator_remaining > 0 {
+                let consumed = literal_separator_remaining.min((count - offset) as u8);
+                literal_separator_remaining -= consumed;
+                offset += consumed as usize;
+                continue;
+            }
+            let byte = buffer[offset];
+            offset += 1;
+            line.push(byte);
+            if line.len() > MAX_IMAP_LIST_LINE_BYTES {
+                return Err("IMAP LIST response record exceeded 64 KiB".into());
+            }
+            if byte != b'\n' {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&line);
+            let text = text.trim_end_matches(['\r', '\n']);
+            if is_untagged_response(text, "LIST") {
+                summary.mailbox_count = summary.mailbox_count.saturating_add(1);
+                if summary.mailbox_count > MAX_IMAP_LIST_MAILBOXES {
+                    return Err(format!(
+                        "IMAP LIST response exceeded the {MAX_IMAP_LIST_MAILBOXES}-mailbox limit"
+                    ));
+                }
+                if crate::imap_protocol::list_has_attribute(text, r"\ALL")
+                    || crate::imap_protocol::list_has_attribute(text, r"\ARCHIVE")
+                    || crate::imap_protocol::list_has_attribute(text, r"\DRAFTS")
+                    || crate::imap_protocol::list_has_attribute(text, r"\FLAGGED")
+                    || crate::imap_protocol::list_has_attribute(text, r"\JUNK")
+                    || crate::imap_protocol::list_has_attribute(text, r"\SENT")
+                    || crate::imap_protocol::list_has_attribute(text, r"\TRASH")
+                {
+                    summary.special_use_mailboxes = summary.special_use_mailboxes.saturating_add(1);
+                }
+            }
+            if is_tagged_response(text, tag) {
+                let status = text.split_whitespace().nth(1);
+                if !status.is_some_and(|status| atom_eq(status, "OK")) {
+                    return Err(format!("IMAP LIST command {tag} failed"));
+                }
+                return Ok(summary);
+            }
+            if let Some(literal_size) = list_literal_size(text)
+                && literal_size > 0
+            {
+                if literal_size > MAX_IMAP_LIST_LITERAL_BYTES {
+                    return Err("IMAP LIST literal exceeded 1 MiB".into());
+                }
+                literal_remaining = literal_size;
+            }
+            line.clear();
+        }
+    }
+}
+
+fn list_literal_size(line: &str) -> Option<usize> {
+    let end = line.strip_suffix('}')?;
+    let start = end.rfind('{')? + 1;
+    end[start..].parse().ok()
+}
+
 fn authenticated_list_command(request_special_use: bool) -> &'static [u8] {
     if request_special_use {
         b"a005 LIST \"\" \"*\" RETURN (SPECIAL-USE)\r\n"
@@ -323,21 +429,18 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
             "SPECIAL-USE",
         )))
         .map_err(|e| e.to_string())?;
-    let mut list_response = String::new();
-    read_imap_tagged(&mut stream, "a005", &mut list_response, &mut buffer)?;
-    if !imap_command_succeeded(&list_response, "a005") {
-        return Err(format!("{host}: folder inventory failed"));
-    }
-    if !list_response
-        .lines()
-        .any(|line| is_untagged_response(line, "LIST"))
-    {
+    let list_summary = read_imap_list_response(&mut stream, "a005", &mut buffer)
+        .map_err(|error| format!("{host}: folder inventory failed: {error}"))?;
+    if list_summary.mailbox_count == 0 {
         return Err(format!(
             "{host}: folder inventory returned no untagged LIST records"
         ));
     }
-    let caps =
-        crate::core::ServerCapabilities::parse_with_inventory(&post_auth_response, &list_response);
+    let caps = crate::core::ServerCapabilities::from_inventory_summary(
+        &post_auth_response,
+        list_summary.mailbox_count,
+        list_summary.special_use_mailboxes,
+    );
     if caps.values.is_empty() {
         return Err(format!(
             "{host}: server did not return a CAPABILITY response"
@@ -408,7 +511,8 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::authenticated_list_command;
+    use super::{authenticated_list_command, read_imap_list_response};
+    use std::io::Cursor;
 
     #[test]
     fn list_request_asks_for_rfc6154_attributes_when_supported() {
@@ -419,6 +523,53 @@ mod tests {
         assert_eq!(
             authenticated_list_command(false),
             b"a005 LIST \"\" \"*\"\r\n"
+        );
+    }
+
+    #[test]
+    fn list_response_streaming_parser_does_not_retain_a_megabyte_string() {
+        let mut response = String::new();
+        for index in 0..20_000 {
+            response.push_str(&format!(
+                "* LIST (\\HasNoChildren) \"/\" \"folder-{index:0>80}\"\r\n"
+            ));
+        }
+        response.push_str("a005 OK LIST completed\r\n");
+        assert!(response.len() > 1_048_576);
+        let mut stream = Cursor::new(response.into_bytes());
+        let mut buffer = [0_u8; 4096];
+        let summary = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap();
+        assert_eq!(summary.mailbox_count, 20_000);
+        assert_eq!(summary.special_use_mailboxes, 0);
+    }
+
+    #[test]
+    fn list_response_streaming_parser_skips_bounded_literals() {
+        let response =
+            b"* LIST (\\HasNoChildren) \"/\" {11}\r\n* LIST fake\r\na005 OK LIST completed\r\n";
+        let mut stream = Cursor::new(response);
+        let mut buffer = [0_u8; 4096];
+        let summary = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap();
+        assert_eq!(summary.mailbox_count, 1);
+    }
+
+    #[test]
+    fn list_response_streaming_parser_rejects_oversized_records_and_literals() {
+        let oversized_line = format!("* LIST ({})\r\na005 OK\r\n", "x".repeat(65 * 1024));
+        let mut line_stream = Cursor::new(oversized_line.into_bytes());
+        let mut buffer = [0_u8; 4096];
+        assert!(
+            read_imap_list_response(&mut line_stream, "a005", &mut buffer)
+                .unwrap_err()
+                .contains("record exceeded")
+        );
+
+        let mut literal_stream =
+            Cursor::new(b"* LIST (\\HasNoChildren) \"/\" {1048577}\r\na005 OK\r\n");
+        assert!(
+            read_imap_list_response(&mut literal_stream, "a005", &mut buffer)
+                .unwrap_err()
+                .contains("literal exceeded")
         );
     }
 }

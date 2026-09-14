@@ -16,7 +16,39 @@ impl ServerCapabilities {
         Self::parse_with_inventory(response, "")
     }
 
+    #[cfg(test)]
     pub fn parse_with_inventory(capability_response: &str, list_response: &str) -> Self {
+        let (mailbox_count, special_use_mailboxes) = list_response
+            .lines()
+            .filter(|line| is_untagged_list_record(line))
+            .fold((0, 0), |(mailbox_count, special_use_mailboxes), line| {
+                let special_use = [
+                    r"\ALL",
+                    r"\ARCHIVE",
+                    r"\DRAFTS",
+                    r"\FLAGGED",
+                    r"\JUNK",
+                    r"\SENT",
+                    r"\TRASH",
+                ]
+                .iter()
+                .any(|attribute| crate::imap_protocol::list_has_attribute(line, attribute));
+                (
+                    mailbox_count + 1,
+                    special_use_mailboxes + usize::from(special_use),
+                )
+            });
+        Self::from_inventory_summary(capability_response, mailbox_count, special_use_mailboxes)
+    }
+
+    /// Build the capability model from a streaming LIST summary. The probe
+    /// must not retain an entire folder inventory just to calculate these
+    /// bounded facts.
+    pub fn from_inventory_summary(
+        capability_response: &str,
+        mailbox_count: usize,
+        special_use_mailboxes: usize,
+    ) -> Self {
         let mut values = BTreeSet::new();
         for line in capability_response.lines() {
             let mut fields = line.split_whitespace();
@@ -30,30 +62,10 @@ impl ServerCapabilities {
                 }
             }
         }
-        let inventory_lines = list_response
-            .lines()
-            .filter(|line| is_untagged_list_record(line))
-            .collect::<Vec<_>>();
-        let special_use_mailboxes = inventory_lines
-            .iter()
-            .filter(|line| {
-                [
-                    r"\ALL",
-                    r"\ARCHIVE",
-                    r"\DRAFTS",
-                    r"\FLAGGED",
-                    r"\JUNK",
-                    r"\SENT",
-                    r"\TRASH",
-                ]
-                .iter()
-                .any(|attribute| crate::imap_protocol::list_has_attribute(line, attribute))
-            })
-            .count();
         Self {
             values,
-            inventory_complete: !inventory_lines.is_empty(),
-            mailbox_count: inventory_lines.len(),
+            inventory_complete: mailbox_count > 0,
+            mailbox_count,
             special_use_mailboxes,
             quota_observed: false,
             quota_exceeded: false,
@@ -109,6 +121,7 @@ impl ServerCapabilities {
     }
 }
 
+#[cfg(test)]
 fn is_untagged_list_record(line: &str) -> bool {
     crate::imap_protocol::is_untagged_response(line, "LIST")
 }
