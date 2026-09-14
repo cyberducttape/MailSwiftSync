@@ -4,9 +4,241 @@ use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
 use crate::ui::{StatusSeverity, WorkspaceView, format_phase_name};
+use crate::ui::{recommended_next_action, workflow_step_index};
 use eframe::egui::{self, RichText};
 
 impl App {
+    fn overview_view(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Migration overview");
+        ui.label(
+            RichText::new("A calm, evidence-led workspace for moving mailboxes safely.")
+                .color(self.theme_colors().text_secondary),
+        );
+        ui.add_space(16.0);
+        let project = self.ui_snapshot.project.clone();
+        let phase = project
+            .as_ref()
+            .map(|value| value.phase)
+            .unwrap_or(core::Phase::Discovery);
+        let attention_count = self.ui_snapshot.mailbox_counts.needs_review;
+        let mailbox_counts = self.ui_snapshot.mailbox_counts;
+        let has_durable_jobs = mailbox_counts.total > 0;
+        let next_action = recommended_next_action(
+            phase,
+            !self.preflight.is_empty(),
+            attention_count,
+            self.running(),
+        );
+        self.overview_readiness_controls(ui);
+        ui.add_space(14.0);
+        let workflow_index = workflow_step_index(
+            phase,
+            !self.preflight.is_empty(),
+            has_durable_jobs || !self.bulk_jobs.is_empty(),
+        );
+        ui.group(|ui| {
+            ui.label(RichText::new("MIGRATION WORKFLOW").strong().size(11.0));
+            ui.horizontal_wrapped(|ui| {
+                for (index, (title, detail)) in [
+                    ("Connect", "endpoints"),
+                    ("Assess", "readiness"),
+                    ("Preflight", "review"),
+                    ("Migrate", "execute"),
+                    ("Verify", "evidence"),
+                    ("Deliver", "customer proof"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let (marker, color) = if index < workflow_index {
+                        ("✓", self.theme_colors().success)
+                    } else if index == workflow_index {
+                        ("●", self.theme_colors().info)
+                    } else {
+                        ("○", self.theme_colors().text_secondary)
+                    };
+                    ui.group(|ui| {
+                        ui.label(
+                            RichText::new(format!("{marker} {title}"))
+                                .strong()
+                                .color(color),
+                        );
+                        ui.label(
+                            RichText::new(detail).color(self.theme_colors().text_secondary),
+                        );
+                    });
+                    if index < 5 {
+                        ui.label(RichText::new("→").color(self.theme_colors().text_secondary));
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("The highlighted step is the current operator focus. A completed-looking step never bypasses the durable execution gates.")
+                    .size(11.0)
+                    .color(self.theme_colors().text_secondary),
+            );
+        });
+        ui.add_space(14.0);
+        if project.is_none() && self.bulk_jobs.is_empty() {
+            ui.group(|ui| {
+                ui.heading("Start your first migration");
+                ui.label("MailSwiftSync guides every migration through a reviewable preflight before any destination changes are allowed.");
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (number, title, detail) in [
+                        ("1", "Connect", "Enter source and destination endpoints."),
+                        ("2", "Assess", "Run a dry preflight and review the plan."),
+                        ("3", "Prove", "Migrate, verify, and export customer evidence."),
+                    ] {
+                        ui.group(|ui| {
+                            ui.label(RichText::new(format!("{number}  {title}")).strong());
+                            ui.label(RichText::new(detail).color(self.theme_colors().text_secondary));
+                        });
+                    }
+                });
+                if ui.button("Configure first mailbox  →").clicked() {
+                    self.active_view = WorkspaceView::Plan;
+                }
+                ui.label(RichText::new("For multiple mailboxes, use Batch after reviewing one representative pilot.").color(self.theme_colors().text_secondary));
+            });
+            ui.add_space(14.0);
+        }
+        ui.group(|ui| {
+            ui.label(
+                RichText::new("CURRENT PHASE")
+                    .size(11.0)
+                    .strong()
+                    .color(self.theme_colors().text_secondary),
+            );
+            ui.heading(format_phase_name(phase));
+            if attention_count > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "{} mailbox item(s) need attention",
+                        attention_count
+                    ))
+                    .color(self.theme_colors().danger),
+                );
+            }
+        });
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            ui.group(|ui| {
+                ui.label(
+                    RichText::new("PROJECT STATUS")
+                        .size(11.0)
+                        .color(self.theme_colors().text_secondary),
+                );
+                ui.heading(if project.is_some() {
+                    "Project created"
+                } else {
+                    "No project yet"
+                });
+                ui.label(if project.is_some() {
+                    "State is durable and ready for review."
+                } else {
+                    "Start by configuring endpoints or importing a mailbox list."
+                });
+            });
+            ui.group(|ui| {
+                ui.label(
+                    RichText::new("MAILBOXES")
+                        .size(11.0)
+                        .color(self.theme_colors().text_secondary),
+                );
+                if !has_durable_jobs {
+                    ui.heading("None configured");
+                    ui.label("Use Mailboxes to review scope before running anything.");
+                } else {
+                    ui.heading(format!("{} total", mailbox_counts.total));
+                    ui.label(format!(
+                        "{} ready · {} running · {} verified",
+                        mailbox_counts.ready, mailbox_counts.running, mailbox_counts.verified,
+                    ));
+                    if attention_count > 0 {
+                        ui.label(
+                            RichText::new(format!(
+                                "{} require operator attention",
+                                attention_count
+                            ))
+                            .color(self.theme_colors().danger),
+                        );
+                    }
+                }
+            });
+            ui.group(|ui| {
+                ui.label(
+                    RichText::new("EVIDENCE")
+                        .size(11.0)
+                        .color(self.theme_colors().text_secondary),
+                );
+                ui.heading(if phase == core::Phase::Complete {
+                    "Available"
+                } else {
+                    "Pending"
+                });
+                ui.label("Open Verification to review evidence and export the customer report.");
+            });
+        });
+        ui.add_space(16.0);
+        ui.group(|ui| {
+            ui.heading("Recommended next step");
+            ui.label(next_action);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        !self.workspace_read_only,
+                        egui::Button::new("Open migration plan  →"),
+                    )
+                    .clicked()
+                {
+                    self.active_view = WorkspaceView::Plan;
+                }
+                if ui
+                    .add_enabled(
+                        !self.workspace_read_only,
+                        egui::Button::new("Refresh preflight assessment"),
+                    )
+                    .clicked()
+                {
+                    self.assess_plan();
+                }
+                if ui
+                    .add_enabled(
+                        !self.workspace_read_only,
+                        egui::Button::new("Import mailbox list"),
+                    )
+                    .clicked()
+                {
+                    self.bulk_open = true;
+                }
+            });
+        });
+        ui.add_space(14.0);
+        ui.label(RichText::new("Safety contract").strong());
+        ui.horizontal_wrapped(|ui| {
+            for text in [
+                "Preflight is the default",
+                "Saved profiles exclude passwords",
+                "Source mail is read-only by default",
+            ] {
+                ui.label(RichText::new(format!("✓ {text}")).color(self.theme_colors().success));
+            }
+            if self.form.profile.source_tls == "plain" {
+                ui.label(
+                    RichText::new("! Source transport is cleartext by explicit configuration")
+                        .color(self.theme_colors().danger),
+                );
+            } else {
+                ui.label(
+                    RichText::new("✓ Encrypted source transport with certificate verification")
+                        .color(self.theme_colors().success),
+                );
+            }
+        });
+    }
+
     pub(crate) fn source_transport_warning(&mut self, ui: &mut egui::Ui) {
         if self.form.profile.source_tls != "plain" {
             return;
