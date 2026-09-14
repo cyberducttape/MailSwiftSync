@@ -2834,109 +2834,11 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        let snapshot = self
-            .store
-            .project_report_snapshot(project_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("The durable migration project no longer exists.")?;
-        if snapshot.mailboxes.is_empty() {
-            return Err("The project has no mailbox jobs to report.".into());
-        }
-        let project = snapshot.project;
-        let mailboxes = snapshot
-            .mailboxes
-            .into_iter()
-            .map(|mailbox| {
-                let job = mailbox.job;
-                let attention_reason = mailbox.attention_reason;
-                match mailbox.evidence {
-                    Some((evidence_run_id, evidence, plan_snapshot)) => {
-                        let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
-                        let digest = evidence_digest(
-                            &evidence_run_id,
-                            &plan_snapshot,
-                            &evidence,
-                        );
-                        Ok(serde_json::json!({
-                            "id": job.id,
-                            "source_mailbox": job.source_mailbox,
-                            "destination_mailbox": job.destination_mailbox,
-                            "state": job.state,
-                            "attention_reason": attention_reason.map(|reason| reason.as_str()),
-                            "recommended_action": attention_reason.map(|reason| reason.recommended_action()),
-                            "verification_acceptance": mailbox.acceptance,
-                            "evidence": {
-                                "run_id": evidence_run_id,
-                                "scope": evidence.evidence_scope().label(),
-                                "evidence_level": evidence.evidence_level(),
-                                "authoritative": evidence.authoritative,
-                                "evidence_digest": digest,
-                                "source_folders": evidence.source_folders,
-                                "destination_folders": evidence.destination_folders,
-                                "source_messages": evidence.source_messages,
-                                "destination_messages": evidence.destination_messages,
-                                "source_bytes": evidence.source_bytes,
-                                "destination_bytes": evidence.destination_bytes,
-                                "unmatched_messages": evidence.unmatched_messages,
-                                "failed_messages": evidence.failed_messages,
-                            }
-                        }))
-                    }
-                    None => Ok(serde_json::json!({
-                        "id": job.id,
-                        "source_mailbox": job.source_mailbox,
-                        "destination_mailbox": job.destination_mailbox,
-                        "state": job.state,
-                        "attention_reason": attention_reason.map(|reason| reason.as_str()),
-                        "recommended_action": attention_reason.map(|reason| reason.recommended_action()),
-                        "verification_acceptance": mailbox.acceptance,
-                        "evidence": null
-                    })),
-                }
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let run_values = snapshot
-            .runs
-            .into_iter()
-            .map(|run| {
-                let value = run.run;
-                Ok(serde_json::json!({
-                    "id": value.id,
-                    "job_id": value.job_id,
-                    "parent_run_id": value.parent_run_id,
-                    "engine": value.engine,
-                    "engine_version": run.engine_version,
-                    "phase_at_start": value.phase_at_start,
-                    "plan_snapshot_sha256": plan_snapshot_sha256(&value.plan_snapshot),
-                    "status": value.status,
-                    "started_at": value.started_at,
-                    "finished_at": value.finished_at,
-                    "detail": value.detail,
-                }))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let value = serde_json::json!({
-            "format": "mailswiftsync-project-report",
-            "format_version": 2,
-            "application_version": env!("CARGO_PKG_VERSION"),
-            "run_manifest_complete": true,
-            "project": {
-                "id": project.id,
-                "name": project.name,
-                "source_endpoint": project.source_endpoint,
-                "destination_endpoint": project.destination_endpoint,
-                "phase": format!("{:?}", project.phase),
-            },
-            "mailboxes": mailboxes,
-            "runs": run_values,
-            "note": "The run manifest contains every durable run for this project. Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
-        });
-        let value = with_proof_digest(value)?;
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-project-report.json")
             .save_file()
             .ok_or("Report export cancelled.")?;
-        let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+        let report = reports::operator::build_project_json(&self.store, project_id)?;
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
