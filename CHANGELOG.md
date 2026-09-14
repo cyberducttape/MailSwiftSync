@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Documented the Windows service-wrapper prerequisite for Job Object breakaway
+  and the fail-closed behavior when the host policy denies child containment.
 - Windows engine launches now request breakaway from an enclosing job before
   attaching to MailSwiftSync's own kill-on-close Job Object. The native test
   uses the same launch configuration, allowing supervised descendants to be

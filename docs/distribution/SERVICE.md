@@ -89,6 +89,14 @@ the release checksum before installation, and collect wrapper stdout/stderr as
 restricted operational logs. Do not place passwords or OAuth tokens in the
 wrapper command line, environment configuration, or service definition.
 
+MailSwiftSync requests `CREATE_BREAKAWAY_FROM_JOB` before assigning an engine
+to its own kill-on-close Job Object. This is required when the wrapper or host
+already places the controller in a Windows job. The service account and wrapper
+policy must permit that breakaway; if the host denies it, MailSwiftSync fails
+closed before starting the engine rather than running an unowned migration
+process. Validate this prerequisite with a preflight on the target service
+host before scheduling a customer migration window.
+
 ## Operational boundary
 
 This deployment pattern is appropriate for restart-aware supervision of work
