@@ -1,4 +1,4 @@
-use crate::{auth_method_is_oauth, credentials::SecretString};
+use crate::{App, StatusSeverity, auth_method_is_oauth, credentials::SecretString};
 use eframe::egui::{self, Color32, RichText};
 
 use super::ThemeColors;
@@ -153,4 +153,99 @@ pub(crate) fn render_account(
             );
         }
     });
+}
+
+impl App {
+    pub(crate) fn keyring_dialog(&mut self, ctx: &egui::Context) {
+        if !self.keyring_open {
+            return;
+        }
+        let mut open = self.keyring_open;
+        egui::Window::new("OS keyring credentials")
+            .open(&mut open)
+            .default_width(620.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Keyring IDs are non-secret references saved in the profile. Passwords and OAuth access tokens stay in the operating system credential store and are loaded only into the active session.",
+                    )
+                    .color(self.theme_colors().text_secondary),
+                );
+                ui.add_space(8.0);
+                let editable = !self.running();
+                ui.add_enabled_ui(editable, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Source ID");
+                        ui.text_edit_singleline(&mut self.form.profile.source_credential_id);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Destination ID");
+                        ui.text_edit_singleline(&mut self.form.profile.destination_credential_id);
+                    });
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let source_label = if auth_method_is_oauth(&self.form.profile.source_auth) {
+                            "Store source token"
+                        } else {
+                            "Store source password"
+                        };
+                        if ui.button(source_label).clicked() {
+                            match self.form.store_keyring_password(true) {
+                                Ok(()) => self.set_status("Source credential stored in OS keyring", StatusSeverity::Success),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
+                        }
+                        if ui.button("Load source").clicked() {
+                            match self.form.load_keyring_password(true) {
+                                Ok(()) => self.set_status("Source credential loaded", StatusSeverity::Success),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
+                        }
+                        if ui.button("Delete source").clicked() {
+                            match self.form.delete_keyring_password(true) {
+                                Ok(()) => self.set_status("Source credential deleted from OS keyring", StatusSeverity::Success),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let destination_label = if auth_method_is_oauth(&self.form.profile.destination_auth) {
+                            "Store destination token"
+                        } else {
+                            "Store destination password"
+                        };
+                        if ui.button(destination_label).clicked() {
+                            match self.form.store_keyring_password(false) {
+                                Ok(()) => self.set_status("Destination credential stored in OS keyring", StatusSeverity::Success),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
+                        }
+                        if ui.button("Load destination").clicked() {
+                            match self.form.load_keyring_password(false) {
+                                Ok(()) => self.set_status("Destination credential loaded", StatusSeverity::Success),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
+                        }
+                        if ui.button("Delete destination").clicked() {
+                            match self.form.delete_keyring_password(false) {
+                                Ok(()) => self.set_status("Destination credential deleted from OS keyring", StatusSeverity::Success),
+                                Err(error) => self.set_status(error, StatusSeverity::Error),
+                            }
+                        }
+                    });
+                });
+                if !editable {
+                    ui.label(RichText::new("Credential settings are locked while a migration is running.").color(self.theme_colors().text_secondary));
+                }
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering.",
+                    )
+                    .size(11.0)
+                    .color(self.theme_colors().danger),
+                );
+            });
+        self.keyring_open = open;
+    }
 }
