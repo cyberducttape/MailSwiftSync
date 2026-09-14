@@ -14,12 +14,10 @@ mod single_admission;
 pub(crate) use batch::{
     BatchExecutionMode, BatchStartContext, BatchStartDecision, BulkConfirmationSummary,
     BulkQueueSummary, BulkRetryScope, BulkStateSet, batch_mailbox_state, batch_start_decision,
-    is_verified_terminal_state, selected_batch_indices,
+    is_verified_terminal_state,
 };
 pub(crate) use batch_admission::{
-    admit_batch_run, batch_project_identity, durable_batch_profile_config,
-    durable_single_identity_matches, prepare_batch_project, prepare_batch_run,
-    prepare_selected_batch_jobs,
+    BatchLaunchRequest, admit_batch_launch, durable_single_identity_matches,
 };
 pub(crate) use batch_completion::{BatchChildCompletion, finish_batch_child};
 pub(crate) use batch_worker::spawn_batch_worker;

@@ -1,6 +1,7 @@
 //! Batch admission and queue policy shared by GUI and headless callers.
 
 use super::batch::BatchExecutionMode;
+use super::batch::BulkRetryScope;
 use super::run::{ActiveRunContext, RunKind};
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
 use std::collections::HashSet;
@@ -9,6 +10,133 @@ pub(crate) struct BatchProjectIdentity {
     pub(crate) name: String,
     pub(crate) source_endpoint: String,
     pub(crate) destination_endpoint: String,
+}
+
+pub(crate) struct BatchLaunchAdmission {
+    pub(crate) project_id: String,
+    pub(crate) job_ids: Vec<String>,
+    pub(crate) selected_indices: Vec<usize>,
+    pub(crate) jobs: Vec<BulkJob>,
+    pub(crate) prepared: PreparedBatchRun,
+    pub(crate) active_run: ActiveRunContext,
+}
+
+pub(crate) struct BatchLaunchRequest<'a> {
+    pub(crate) store: &'a core::StateStore,
+    pub(crate) requested_project_id: Option<&'a str>,
+    pub(crate) source_jobs: &'a [BulkJob],
+    pub(crate) queue_job_ids: &'a [String],
+    pub(crate) selected_ids: &'a HashSet<String>,
+    pub(crate) retry_scope: BulkRetryScope,
+    pub(crate) mode: BatchExecutionMode,
+    pub(crate) fallback_profile: &'a Profile,
+    pub(crate) expected_credential_fingerprints: &'a [Option<String>],
+    pub(crate) run_id: &'a str,
+}
+
+/// Perform the complete durable batch admission sequence before the UI owns
+/// any worker or process state. This is the shared controller boundary for
+/// GUI and headless batch launches.
+pub(crate) fn admit_batch_launch(
+    request: BatchLaunchRequest<'_>,
+) -> Result<BatchLaunchAdmission, String> {
+    let BatchLaunchRequest {
+        store,
+        requested_project_id,
+        source_jobs,
+        queue_job_ids,
+        selected_ids,
+        retry_scope,
+        mode,
+        fallback_profile,
+        expected_credential_fingerprints,
+        run_id,
+    } = request;
+    let durable_admissions = if let Some(project_id) =
+        requested_project_id.filter(|_| queue_job_ids.len() == source_jobs.len())
+    {
+        store
+            .batch_admission_states(project_id, queue_job_ids)
+            .map_err(|error| {
+                format!(
+                    "Could not read durable batch admission state; batch was not started: {error}"
+                )
+            })?
+            .into_iter()
+            .map(Some)
+            .collect::<Vec<_>>()
+    } else {
+        vec![None; source_jobs.len()]
+    };
+    let durable_states = durable_admissions
+        .iter()
+        .map(|admission| admission.as_ref().map(|value| value.state.clone()))
+        .collect::<Vec<_>>();
+    let selected_indices = super::batch::selected_batch_indices(
+        source_jobs.len(),
+        queue_job_ids,
+        &durable_states,
+        selected_ids,
+        retry_scope,
+    );
+    if selected_indices.is_empty() {
+        return Err(format!(
+            "No mailboxes match the selected live retry scope: {}.",
+            retry_scope.label()
+        ));
+    }
+    let jobs = prepare_selected_batch_jobs(
+        source_jobs,
+        &selected_indices,
+        &durable_admissions,
+        mode,
+        expected_credential_fingerprints,
+    )?;
+    let concurrency = fallback_profile.batch_concurrency.clamp(1, 16);
+    validate_batch_throttle(fallback_profile, concurrency)?;
+    let mailboxes = jobs
+        .iter()
+        .map(|job| {
+            let config = durable_batch_profile_config(&job.form.profile)?;
+            Ok((
+                job.form.profile.source_user.clone(),
+                job.form.profile.destination_user.clone(),
+                config,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let identity = batch_project_identity(&jobs, fallback_profile);
+    let (project_id, job_ids) = prepare_batch_project(
+        store,
+        requested_project_id,
+        &mailboxes,
+        &identity.name,
+        &identity.source_endpoint,
+        &identity.destination_endpoint,
+    )?;
+    let prepared = prepare_batch_run(
+        &jobs,
+        &selected_indices,
+        &job_ids,
+        &durable_admissions,
+        mode,
+    )?;
+    let active_run = admit_batch_run(
+        store,
+        &project_id,
+        run_id,
+        mode,
+        fallback_profile.engine,
+        prepared.clone(),
+    )?;
+    Ok(BatchLaunchAdmission {
+        project_id,
+        job_ids,
+        selected_indices,
+        jobs,
+        prepared,
+        active_run,
+    })
 }
 
 /// Derive durable batch-project metadata from the admitted queue. Keeping
@@ -294,6 +422,7 @@ pub(crate) fn prepare_selected_batch_jobs(
     Ok(jobs)
 }
 
+#[derive(Clone)]
 pub(crate) struct PreparedBatchRun {
     pub(crate) selected_job_ids: Vec<String>,
     pub(crate) queue_checkpoints: Vec<Option<String>>,

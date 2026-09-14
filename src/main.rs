@@ -31,22 +31,22 @@ use controller::batch_admission::canonical_destination_identity;
 use controller::batch_admission::duplicate_destination;
 #[cfg(test)]
 use controller::batch_admission::matches_queue;
-use controller::batch_admission::{apply_keyring_id, selection_value, validate_batch_throttle};
+use controller::batch_admission::{apply_keyring_id, selection_value};
+#[cfg(test)]
+use controller::batch_admission::{durable_batch_profile_config, validate_batch_throttle};
 use controller::failure::{
     FailureClass, classified_failure_detail, classify_failure, terminal_phase_advance_allowed,
 };
 #[cfg(test)]
 use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
-    ActiveRunContext, BatchExecutionMode, BatchStartContext, BatchStartDecision,
-    BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, CapabilityProbeResult,
-    LiveAuthProof, RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext,
-    SingleStartDecision, admit_batch_run, admit_single_run, assess_plan, batch_mailbox_state,
-    batch_project_identity, batch_start_decision, capability_observation_matches,
-    capability_probe_result_matches, durable_batch_profile_config, durable_single_identity_matches,
-    finish_batch_child, is_verified_terminal_state, prepare_batch_project, prepare_batch_run,
-    prepare_selected_batch_jobs, selected_batch_indices, single_start_decision, spawn_batch_worker,
-    spawn_single_run_worker,
+    ActiveRunContext, BatchExecutionMode, BatchLaunchRequest, BatchStartContext,
+    BatchStartDecision, BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet,
+    CapabilityProbeResult, LiveAuthProof, RunKind, SingleRunAdmission, SingleRunWorkerSpec,
+    SingleStartContext, SingleStartDecision, admit_batch_launch, admit_single_run, assess_plan,
+    batch_mailbox_state, batch_start_decision, capability_observation_matches,
+    capability_probe_result_matches, durable_single_identity_matches, finish_batch_child,
+    is_verified_terminal_state, single_start_decision, spawn_batch_worker, spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -3055,139 +3055,44 @@ impl App {
                 return;
             }
         }
-        let durable_admissions = if self.bulk_project_id.is_some()
-            && self.bulk_job_ids.len() == self.bulk_jobs.len()
-        {
-            let Some(project_id) = self.bulk_project_id.as_deref() else {
-                self.bulk_message =
-                    "Run a successful preflight for this queue before starting live migrations."
-                        .into();
-                return;
-            };
-            match self
-                .store
-                .batch_admission_states(project_id, &self.bulk_job_ids)
-            {
-                Ok(states) => states.into_iter().map(Some).collect::<Vec<_>>(),
-                Err(error) => {
-                    self.bulk_message = format!(
-                        "Could not read durable batch admission state; batch was not started: {error}"
-                    );
-                    return;
-                }
-            }
-        } else {
-            vec![None; self.bulk_jobs.len()]
-        };
-        let durable_states = durable_admissions
-            .iter()
-            .map(|admission| admission.as_ref().map(|value| value.state.clone()))
-            .collect::<Vec<_>>();
-        let selected_indices = selected_batch_indices(
-            self.bulk_jobs.len(),
-            &self.bulk_job_ids,
-            &durable_states,
-            &self.bulk_selected_ids,
-            self.bulk_retry_scope,
-        );
-        if selected_indices.is_empty() {
-            self.bulk_message = format!(
-                "No mailboxes match the selected live retry scope: {}.",
-                self.bulk_retry_scope.label()
-            );
-            return;
-        }
-        let jobs = match prepare_selected_batch_jobs(
-            &self.bulk_jobs,
-            &selected_indices,
-            &durable_admissions,
-            mode,
-            &self.bulk_preflight_credential_fingerprints,
-        ) {
-            Ok(jobs) => jobs,
-            Err(error) => {
-                self.bulk_message = error;
-                return;
-            }
-        };
-        let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
-        if let Err(error) = validate_batch_throttle(&self.form.profile, concurrency) {
-            self.bulk_message = error;
-            return;
-        }
         self.durability_error = false;
         self.durability_recovery_pending = false;
         self.pending_batch_evidence.clear();
         self.pending_batch_checkpoints.clear();
-        let mailboxes = jobs
-            .iter()
-            .map(|job| {
-                let config = durable_batch_profile_config(&job.form.profile)?;
-                Ok((
-                    job.form.profile.source_user.clone(),
-                    job.form.profile.destination_user.clone(),
-                    config,
-                ))
-            })
-            .collect::<Result<Vec<_>, String>>();
-        let mailboxes = match mailboxes {
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let admission = match admit_batch_launch(BatchLaunchRequest {
+            store: &self.store,
+            requested_project_id: self.bulk_project_id.as_deref(),
+            source_jobs: &self.bulk_jobs,
+            queue_job_ids: &self.bulk_job_ids,
+            selected_ids: &self.bulk_selected_ids,
+            retry_scope: self.bulk_retry_scope,
+            mode,
+            fallback_profile: &self.form.profile,
+            expected_credential_fingerprints: &self.bulk_preflight_credential_fingerprints,
+            run_id: &run_id,
+        }) {
             Ok(value) => value,
             Err(error) => {
                 self.bulk_message = error;
                 return;
             }
         };
-        let project_identity = batch_project_identity(&jobs, &self.form.profile);
-        let (project_id, job_ids) = match prepare_batch_project(
-            &self.store,
-            self.bulk_project_id.as_deref(),
-            &mailboxes,
-            &project_identity.name,
-            &project_identity.source_endpoint,
-            &project_identity.destination_endpoint,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                self.bulk_message = error;
-                return;
-            }
-        };
+        let selected_indices = admission.selected_indices;
+        let jobs = admission.jobs;
+        let project_id = admission.project_id;
+        let job_ids = admission.job_ids;
+        let prepared = admission.prepared;
+        let active_run = admission.active_run;
+        let selected_job_ids = prepared.selected_job_ids.clone();
+        let queue_checkpoints = prepared.queue_checkpoints.clone();
+        let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         self.bulk_project_id = Some(project_id.clone());
         self.selected_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
         self.rebuild_bulk_job_index();
-        let prepared = match prepare_batch_run(
-            &jobs,
-            &selected_indices,
-            &self.bulk_job_ids,
-            &durable_admissions,
-            mode,
-        ) {
-            Ok(value) => value,
-            Err(error) => {
-                self.bulk_message = error;
-                return;
-            }
-        };
-        let selected_job_ids = prepared.selected_job_ids.clone();
-        let queue_checkpoints = prepared.queue_checkpoints.clone();
         self.bulk_live_run = live;
-        let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
-        let active_run = match admit_batch_run(
-            &self.store,
-            &project_id,
-            &run_id,
-            mode,
-            self.form.engine(),
-            prepared,
-        ) {
-            Ok(context) => context,
-            Err(error) => {
-                self.bulk_message = error;
-                return;
-            }
-        };
         self.locked_profile = Some(self.form.profile.clone());
         self.active_run = Some(active_run);
         for &index in &selected_indices {

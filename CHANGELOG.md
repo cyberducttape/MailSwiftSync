@@ -12,6 +12,9 @@ All notable changes to MailSwiftSync are documented here.
 - Centralized batch-project naming and endpoint metadata derivation in batch
   admission, so GUI and headless queue paths share one durable project identity
   contract.
+- Consolidated batch queue selection, durable admission, project preparation,
+  plan materialization, and active-run creation behind one controller launch
+  API, reducing policy and persistence coordination in `start_bulk()`.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless
