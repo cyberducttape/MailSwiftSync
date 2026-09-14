@@ -571,8 +571,12 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{BatchExecutionMode, batch_project_identity, prepare_selected_batch_jobs};
+    use super::{
+        BatchExecutionMode, BatchLaunchRequest, admit_batch_launch, batch_project_identity,
+        prepare_selected_batch_jobs,
+    };
     use crate::{bulk_import::BulkJob, migration_plan::Form};
+    use std::collections::HashSet;
 
     #[test]
     fn selected_batch_preparation_fails_closed_without_durable_live_admission() {
@@ -607,5 +611,27 @@ mod tests {
         let fallback = batch_project_identity(&[], &form.profile);
         assert_eq!(fallback.name, "Customer cutover");
         assert_eq!(fallback.source_endpoint, "imap.source.example");
+    }
+
+    #[test]
+    fn batch_launch_admission_rejects_an_empty_queue_before_persistence() {
+        let store = crate::core::StateStore::in_memory().unwrap();
+        let profile = Form::default().profile;
+        let error = admit_batch_launch(BatchLaunchRequest {
+            store: &store,
+            requested_project_id: None,
+            source_jobs: &[],
+            queue_job_ids: &[],
+            selected_ids: &HashSet::new(),
+            retry_scope: super::BulkRetryScope::All,
+            mode: BatchExecutionMode::Preflight,
+            fallback_profile: &profile,
+            expected_credential_fingerprints: &[],
+            run_id: "run-empty",
+        })
+        .err()
+        .expect("empty queue must be rejected");
+        assert!(error.contains("No mailboxes match"));
+        assert!(store.latest_project().unwrap().is_none());
     }
 }
