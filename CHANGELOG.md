@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Hardened ledger restore durability: the verified temporary database is
+  flushed before installation and the destination directory is synchronized
+  after the atomic rename, so a successful restore now reflects the on-disk
+  commit boundary on Unix.
 - Batch projects now preserve an explicit profile name or derive a bounded
   source-to-destination label instead of creating indistinguishable generic
   “Batch migration” entries. Durable batch restoration recognizes the batch

@@ -81,6 +81,9 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("could not secure restored ledger: {error}"));
     }
+    std::fs::File::open(&temporary)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("could not flush restored ledger: {error}"))?;
     if let Err(error) = core::StateStore::open_readonly(&temporary) {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!(
@@ -138,5 +141,18 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
     restrict_file_permissions(destination).map_err(|error| {
         format!("restored ledger was installed but could not be secured: {error}")
     })?;
+    sync_parent_directory(parent).map_err(|error| {
+        format!("restored ledger was installed but could not be flushed: {error}")
+    })?;
     Ok(previous)
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_: &Path) -> std::io::Result<()> {
+    Ok(())
 }
