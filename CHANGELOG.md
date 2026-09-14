@@ -26,6 +26,9 @@ All notable changes to MailSwiftSync are documented here.
 - Hardened bounded output buffers so an individual oversized UTF-8 line is
   truncated at a character boundary and cannot exceed the configured aggregate
   byte budget.
+- Exposed customer/project naming in the batch cockpit and made customized
+  workspace names apply when queue rows still carry a generic default, keeping
+  durable projects and customer evidence identifiable without editing a CSV.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless

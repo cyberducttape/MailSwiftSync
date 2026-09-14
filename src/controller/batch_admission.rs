@@ -146,10 +146,25 @@ pub(crate) fn batch_project_identity(
     jobs: &[BulkJob],
     fallback_profile: &Profile,
 ) -> BatchProjectIdentity {
-    let profile = jobs
+    let queue_profile = jobs
         .first()
         .map(|job| &job.form.profile)
         .unwrap_or(fallback_profile);
+    let configured_fallback = fallback_profile.name.trim();
+    let profile = if !configured_fallback.is_empty()
+        && !matches!(
+            configured_fallback,
+            "New migration" | "Batch migration" | "Batch validation"
+        )
+        && (queue_profile.name.trim().is_empty()
+            || matches!(
+                queue_profile.name.trim(),
+                "New migration" | "Batch migration" | "Batch validation"
+            )) {
+        fallback_profile
+    } else {
+        queue_profile
+    };
     BatchProjectIdentity {
         name: super::batch::suggested_batch_project_name(profile),
         source_endpoint: profile.source_host.trim().to_owned(),
@@ -611,6 +626,18 @@ mod tests {
         let fallback = batch_project_identity(&[], &form.profile);
         assert_eq!(fallback.name, "Customer cutover");
         assert_eq!(fallback.source_endpoint, "imap.source.example");
+
+        let mut queue_form = form.clone();
+        queue_form.profile.name = "New migration".into();
+        let fallback = batch_project_identity(
+            &[BulkJob {
+                label: "mailbox".into(),
+                form: queue_form,
+                state: "imported".into(),
+            }],
+            &form.profile,
+        );
+        assert_eq!(fallback.name, "Customer cutover");
     }
 
     #[test]
