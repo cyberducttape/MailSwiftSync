@@ -23,4 +23,7 @@ pub(crate) use batch_worker::spawn_batch_worker;
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use preflight::assess_plan;
 pub(crate) use run::{ActiveRunContext, LiveAuthProof, RunKind};
-pub(crate) use single_admission::{SingleRunAdmission, admit_single_run};
+pub(crate) use single_admission::{
+    SingleRunAdmission, SingleStartContext, SingleStartDecision, admit_single_run,
+    single_start_decision,
+};

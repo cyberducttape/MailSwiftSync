@@ -40,11 +40,12 @@ use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BatchStartContext, BatchStartDecision,
     BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, LiveAuthProof,
-    RunKind, SingleRunAdmission, SingleRunWorkerSpec, admit_batch_run, admit_single_run,
-    assess_plan, batch_mailbox_state, batch_run_status, batch_start_decision,
-    durable_batch_profile_config, durable_single_identity_matches, is_verified_terminal_state,
-    prepare_batch_project, prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices,
-    spawn_batch_worker, spawn_single_run_worker, suggested_batch_project_name,
+    RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext, SingleStartDecision,
+    admit_batch_run, admit_single_run, assess_plan, batch_mailbox_state, batch_run_status,
+    batch_start_decision, durable_batch_profile_config, durable_single_identity_matches,
+    is_verified_terminal_state, prepare_batch_project, prepare_batch_run,
+    prepare_selected_batch_jobs, selected_batch_indices, single_start_decision, spawn_batch_worker,
+    spawn_single_run_worker, suggested_batch_project_name,
 };
 #[cfg(test)]
 use credentials::CleanupGuard;
@@ -3414,44 +3415,28 @@ impl App {
     }
 
     fn start(&mut self) {
-        if self.ui_snapshot.is_stale() {
-            self.set_status(
-                "Execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a migration.",
-                StatusSeverity::Error,
-            );
-            return;
-        }
-        if !self.profile_available {
-            self.set_status(
-                "Execution is blocked because the saved migration profile is unavailable; repair it before starting a migration.",
-                StatusSeverity::Error,
-            );
-            return;
-        }
-        if self.workspace_read_only {
-            self.set_status(
-                "This project is being viewed read-only. Start a new migration to execute a plan.",
-                StatusSeverity::Warning,
-            );
-            return;
-        }
-        if self.process_review_required {
-            self.set_status(
-                "Execution is blocked until you confirm that no unverified migration process remains on this host.",
-                StatusSeverity::Warning,
-            );
-            return;
-        }
-        if !self.form.dry_run {
-            let current_plan = plan_fingerprint_digest(&self.form.plan_fingerprint());
-            if !self.live_confirmed
-                || self.live_confirmation_plan.as_deref() != Some(current_plan.as_str())
-            {
+        let live_requires_confirmation = !self.form.dry_run
+            && (!self.live_confirmed
+                || self.live_confirmation_plan.as_deref()
+                    != Some(plan_fingerprint_digest(&self.form.plan_fingerprint()).as_str()));
+        match single_start_decision(SingleStartContext {
+            durable_view_stale: self.ui_snapshot.is_stale(),
+            profile_available: self.profile_available,
+            read_only_project: self.workspace_read_only,
+            process_review_required: self.process_review_required,
+            live_requires_confirmation,
+        }) {
+            SingleStartDecision::Block(block) => {
+                self.set_status(block.message(), StatusSeverity::Error);
+                return;
+            }
+            SingleStartDecision::ConfirmLive => {
                 self.live_confirmed = false;
                 self.live_confirmation_plan = None;
                 self.live_confirm_open = true;
                 return;
             }
+            SingleStartDecision::Proceed => {}
         }
         if !self.credentials_ready_for_start && self.start_requires_keyring_load() {
             if self.start_credentials_receiver.is_none() {

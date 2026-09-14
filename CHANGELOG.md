@@ -36,6 +36,9 @@ All notable changes to MailSwiftSync are documented here.
 - Extracted the Settings dialog into `ui/settings.rs` with explicit navigation
   actions, keeping operator/workspace preferences separate from the main
   application shell and leaving migration configuration on the Migration plan.
+- Extracted the single-run start safety gate into a typed controller decision,
+  matching batch admission's tested fail-closed ordering before credentials,
+  engine preparation, or durable run creation begins.
 - Updated the batch cockpit's import guidance to expose `project_name` and
   distinguish durable customer-migration identity from per-mailbox `name`
   labels.
