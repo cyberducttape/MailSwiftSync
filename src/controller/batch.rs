@@ -161,6 +161,7 @@ pub(crate) fn suggested_batch_project_name(profile: &Profile) -> String {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct BulkQueueSummary {
     pub(crate) total: usize,
+    pub(crate) imported: usize,
     pub(crate) ready: usize,
     pub(crate) running: usize,
     pub(crate) verified: usize,
@@ -178,6 +179,10 @@ impl BulkQueueSummary {
             ..Self::default()
         };
         for job in jobs {
+            if job.state.eq_ignore_ascii_case("imported") {
+                summary.imported += 1;
+                continue;
+            }
             match core::MailboxState::parse_ascii_case_insensitive(&job.state) {
                 Some(core::MailboxState::Ready) => summary.ready += 1,
                 Some(core::MailboxState::Running) => summary.running += 1,
@@ -267,6 +272,7 @@ mod tests {
             BulkQueueSummary::from_jobs(&jobs),
             BulkQueueSummary {
                 total: 10,
+                imported: 1,
                 ready: 1,
                 running: 1,
                 verified: 2,

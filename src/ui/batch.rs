@@ -47,6 +47,7 @@ impl App {
             ui.group(|ui| {
                 ui.label(RichText::new("QUEUE HEALTH").strong().size(11.0));
                 ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("{} imported", summary.imported));
                     ui.label(format!("{} ready", summary.ready));
                     ui.label(format!("{} running", summary.running));
                     ui.label(format!("{} verified", summary.verified));
@@ -305,6 +306,7 @@ impl App {
                 ui.group(|ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.strong(format!("{} total", summary.total));
+                        ui.label(format!("{} imported", summary.imported));
                         ui.label(format!("{} ready", summary.ready));
                         ui.label(format!("{} running", summary.running));
                         ui.label(format!("{} verified", summary.verified));
