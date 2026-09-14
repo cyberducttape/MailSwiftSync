@@ -43,6 +43,8 @@ All notable changes to MailSwiftSync are documented here.
   operator-facing phase workflow separate from application composition.
 - Moved the cleartext source-transport warning into `ui/overview.rs` so the
   first-run safety guidance remains alongside the migration lifecycle view.
+- Moved the Overview first-run summary, process-ownership review gate, and
+  historical read-only banner into `ui/overview.rs`.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
