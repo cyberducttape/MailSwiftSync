@@ -16,6 +16,10 @@ impl BoundedLineBuffer {
     }
 
     pub(crate) fn push_bounded(&mut self, line: String, max_lines: usize, max_bytes: usize) {
+        if max_lines == 0 || max_bytes == 0 {
+            return;
+        }
+        let line = truncate_to_bytes(line, max_bytes);
         while self.lines.len() >= max_lines || self.bytes.saturating_add(line.len()) > max_bytes {
             let Some(removed) = self.lines.pop_front() else {
                 break;
@@ -27,6 +31,10 @@ impl BoundedLineBuffer {
     }
 
     pub(crate) fn push_front_bounded(&mut self, line: String, max_lines: usize, max_bytes: usize) {
+        if max_lines == 0 || max_bytes == 0 {
+            return;
+        }
+        let line = truncate_to_bytes(line, max_bytes);
         while self.lines.len() >= max_lines || self.bytes.saturating_add(line.len()) > max_bytes {
             let Some(removed) = self.lines.pop_back() else {
                 break;
@@ -58,10 +66,43 @@ impl BoundedLineBuffer {
     }
 }
 
+fn truncate_to_bytes(mut line: String, max_bytes: usize) -> String {
+    if line.len() > max_bytes {
+        let mut boundary = max_bytes;
+        while !line.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        line.truncate(boundary);
+    }
+    line
+}
+
 impl Deref for BoundedLineBuffer {
     type Target = VecDeque<String>;
 
     fn deref(&self) -> &Self::Target {
         &self.lines
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BoundedLineBuffer;
+
+    #[test]
+    fn oversized_lines_are_truncated_to_the_byte_budget() {
+        let mut buffer = BoundedLineBuffer::new();
+        buffer.push_bounded("é".repeat(100), 10, 7);
+        assert!(buffer.bytes() <= 7);
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.front().map(String::len), Some(6));
+    }
+
+    #[test]
+    fn front_insertion_also_respects_the_byte_budget() {
+        let mut buffer = BoundedLineBuffer::new();
+        buffer.push_front_bounded("x".repeat(20), 10, 5);
+        assert_eq!(buffer.bytes(), 5);
+        assert_eq!(buffer.front().map(String::len), Some(5));
     }
 }
