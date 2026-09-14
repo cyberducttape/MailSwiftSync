@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted plan assessment and capability/quota presentation policy into `controller::preflight`, reducing `App` responsibility while keeping the explicit network readiness gate separate.
 - Moved the local plan-completeness calculation into `migration_plan`, reducing UI-controller responsibility while keeping network readiness checks in the explicit preflight path.
 - Moved verification-report assembly into `reports::operator` and made it consume one durable project snapshot, preventing mixed-commit mailbox/evidence/run artifacts; obsolete single-query helpers are now test-only.
 - Extracted operator JSON report construction into `reports::operator`, keeping the GUI wrapper focused on project selection and private atomic writing while preserving proof digests and complete run manifests.

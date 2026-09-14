@@ -30,7 +30,7 @@ use controller::failure::{
 };
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
-    BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec,
+    BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
     durable_single_identity_matches, is_verified_terminal_state, spawn_single_run_worker,
 };
 use credentials::{
@@ -997,18 +997,6 @@ fn terminal_phase_advance_allowed(
 
 /// Pre-live readiness and quota checks remain in `imap_probe`; this root module
 /// only wires the shared result into the application controller.
-fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
-    if !caps.supports("QUOTA") {
-        "quota not advertised"
-    } else if caps.quota_exceeded {
-        "quota exceeded"
-    } else if caps.quota_observed {
-        "quota reported within limit"
-    } else {
-        "quota status unavailable; verify capacity with the provider"
-    }
-}
-
 impl App {
     fn set_status(&mut self, message: impl Into<String>, severity: StatusSeverity) {
         self.status = StatusMessage::new(message, severity);
@@ -1322,98 +1310,11 @@ impl App {
         });
     }
     fn assess_plan(&mut self) {
-        self.preflight = vec![
-            (
-                "Source endpoint".into(),
-                if self.form.profile.source_host.is_empty() {
-                    "Missing source server".into()
-                } else {
-                    self.form.profile.source_host.clone()
-                },
-                !self.form.profile.source_host.is_empty(),
-            ),
-            (
-                "Destination endpoint".into(),
-                if self.form.profile.destination_host.is_empty() {
-                    "Missing destination server".into()
-                } else {
-                    self.form.profile.destination_host.clone()
-                },
-                !self.form.profile.destination_host.is_empty(),
-            ),
-            (
-                "Execution mode".into(),
-                if self.form.dry_run {
-                    "Preflight enabled — destination will not be intentionally changed".into()
-                } else {
-                    "Live migration enabled — destination may be changed".into()
-                },
-                self.form.dry_run,
-            ),
-            (
-                "Destructive options".into(),
-                if self.form.profile.delete2 {
-                    "--delete2 enabled: destination-only messages may be removed".into()
-                } else {
-                    "No destination deletion option selected".into()
-                },
-                !self.form.profile.delete2,
-            ),
-            (
-                "Credential persistence".into(),
-                "Passwords are excluded from saved profiles and the SQLite ledger".into(),
-                true,
-            ),
-        ];
-        if let Some(caps) = &self.source_capabilities {
-            self.preflight.push((
-                "Source capabilities".into(),
-                format!(
-                    "{} · {} folder(s) discovered{} · {}",
-                    caps.detected_capabilities().join(" · "),
-                    caps.mailbox_count,
-                    if caps.special_use_mailboxes > 0 {
-                        format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)
-                    } else {
-                        String::new()
-                    },
-                    quota_summary(caps)
-                ),
-                caps.inventory_complete && !caps.quota_exceeded,
-            ));
-        }
-        if let Some(caps) = &self.destination_capabilities {
-            self.preflight.push((
-                "Destination capabilities".into(),
-                format!(
-                    "{} · {} folder(s) discovered{} · {}",
-                    caps.detected_capabilities().join(" · "),
-                    caps.mailbox_count,
-                    if caps.special_use_mailboxes > 0 {
-                        format!(" · {} SPECIAL-USE folder(s)", caps.special_use_mailboxes)
-                    } else {
-                        String::new()
-                    },
-                    quota_summary(caps)
-                ),
-                caps.inventory_complete && !caps.quota_exceeded,
-            ));
-        }
-        if self.form.engine() == core::Engine::ImapSync {
-            self.preflight.push((
-                "Transport security".into(),
-                match self.form.profile.source_tls.as_str() {
-                    "imaps" => {
-                        "TLS required for source and destination; imapsync will receive --ssl1 and --ssl2".into()
-                    }
-                    "starttls" => {
-                        "STARTTLS required for source; TLS required for destination; cleartext fallback prohibited".into()
-                    }
-                    _ => "WARNING: source cleartext is explicitly configured; destination TLS remains required".into(),
-                },
-                self.form.profile.source_tls != "plain",
-            ));
-        }
+        self.preflight = assess_plan(
+            &self.form,
+            self.source_capabilities.as_ref(),
+            self.destination_capabilities.as_ref(),
+        );
     }
     fn create_project(&mut self) {
         self.assess_plan();
