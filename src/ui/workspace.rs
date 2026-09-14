@@ -167,6 +167,7 @@ impl WorkspaceSnapshot {
         if !project_changed
             && !report_needs_load
             && !runs_need_load
+            && self.refresh_error.is_none()
             && observed_revision.is_some()
             && observed_revision == self.durable_revision
             && observed_project_revision == self.project_revision
