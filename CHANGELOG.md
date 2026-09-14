@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Fixed Windows compilation of signing-key DACL verification and executable
+  resolution so the native MSVC CI path uses the correct Windows APIs and
+  handles `.exe` candidates without platform-specific formatting errors.
 - Windows CI now uses the pinned Visual Studio x64 developer-environment
   action before MSVC builds and native tests, ensuring Rust dependencies can
   locate the required `lib.exe` tool across runner image layouts.

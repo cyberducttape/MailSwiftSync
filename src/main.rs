@@ -67,12 +67,12 @@ use headless::headless_status;
 use output::BoundedLineBuffer;
 #[cfg(test)]
 use process::ProcessLaunchLimiter;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use process::terminate_process_group_by_pid;
 use process::{
     InstanceLock, acquire_instance_lock, recorded_process_matches, terminate_recorded_process_group,
 };
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use process::{configure_process_group, process_identity};
 use provider::ProviderPreset;
 #[cfg(test)]

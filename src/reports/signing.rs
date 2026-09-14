@@ -26,12 +26,13 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
     use std::{os::windows::ffi::OsStrExt, ptr};
     use windows_sys::Win32::{
         Foundation::{HLOCAL, LocalFree},
+        Security::Authorization::GetNamedSecurityInfoW,
         Security::Authorization::SE_FILE_OBJECT,
         Security::{
-            ACCESS_ALLOWED_ACE, ACE_HEADER, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
-            EqualSid, GetAce, GetNamedSecurityInfoW, GetSecurityDescriptorControl,
-            GetSecurityDescriptorDacl, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-            SE_DACL_PROTECTED, SECURITY_MAX_SID_SIZE, WinLocalSystemSid,
+            ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CreateWellKnownSid, DACL_SECURITY_INFORMATION,
+            EqualSid, GetAce, GetSecurityDescriptorControl, GetSecurityDescriptorDacl,
+            OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+            SECURITY_MAX_SID_SIZE, WinLocalSystemSid,
         },
         System::SystemServices::ACCESS_ALLOWED_ACE_TYPE,
     };
@@ -47,7 +48,7 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
     let mut owner: PSID = ptr::null_mut();
-    let mut dacl = ptr::null_mut();
+    let mut dacl: *mut ACL = ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
     let status = unsafe {
         GetNamedSecurityInfoW(
@@ -118,7 +119,7 @@ fn require_private_key_permissions(path: &Path) -> Result<(), String> {
                 return Err("could not inspect a signing key DACL entry".into());
             }
             let header = unsafe { &*(ace_pointer as *const ACE_HEADER) };
-            if header.AceType != ACCESS_ALLOWED_ACE_TYPE || header.AceFlags != 0 {
+            if u32::from(header.AceType) != ACCESS_ALLOWED_ACE_TYPE || header.AceFlags != 0 {
                 return Err("signing key DACL contains an unsupported or inherited ACE".into());
             }
             let ace = unsafe { &*(ace_pointer as *const ACCESS_ALLOWED_ACE) };
