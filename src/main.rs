@@ -1503,6 +1503,52 @@ impl App {
 
     fn project_summary(&mut self, ui: &mut egui::Ui) {
         self.lifecycle_stepper(ui);
+        if self.active_project_id().is_none() && self.bulk_jobs.is_empty() {
+            let colors = self.theme_colors();
+            ui.group(|ui| {
+                ui.heading("Start a safe migration");
+                ui.label(
+                    RichText::new(
+                        "MailSwiftSync guides every migration through a reviewed preflight before any destination changes are allowed.",
+                    )
+                    .color(colors.text_secondary),
+                );
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    for (number, title, detail) in [
+                        ("1", "Connect", "Configure source and destination"),
+                        ("2", "Preflight", "Authenticate and review blockers"),
+                        ("3", "Pilot", "Start with a small mailbox set"),
+                    ] {
+                        ui.group(|ui| {
+                            ui.label(
+                                RichText::new(format!("{number}  {title}"))
+                                    .strong()
+                                    .color(colors.info),
+                            );
+                            ui.label(
+                                RichText::new(detail)
+                                    .size(11.0)
+                                    .color(colors.text_secondary),
+                            );
+                        });
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Import mailbox list").clicked() {
+                        self.bulk_open = true;
+                    }
+                    ui.label(
+                        RichText::new(
+                            "For one mailbox, continue with the migration plan below.",
+                        )
+                        .size(11.0)
+                        .color(colors.text_secondary),
+                    );
+                });
+            });
+            ui.add_space(10.0);
+        }
         if self.process_review_required {
             ui.group(|ui| {
                 ui.label(RichText::new("PROCESS OWNERSHIP REVIEW REQUIRED").strong().color(self.theme_colors().danger));
