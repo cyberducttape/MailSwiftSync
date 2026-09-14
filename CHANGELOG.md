@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Overview batch recommendations now use the imported queue's attention count
+  when that queue is present, avoiding guidance based on an unrelated durable
+  project projection.
 - Batch summaries now count imported rows explicitly, so newly loaded queues
   expose their unassessed mailbox count instead of appearing to have no work.
 - Overview recommendations now distinguish an imported batch queue from an
