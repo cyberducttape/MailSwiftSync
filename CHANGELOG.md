@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Updated the local packaging script to ship the same deployment and
+  release-readiness guides as tagged release archives.
 - Release archives now include the service-manager, container deployment, and
   release-readiness guides alongside the installation documentation, so an
   operator can deploy and verify the portable bundle without returning to the
