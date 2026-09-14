@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Overview recommendations now distinguish an imported batch queue from an
+  empty project, directing operators to review rows and run preflight before
+  live execution.
 - The Overview now reflects imported batch queues before durable admission,
   showing the queue as loaded with its readiness and unresolved counts instead
   of incorrectly reporting that no project or mailboxes exist.

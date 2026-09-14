@@ -69,6 +69,27 @@ pub(crate) fn recommended_next_action(
     }
 }
 
+pub(crate) fn recommended_batch_next_action(
+    has_imported_queue: bool,
+    attention_count: usize,
+    running: bool,
+) -> Option<&'static str> {
+    if !has_imported_queue {
+        return None;
+    }
+    if running {
+        return Some(
+            "The batch is running — monitor Activity and review any Attention rows before continuing.",
+        );
+    }
+    if attention_count > 0 {
+        return Some(
+            "Review Attention items in the imported batch before starting another operation.",
+        );
+    }
+    Some("Review the imported mailbox rows, then run a dry preflight before any live migration.")
+}
+
 /// The UI-level proof gate mirrors the durable report contract: completion,
 /// zero review items, and a current read model are all required before the
 /// customer-facing export is offered.
@@ -257,6 +278,21 @@ mod tests {
             4
         );
         assert_eq!(workflow_step_index(core::Phase::Complete, true, true), 5);
+    }
+
+    #[test]
+    fn imported_batch_gets_batch_specific_next_action() {
+        assert_eq!(
+            recommended_batch_next_action(true, 0, false),
+            Some(
+                "Review the imported mailbox rows, then run a dry preflight before any live migration."
+            )
+        );
+        assert_eq!(
+            recommended_batch_next_action(true, 2, false),
+            Some("Review Attention items in the imported batch before starting another operation.")
+        );
+        assert_eq!(recommended_batch_next_action(false, 0, false), None);
     }
 
     #[test]
