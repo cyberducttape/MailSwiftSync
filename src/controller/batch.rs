@@ -1,3 +1,4 @@
+use crate::Profile;
 use crate::bulk_import::BulkJob;
 use crate::core;
 use std::collections::HashSet;
@@ -23,6 +24,29 @@ impl BatchExecutionMode {
 
 pub(crate) fn is_verified_terminal_state(state: &str) -> bool {
     matches!(state, "verified" | "verified_with_exceptions")
+}
+
+/// Choose a useful durable label for a batch without copying mailbox
+/// credentials or volatile execution details into project metadata.
+pub(crate) fn suggested_batch_project_name(profile: &Profile) -> String {
+    let configured = profile.name.trim();
+    if !configured.is_empty()
+        && !matches!(
+            configured,
+            "New migration" | "Batch migration" | "Batch validation"
+        )
+    {
+        return configured.chars().take(120).collect();
+    }
+    let source = profile.source_host.trim();
+    let destination = profile.destination_host.trim();
+    let derived = match (source.is_empty(), destination.is_empty()) {
+        (false, false) => format!("{source} → {destination} batch"),
+        (false, true) => format!("{source} batch"),
+        (true, false) => format!("{destination} batch"),
+        (true, true) => "Mailbox batch".to_owned(),
+    };
+    derived.chars().take(120).collect()
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -99,7 +123,10 @@ pub(crate) fn selected_batch_indices(
 
 #[cfg(test)]
 mod tests {
-    use super::{BulkJob, BulkQueueSummary, BulkRetryScope, selected_batch_indices};
+    use super::{
+        BulkJob, BulkQueueSummary, BulkRetryScope, selected_batch_indices,
+        suggested_batch_project_name,
+    };
     use crate::migration_plan::Form;
     use std::collections::HashSet;
 
@@ -167,6 +194,19 @@ mod tests {
             selected_batch_indices(3, &ids, &states, &HashSet::new(), BulkRetryScope::All),
             vec![0, 1, 2]
         );
+    }
+
+    #[test]
+    fn batch_project_name_prefers_configured_name_and_derives_safe_fallback() {
+        let mut form = Form::default();
+        form.profile.source_host = "old.example".into();
+        form.profile.destination_host = "new.example".into();
+        assert_eq!(
+            suggested_batch_project_name(&form.profile),
+            "old.example → new.example batch"
+        );
+        form.profile.name = "Acme cutover".into();
+        assert_eq!(suggested_batch_project_name(&form.profile), "Acme cutover");
     }
 }
 

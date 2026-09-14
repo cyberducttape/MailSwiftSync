@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Batch projects now preserve an explicit profile name or derive a bounded
+  source-to-destination label instead of creating indistinguishable generic
+  “Batch migration” entries. Durable batch restoration recognizes the batch
+  marker independently of the display label.
 - Made full evidence-report loading demand-driven in the workspace snapshot:
   overview and mailbox views use compact projections, while verification and
   activity load the detailed report only when opened. Explicit snapshot

@@ -38,7 +38,7 @@ use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
     durable_single_identity_matches, is_verified_terminal_state, selected_batch_indices,
-    spawn_single_run_worker,
+    spawn_single_run_worker, suggested_batch_project_name,
 };
 use credentials::{
     CleanupGuard, SecretString, cleanup_paths, cleanup_stale_secret_directories,
@@ -742,10 +742,8 @@ impl App {
         let mut restored_bulk_jobs = Vec::new();
         let mut restored_bulk_job_ids = Vec::new();
         let restored_bulk_project_id = restored_project.as_ref().and_then(|project| {
-            if !matches!(
-                project.name.as_str(),
-                "Batch validation" | "Batch migration"
-            ) || project.source_endpoint != "batch"
+            if project.name.trim().is_empty()
+                || project.source_endpoint != "batch"
                 || project.destination_endpoint != "batch"
             {
                 return None;
@@ -3288,7 +3286,11 @@ impl App {
             (project_id, self.bulk_job_ids.clone())
         } else {
             let (project, job_ids) = match self.store.create_project_with_mailbox_configs(
-                "Batch migration",
+                &suggested_batch_project_name(
+                    jobs.first()
+                        .map(|job| &job.form.profile)
+                        .unwrap_or(&self.form.profile),
+                ),
                 "batch",
                 "batch",
                 &mailboxes,
