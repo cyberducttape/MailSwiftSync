@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the batch worker-pool coordinator from `main.rs` into
+  `controller/batch_worker.rs`. GUI batch admission now hands an explicit,
+  already-admitted work specification to the controller worker, keeping
+  process launch, retry, cancellation, and batch event production outside the
+  egui dispatcher.
 - Added a persistent global-header `DURABLE VIEW STALE` indicator and an
   explicit application status when workspace refresh fails, so retained
   cached state cannot look current merely because the operator is on another
