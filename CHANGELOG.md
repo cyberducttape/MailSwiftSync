@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added regression coverage for workspace refresh skipping, ensuring a
+  previously failed projection is retried even when durable revisions match.
 - Workspace refreshes now retry previously failed projections even when the
   durable revision is unchanged, preventing a stale error from being cleared
   before the failed read succeeds.

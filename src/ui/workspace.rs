@@ -93,6 +93,29 @@ pub(crate) struct WorkspaceSnapshot {
     refresh_error: Option<String>,
 }
 
+struct RefreshSkipState {
+    project_changed: bool,
+    report_needs_load: bool,
+    runs_need_load: bool,
+    refresh_error_present: bool,
+    observed_revision: Option<i64>,
+    durable_revision: Option<i64>,
+    observed_project_revision: Option<i64>,
+    project_revision: Option<i64>,
+    refresh_errors_empty: bool,
+}
+
+fn refresh_can_be_skipped(state: RefreshSkipState) -> bool {
+    !state.project_changed
+        && !state.report_needs_load
+        && !state.runs_need_load
+        && !state.refresh_error_present
+        && state.observed_revision.is_some()
+        && state.observed_revision == state.durable_revision
+        && state.observed_project_revision == state.project_revision
+        && state.refresh_errors_empty
+}
+
 impl WorkspaceSnapshot {
     pub(crate) fn invalidate(&mut self) {
         self.refreshed_at = None;
@@ -164,15 +187,17 @@ impl WorkspaceSnapshot {
                         None
                     }
                 });
-        if !project_changed
-            && !report_needs_load
-            && !runs_need_load
-            && self.refresh_error.is_none()
-            && observed_revision.is_some()
-            && observed_revision == self.durable_revision
-            && observed_project_revision == self.project_revision
-            && refresh_errors.is_empty()
-        {
+        if refresh_can_be_skipped(RefreshSkipState {
+            project_changed,
+            report_needs_load,
+            runs_need_load,
+            refresh_error_present: self.refresh_error.is_some(),
+            observed_revision,
+            durable_revision: self.durable_revision,
+            observed_project_revision,
+            project_revision: self.project_revision,
+            refresh_errors_empty: refresh_errors.is_empty(),
+        }) {
             self.refresh_error = None;
             self.last_successful_refresh = Some(Instant::now());
             return;
@@ -487,7 +512,10 @@ fn format_refresh_age(age: Duration) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkspaceSnapshot, filter_project_indices, preferred_project_id};
+    use super::{
+        RefreshSkipState, WorkspaceSnapshot, filter_project_indices, preferred_project_id,
+        refresh_can_be_skipped,
+    };
     use crate::core::{Phase, ProjectListItem};
 
     #[test]
@@ -556,5 +584,31 @@ mod tests {
         let notice = snapshot.stale_notice().unwrap();
         assert!(notice.contains("no successful refresh yet"));
         assert!(notice.contains("database is busy"));
+    }
+
+    #[test]
+    fn failed_refresh_cannot_be_skipped_when_revisions_are_unchanged() {
+        assert!(!refresh_can_be_skipped(RefreshSkipState {
+            project_changed: false,
+            report_needs_load: false,
+            runs_need_load: false,
+            refresh_error_present: true,
+            observed_revision: Some(7),
+            durable_revision: Some(7),
+            observed_project_revision: Some(11),
+            project_revision: Some(11),
+            refresh_errors_empty: true,
+        },));
+        assert!(refresh_can_be_skipped(RefreshSkipState {
+            project_changed: false,
+            report_needs_load: false,
+            runs_need_load: false,
+            refresh_error_present: false,
+            observed_revision: Some(7),
+            durable_revision: Some(7),
+            observed_project_revision: Some(11),
+            project_revision: Some(11),
+            refresh_errors_empty: true,
+        },));
     }
 }
