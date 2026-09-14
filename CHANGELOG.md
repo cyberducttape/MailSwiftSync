@@ -6,6 +6,15 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- A controller chaos lab (`scripts/controller-chaos-smoke.sh`), run in CI
+  alongside the existing recovery lab, covering two ledger-level storage
+  fault classes with no root privileges and no real full disk required: a
+  file-size (`RLIMIT_FSIZE`) limit hit while the ledger is first written, and
+  a corrupted or truncated ledger/backup file. It asserts the controller
+  stops rather than completing silently, that `restore` rejects a bad source
+  without touching the live ledger, that `status`/`recover` both refuse to
+  operate on a corrupted ledger, and that restoring an earlier verified
+  backup returns the ledger to normal operation.
 - Automatic OAuth 2.0 access-token refresh for the imapsync XOAUTH2 path. An
   operator who has registered their own OAuth application and obtained a
   refresh token can store the token endpoint, client ID/secret, and refresh

@@ -95,14 +95,28 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   Dovecot 2.3 or 2.4 configuration syntax to match the installed runtime and
   uses the same pinned Debian Bookworm Dovecot and imapsync packages used by
   the distributed container. Tagged release publication depends on this
-  product-level gate. Storage-fault chaos coverage is still required before
-  unattended production use.
+  product-level gate. This lab does not fault-inject the transfer itself
+  (for example a destination filesystem that fills up mid-transfer); that
+  engine-side storage-fault coverage is still required before unattended
+  production use.
 - A separate controller recovery lab uses a deterministic blocking engine to
   verify durable `running` state, simulate an ungraceful controller crash, and
   confirm `recover` clears process ownership and moves interrupted work to
   operator attention. This covers controller/ledger restart behavior without
-  confusing it with successful engine transfer coverage; disk-full and
-  corruption chaos cases remain outstanding.
+  confusing it with successful engine transfer coverage.
+- A controller chaos lab (`scripts/controller-chaos-smoke.sh`) covers two
+  ledger-level fault classes without needing a real full disk: an `RLIMIT_FSIZE`
+  limit hit while the ledger is first written (proving the controller stops
+  rather than completing silently, and that the ledger opens cleanly once the
+  limit is lifted, with no partial write visible), and a corrupted or
+  truncated ledger/backup file (proving `restore` rejects a truncated or
+  non-database restore source without touching the live ledger, that `status`
+  and `recover` both refuse to operate on a corrupted ledger rather than
+  silently continuing, and that restoring an earlier verified backup returns
+  the ledger to normal operation). This closes the ledger-level half of the
+  outstanding disk-full/corruption chaos gap; engine-side storage-fault
+  coverage (the transfer itself running out of destination space) remains
+  outstanding.
 - Headless `status` and `recover` commands expose secret-free durable state and
   reuse the GUI's fail-closed process recovery path. They are control-plane
   primitives, and `headless preflight|live` now drives the existing controller
@@ -177,7 +191,7 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Bounded concurrency, throttling, maintenance windows, and a scheduler/API that can survive the desktop closing.
 - Independent message-level mismatch reporting and reconciliation; current reports are aggregate/engine evidence plus durable exception acceptance.
 - Published migration evidence from representative datasets, including failures and recovery results.
-- Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, storage failure, retry, and evidence recovery.
+- Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is not yet covered.
 - A clean `cargo audit` result for vulnerabilities; unmaintained transitive dependencies must be tracked and reviewed before each release.
 - CI and release workflows should keep third-party GitHub Actions pinned to reviewed commit SHAs; update pins deliberately with the corresponding release version documented in a comment.
 

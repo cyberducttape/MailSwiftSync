@@ -263,6 +263,16 @@ engine to simulate an ungraceful controller crash and verifies that durable
 running state is recovered into operator attention with no active process
 ownership left behind.
 
+A third lab, `scripts/controller-chaos-smoke.sh`, covers ledger-level storage
+faults without needing root or a real full disk: a file-size limit hit while
+the ledger is first written, and a corrupted or truncated ledger/backup file.
+It verifies the controller stops instead of completing silently, that
+`restore` rejects a bad source without touching the live ledger, that
+`status`/`recover` refuse to operate on a corrupted ledger, and that
+restoring an earlier verified backup returns the ledger to normal operation.
+It does not cover the transfer engine itself running out of destination
+storage.
+
 ![Mailboxes workspace](docs/wiki/assets/batch-queue.png)
 
 The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the structured durable event ledger remains the longer-lived audit record. Raw engine transcripts stay process-local and are not written to SQLite.
