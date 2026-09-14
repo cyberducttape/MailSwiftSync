@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved capability-probe validation and request construction into the plan UI
+  module, reducing controller/UI coordination in `main.rs`.
 - Extracted capability and live IMAP authentication probe workers into the
   controller layer, keeping network I/O and secret-bearing probe requests out
   of the egui composition root.

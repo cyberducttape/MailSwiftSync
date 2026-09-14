@@ -1,9 +1,106 @@
 //! Migration-plan configuration views.
 
 use crate::App;
+use crate::StatusSeverity;
+use crate::controller::{CapabilityProbeSpec, ImapProbeEndpoint, spawn_capability_probe};
+use crate::imap_probe::endpoint_for_probe;
+use crate::plan_identity::fingerprint_digest as plan_fingerprint_digest;
 use eframe::egui::{self, RichText};
 
 impl App {
+    pub(crate) fn start_capability_probe(&mut self) {
+        let credential_load = if self.form.dry_run {
+            self.form.load_configured_keyring_credentials()
+        } else {
+            self.form.reload_configured_keyring_credentials()
+        };
+        if let Err(error) = credential_load {
+            self.set_status(error, StatusSeverity::Error);
+            return;
+        }
+        if let Err(error) = self.form.validate() {
+            self.set_status(
+                format!("Preflight input is invalid: {error}"),
+                StatusSeverity::Error,
+            );
+            return;
+        }
+        if self.form.engine() == crate::core::Engine::Dovecot {
+            self.set_status(
+                "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight.",
+                StatusSeverity::Info,
+            );
+            return;
+        }
+        if self.form.profile.source_tls == "plain" || self.form.profile.destination_tls == "plain" {
+            self.set_status(
+                "Authenticated capability discovery requires encrypted IMAP; plain transport remains blocked by the explicit cleartext acknowledgement gate.",
+                StatusSeverity::Warning,
+            );
+            return;
+        }
+        let source = match endpoint_for_probe(
+            &self.form.profile.source_host,
+            &self.form.profile.source_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.set_status(
+                    format!("Source readiness probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
+                return;
+            }
+        };
+        let destination = match endpoint_for_probe(
+            &self.form.profile.destination_host,
+            &self.form.profile.destination_port,
+        ) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                self.set_status(
+                    format!("Destination readiness probe blocked: {error}"),
+                    StatusSeverity::Error,
+                );
+                return;
+            }
+        };
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
+        self.capability_probe_request_id = Some(request_id.clone());
+        self.capability_probe_fingerprint = Some(plan_fingerprint.clone());
+        self.set_status(
+            "Authenticating and inspecting IMAPS readiness…",
+            StatusSeverity::Info,
+        );
+        self.capability_receiver = Some(spawn_capability_probe(CapabilityProbeSpec {
+            request_id,
+            plan_fingerprint,
+            source: ImapProbeEndpoint {
+                endpoint: source,
+                user: self.form.profile.source_user.clone(),
+                password: self.form.source_password.clone(),
+                auth: self.form.profile.source_auth.clone(),
+                tls: self.form.profile.source_tls.clone(),
+                ca_bundle: self.form.profile.source_ca_bundle.clone(),
+                certificate_pin_sha256: self.form.profile.source_certificate_pin_sha256.clone(),
+            },
+            destination: ImapProbeEndpoint {
+                endpoint: destination,
+                user: self.form.profile.destination_user.clone(),
+                password: self.form.destination_password.clone(),
+                auth: self.form.profile.destination_auth.clone(),
+                tls: self.form.profile.destination_tls.clone(),
+                ca_bundle: self.form.profile.destination_ca_bundle.clone(),
+                certificate_pin_sha256: self
+                    .form
+                    .profile
+                    .destination_certificate_pin_sha256
+                    .clone(),
+            },
+        }));
+    }
+
     pub(crate) fn preview(&mut self, ctx: &egui::Context) {
         if !self.preview {
             return;
