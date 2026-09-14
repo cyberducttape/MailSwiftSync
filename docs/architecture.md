@@ -29,7 +29,7 @@ failure classification, retry policy, and recovery-facing state transitions.
 does not define migration policy. Headless and GUI entry points should call
 these shared controller/plan boundaries rather than reimplementing them.
 
-Batch validation and migration use a bounded worker pool (1–16 workers) over an immutable in-memory job list. Admission creates a parent wave run plus one mailbox-specific child run and snapshot per row in one transaction. Mailbox rows remain `queued` until a worker claims them; process identity and terminal results are then attributed to the child run. Worker output is redacted in the UI and committed to the event ledger in batches per UI cycle rather than issuing one disk transaction per output line. Verbose `run_output` events retain a bounded per-project tail; lifecycle, run, phase, and evidence events are not pruned.
+Batch validation and migration use a bounded worker pool (1–16 workers) over an immutable in-memory job list. Admission creates a parent wave run plus one mailbox-specific child run and snapshot per row in one transaction. Mailbox rows remain `queued` until a worker claims them; process identity and terminal results are then attributed to the child run. Worker output is redacted and retained only in bounded process-local UI memory; raw `run_output` transcripts are not persisted, preventing subjects, folder names, and message metadata from becoming durable ledger data. Structured lifecycle, run, phase, and evidence events remain durable.
 
 Batch destination collision checks use a canonical endpoint/port/mailbox identity
 when a restored row contains secret-free profile configuration. This permits the

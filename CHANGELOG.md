@@ -29,6 +29,9 @@ All notable changes to MailSwiftSync are documented here.
 - Exposed customer/project naming in the batch cockpit and made customized
   workspace names apply when queue rows still carry a generic default, keeping
   durable projects and customer evidence identifiable without editing a CSV.
+- Corrected architecture and operations documentation to state that raw engine
+  transcripts remain bounded process-local diagnostics and are not persisted in
+  the SQLite evidence ledger.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless

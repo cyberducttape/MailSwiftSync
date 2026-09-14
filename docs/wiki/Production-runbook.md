@@ -119,7 +119,7 @@ If startup cannot verify a recorded process identity, MailSwiftSync fails closed
 - Confirm no child engine processes remain, then rotate or remove temporary/keyring credentials according to local policy.
 - Preserve the SQLite workspace and exported artifacts together if the migration may need an audit or post-incident review.
 
-The durable ledger retains lifecycle and evidence history. Verbose subprocess output is diagnostic context and is automatically retained as a bounded per-project tail, so export the relevant report and health summary during the migration window if detailed engine output may be needed later.
+The durable ledger retains lifecycle and evidence history. Verbose subprocess output is diagnostic context held only in bounded process-local memory; raw engine transcripts are not written to the ledger. Export the relevant report and health summary during the migration window if detailed engine output may be needed later.
 
 ## Policy exceptions
 
