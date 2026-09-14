@@ -19,7 +19,13 @@ if [[ -z "$dovecot_version" ]]; then
   exit 1
 fi
 dovecot_semver="${dovecot_version%% *}"
-echo "Using Dovecot ${dovecot_version} and imapsync $(imapsync --version 2>/dev/null || true)"
+imapsync_version_output="$(imapsync --version 2>&1 || true)"
+imapsync_version="$(sed -n 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' <<<"$imapsync_version_output" | head -1)"
+if [[ "$imapsync_version" != "2.314" ]]; then
+  echo "FAIL: product integration requires packaged imapsync 2.314; found ${imapsync_version:-unknown}" >&2
+  exit 1
+fi
+echo "Using Dovecot ${dovecot_version} and imapsync ${imapsync_version}"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
 cleanup() {
