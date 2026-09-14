@@ -340,7 +340,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn job_supervisor_kills_the_engine_tree_when_dropped() {
-        let mut command = Command::new("cmd.exe");
+        let shell = std::env::var_os("COMSPEC")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+        let mut command = Command::new(shell);
         command.args(["/C", "ping.exe -t 127.0.0.1"]);
         configure_process_group(&mut command);
         let mut child = command.spawn().expect("Windows command shell must exist");

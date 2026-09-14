@@ -11,6 +11,9 @@ All notable changes to MailSwiftSync are documented here.
   handles `.exe` candidates without platform-specific formatting errors.
 - Fixed Windows 2024-edition safety checks and platform-only test imports so
   native MSVC builds compile cleanly with warnings denied.
+- Hardened Windows-native validation by using the system command shell in
+  process tests, flushing restored ledgers through a writable handle, and
+  recognizing the protected Owner Rights ACE used by private-file ACLs.
 - Windows CI now uses the pinned Visual Studio x64 developer-environment
   action before MSVC builds and native tests, ensuring Rust dependencies can
   locate the required `lib.exe` tool across runner image layouts.
