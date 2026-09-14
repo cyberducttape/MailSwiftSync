@@ -11,6 +11,8 @@ All notable changes to MailSwiftSync are documented here.
   existing `core::*` API.
 - Moved report snapshot read-model types alongside the durable evidence model,
   keeping report assembly boundaries explicit without changing persistence.
+- Extracted durable project, mailbox, run, and batch read-model types into
+  `core::models`, preserving the existing public core API.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

@@ -6,7 +6,6 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crc32fast::Hasher as Crc32Hasher;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, backup, params};
-use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
@@ -15,11 +14,16 @@ use uuid::Uuid;
 
 mod engine;
 mod evidence;
+mod models;
 mod state;
 pub use engine::Engine;
 pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
     ReportRunSnapshot, VerificationAcceptance,
+};
+pub use models::{
+    ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, Project, ProjectListItem,
+    RunListItem, RunSummary,
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
@@ -171,104 +175,6 @@ pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
     hasher.finalize() == expected
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Project {
-    pub id: String,
-    pub name: String,
-    pub source_endpoint: String,
-    pub destination_endpoint: String,
-    pub phase: Phase,
-}
-
-/// Compact project row for workspace selection. It intentionally omits
-/// mailbox configuration and plan snapshots so switching customers never
-/// loads secrets or large historical plans into the UI shell. Endpoints are
-/// non-secret identity metadata and make project search useful to operators.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectListItem {
-    pub id: String,
-    pub name: String,
-    pub source_endpoint: String,
-    pub destination_endpoint: String,
-    pub phase: Phase,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MailboxJob {
-    pub id: String,
-    pub source_mailbox: String,
-    pub destination_mailbox: String,
-    pub state: String,
-    /// Secret-free serialized configuration, if the importer supplied one.
-    pub config: Option<String>,
-}
-
-/// The immutable durable facts needed to admit a selected batch. Keeping the
-/// values together prevents the controller from reading state, preflight, and
-/// checkpoint in separate N+1 query passes that could observe different
-/// database versions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BatchAdmissionState {
-    pub job_id: String,
-    pub state: String,
-    pub preflight_plan: Option<String>,
-    pub checkpoint: Option<String>,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunSummary {
-    pub id: String,
-    pub job_id: Option<String>,
-    pub parent_run_id: Option<String>,
-    pub engine: String,
-    /// Project lifecycle phase captured when this run was admitted. This is
-    /// provenance metadata; it does not by itself claim stage-specific engine
-    /// behavior.
-    pub phase_at_start: String,
-    /// Serialized execution plan captured when the run started. Session
-    /// passwords and raw operator-supplied extra-option values are excluded;
-    /// the application may retain a digest of those options for identity.
-    pub plan_snapshot: String,
-    pub status: String,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub detail: String,
-}
-
-/// Lightweight run row for activity views and health summaries. The full
-/// immutable plan snapshot is intentionally excluded; callers that need the
-/// historical execution plan can request the individual run by ID.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunListItem {
-    pub id: String,
-    pub job_id: Option<String>,
-    pub parent_run_id: Option<String>,
-    pub source_mailbox: Option<String>,
-    pub destination_mailbox: Option<String>,
-    pub engine: String,
-    pub phase_at_start: String,
-    pub status: String,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub detail: String,
-}
-
-/// Immutable per-mailbox metadata supplied when a batch wave is admitted.
-/// Secrets are intentionally not part of this structure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BatchChildPlan {
-    pub engine: String,
-    pub plan_snapshot: String,
-    pub engine_version: Option<String>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ActiveProcess {
-    pub run_id: String,
-    pub job_id: String,
-    pub pid: u32,
-    pub start_ticks: Option<u64>,
-    pub process_group: Option<u32>,
-    pub session_id: Option<u32>,
-    pub executable: String,
-}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerCapabilities {
     pub values: BTreeSet<String>,
