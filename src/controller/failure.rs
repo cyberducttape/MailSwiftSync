@@ -3,6 +3,16 @@
 use crate::core;
 use std::time::Duration;
 
+/// External success may advance the durable lifecycle only after the
+/// terminal result has been committed and no durability fault remains.
+pub(crate) fn terminal_phase_advance_allowed(
+    external_succeeded: bool,
+    terminal_write_ok: bool,
+    durability_error: bool,
+) -> bool {
+    external_succeeded && terminal_write_ok && !durability_error
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FailureClass {
     Cancellation,

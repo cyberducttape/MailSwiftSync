@@ -19,6 +19,9 @@ All notable changes to MailSwiftSync are documented here.
   status module so controller polling no longer owns presentation rules.
 - Expanded the distribution installation guide with the attended-operation
   boundary and macOS fail-closed process-supervision limitation.
+- Moved the terminal durability/lifecycle admission predicate into the
+  controller policy module, keeping durable phase advancement out of the UI
+  shell.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

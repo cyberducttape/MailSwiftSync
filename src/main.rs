@@ -32,7 +32,7 @@ use controller::batch_admission::{
 };
 use controller::failure::{
     FailureClass, classified_failure_detail, classify_failure, is_transient_batch_error,
-    transient_retry_delay,
+    terminal_phase_advance_allowed, transient_retry_delay,
 };
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
@@ -904,14 +904,6 @@ impl App {
             ui_snapshot: WorkspaceSnapshot::default(),
         }
     }
-}
-
-fn terminal_phase_advance_allowed(
-    external_succeeded: bool,
-    terminal_write_ok: bool,
-    durability_error: bool,
-) -> bool {
-    external_succeeded && terminal_write_ok && !durability_error
 }
 
 /// Pre-live readiness and quota checks remain in `imap_probe`; this root module
