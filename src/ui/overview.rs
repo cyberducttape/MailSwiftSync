@@ -4,7 +4,10 @@ use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
 use crate::ui::{StatusSeverity, WorkspaceView, format_phase_name};
-use crate::ui::{recommended_batch_next_action, recommended_next_action, workflow_step_index};
+use crate::ui::{
+    customer_proof_ready, recommended_batch_next_action, recommended_next_action,
+    workflow_step_index,
+};
 use eframe::egui::{self, RichText};
 
 impl App {
@@ -31,6 +34,9 @@ impl App {
         } else {
             attention_count
         };
+        let proof_ready = project.as_ref().is_some_and(|project| {
+            customer_proof_ready(project.phase, attention_count, self.ui_snapshot.is_stale())
+        });
         let next_action =
             recommended_batch_next_action(has_bulk_jobs, workspace_attention_count, self.running())
                 .unwrap_or_else(|| {
@@ -196,12 +202,18 @@ impl App {
                         .size(11.0)
                         .color(self.theme_colors().text_secondary),
                 );
-                ui.heading(if phase == core::Phase::Complete {
-                    "Available"
+                ui.heading(if proof_ready {
+                    "Customer proof ready"
+                } else if project.is_some() {
+                    "Review required"
                 } else {
-                    "Pending"
+                    "Not available"
                 });
-                ui.label("Open Verification to review evidence and export the customer report.");
+                ui.label(if proof_ready {
+                    "Open Verification to export the customer-safe evidence artifact."
+                } else {
+                    "Open Verification to review evidence; customer proof remains gated until the durable state is complete."
+                });
             });
         });
         ui.add_space(16.0);
