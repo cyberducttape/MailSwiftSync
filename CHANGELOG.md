@@ -45,6 +45,9 @@ All notable changes to MailSwiftSync are documented here.
   first-run safety guidance remains alongside the migration lifecycle view.
 - Moved the Overview first-run summary, process-ownership review gate, and
   historical read-only banner into `ui/overview.rs`.
+- Moved Overview preflight/readiness controls and completed-project reopen
+  review into `ui/overview.rs`, keeping assessment actions with the workflow
+  presentation.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
