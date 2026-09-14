@@ -6,6 +6,7 @@ mod batch;
 mod engine;
 mod output;
 mod plan;
+mod reports;
 mod settings;
 mod status;
 mod theme;

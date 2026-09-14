@@ -34,6 +34,9 @@ All notable changes to MailSwiftSync are documented here.
   history presentation into `ui/activity.rs`.
 - Extracted the verification workspace and mailbox evidence review into
   `ui/verification.rs`, keeping report actions and exception review together.
+- Extracted GUI report-export actions into `ui/reports.rs`, keeping customer
+  proof, operator reports, health exports, and support bundles at the UI/report
+  boundary while leaving artifact construction in `reports/`.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
