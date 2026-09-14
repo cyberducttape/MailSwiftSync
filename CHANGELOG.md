@@ -19,6 +19,9 @@ All notable changes to MailSwiftSync are documented here.
 - Removed stale single-mailbox dry-run mutations from Mailboxes-page batch
   actions; batch preflight/live/final-delta mode is now controlled only by
   the batch mode state.
+- Extracted shell-word parsing, operator quoting, and trusted option removal
+  into the shared `command` module, decoupling engine and plan construction
+  from `main.rs` while retaining focused parser tests.
 - Extracted batch row selection by durable state and operator scope into the
   batch controller, with focused coverage for selected IDs and retry policy.
 - Moved elapsed-time presentation into `ui::status` with focused formatting tests, further reducing pure UI formatting logic in `main.rs`.

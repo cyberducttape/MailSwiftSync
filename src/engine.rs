@@ -110,7 +110,7 @@ pub(crate) fn imapsync_args(
     }
     // MailSwiftSync owns the journal and retention policy.
     args.push("--nolog".into());
-    if let Ok(extra) = super::parse_shell_words(&profile.extra_options) {
+    if let Ok(extra) = crate::command::parse_shell_words(&profile.extra_options) {
         args.extend(extra);
     }
     args
@@ -148,7 +148,7 @@ fn command_endpoint_parts(host: &str, default_port: u16) -> (String, u16) {
 }
 
 pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> {
-    let options = super::parse_shell_words(extra_options)
+    let options = crate::command::parse_shell_words(extra_options)
         .map_err(|error| format!("Extra options: {error}"))?;
     // This is deliberately an allowlist. The field is trusted application
     // configuration, but imapsync's option surface is powerful and changes

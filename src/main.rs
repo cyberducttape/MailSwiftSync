@@ -1,5 +1,6 @@
 mod bulk_import;
 mod cli;
+mod command;
 mod controller;
 mod core;
 mod credentials;
@@ -19,6 +20,8 @@ mod storage_paths;
 mod ui;
 mod verification;
 
+#[cfg(test)]
+use command::{parse_shell_words, remove_option, shell_quote};
 #[cfg(test)]
 use controller::batch_admission::canonical_destination_identity;
 use controller::batch_admission::{
@@ -265,72 +268,6 @@ fn decode_report_run_snapshot(snapshot: &str) -> Result<Option<RunPlanSnapshot>,
     toml::from_str(snapshot)
         .map(Some)
         .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
-}
-
-fn remove_option(args: &mut Vec<String>, option: &str) {
-    if let Some(index) = args.iter().position(|arg| arg == option) {
-        args.remove(index);
-        if index < args.len() {
-            args.remove(index);
-        }
-    }
-}
-
-fn shell_quote(value: &str) -> String {
-    if value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || "._/@=:-,".contains(character))
-    {
-        value.to_owned()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-}
-
-fn parse_shell_words(input: &str) -> Result<Vec<String>, String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    let mut in_token = false;
-    for character in input.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-            in_token = true;
-            continue;
-        }
-        if character == '\\' && quote != Some('\'') {
-            escaped = true;
-            in_token = true;
-            continue;
-        }
-        match quote {
-            Some(active) if character == active => quote = None,
-            Some(_) => current.push(character),
-            None if character == '\'' || character == '"' => quote = Some(character),
-            None if character.is_whitespace() => {
-                if in_token {
-                    words.push(std::mem::take(&mut current));
-                    in_token = false;
-                }
-            }
-            None => current.push(character),
-        }
-        if !character.is_whitespace() || quote.is_some() {
-            in_token = true;
-        }
-    }
-    if escaped {
-        return Err("unfinished escape".into());
-    }
-    if quote.is_some() {
-        return Err("unterminated quote".into());
-    }
-    if in_token {
-        words.push(current);
-    }
-    Ok(words)
 }
 
 pub(crate) enum Event {

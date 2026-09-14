@@ -1,3 +1,4 @@
+use crate::command::{remove_option, shell_quote};
 use crate::imap_probe::{command_endpoint_parts, command_port};
 use crate::{
     DOVECOT_SYNC_LOCK_WAIT_SECONDS, RunPlanSnapshot, RunProfileSnapshot, core,
@@ -7,8 +8,8 @@ use crate::{
     plan_identity::{
         configured_file_content_identity, executable_content_identity, snapshot_sha256,
     },
-    remove_option, restrict_directory_permissions, shell_quote, validate_certificate_pin,
-    write_private_atomic, write_secret_file,
+    restrict_directory_permissions, validate_certificate_pin, write_private_atomic,
+    write_secret_file,
 };
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
