@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted SQLite opening, read-only snapshots, backups, schema migration,
+  permission hardening, and legacy-ledger repair into `core/database.rs`,
+  isolating storage bootstrap from the durable domain operations.
 - Extracted mailbox creation, state transitions, attention and checkpoint
   reads, batch admission, and preflight-plan persistence into
   `core/mailboxes.rs`, isolating mailbox admission policy from the remaining
