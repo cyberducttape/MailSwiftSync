@@ -11,6 +11,15 @@ use std::time::{Duration, Instant};
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const MAILBOX_PAGE_SIZE: u32 = 200;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkspaceView {
+    Overview,
+    Plan,
+    Mailboxes,
+    Activity,
+    Verification,
+}
+
 pub(crate) struct WorkspaceRefreshOptions<'a> {
     pub(crate) active_project_id: Option<&'a str>,
     pub(crate) all_projects_loaded: bool,

@@ -17,6 +17,11 @@ pub(crate) struct BulkJob {
     pub(crate) state: String,
 }
 
+pub(crate) struct PendingSheetImport {
+    pub(crate) path: PathBuf,
+    pub(crate) sheets: Vec<String>,
+}
+
 pub(crate) enum BulkImportResult {
     Jobs(Vec<BulkJob>),
     Workbook { path: PathBuf, sheets: Vec<String> },

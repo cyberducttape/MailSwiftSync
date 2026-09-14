@@ -25,5 +25,5 @@ pub(crate) use theme::contrast_ratio;
 #[cfg(test)]
 pub(crate) use theme::next_ui_scale;
 pub(crate) use theme::{AppearancePreferences, ThemeColors};
-pub(crate) use workspace::{WorkspaceRefreshOptions, WorkspaceSnapshot};
+pub(crate) use workspace::{WorkspaceRefreshOptions, WorkspaceSnapshot, WorkspaceView};
 pub(crate) use workspace::{filter_project_indices, preferred_project_id};

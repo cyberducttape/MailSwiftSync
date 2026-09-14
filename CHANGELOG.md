@@ -78,6 +78,8 @@ All notable changes to MailSwiftSync are documented here.
   durable plan contract and its corruption test together.
 - Moved certificate-pin validation coverage into `migration_plan.rs`, keeping
   TLS input policy and its regression tests together.
+- Moved worksheet-import state and workspace-view identity into their owning
+  bulk-import and UI modules, reducing workflow declarations in `main.rs`.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.

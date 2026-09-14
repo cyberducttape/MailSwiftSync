@@ -121,11 +121,12 @@ use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
     AppearancePreferences, SettingsAction, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
-    contains_ascii_case_insensitive, display_job_state, display_state_key, filter_project_indices,
-    format_elapsed, format_phase_name, job_state_badge, markdown_escape, needs_operator_review,
-    password_visibility_id, preferred_project_id, project_health_state_counts, push_visible_output,
-    recommended_next_action, render_account, show_settings, status_color, successful_run_severity,
-    successful_run_status, truncate_utf8, workflow_step_index,
+    WorkspaceView, contains_ascii_case_insensitive, display_job_state, display_state_key,
+    filter_project_indices, format_elapsed, format_phase_name, job_state_badge, markdown_escape,
+    needs_operator_review, password_visibility_id, preferred_project_id,
+    project_health_state_counts, push_visible_output, recommended_next_action, render_account,
+    show_settings, status_color, successful_run_severity, successful_run_status, truncate_utf8,
+    workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -154,23 +155,10 @@ const MAX_UI_SCALE: f32 = 1.50;
 
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
-struct PendingSheetImport {
-    path: std::path::PathBuf,
-    sheets: Vec<String>,
-}
-
-use bulk_import::{BulkImportResult, BulkJob};
+use bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
 
 type PendingDbEvent = (String, String, String, String);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WorkspaceView {
-    Overview,
-    Plan,
-    Mailboxes,
-    Activity,
-    Verification,
-}
 struct App {
     form: Form,
     output: BoundedLineBuffer,
