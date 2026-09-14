@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- The application state struct (`App`) moved from `main.rs` into
+  `ui::app_state`, next to the `impl App` helpers that already lived there.
+  `main.rs` is now limited to module wiring, startup constants, and the entry
+  point, matching the plan/controller/UI/core boundary described in the
+  architecture docs.
 - Batch project classification now uses a bounded SQLite existence query at
   startup instead of loading every mailbox configuration twice, keeping large
   restored queues from multiplying startup memory and I/O.
