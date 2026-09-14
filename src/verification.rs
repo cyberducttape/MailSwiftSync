@@ -1,22 +1,49 @@
 use crate::core;
 
-fn number_after(line: &str, marker: &str) -> Option<u64> {
-    let token = line.split_once(marker)?.1.split_whitespace().next()?;
-    if token.is_empty() || !token.chars().all(|character| character.is_ascii_digit()) {
+fn number_after(line: &str, marker: &str, unit: &str) -> Option<u64> {
+    let remainder = line
+        .strip_prefix(marker)?
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let token = remainder.first().copied()?;
+    if remainder.len() != 2
+        || remainder[1] != unit
+        || !token.chars().all(|character| character.is_ascii_digit())
+    {
         return None;
     }
     token.parse().ok()
 }
 
 fn detected_error_count(line: &str) -> Option<u64> {
-    let remainder = line.strip_prefix("Detected ")?;
-    let count = remainder.split_whitespace().next()?.parse().ok()?;
-    remainder
-        .split_whitespace()
-        .any(|word| {
-            word.trim_matches(|character: char| !character.is_ascii_alphabetic()) == "errors"
-        })
-        .then_some(count)
+    let mut fields = line.split_whitespace();
+    (fields.next() == Some("Detected")
+        && fields
+            .next()
+            .is_some_and(|value| value.chars().all(|c| c.is_ascii_digit()))
+        && fields.next() == Some("errors")
+        && fields.next().is_none())
+    .then(|| line.split_whitespace().nth(1)?.parse().ok())
+    .flatten()
+}
+
+fn is_sync_good_summary(line: &str) -> bool {
+    let fields = line.split_whitespace().collect::<Vec<_>>();
+    fields.len() == 13
+        && fields[..5] == ["The", "sync", "looks", "good,", "all"]
+        && fields[5]
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        && fields[6..]
+            == [
+                "identified",
+                "messages",
+                "in",
+                "host1",
+                "are",
+                "on",
+                "host2.",
+            ]
 }
 
 #[derive(Clone, Debug, Default)]
@@ -33,22 +60,22 @@ pub(crate) struct ImapsyncEvidenceAccumulator {
 
 impl ImapsyncEvidenceAccumulator {
     pub(crate) fn observe(&mut self, line: &str) {
-        if let Some(value) = number_after(line, "Host1 Nb folders:") {
+        if let Some(value) = number_after(line, "Host1 Nb folders:", "folders") {
             self.source_folders = Some(value);
         }
-        if let Some(value) = number_after(line, "Host2 Nb folders:") {
+        if let Some(value) = number_after(line, "Host2 Nb folders:", "folders") {
             self.destination_folders = Some(value);
         }
-        if let Some(value) = number_after(line, "Host1 Nb messages:") {
+        if let Some(value) = number_after(line, "Host1 Nb messages:", "messages") {
             self.source_messages = Some(value);
         }
-        if let Some(value) = number_after(line, "Host2 Nb messages:") {
+        if let Some(value) = number_after(line, "Host2 Nb messages:", "messages") {
             self.destination_messages = Some(value);
         }
-        if let Some(value) = number_after(line, "Host1 Total size:") {
+        if let Some(value) = number_after(line, "Host1 Total size:", "bytes") {
             self.source_bytes = Some(value);
         }
-        if let Some(value) = number_after(line, "Host2 Total size:") {
+        if let Some(value) = number_after(line, "Host2 Total size:", "bytes") {
             self.destination_bytes = Some(value);
         }
         if let Some(value) = detected_error_count(line) {
@@ -61,7 +88,11 @@ impl ImapsyncEvidenceAccumulator {
                 self.sync_good = false;
             }
         }
-        self.sync_good |= line.contains("The sync looks good");
+        // This is the exact completion sentence emitted by the supported
+        // imapsync summary contract. Substring matches are deliberately not
+        // accepted: diagnostics or future wording changes must produce
+        // incomplete evidence rather than accidentally assert success.
+        self.sync_good |= is_sync_good_summary(line.trim());
     }
 
     pub(crate) fn evidence(&self) -> Option<core::MailboxEvidence> {
@@ -197,7 +228,7 @@ mod tests {
             "Host2 Nb messages: 2 messages",
             "Host1 Total size: 100 bytes",
             "Host2 Total size: 100 bytes",
-            "The sync looks good",
+            "The sync looks good, all 2 identified messages in host1 are on host2.",
         ] {
             accumulator.observe(line);
         }
@@ -232,7 +263,7 @@ mod tests {
             "Host2 Nb messages: 2 messages",
             "Host1 Total size: 100 bytes",
             "Host2 Total size: 100 bytes",
-            "The sync looks good",
+            "The sync looks good, all 42 identified messages in host1 are on host2.",
             "Detected 2 errors",
         ] {
             accumulator.observe(line);
@@ -252,7 +283,7 @@ mod tests {
             "Host2 Nb messages: 1 messages".into(),
             "Host1 Total size: 10 bytes".into(),
             "Host2 Total size: 10 bytes".into(),
-            "The sync looks good".into(),
+            "The sync looks good, all 1 identified messages in host1 are on host2.".into(),
         ];
         assert!(parse_imapsync_evidence(&lines).is_none());
     }
@@ -267,11 +298,41 @@ mod tests {
             "Host2 Nb messages: 1 messages",
             "Host1 Total size: 10 bytes",
             "Host2 Total size: 10 bytes",
-            "The sync looks good",
+            "The sync looks good, all 1 identified messages in host1 are on host2.",
         ] {
             accumulator.observe(line);
         }
         assert!(accumulator.evidence().is_none());
+    }
+
+    #[test]
+    fn imapsync_parser_rejects_prose_that_resembles_summary_records() {
+        let lines = [
+            "diagnostic Host1 Nb folders: 1 folders".into(),
+            "Host2 Nb folders: 1 folders".into(),
+            "Host1 Nb messages: 1 messages".into(),
+            "Host2 Nb messages: 1 messages".into(),
+            "Host1 Total size: 10 bytes".into(),
+            "Host2 Total size: 10 bytes".into(),
+            "The sync looks good according to a previous attempt".into(),
+            "Detected 0 errors while checking an unrelated command".into(),
+        ];
+        assert!(parse_imapsync_evidence(&lines).is_none());
+    }
+
+    #[test]
+    fn imapsync_parser_requires_the_expected_summary_units() {
+        let lines = [
+            "Host1 Nb folders: 1 messages".into(),
+            "Host2 Nb folders: 1 folders".into(),
+            "Host1 Nb messages: 1 messages".into(),
+            "Host2 Nb messages: 1 messages".into(),
+            "Host1 Total size: 10 bytes".into(),
+            "Host2 Total size: 10 bytes".into(),
+            "The sync looks good, all 1 identified messages in host1 are on host2.".into(),
+            "Detected 0 errors".into(),
+        ];
+        assert!(parse_imapsync_evidence(&lines).is_none());
     }
 
     #[test]

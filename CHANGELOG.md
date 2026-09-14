@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Tightened imapsync evidence parsing into an explicit summary contract:
+  aggregate records must use the expected units, the completion marker must be
+  exact, and the error summary must be exactly `Detected N errors`. Prose that
+  merely resembles a summary now remains incomplete evidence. The operator
+  guide documents this fail-closed compatibility boundary.
 - Reworked authenticated IMAP LIST handling into a streaming inventory
   consumer. Readiness now retains only mailbox and SPECIAL-USE counts, while
   bounding individual records, literals, processing time, and mailbox count;

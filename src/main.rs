@@ -8128,7 +8128,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let args = vec![
             "-c".into(),
-            "printf '%s\\n' 'Host1 Nb folders: 2' 'Host2 Nb folders: 2' 'Host1 Nb messages: 7' 'Host2 Nb messages: 7' 'Host1 Total size: 100' 'Host2 Total size: 100' 'The sync looks good' 'Detected 0 errors'".into(),
+            "printf '%s\\n' 'Host1 Nb folders: 2 folders' 'Host2 Nb folders: 2 folders' 'Host1 Nb messages: 7 messages' 'Host2 Nb messages: 7 messages' 'Host1 Total size: 100 bytes' 'Host2 Total size: 100 bytes' 'The sync looks good, all 7 identified messages in host1 are on host2.' 'Detected 0 errors'".into(),
         ];
         let result = run_streaming(
             "/bin/sh",
@@ -8929,7 +8929,7 @@ mod tests {
             "Host1 Total size: 100 bytes".into(),
             "Host2 Total size: 100 bytes".into(),
             "Detected 17 folders during namespace discovery".into(),
-            "The sync looks good".into(),
+            "The sync looks good, all 2 identified messages in host1 are on host2.".into(),
             "Detected 0 errors".into(),
         ];
         let evidence = verification::parse_imapsync_evidence(&lines).unwrap();
