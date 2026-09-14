@@ -3,6 +3,16 @@
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
 use std::collections::HashSet;
 
+/// The durable batch configuration excludes free-form expert options. Those
+/// options are revalidated from the current editable profile before launch;
+/// the run snapshot records their digest instead of persisting raw text.
+pub(crate) fn durable_batch_profile_config(profile: &Profile) -> Result<String, String> {
+    let mut safe_profile = profile.clone();
+    safe_profile.extra_options.clear();
+    toml::to_string(&safe_profile)
+        .map_err(|error| format!("Could not serialize batch plan: {error}"))
+}
+
 pub(crate) fn selection_value(
     jobs: &[BulkJob],
     selected_ids: &HashSet<String>,
@@ -254,6 +264,84 @@ pub(crate) fn prepare_selected_batch_jobs(
         return Err(error);
     }
     Ok(jobs)
+}
+
+pub(crate) struct PreparedBatchRun {
+    pub(crate) selected_job_ids: Vec<String>,
+    pub(crate) queue_checkpoints: Vec<Option<String>>,
+    pub(crate) expected_plans: Vec<String>,
+    pub(crate) batch_plan_fingerprints: Vec<String>,
+    pub(crate) plan_snapshot: String,
+    pub(crate) child_plans: Vec<core::BatchChildPlan>,
+}
+
+/// Materialize the exact durable inputs for an admitted batch. This is a
+/// deterministic controller operation and deliberately has no egui or
+/// process-launch responsibilities.
+pub(crate) fn prepare_batch_run(
+    jobs: &[BulkJob],
+    selected_indices: &[usize],
+    queue_job_ids: &[String],
+    durable_admissions: &[Option<core::BatchAdmissionState>],
+    live: bool,
+) -> Result<PreparedBatchRun, String> {
+    let selected_job_ids = selected_indices
+        .iter()
+        .map(|&index| {
+            queue_job_ids
+                .get(index)
+                .cloned()
+                .ok_or_else(|| format!("Batch queue row {} has no durable job ID.", index + 1))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let queue_checkpoints = selected_indices
+        .iter()
+        .zip(jobs.iter())
+        .map(|(&index, job)| {
+            if live && job.form.engine() == core::Engine::Dovecot {
+                durable_admissions
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .and_then(|admission| admission.checkpoint.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let batch_plan_fingerprints = jobs
+        .iter()
+        .map(|job| crate::plan_identity::fingerprint_digest(&job.form.plan_fingerprint()))
+        .collect::<Vec<_>>();
+    let expected_plans = if live {
+        batch_plan_fingerprints.clone()
+    } else {
+        Vec::new()
+    };
+    let snapshots = jobs
+        .iter()
+        .zip(queue_checkpoints.iter())
+        .map(|(job, checkpoint)| {
+            job.form
+                .plan_snapshot_with_checkpoint(checkpoint.as_deref())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let child_plans = jobs
+        .iter()
+        .zip(snapshots.iter())
+        .map(|(job, plan_snapshot)| core::BatchChildPlan {
+            engine: job.form.engine().label().to_owned(),
+            plan_snapshot: plan_snapshot.clone(),
+            engine_version: None,
+        })
+        .collect();
+    Ok(PreparedBatchRun {
+        selected_job_ids,
+        queue_checkpoints,
+        expected_plans,
+        batch_plan_fingerprints,
+        plan_snapshot: snapshots.join("\n--- batch mailbox plan ---\n"),
+        child_plans,
+    })
 }
 
 pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {

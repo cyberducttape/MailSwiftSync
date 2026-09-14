@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted deterministic batch plan materialization into
+  `controller/batch_admission.rs`: selected durable IDs, Dovecot checkpoints,
+  plan fingerprints, run snapshots, and child plans are now produced by one
+  controller operation before SQLite run admission.
 - Extracted selected batch-row validation and preparation into
   `controller/batch_admission.rs`, centralizing live durable-state checks,
   credential fingerprints, form validation, transport acknowledgements, and

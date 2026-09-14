@@ -40,9 +40,9 @@ use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
-    durable_single_identity_matches, is_verified_terminal_state, prepare_batch_project,
-    prepare_selected_batch_jobs, selected_batch_indices, spawn_batch_worker,
-    spawn_single_run_worker, suggested_batch_project_name,
+    durable_batch_profile_config, durable_single_identity_matches, is_verified_terminal_state,
+    prepare_batch_project, prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices,
+    spawn_batch_worker, spawn_single_run_worker, suggested_batch_project_name,
 };
 #[cfg(test)]
 use credentials::CleanupGuard;
@@ -244,17 +244,6 @@ fn verify_proof_file_with_trust(
     trusted_public_key: Option<&str>,
 ) -> Result<String, String> {
     reports::signing::verify_file(path, trusted_public_key)
-}
-
-/// Serialize the durable queue configuration without retaining free-form
-/// expert options. Restored rows must be re-reviewed against the current
-/// trusted application profile; the launch-time run snapshot retains the
-/// SHA-256 identity of the options that were actually used.
-fn durable_batch_profile_config(profile: &Profile) -> Result<String, String> {
-    let mut safe_profile = profile.clone();
-    safe_profile.extra_options.clear();
-    toml::to_string(&safe_profile)
-        .map_err(|error| format!("Could not serialize batch plan: {error}"))
 }
 
 /// Decode a persisted batch row without ever substituting a default plan.
@@ -3324,81 +3313,28 @@ impl App {
         self.selected_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
         self.rebuild_bulk_job_index();
-        // Resolve queue-row indices to the durable IDs of the project chosen
-        // above. A freshly imported dry queue has no old IDs at all, and an
-        // edited queue may have IDs from a different project; using those
-        // pre-resolution IDs would panic or bind children to stale mailboxes.
-        let selected_job_ids = selected_indices
-            .iter()
-            .map(|&index| self.bulk_job_ids[index].clone())
-            .collect::<Vec<_>>();
-        let queue_checkpoints = selected_indices
-            .iter()
-            .map(|index| {
-                if live && self.bulk_jobs[*index].form.engine() == core::Engine::Dovecot {
-                    durable_admissions
-                        .get(*index)
-                        .and_then(|admission| admission.as_ref())
-                        .and_then(|admission| admission.checkpoint.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        self.bulk_live_run = live;
-        let expected_plans = if live {
-            jobs.iter()
-                .map(|job| plan_fingerprint_digest(&job.form.plan_fingerprint()))
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let batch_plan_fingerprints = jobs
-            .iter()
-            .map(|job| plan_fingerprint_digest(&job.form.plan_fingerprint()))
-            .collect::<Vec<_>>();
-        let plan_snapshot = jobs
-            .iter()
-            .zip(queue_checkpoints.iter())
-            .map(|(job, checkpoint)| {
-                job.form
-                    .plan_snapshot_with_checkpoint(checkpoint.as_deref())
-            })
-            .collect::<Result<Vec<_>, _>>();
-        let plan_snapshot = match plan_snapshot {
-            Ok(snapshots) => snapshots.join("\n--- batch mailbox plan ---\n"),
+        let prepared = match prepare_batch_run(
+            &jobs,
+            &selected_indices,
+            &self.bulk_job_ids,
+            &durable_admissions,
+            live,
+        ) {
+            Ok(value) => value,
             Err(error) => {
                 self.bulk_message = error;
                 return;
             }
         };
+        let selected_job_ids = prepared.selected_job_ids;
+        let queue_checkpoints = prepared.queue_checkpoints;
+        let expected_plans = prepared.expected_plans;
+        let batch_plan_fingerprints = prepared.batch_plan_fingerprints;
+        let plan_snapshot = prepared.plan_snapshot;
+        let child_plans = prepared.child_plans;
+        self.bulk_live_run = live;
         let run_id = uuid::Uuid::new_v4().to_string();
         self.run_id = Some(run_id.clone());
-        // Version metadata is a property of the executable, not the mailbox.
-        // Probe each distinct path once so a large batch does not synchronously
-        // spawn one --version process per row on the UI thread.
-        let child_plans = jobs
-            .iter()
-            .zip(queue_checkpoints.iter())
-            .map(|(job, checkpoint)| {
-                job.form
-                    .plan_snapshot_with_checkpoint(checkpoint.as_deref())
-                    .map(|plan_snapshot| core::BatchChildPlan {
-                        engine: job.form.engine().label().to_owned(),
-                        plan_snapshot,
-                        // Version metadata is recorded asynchronously by the
-                        // shared worker after durable admission.
-                        engine_version: None,
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>();
-        let child_plans = match child_plans {
-            Ok(plans) => plans,
-            Err(error) => {
-                self.bulk_message = error;
-                return;
-            }
-        };
         let child_run_ids = match self.store.begin_batch_run_with_children(
             &project_id,
             &selected_job_ids,
