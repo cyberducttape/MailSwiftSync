@@ -308,3 +308,23 @@ fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::validate_workbook_input;
+
+    #[test]
+    fn legacy_xls_input_uses_ole_validation_instead_of_zip_validation() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-legacy-xls-header-{}-{}.xls",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let ole_header = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+        std::fs::write(&path, ole_header).unwrap();
+
+        assert!(validate_workbook_input(&path).is_ok());
+
+        std::fs::remove_file(path).unwrap();
+    }
+}

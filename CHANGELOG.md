@@ -91,6 +91,8 @@ All notable changes to MailSwiftSync are documented here.
   appropriate signature check instead of being sent through the `.xlsx` ZIP
   validator, while the existing input-size limit remains in force. Updated
   the import controls and guide to describe CSV/Excel support consistently.
+- Added a regression test at the workbook-dispatch boundary to ensure legacy
+  `.xls` inputs remain on the OLE validation path.
 - Moved mailbox evidence values, evidence-scope semantics, and verification
   acceptance records into a dedicated durable-core module while preserving the
   existing `core::*` API.
