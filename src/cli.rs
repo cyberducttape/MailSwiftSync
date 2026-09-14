@@ -19,6 +19,30 @@ struct SuperviseArguments {
     idle_polls: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeadlessMode {
+    Preflight,
+    Live,
+    BatchPreflight,
+    BatchLive,
+}
+
+impl HeadlessMode {
+    fn parse(value: &std::ffi::OsStr) -> Option<Self> {
+        match value.to_str()? {
+            "preflight" => Some(Self::Preflight),
+            "live" => Some(Self::Live),
+            "batch-preflight" => Some(Self::BatchPreflight),
+            "batch-live" => Some(Self::BatchLive),
+            _ => None,
+        }
+    }
+
+    fn is_batch(self) -> bool {
+        matches!(self, Self::BatchPreflight | Self::BatchLive)
+    }
+}
+
 /// Parse supervisor arguments without terminating the process. Keeping this
 /// pure makes the automation boundary directly testable and prevents future
 /// changes from turning malformed maintenance-window input into a panic.
@@ -416,15 +440,15 @@ pub(crate) fn run() -> eframe::Result<()> {
             );
             std::process::exit(2);
         };
-        if !matches!(
-            mode.to_str(),
-            Some("preflight" | "live" | "batch-preflight" | "batch-live")
-        ) {
-            eprintln!(
-                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>]"
-            );
-            std::process::exit(2);
-        }
+        let mode = match HeadlessMode::parse(&mode) {
+            Some(mode) => mode,
+            None => {
+                eprintln!(
+                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>]"
+                );
+                std::process::exit(2);
+            }
+        };
         let mut source_secret_file = None;
         let mut destination_secret_file = None;
         while let Some(option) = arguments.next() {
@@ -446,9 +470,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             };
             *target = Some(std::path::PathBuf::from(path));
         }
-        if mode.to_str().is_some_and(|mode| mode.starts_with("batch-"))
-            && (source_secret_file.is_some() || destination_secret_file.is_some())
-        {
+        if mode.is_batch() && (source_secret_file.is_some() || destination_secret_file.is_some()) {
             eprintln!(
                 "Secret-file options are supported for single-mailbox headless execution only."
             );
@@ -480,13 +502,13 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         };
         let state = std::path::PathBuf::from(state);
-        let mode = mode.to_string_lossy();
-        let result = match mode.as_ref() {
-            "preflight" => headless_execute_with_credentials(&state, false, credentials),
-            "live" => headless_execute_with_credentials(&state, true, credentials),
-            "batch-preflight" => headless_batch_execute(&state, false),
-            "batch-live" => headless_batch_execute(&state, true),
-            _ => unreachable!("headless mode was validated above"),
+        let result = match mode {
+            HeadlessMode::Preflight => {
+                headless_execute_with_credentials(&state, false, credentials)
+            }
+            HeadlessMode::Live => headless_execute_with_credentials(&state, true, credentials),
+            HeadlessMode::BatchPreflight => headless_batch_execute(&state, false),
+            HeadlessMode::BatchLive => headless_batch_execute(&state, true),
         };
         match result {
             Ok(message) => {
@@ -520,7 +542,7 @@ fn print_cli_help() {
 
 #[cfg(test)]
 mod tests {
-    use super::{SuperviseArguments, parse_supervise_arguments};
+    use super::{HeadlessMode, SuperviseArguments, parse_supervise_arguments};
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -566,5 +588,29 @@ mod tests {
                 "{values:?}"
             );
         }
+    }
+
+    #[test]
+    fn headless_mode_parser_covers_all_dispatch_paths() {
+        assert_eq!(
+            HeadlessMode::parse(OsString::from("preflight").as_os_str()),
+            Some(HeadlessMode::Preflight)
+        );
+        assert_eq!(
+            HeadlessMode::parse(OsString::from("live").as_os_str()),
+            Some(HeadlessMode::Live)
+        );
+        assert_eq!(
+            HeadlessMode::parse(OsString::from("batch-preflight").as_os_str()),
+            Some(HeadlessMode::BatchPreflight)
+        );
+        assert_eq!(
+            HeadlessMode::parse(OsString::from("batch-live").as_os_str()),
+            Some(HeadlessMode::BatchLive)
+        );
+        assert_eq!(
+            HeadlessMode::parse(OsString::from("unknown").as_os_str()),
+            None
+        );
     }
 }

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Headless CLI dispatch now uses a typed mode parser instead of validating a
+  string and later relying on `unreachable!`; all single and batch modes have
+  direct regression coverage.
 - Extracted pure `supervise` argument parsing from CLI process control and
   added coverage for defaults, continuous polling, bounds, malformed values,
   and extra arguments.
