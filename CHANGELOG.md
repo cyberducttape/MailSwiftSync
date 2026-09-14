@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Release bundles now preserve the `docs/` hierarchy so relative links among
+  installation, service, container, and readiness guides remain valid after
+  extraction on every supported platform.
 - Local packaging now stages files in a private temporary directory and cleans
   it on exit, preventing interrupted builds from contaminating later release
   archives with stale bundle contents.
