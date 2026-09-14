@@ -20,7 +20,9 @@ if [[ -z "$dovecot_version" ]]; then
 fi
 dovecot_semver="${dovecot_version%% *}"
 imapsync_version_output="$(imapsync --version 2>&1 || true)"
-imapsync_version="$(sed -n 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' <<<"$imapsync_version_output" | head -1)"
+imapsync_version="$(sed -n -e 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' \
+  -e 's/^[[:space:]]*v\?\([0-9][0-9.]*\)[[:space:]]*$/\1/p' \
+  <<<"$imapsync_version_output" | head -1)"
 if [[ "$imapsync_version" != "2.314" ]]; then
   echo "FAIL: product integration requires packaged imapsync 2.314; found ${imapsync_version:-unknown}" >&2
   exit 1
