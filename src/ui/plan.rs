@@ -8,9 +8,76 @@ use crate::controller::{
 };
 use crate::imap_probe::endpoint_for_probe;
 use crate::plan_identity::fingerprint_digest as plan_fingerprint_digest;
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Color32, RichText};
 
 impl App {
+    pub(crate) fn live_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.live_confirm_open {
+            return;
+        }
+        let mut open = self.live_confirm_open;
+        let mut close_requested = false;
+        egui::Window::new("Confirm live migration")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(
+                    RichText::new("Destination changes require confirmation")
+                        .color(self.theme_colors().danger),
+                );
+                ui.label(format!(
+                    "This will invoke {} with the current credentials and rules.",
+                    self.form.engine().label()
+                ));
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("Project: {}", self.form.profile.name)).strong());
+                ui.label(format!(
+                    "{}  →  {}",
+                    self.form.profile.source_host, self.form.profile.destination_host
+                ));
+                let deletion_enabled = self.form.profile.delete2;
+                ui.label("Source mail: not deleted by default");
+                ui.label(
+                    RichText::new(format!(
+                        "Destination deletion: {}",
+                        if deletion_enabled {
+                            "ENABLED ⚠"
+                        } else {
+                            "disabled"
+                        }
+                    ))
+                    .color(if deletion_enabled {
+                        self.theme_colors().danger
+                    } else {
+                        self.theme_colors().text_secondary
+                    }),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close_requested = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("I understand — start migration")
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(self.theme_colors().danger),
+                        )
+                        .clicked()
+                    {
+                        close_requested = true;
+                        self.live_confirmed = true;
+                        self.live_confirmation_plan =
+                            Some(plan_fingerprint_digest(&self.form.plan_fingerprint()));
+                        self.start();
+                    }
+                });
+            });
+        self.live_confirm_open = open && !close_requested;
+    }
     pub(crate) fn requires_live_imaps_auth_probe(&self) -> bool {
         crate::imap_probe::fresh_imap_authentication_applies(&self.form)
     }

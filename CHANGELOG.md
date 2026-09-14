@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the live-migration confirmation dialog into `ui/plan.rs`, keeping
+  destructive plan controls together with the plan workflow.
 - Extracted the mailbox batch-cockpit renderer into `ui/batch.rs`, removing
   table, filtering, and action presentation logic from `main.rs` while keeping
   batch admission controller-owned.
