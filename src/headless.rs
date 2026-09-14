@@ -64,6 +64,14 @@ pub(crate) fn export_support_bundle(
     state_path: &std::path::Path,
     output_path: &std::path::Path,
 ) -> Result<(), String> {
+    export_support_bundle_with_sample_limit(state_path, output_path, SUPPORT_MAILBOX_SAMPLE_LIMIT)
+}
+
+pub(crate) fn export_support_bundle_with_sample_limit(
+    state_path: &std::path::Path,
+    output_path: &std::path::Path,
+    sample_limit: u32,
+) -> Result<(), String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
     let projects = store
         .recent_projects(1_000)
@@ -74,7 +82,7 @@ pub(crate) fn export_support_bundle(
             .mailbox_state_counts(&project.id)
             .map_err(|error| error.to_string())?;
         let jobs = store
-            .mailbox_status_page(&project.id, 0, SUPPORT_MAILBOX_SAMPLE_LIMIT)
+            .mailbox_status_page(&project.id, 0, sample_limit)
             .map_err(|error| error.to_string())?;
         let mailbox_values = jobs
             .iter()
@@ -112,7 +120,7 @@ pub(crate) fn export_support_bundle(
             "project_name": project.name,
             "phase": project.phase.as_str(),
             "mailbox_count": counts.total,
-            "mailbox_sample_limit": SUPPORT_MAILBOX_SAMPLE_LIMIT,
+            "mailbox_sample_limit": sample_limit,
             "mailboxes_truncated": counts.total > jobs.len(),
             "mailbox_state_counts": {
                 "ready": counts.ready,
