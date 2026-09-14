@@ -26,8 +26,13 @@ impl App {
         let has_bulk_jobs = batch_summary.total > 0;
         let has_durable_jobs = mailbox_counts.total > 0;
         let has_mailboxes = has_durable_jobs || has_bulk_jobs;
+        let workspace_attention_count = if has_bulk_jobs {
+            batch_summary.attention
+        } else {
+            attention_count
+        };
         let next_action =
-            recommended_batch_next_action(has_bulk_jobs, attention_count, self.running())
+            recommended_batch_next_action(has_bulk_jobs, workspace_attention_count, self.running())
                 .unwrap_or_else(|| {
                     recommended_next_action(
                         phase,
