@@ -106,6 +106,12 @@ impl App {
                         }
                     }
                 }
+                if ui.button("Select unresolved").clicked() {
+                    self.select_bulk_state_set(BulkStateSet::Unresolved);
+                }
+                if ui.button("Select attention").clicked() {
+                    self.select_bulk_state_set(BulkStateSet::Attention);
+                }
                 if ui.button("Clear selection").clicked() {
                     self.bulk_selected_ids.clear();
                 }

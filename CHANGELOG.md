@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added fast unresolved and attention selection actions to the primary
+  Mailboxes workspace, keeping remediation discoverable without opening the
+  secondary batch queue dialog.
 - The primary Mailboxes workspace now surfaces queue-health totals and
   unresolved work alongside its filters, making large-batch readiness visible
   before operators select an action.
