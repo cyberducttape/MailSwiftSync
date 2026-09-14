@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed the unused locked dry-run flag from application execution state;
+  batch mode remains owned by its explicit controller mode and single-run mode
+  remains bound to the active run context.
 - Removed the obsolete full-report field from the workspace read model so UI
   code cannot accidentally treat interactive state as a complete export
   snapshot.
