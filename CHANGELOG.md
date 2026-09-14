@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted per-mailbox batch execution—durable claim coordination, retries,
+  engine invocation, evidence/checkpoint staging, cancellation, and terminal
+  events—into `controller/batch_work_item.rs`, leaving the batch scheduler
+  responsible for bounded queue and worker lifecycle management.
 - Extracted bounded worker-event consumption, process ownership handling,
   batch evidence/checkpoint staging, and deferred-event retry handling into
   `controller/poll_events.rs`, leaving `poll.rs` focused on cycle setup,
