@@ -23,6 +23,7 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: bash -n scripts/*.sh
+      - run: scripts/verify-compatibility-matrix.sh docs/compatibility-matrix.md
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
       - run: cargo build --locked --release --all-features
