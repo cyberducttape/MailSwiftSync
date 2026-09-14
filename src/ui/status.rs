@@ -69,6 +69,17 @@ pub(crate) fn recommended_next_action(
     }
 }
 
+/// The UI-level proof gate mirrors the durable report contract: completion,
+/// zero review items, and a current read model are all required before the
+/// customer-facing export is offered.
+pub(crate) fn customer_proof_ready(
+    phase: core::Phase,
+    attention_count: usize,
+    durable_view_stale: bool,
+) -> bool {
+    phase == core::Phase::Complete && attention_count == 0 && !durable_view_stale
+}
+
 /// Map the durable project phase to the operator-facing six-step workflow.
 /// The overview uses this only for presentation; execution still requires the
 /// controller's existing preflight and live-admission gates.
@@ -246,6 +257,14 @@ mod tests {
             4
         );
         assert_eq!(workflow_step_index(core::Phase::Complete, true, true), 5);
+    }
+
+    #[test]
+    fn customer_proof_gate_requires_current_complete_review_free_state() {
+        assert!(customer_proof_ready(core::Phase::Complete, 0, false));
+        assert!(!customer_proof_ready(core::Phase::Verification, 0, false));
+        assert!(!customer_proof_ready(core::Phase::Complete, 1, false));
+        assert!(!customer_proof_ready(core::Phase::Complete, 0, true));
     }
 
     #[test]
