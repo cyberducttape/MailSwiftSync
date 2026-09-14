@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Batch summaries now count imported rows explicitly, so newly loaded queues
+  expose their unassessed mailbox count instead of appearing to have no work.
 - Overview recommendations now distinguish an imported batch queue from an
   empty project, directing operators to review rows and run preflight before
   live execution.
