@@ -297,7 +297,10 @@ impl App {
 
     pub(crate) fn project_summary(&mut self, ui: &mut egui::Ui) {
         self.lifecycle_stepper(ui);
-        if self.active_project_id().is_none() && self.bulk_jobs.is_empty() {
+        if self.active_view != WorkspaceView::Overview
+            && self.active_project_id().is_none()
+            && self.bulk_jobs.is_empty()
+        {
             let colors = self.theme_colors();
             ui.group(|ui| {
                 ui.heading("Start a safe migration");
