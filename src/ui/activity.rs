@@ -5,9 +5,40 @@ use crate::ui::{
     status_color,
 };
 use crate::{App, MAX_ACTIVITY_HISTORY_ROWS};
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Color32, RichText};
+use std::sync::atomic::Ordering;
 
 impl App {
+    pub(crate) fn stop_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.stop_confirm_open || !self.running() {
+            return;
+        }
+        let mut open = self.stop_confirm_open;
+        let mut close_requested = false;
+        egui::Window::new("Stop migration?")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.heading(RichText::new("The migration will stop where it is").color(self.theme_colors().danger));
+                ui.label("The destination may be partially migrated. A later preflight, delta, or verification pass may be required before continuing.");
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Keep running").clicked() {
+                        close_requested = true;
+                    }
+                    if ui.add(egui::Button::new(RichText::new("Stop migration").color(Color32::WHITE)).fill(self.theme_colors().danger)).clicked() {
+                        if let Some(cancel) = &self.cancel_requested {
+                            cancel.store(true, Ordering::Relaxed);
+                        }
+                        self.set_status("Cancellation requested…", StatusSeverity::Warning);
+                        close_requested = true;
+                    }
+                });
+            });
+        self.stop_confirm_open = open && !close_requested;
+    }
+
     pub(crate) fn activity_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Activity");
         ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(self.theme_colors().text_secondary));

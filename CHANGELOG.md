@@ -50,6 +50,8 @@ All notable changes to MailSwiftSync are documented here.
   presentation.
 - Moved the Settings navigation adapter into `ui/settings.rs`, keeping
   appearance/workspace navigation behavior with the settings presentation.
+- Moved the stop/cancellation confirmation into `ui/activity.rs`, keeping
+  active-run controls with the live output and run-history surface.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
