@@ -178,8 +178,7 @@ impl BulkQueueSummary {
             ..Self::default()
         };
         for job in jobs {
-            let state = job.state.to_ascii_lowercase();
-            match core::MailboxState::parse(&state) {
+            match core::MailboxState::parse_ascii_case_insensitive(&job.state) {
                 Some(core::MailboxState::Ready) => summary.ready += 1,
                 Some(core::MailboxState::Running) => summary.running += 1,
                 Some(state) if state.is_verified() => summary.verified += 1,

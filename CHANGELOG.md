@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed per-row lowercase string allocation while calculating large batch
+  queue summaries; imported display-case states are now classified directly
+  through the shared allocation-free state parser.
 - Moved bulk file and worksheet worker creation into `bulk_import`, leaving
   the egui shell responsible only for starting an import and applying its
   result while keeping parsing and background dispatch together.

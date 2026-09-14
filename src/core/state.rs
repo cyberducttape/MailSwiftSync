@@ -149,6 +149,29 @@ impl MailboxState {
         })
     }
 
+    /// Parse a wire state without allocating a normalized copy. Imported
+    /// queues may carry display-case values, while durable state remains
+    /// lowercase; callers that only need classification should use this
+    /// helper instead of allocating through `to_ascii_lowercase()`.
+    pub fn parse_ascii_case_insensitive(value: &str) -> Option<Self> {
+        [
+            ("queued", Self::Queued),
+            ("preflight", Self::Preflight),
+            ("ready", Self::Ready),
+            ("running", Self::Running),
+            ("completed", Self::Completed),
+            ("verified", Self::Verified),
+            ("verified_with_exceptions", Self::VerifiedWithExceptions),
+            ("failed", Self::Failed),
+            ("cancelled", Self::Cancelled),
+            ("attention", Self::Attention),
+            ("delta_required", Self::DeltaRequired),
+            ("verification_difference", Self::VerificationDifference),
+        ]
+        .into_iter()
+        .find_map(|(wire, state)| value.eq_ignore_ascii_case(wire).then_some(state))
+    }
+
     pub fn is_verified(self) -> bool {
         matches!(self, Self::Verified | Self::VerifiedWithExceptions)
     }
