@@ -85,7 +85,6 @@ use eframe::{
     egui,
     egui::{Color32, RichText, Stroke},
 };
-use egui_extras::{Column, TableBuilder};
 #[cfg(test)]
 use imap_probe::{
     command_endpoint_parts, command_port, endpoint_for_probe, fresh_imap_authentication_applies,
@@ -124,13 +123,14 @@ use storage_paths::{persistent_state_path, restore_ledger};
 #[cfg(test)]
 use ui::display_state_key;
 #[cfg(test)]
+use ui::job_state_badge;
+#[cfg(test)]
 use ui::recommended_next_action;
 use ui::{
     AppearancePreferences, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot, WorkspaceView,
-    display_job_state, format_elapsed, format_phase_name, job_state_badge, markdown_escape,
-    needs_operator_review, password_visibility_id, preferred_project_id,
-    project_health_state_counts, push_visible_output, render_account, status_color,
-    successful_run_severity, successful_run_status, truncate_utf8,
+    display_job_state, format_elapsed, format_phase_name, markdown_escape, needs_operator_review,
+    password_visibility_id, preferred_project_id, project_health_state_counts, push_visible_output,
+    render_account, status_color, successful_run_severity, successful_run_status, truncate_utf8,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -901,251 +901,6 @@ impl App {
             self.bulk_project_id.as_deref(),
             self.project_id.as_deref(),
         )
-    }
-
-    fn mailbox_view(&mut self, ui: &mut egui::Ui) {
-        let colors = self.theme_colors();
-        ui.heading("Mailboxes");
-        ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(self.theme_colors().text_secondary));
-        ui.add_space(12.0);
-        if self.historical_mailbox_view(ui) {
-            return;
-        }
-        if self.bulk_jobs.is_empty() {
-            ui.group(|ui| {
-                ui.heading("No bulk mailbox list loaded");
-                ui.label("A single mailbox can be configured from the migration plan.");
-                if ui.button("Open migration plan").clicked() {
-                    self.active_view = WorkspaceView::Plan;
-                }
-                if ui.button("Import CSV / Excel…").clicked() {
-                    self.bulk_open = true;
-                }
-            });
-        } else {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("{} mailbox jobs in scope", self.bulk_jobs.len()))
-                        .strong(),
-                );
-                if ui.button("Import / edit queue").clicked() {
-                    self.bulk_open = true;
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Search");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.bulk_search)
-                        .hint_text("mailbox, host, or user")
-                        .desired_width(220.0),
-                );
-                egui::ComboBox::from_id_salt("mailbox_state_filter")
-                    .selected_text(match self.bulk_state_filter.as_str() {
-                        "imported" => "Imported",
-                        "attention" => "Attention",
-                        "failed" => "Failed",
-                        "delta_required" => "Delta required",
-                        "verified" | "verified_with_exceptions" => "Verified",
-                        "ready" => "Ready",
-                        _ => "All states",
-                    })
-                    .show_ui(ui, |ui| {
-                        for (value, label) in [
-                            ("all", "All states"),
-                            ("imported", "Imported"),
-                            ("ready", "Ready"),
-                            ("attention", "Attention"),
-                            ("failed", "Failed"),
-                            ("delta_required", "Delta required"),
-                            ("verified", "Verified"),
-                            ("verified_with_exceptions", "Verified with exceptions"),
-                        ] {
-                            ui.selectable_value(&mut self.bulk_state_filter, value.into(), label);
-                        }
-                    });
-                if ui.button("Select visible").clicked() {
-                    for (index, job) in self.bulk_jobs.iter().enumerate() {
-                        if self.mailbox_matches_filter(job)
-                            && let Some(id) = self.bulk_job_ids.get(index)
-                        {
-                            self.bulk_selected_ids.insert(id.clone());
-                        }
-                    }
-                }
-                if ui.button("Clear selection").clicked() {
-                    self.bulk_selected_ids.clear();
-                }
-            });
-            // Rebuild normalized search values and filtered indices only when
-            // the queue, query, or state filter changes. The table still
-            // virtualizes row widgets without doing a full filter pass on
-            // every repaint.
-            self.refresh_bulk_filter_cache();
-            let visible_indices = std::mem::take(&mut self.bulk_visible_indices);
-            ui.label(
-                RichText::new(format!(
-                    "{} visible · {} selected",
-                    visible_indices.len(),
-                    self.bulk_selected_ids.len()
-                ))
-                .color(self.theme_colors().text_secondary),
-            );
-            let has_selection = !self.bulk_selected_ids.is_empty();
-            let mut run_preflight = false;
-            let mut run_live = false;
-            let mut run_delta = false;
-            let mut review_selected = false;
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Selected mailbox actions").strong());
-                if ui
-                    .add_enabled(
-                        has_selection && !self.running(),
-                        egui::Button::new("Run preflight"),
-                    )
-                    .clicked()
-                {
-                    run_preflight = true;
-                }
-                if ui
-                    .add_enabled(
-                        has_selection && !self.running(),
-                        egui::Button::new(
-                            RichText::new("Run live migration").color(Color32::WHITE),
-                        )
-                        .fill(self.theme_colors().danger),
-                    )
-                    .clicked()
-                {
-                    run_live = true;
-                }
-                if ui
-                    .add_enabled(
-                        has_selection && !self.running(),
-                        egui::Button::new("Run final delta"),
-                    )
-                    .clicked()
-                {
-                    run_delta = true;
-                }
-                if ui
-                    .add_enabled(has_selection, egui::Button::new("Review verification"))
-                    .clicked()
-                {
-                    review_selected = true;
-                }
-                if !has_selection {
-                    ui.label(
-                        RichText::new("Select one or more rows to enable actions.")
-                            .color(self.theme_colors().text_secondary),
-                    );
-                }
-            });
-            if run_preflight {
-                self.bulk_mode = BatchExecutionMode::Preflight;
-                self.bulk_retry_scope = BulkRetryScope::All;
-                self.start_bulk();
-            } else if run_live {
-                self.bulk_mode = BatchExecutionMode::Live;
-                self.bulk_retry_scope = BulkRetryScope::All;
-                self.start_bulk();
-            } else if run_delta {
-                self.bulk_mode = BatchExecutionMode::Live;
-                self.bulk_retry_scope = BulkRetryScope::DeltaRequired;
-                self.start_bulk();
-            } else if review_selected
-                && let Some(job_id) = self
-                    .bulk_job_ids
-                    .iter()
-                    .find(|id| self.bulk_selected_ids.contains(*id))
-            {
-                self.job_id = Some(job_id.clone());
-                self.active_view = WorkspaceView::Verification;
-            }
-            ui.add_space(8.0);
-            TableBuilder::new(ui)
-                .striped(true)
-                .resizable(true)
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Column::auto())
-                .column(Column::remainder())
-                .column(Column::remainder())
-                .column(Column::remainder())
-                .column(Column::auto())
-                .column(Column::remainder())
-                .header(32.0, |mut header| {
-                    for label in [
-                        "",
-                        "Mailbox",
-                        "Source",
-                        "Destination",
-                        "State",
-                        "Operator action",
-                    ] {
-                        header.col(|ui| {
-                            ui.strong(label);
-                        });
-                    }
-                })
-                .body(|body| {
-                    body.rows(42.0, visible_indices.len(), |mut row| {
-                        let index = visible_indices[row.index()];
-                        let job = &self.bulk_jobs[index];
-                        let Some(job_id) = self.bulk_job_ids.get(index) else {
-                            return;
-                        };
-                        row.col(|ui| {
-                            let mut selected = self.bulk_selected_ids.contains(job_id);
-                            if ui.checkbox(&mut selected, "").changed() {
-                                if selected {
-                                    self.bulk_selected_ids.insert(job_id.clone());
-                                } else {
-                                    self.bulk_selected_ids.remove(job_id);
-                                }
-                            }
-                        });
-                        row.col(|ui| {
-                            ui.label(&job.label);
-                        });
-                        row.col(|ui| {
-                            ui.label(format!(
-                                "{}\n{}",
-                                job.form.profile.source_host, job.form.profile.source_user
-                            ));
-                        });
-                        row.col(|ui| {
-                            ui.label(format!(
-                                "{}\n{}",
-                                job.form.profile.destination_host,
-                                job.form.profile.destination_user
-                            ));
-                        });
-                        row.col(|ui| {
-                            let (badge, color) = job_state_badge(&job.state, colors);
-                            ui.label(RichText::new(badge).color(color));
-                        });
-                        row.col(|ui| {
-                            if job.state == "attention" {
-                                if let Some(reason) = self
-                                    .cached_report_mailbox(job_id)
-                                    .and_then(|mailbox| mailbox.attention_reason.as_ref())
-                                {
-                                    ui.label(
-                                        RichText::new(reason.recommended_action())
-                                            .color(self.theme_colors().text_secondary),
-                                    );
-                                } else {
-                                    ui.label(
-                                        RichText::new("Inspect durable run detail")
-                                            .color(self.theme_colors().text_secondary),
-                                    );
-                                }
-                            }
-                        });
-                    });
-                });
-            self.bulk_visible_indices = visible_indices;
-            ui.label(RichText::new("When a selection is present, batch actions apply only to selected rows. With no selection, the chosen retry scope applies to all matching rows.").color(self.theme_colors().text_secondary));
-        }
     }
 
     fn running(&self) -> bool {

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the mailbox batch-cockpit renderer into `ui/batch.rs`, removing
+  table, filtering, and action presentation logic from `main.rs` while keeping
+  batch admission controller-owned.
 - Extracted the overview dashboard renderer into `ui/overview.rs`, reducing
   the egui composition-root surface in `main.rs`.
 - Added a job-level timeout to the scheduled and pull-request integration lab
