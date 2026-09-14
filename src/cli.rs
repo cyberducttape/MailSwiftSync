@@ -367,12 +367,17 @@ pub(crate) fn run() -> eframe::Result<()> {
             );
             std::process::exit(2);
         }
+        let Some(idle_polls) = idle_polls else {
+            // Keep this invariant explicit at the command boundary. This is
+            // unreachable after the validation above, but a future edit must
+            // not turn malformed supervisor input into a process panic.
+            eprintln!(
+                "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous]"
+            );
+            std::process::exit(2);
+        };
         let state = std::path::PathBuf::from(state);
-        match headless_supervise(
-            &state,
-            Duration::from_secs(poll_seconds),
-            idle_polls.expect("idle-poll count was validated above"),
-        ) {
+        match headless_supervise(&state, Duration::from_secs(poll_seconds), idle_polls) {
             Ok(message) => {
                 println!("{message}");
                 return Ok(());

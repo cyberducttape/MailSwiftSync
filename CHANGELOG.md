@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed the CLI supervisor's panic-based idle-poll invariant so malformed
+  maintenance-window arguments always fail through the usage path.
 - Corrected the CI `actions/upload-artifact` SHA to the actual reviewed
   `v4.6.0` commit, allowing platform jobs and failure-log uploads to start.
 - Fixed Windows compilation of signing-key DACL verification and executable
