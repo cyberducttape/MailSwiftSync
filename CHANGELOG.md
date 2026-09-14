@@ -10,6 +10,10 @@ All notable changes to MailSwiftSync are documented here.
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless
   divergence risk during batch orchestration changes.
+- Batch admission, plan materialization, and worker launch now receive the
+  explicit `BatchExecutionMode` enum rather than independent live booleans,
+  making preflight/live intent visible and consistent across controller
+  boundaries.
 
 - Extracted deterministic batch plan materialization into
   `controller/batch_admission.rs`: selected durable IDs, Dovecot checkpoints,

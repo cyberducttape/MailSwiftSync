@@ -1,3 +1,4 @@
+use super::batch::BatchExecutionMode;
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
@@ -31,7 +32,7 @@ pub(crate) fn spawn_batch_worker(
     concurrency: usize,
     tx: mpsc::SyncSender<Event>,
     cancel: Arc<AtomicBool>,
-    live: bool,
+    mode: BatchExecutionMode,
     retry_count: usize,
     job_count: usize,
     queue_job_ids: Vec<String>,
@@ -41,6 +42,7 @@ pub(crate) fn spawn_batch_worker(
     batch_run_id: String,
     jobs: Vec<BulkJob>,
 ) {
+    let live = mode.is_live();
     let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
     thread::spawn(move || {
         let failed = Arc::new(AtomicBool::new(false));

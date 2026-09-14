@@ -3174,7 +3174,8 @@ impl App {
             self.bulk_message = "Import a file before starting the queue.".into();
             return;
         }
-        let live = self.bulk_mode.is_live();
+        let mode = self.bulk_mode;
+        let live = mode.is_live();
         if live && !self.bulk_live_confirmed {
             // Capture the durable admission facts before opening the dialog;
             // the dialog itself is presentation-only and must not query
@@ -3243,7 +3244,7 @@ impl App {
             &self.bulk_jobs,
             &selected_indices,
             &durable_admissions,
-            live,
+            mode,
             &self.bulk_preflight_credential_fingerprints,
         ) {
             Ok(jobs) => jobs,
@@ -3319,7 +3320,7 @@ impl App {
             &selected_indices,
             &self.bulk_job_ids,
             &durable_admissions,
-            live,
+            mode,
         ) {
             Ok(value) => value,
             Err(error) => {
@@ -3412,7 +3413,7 @@ impl App {
             concurrency,
             tx,
             cancel,
-            live,
+            mode,
             retry_count,
             job_count,
             queue_job_ids,

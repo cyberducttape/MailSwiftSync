@@ -1,5 +1,6 @@
 //! Batch admission and queue policy shared by GUI and headless callers.
 
+use super::batch::BatchExecutionMode;
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
 use std::collections::HashSet;
 
@@ -169,10 +170,10 @@ pub(crate) fn prepare_selected_batch_jobs(
     source_jobs: &[BulkJob],
     selected_indices: &[usize],
     durable_admissions: &[Option<core::BatchAdmissionState>],
-    live: bool,
+    mode: BatchExecutionMode,
     expected_credential_fingerprints: &[Option<String>],
 ) -> Result<Vec<BulkJob>, String> {
-    if live {
+    if mode.is_live() {
         for &index in selected_indices {
             let job = source_jobs
                 .get(index)
@@ -212,13 +213,13 @@ pub(crate) fn prepare_selected_batch_jobs(
                 .get(index)
                 .cloned()
                 .ok_or_else(|| format!("Batch queue row {} no longer exists.", index + 1))?;
-            job.form.dry_run = !live;
+            job.form.dry_run = mode.is_preflight();
             Ok(job)
         })
         .collect::<Result<Vec<_>, String>>()?;
     for (selected_index, job) in jobs.iter_mut().enumerate() {
         let queue_index = selected_indices[selected_index];
-        let credential_load = if live {
+        let credential_load = if mode.is_live() {
             job.form.reload_configured_keyring_credentials()
         } else {
             job.form.load_configured_keyring_credentials()
@@ -230,7 +231,7 @@ pub(crate) fn prepare_selected_batch_jobs(
                 queue_index + 1
             ));
         }
-        if live {
+        if mode.is_live() {
             let current = job.form.credential_fingerprint();
             let expected = expected_credential_fingerprints
                 .get(queue_index)
@@ -253,14 +254,16 @@ pub(crate) fn prepare_selected_batch_jobs(
             selected_indices[selected_index] + 1
         ));
     }
-    if live
+    if mode.is_live()
         && jobs
             .iter()
             .any(|job| job.form.requires_insecure_transport_ack())
     {
         return Err("Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into());
     }
-    if live && let Some(error) = duplicate_destination(&jobs)? {
+    if mode.is_live()
+        && let Some(error) = duplicate_destination(&jobs)?
+    {
         return Err(error);
     }
     Ok(jobs)
@@ -283,7 +286,7 @@ pub(crate) fn prepare_batch_run(
     selected_indices: &[usize],
     queue_job_ids: &[String],
     durable_admissions: &[Option<core::BatchAdmissionState>],
-    live: bool,
+    mode: BatchExecutionMode,
 ) -> Result<PreparedBatchRun, String> {
     let selected_job_ids = selected_indices
         .iter()
@@ -298,7 +301,7 @@ pub(crate) fn prepare_batch_run(
         .iter()
         .zip(jobs.iter())
         .map(|(&index, job)| {
-            if live && job.form.engine() == core::Engine::Dovecot {
+            if mode.is_live() && job.form.engine() == core::Engine::Dovecot {
                 durable_admissions
                     .get(index)
                     .and_then(Option::as_ref)
@@ -312,7 +315,7 @@ pub(crate) fn prepare_batch_run(
         .iter()
         .map(|job| crate::plan_identity::fingerprint_digest(&job.form.plan_fingerprint()))
         .collect::<Vec<_>>();
-    let expected_plans = if live {
+    let expected_plans = if mode.is_live() {
         batch_plan_fingerprints.clone()
     } else {
         Vec::new()
@@ -367,7 +370,7 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::prepare_selected_batch_jobs;
+    use super::{BatchExecutionMode, prepare_selected_batch_jobs};
     use crate::{bulk_import::BulkJob, migration_plan::Form};
 
     #[test]
@@ -377,9 +380,10 @@ mod tests {
             form: Form::default(),
             state: "imported".into(),
         }];
-        let error = prepare_selected_batch_jobs(&jobs, &[0], &[None], true, &[])
-            .err()
-            .unwrap();
+        let error =
+            prepare_selected_batch_jobs(&jobs, &[0], &[None], BatchExecutionMode::Live, &[])
+                .err()
+                .unwrap();
         assert!(error.contains("not ready for live execution"));
     }
 }
