@@ -58,6 +58,7 @@ pub(crate) struct WorkspaceSnapshot {
 impl WorkspaceSnapshot {
     pub(crate) fn invalidate(&mut self) {
         self.refreshed_at = None;
+        self.report = None;
     }
 
     pub(crate) fn stale_notice(&self) -> Option<String> {
@@ -79,10 +80,13 @@ impl WorkspaceSnapshot {
         active_project_id: Option<&str>,
         all_projects_loaded: bool,
         mailbox_offset: u32,
+        load_report: bool,
     ) {
         let project_id = active_project_id.map(str::to_owned);
         let project_changed = project_id.as_deref() != self.snapshot_project_id.as_deref();
+        let report_needs_load = load_report && self.report.is_none();
         if !project_changed
+            && !report_needs_load
             && self
                 .refreshed_at
                 .is_some_and(|at| at.elapsed() < REFRESH_INTERVAL)
@@ -112,6 +116,12 @@ impl WorkspaceSnapshot {
         }
 
         let Some(project_id) = project_id else {
+            if refresh_errors.is_empty() {
+                self.last_successful_refresh = Some(Instant::now());
+                self.refresh_error = None;
+            } else {
+                self.refresh_error = Some(refresh_errors.join("; "));
+            }
             return;
         };
 
@@ -141,10 +151,12 @@ impl WorkspaceSnapshot {
             Ok(value) => self.mailbox_counts = value,
             Err(error) => refresh_errors.push(format!("mailbox counts: {error}")),
         }
-        match store.project_report_snapshot(&project_id) {
-            Ok(Some(value)) => self.report = Some(value),
-            Ok(None) => {}
-            Err(error) => refresh_errors.push(format!("evidence report: {error}")),
+        if load_report {
+            match store.project_report_snapshot(&project_id) {
+                Ok(Some(value)) => self.report = Some(value),
+                Ok(None) => {}
+                Err(error) => refresh_errors.push(format!("evidence report: {error}")),
+            }
         }
         match store.recent_run_list(&project_id, crate::MAX_ACTIVITY_HISTORY_ROWS) {
             Ok(value) => self.runs = value,
