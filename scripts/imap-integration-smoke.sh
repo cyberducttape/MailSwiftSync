@@ -23,6 +23,24 @@ echo "Using Dovecot ${dovecot_version} and imapsync $(imapsync --version 2>/dev/
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
 cleanup() {
+  local status=$?
+  if [[ "$status" -ne 0 ]]; then
+    echo "--- MailSwiftSync integration diagnostics (exit $status) ---" >&2
+    if [[ -n "${binary:-}" && -f "${state:-}" ]]; then
+      "$binary" status "$state" --summary >&2 || true
+    fi
+    for log in "${workspace:-}"/source/log/dovecot-info.log \
+      "${workspace:-}"/source/log/dovecot.log \
+      "${workspace:-}"/destination/log/dovecot-info.log \
+      "${workspace:-}"/destination/log/dovecot.log \
+      "${workspace:-}"/source/dovecot.stdout \
+      "${workspace:-}"/destination/dovecot.stdout; do
+      if [[ -f "$log" ]]; then
+        echo "--- $log ---" >&2
+        tail -120 "$log" >&2 || true
+      fi
+    done
+  fi
   if [[ -n "${source_pid:-}" ]]; then kill "$source_pid" 2>/dev/null || true; fi
   if [[ -n "${destination_pid:-}" ]]; then kill "$destination_pid" 2>/dev/null || true; fi
   wait "${source_pid:-}" 2>/dev/null || true
@@ -32,6 +50,7 @@ cleanup() {
   else
     echo "Keeping integration lab workspace: $workspace" >&2
   fi
+  return "$status"
 }
 trap cleanup EXIT
 
