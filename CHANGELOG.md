@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted terminal run completion reduction—durable terminal commits,
+  evidence/checkpoint handling, phase advancement, and final UI cleanup—into
+  `controller/poll_completion.rs`, leaving event ingestion in `poll.rs`.
 - Extracted SQLite opening, read-only snapshots, backups, schema migration,
   permission hardening, and legacy-ledger repair into `core/database.rs`,
   isolating storage bootstrap from the durable domain operations.
