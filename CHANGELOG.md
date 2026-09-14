@@ -8,8 +8,9 @@ All notable changes to MailSwiftSync are documented here.
 
 - Reworked authenticated IMAP LIST handling into a streaming inventory
   consumer. Readiness now retains only mailbox and SPECIAL-USE counts, while
-  bounding individual records, literals, total processing, and mailbox count;
-  large folder inventories no longer accumulate in a 1 MiB response string.
+  bounding individual records, literals, processing time, and mailbox count;
+  large folder inventories no longer accumulate in a 1 MiB response string or
+  fail solely because their legitimate aggregate size is larger.
 - Moved OS-keyring credential loading out of the egui start path. Runs now
   show an explicit loading state while the keyring is queried in a worker;
   results are discarded if the operator edits the migration plan meanwhile.

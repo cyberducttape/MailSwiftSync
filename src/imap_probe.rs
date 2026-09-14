@@ -11,7 +11,7 @@ use std::{
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(crate) fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
@@ -84,7 +84,7 @@ fn read_imap_tagged<S: Read>(
 const MAX_IMAP_LIST_LINE_BYTES: usize = 64 * 1024;
 const MAX_IMAP_LIST_LITERAL_BYTES: usize = 1024 * 1024;
 const MAX_IMAP_LIST_MAILBOXES: usize = 100_000;
-const MAX_IMAP_LIST_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ListInventorySummary {
@@ -94,15 +94,18 @@ struct ListInventorySummary {
 
 /// Consume an authenticated LIST response without retaining the complete
 /// inventory. LIST may contain literals and arbitrarily many folders, so the
-/// safety limits apply to individual records, literals, total bytes processed,
-/// and mailbox count rather than to one growing response string.
+/// safety limits apply to individual records, literals, processing time, and
+/// mailbox count rather than to one growing response string. There is
+/// intentionally no aggregate byte ceiling: a legitimate folder-heavy
+/// account may exceed several megabytes while still remaining bounded in
+/// memory by the record and count limits.
 fn read_imap_list_response<S: Read>(
     stream: &mut S,
     tag: &str,
     buffer: &mut [u8; 4096],
 ) -> Result<ListInventorySummary, String> {
     let mut line = Vec::new();
-    let mut total_bytes = 0_u64;
+    let started = Instant::now();
     let mut literal_remaining = 0_usize;
     let mut literal_separator_remaining = 0_u8;
     let mut summary = ListInventorySummary::default();
@@ -111,9 +114,8 @@ fn read_imap_list_response<S: Read>(
         if count == 0 {
             return Err(format!("IMAP connection closed before {tag} completed"));
         }
-        total_bytes = total_bytes.saturating_add(count as u64);
-        if total_bytes > MAX_IMAP_LIST_TOTAL_BYTES {
-            return Err("IMAP LIST response exceeded the processing limit".into());
+        if started.elapsed() > MAX_IMAP_LIST_DURATION {
+            return Err("IMAP LIST response exceeded the 60-second processing limit".into());
         }
         let mut offset = 0;
         while offset < count {
@@ -531,7 +533,7 @@ mod tests {
         let mut response = String::new();
         for index in 0..20_000 {
             response.push_str(&format!(
-                "* LIST (\\HasNoChildren) \"/\" \"folder-{index:0>80}\"\r\n"
+                "* LIST (\\HasNoChildren) \"/\" \"folder-{index:0>900}\"\r\n"
             ));
         }
         response.push_str("a005 OK LIST completed\r\n");
