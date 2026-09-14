@@ -4,6 +4,7 @@
 //! only translates an admitted batch into the presentation state needed by
 //! the egui shell.
 
+use crate::bulk_import::{BulkImportResult, PendingSheetImport};
 use crate::controller::batch_admission::apply_keyring_id;
 use crate::controller::{
     BatchLaunchRequest, BatchStartContext, BatchStartDecision, admit_batch_launch,
@@ -13,6 +14,77 @@ use crate::{App, StatusSeverity};
 use std::time::Instant;
 
 impl App {
+    pub(crate) fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {
+        match result {
+            Ok(BulkImportResult::Jobs(jobs)) => {
+                self.bulk_message = format!(
+                    "Imported {} mailbox rows. Review them and run preflight before migration.",
+                    jobs.len()
+                );
+                if self.selected_project_id == self.bulk_project_id {
+                    self.selected_project_id = None;
+                }
+                self.bulk_project_id = None;
+                self.bulk_job_ids.clear();
+                self.bulk_job_index_by_id.clear();
+                self.bulk_retry_scope = crate::controller::BulkRetryScope::default();
+                self.bulk_selected_ids.clear();
+                self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
+                self.bulk_jobs = jobs;
+                self.mark_bulk_jobs_changed();
+            }
+            Ok(BulkImportResult::Workbook { path, sheets }) => {
+                self.bulk_sheet_index = 0;
+                self.pending_sheet_import = Some(PendingSheetImport { path, sheets });
+                self.bulk_message =
+                    "Choose the worksheet containing the migration rows before importing.".into();
+            }
+            Err(error) => self.bulk_message = error,
+        }
+    }
+
+    pub(crate) fn begin_bulk_import(&mut self, path: std::path::PathBuf) {
+        if self.bulk_import_receiver.is_some() {
+            self.bulk_message = "A mailbox file is already being imported.".into();
+            return;
+        }
+        self.bulk_message = format!(
+            "Importing {} in the background…",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("mailbox file")
+        );
+        self.bulk_import_receiver = Some(crate::bulk_import::spawn_import(
+            path,
+            self.form.clone_without_credentials(),
+        ));
+    }
+
+    pub(crate) fn begin_sheet_import(&mut self, path: std::path::PathBuf, sheet_index: usize) {
+        if self.bulk_import_receiver.is_some() {
+            self.bulk_message = "A mailbox file is already being imported.".into();
+            return;
+        }
+        self.bulk_message = "Importing the selected worksheet in the background…".into();
+        self.bulk_import_receiver = Some(crate::bulk_import::spawn_sheet_import(
+            path,
+            self.form.clone_without_credentials(),
+            sheet_index,
+        ));
+    }
+
+    pub(crate) fn import_bulk(&mut self, path: &std::path::Path) {
+        self.begin_bulk_import(path.to_owned());
+    }
+
+    pub(crate) fn request_bulk_import(&mut self, path: std::path::PathBuf) {
+        if self.bulk_jobs.is_empty() {
+            self.import_bulk(&path);
+        } else {
+            self.pending_bulk_import = Some(path);
+        }
+    }
+
     pub(crate) fn clear_bulk_queue(&mut self) {
         self.bulk_jobs.clear();
         self.mark_bulk_jobs_changed();
