@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Workspace refreshes now retry previously failed projections even when the
+  durable revision is unchanged, preventing a stale error from being cleared
+  before the failed read succeeds.
 - Removed duplicate first-run instructions from the Overview while retaining
   the shared onboarding panel on the other workspace views.
 - Overview evidence status now distinguishes a ready customer proof from a
