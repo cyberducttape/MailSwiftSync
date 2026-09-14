@@ -148,12 +148,9 @@ const MAX_PENDING_EVENTS: usize = 4_096;
 const MAX_ACTIVITY_HISTORY_ROWS: u32 = 250;
 // Keep one unusually noisy worker from monopolising an egui frame.
 const MAX_EVENTS_PER_FRAME: usize = 250;
-const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_UI_SCALE: f32 = 1.10;
 const MIN_UI_SCALE: f32 = 0.90;
 const MAX_UI_SCALE: f32 = 1.50;
-
-pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
 use bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
 

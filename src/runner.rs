@@ -10,9 +10,12 @@ use std::{
     time::Duration,
 };
 
+const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
+
 use crate::{
     BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES,
-    MAX_PROCESS_TAIL_LINES, OutputObserver, PROCESS_REGISTRATION_ACK_TIMEOUT, StreamOutcome, core,
+    MAX_PROCESS_TAIL_LINES, StreamOutcome, core,
     credentials::SecretString,
     process::{
         ProcessOutcome, attach_child_supervisor, collect_redacted_lines_with_callback,

@@ -80,6 +80,8 @@ All notable changes to MailSwiftSync are documented here.
   TLS input policy and its regression tests together.
 - Moved worksheet-import state and workspace-view identity into their owning
   bulk-import and UI modules, reducing workflow declarations in `main.rs`.
+- Moved process-registration timeout and output-observer types into
+  `runner.rs`, keeping child-supervision policy with execution code.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
