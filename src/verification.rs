@@ -1,5 +1,34 @@
 use crate::core;
 
+/// Output grammar covered by the packaged integration fixture. A version is
+/// deliberately part of the contract: a future imapsync release may change
+/// prose without changing its exit status, and must not silently weaken
+/// verification.
+const SUPPORTED_IMAPSYNC_VERSION: &str = "2.314";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImapsyncOutputProfile {
+    Packaged2314,
+    Unknown,
+}
+
+fn imapsync_output_profile(version: Option<&str>) -> ImapsyncOutputProfile {
+    let Some(version) = version else {
+        // The version probe is best-effort. Keep the strict current grammar
+        // usable when metadata is unavailable; any grammar drift still fails
+        // closed because every record and marker is exact below.
+        return ImapsyncOutputProfile::Packaged2314;
+    };
+    let supported = version
+        .split_whitespace()
+        .any(|token| token.trim_start_matches('v') == SUPPORTED_IMAPSYNC_VERSION);
+    if supported {
+        ImapsyncOutputProfile::Packaged2314
+    } else {
+        ImapsyncOutputProfile::Unknown
+    }
+}
+
 fn number_after(line: &str, marker: &str, unit: &str) -> Option<u64> {
     let remainder = line
         .strip_prefix(marker)?
@@ -112,7 +141,20 @@ impl ImapsyncEvidenceAccumulator {
 
 /// Extract the stable summary fields emitted by imapsync. The accumulator is
 /// constant-memory and always keeps the latest value from a noisy run.
+#[cfg(test)]
 pub(crate) fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxEvidence> {
+    parse_imapsync_evidence_for_version(lines, None)
+}
+
+/// Parse evidence only against a parser profile covered by the compatibility
+/// contract. Explicitly unknown engine versions never become authoritative.
+pub(crate) fn parse_imapsync_evidence_for_version(
+    lines: &[String],
+    engine_version: Option<&str>,
+) -> Option<core::MailboxEvidence> {
+    if imapsync_output_profile(engine_version) == ImapsyncOutputProfile::Unknown {
+        return None;
+    }
     let mut accumulator = ImapsyncEvidenceAccumulator::default();
     for line in lines {
         accumulator.observe(line);
@@ -333,6 +375,36 @@ mod tests {
             "Detected 0 errors".into(),
         ];
         assert!(parse_imapsync_evidence(&lines).is_none());
+    }
+
+    #[test]
+    fn imapsync_parser_accepts_the_packaged_engine_profile() {
+        let lines = [
+            "Host1 Nb folders: 1 folders".into(),
+            "Host2 Nb folders: 1 folders".into(),
+            "Host1 Nb messages: 1 messages".into(),
+            "Host2 Nb messages: 1 messages".into(),
+            "Host1 Total size: 10 bytes".into(),
+            "Host2 Total size: 10 bytes".into(),
+            "The sync looks good, all 1 identified messages in host1 are on host2.".into(),
+            "Detected 0 errors".into(),
+        ];
+        assert!(parse_imapsync_evidence_for_version(&lines, Some("imapsync 2.314")).is_some());
+    }
+
+    #[test]
+    fn imapsync_parser_rejects_an_explicitly_unknown_engine_profile() {
+        let lines = [
+            "Host1 Nb folders: 1 folders".into(),
+            "Host2 Nb folders: 1 folders".into(),
+            "Host1 Nb messages: 1 messages".into(),
+            "Host2 Nb messages: 1 messages".into(),
+            "Host1 Total size: 10 bytes".into(),
+            "Host2 Total size: 10 bytes".into(),
+            "The sync looks good, all 1 identified messages in host1 are on host2.".into(),
+            "Detected 0 errors".into(),
+        ];
+        assert!(parse_imapsync_evidence_for_version(&lines, Some("imapsync 2.315")).is_none());
     }
 
     #[test]

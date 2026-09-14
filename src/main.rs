@@ -5122,7 +5122,15 @@ impl App {
                     (run_context.engine == core::Engine::ImapSync)
                         .then(|| {
                             let output = self.output.iter().cloned().collect::<Vec<_>>();
-                            verification::parse_imapsync_evidence(&output)
+                            let engine_version = self
+                                .store
+                                .engine_version(&run_context.run_id)
+                                .ok()
+                                .flatten();
+                            verification::parse_imapsync_evidence_for_version(
+                                &output,
+                                engine_version.as_deref(),
+                            )
                         })
                         .flatten()
                 })

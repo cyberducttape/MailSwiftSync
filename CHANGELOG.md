@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Bound imapsync verification to the packaged `2.314` output profile when
+  engine version metadata is available. Explicitly unknown versions now
+  produce incomplete evidence instead of being treated as compatible; the
+  existing strict grammar remains the fallback when version probing is
+  unavailable.
 - Tightened imapsync evidence parsing into an explicit summary contract:
   aggregate records must use the expected units, the completion marker must be
   exact, and the error summary must be exactly `Detected N errors`. Prose that
