@@ -160,8 +160,7 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
             .map_err(|error| format!("could not open secret file: {error}"))?
     };
     #[cfg(not(unix))]
-    let mut file =
-        fs::File::open(path).map_err(|error| format!("could not open secret file: {error}"))?;
+    let mut file = open_secret_read_handle(path)?;
 
     // Inspect the already-open handle so validation and reading refer to the
     // same file. On Unix this also avoids following a symlink at open time.
@@ -197,6 +196,36 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
     let contents = String::from_utf8(contents)
         .map_err(|_| "secret file must contain valid UTF-8 text".to_owned())?;
     Ok(SecretString::new(contents))
+}
+
+#[cfg(windows)]
+fn open_secret_read_handle(path: &Path) -> Result<fs::File, String> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    let file = OpenOptions::new()
+        .read(true)
+        // Open the final path component itself so a reparse point cannot be
+        // substituted between validation and the read. A regular file is
+        // required below; this flag makes that check apply to the opened
+        // object rather than to a second path lookup.
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| format!("could not open secret file: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("could not inspect secret file: {error}"))?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err("secret-file path must not refer to a symlink or reparse point".into());
+    }
+    Ok(file)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn open_secret_read_handle(path: &Path) -> Result<fs::File, String> {
+    fs::File::open(path).map_err(|error| format!("could not open secret file: {error}"))
 }
 
 #[cfg(unix)]

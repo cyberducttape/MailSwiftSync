@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Hardened Windows headless secret-file reads against reparse-point
+  substitution by validating the already-open handle with
+  `FILE_FLAG_OPEN_REPARSE_POINT`; validation and reading now use the same
+  filesystem object on all supported platforms.
 - Legacy `.xls` validation now opens the file with calamine's BIFF parser after
   checking the OLE signature. Header-only or malformed legacy workbooks are
   rejected during validation with an actionable error instead of reaching the
