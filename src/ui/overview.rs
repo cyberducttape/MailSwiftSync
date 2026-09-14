@@ -164,8 +164,10 @@ impl App {
                 } else if !has_durable_jobs {
                     ui.heading(format!("{} queued", batch_summary.total));
                     ui.label(format!(
-                        "{} imported · {} ready · {} attention · {} unresolved",
+                        "{} imported · {} queued · {} preflight · {} ready · {} attention · {} unresolved",
                         batch_summary.imported,
+                        batch_summary.queued,
+                        batch_summary.preflight,
                         batch_summary.ready,
                         batch_summary.attention,
                         batch_summary.unresolved(),

@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Batch health summaries now expose queued and preflight rows explicitly,
+  making active and partially validated batches reconcile with their total.
 - Overview batch recommendations now use the imported queue's attention count
   when that queue is present, avoiding guidance based on an unrelated durable
   project projection.
