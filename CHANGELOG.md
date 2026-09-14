@@ -48,6 +48,8 @@ All notable changes to MailSwiftSync are documented here.
 - Moved Overview preflight/readiness controls and completed-project reopen
   review into `ui/overview.rs`, keeping assessment actions with the workflow
   presentation.
+- Moved the Settings navigation adapter into `ui/settings.rs`, keeping
+  appearance/workspace navigation behavior with the settings presentation.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution

@@ -125,11 +125,11 @@ use storage_paths::{persistent_state_path, restore_ledger};
 #[cfg(test)]
 use ui::display_state_key;
 use ui::{
-    AppearancePreferences, SettingsAction, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
-    WorkspaceView, display_job_state, format_elapsed, format_phase_name, job_state_badge,
-    markdown_escape, needs_operator_review, password_visibility_id, preferred_project_id,
+    AppearancePreferences, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot, WorkspaceView,
+    display_job_state, format_elapsed, format_phase_name, job_state_badge, markdown_escape,
+    needs_operator_review, password_visibility_id, preferred_project_id,
     project_health_state_counts, push_visible_output, recommended_next_action, render_account,
-    show_settings, status_color, successful_run_severity, successful_run_status, truncate_utf8,
+    status_color, successful_run_severity, successful_run_status, truncate_utf8,
     workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
@@ -1163,28 +1163,6 @@ impl App {
             ),
         }
     }
-    fn settings_dialog(&mut self, ctx: &egui::Context) {
-        let result = show_settings(
-            ctx,
-            &mut self.settings_open,
-            &mut self.dark_mode,
-            &mut self.ui_scale,
-            self.form.engine(),
-        );
-        if let Some(error) = result.error {
-            self.set_status(error, StatusSeverity::Error);
-        }
-        match result.action {
-            Some(SettingsAction::OpenMigrationPlan) => {
-                self.active_view = WorkspaceView::Plan;
-            }
-            Some(SettingsAction::OpenProjectBrowser) => {
-                self.projects_open = true;
-            }
-            None => {}
-        }
-    }
-
     fn overview_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Migration overview");
         ui.label(

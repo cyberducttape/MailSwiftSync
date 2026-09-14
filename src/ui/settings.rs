@@ -1,3 +1,4 @@
+use crate::App;
 use crate::core;
 use eframe::egui::{self, RichText};
 
@@ -92,4 +93,28 @@ pub(crate) fn show(
         });
     *open = window_open && !close_requested;
     SettingsResult { action, error }
+}
+
+impl App {
+    pub(crate) fn settings_dialog(&mut self, ctx: &egui::Context) {
+        let result = show(
+            ctx,
+            &mut self.settings_open,
+            &mut self.dark_mode,
+            &mut self.ui_scale,
+            self.form.engine(),
+        );
+        if let Some(error) = result.error {
+            self.set_status(error, super::StatusSeverity::Error);
+        }
+        match result.action {
+            Some(SettingsAction::OpenMigrationPlan) => {
+                self.active_view = super::WorkspaceView::Plan;
+            }
+            Some(SettingsAction::OpenProjectBrowser) => {
+                self.projects_open = true;
+            }
+            None => {}
+        }
+    }
 }

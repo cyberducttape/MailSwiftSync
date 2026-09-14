@@ -20,7 +20,6 @@ pub(crate) use account::{password_visibility_id, render_account};
 pub(crate) use output::{
     contains_ascii_case_insensitive, markdown_escape, push_visible_output, truncate_utf8,
 };
-pub(crate) use settings::{SettingsAction, show as show_settings};
 pub(crate) use status::{
     StatusMessage, StatusSeverity, display_job_state, display_state_key, format_elapsed,
     format_phase_name, job_state_badge, needs_operator_review, project_health_state_counts,
