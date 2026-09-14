@@ -1,6 +1,7 @@
 //! Presentation primitives shared by the egui views.
 
 mod account;
+mod activity;
 mod batch;
 mod engine;
 mod output;

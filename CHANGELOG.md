@@ -30,6 +30,8 @@ All notable changes to MailSwiftSync are documented here.
   `ui/engine.rs`, keeping migration-engine presentation out of `main.rs`.
 - Moved the redacted execution-plan preview into `ui/plan.rs` alongside the
   migration-plan controls.
+- Extracted the activity workspace, bounded output viewer, and durable run
+  history presentation into `ui/activity.rs`.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
