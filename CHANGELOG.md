@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted bounded operator-journal and process-tail storage into the
+  dedicated `output` module, keeping line and aggregate-byte limits together
+  as one reusable memory-safety boundary.
 - Moved failure classification, retry eligibility, retry backoff, and durable
   attention-detail formatting into `controller::failure` so controller policy
   is independent of the egui dispatcher.

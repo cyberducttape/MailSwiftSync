@@ -39,6 +39,7 @@ use credentials::{
 use headless::export_support_bundle;
 #[cfg(test)]
 use headless::headless_status;
+use output::BoundedLineBuffer;
 #[cfg(test)]
 use process::terminate_process_group_by_pid;
 use process::{
@@ -79,7 +80,6 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     io::Write,
-    ops::Deref,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -6845,66 +6845,6 @@ fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
         .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
-struct BoundedLineBuffer {
-    lines: VecDeque<String>,
-    bytes: usize,
-}
-
-impl BoundedLineBuffer {
-    fn new() -> Self {
-        Self {
-            lines: VecDeque::new(),
-            bytes: 0,
-        }
-    }
-
-    fn push_bounded(&mut self, line: String, max_lines: usize, max_bytes: usize) {
-        while self.lines.len() >= max_lines || self.bytes.saturating_add(line.len()) > max_bytes {
-            let Some(removed) = self.lines.pop_front() else {
-                break;
-            };
-            self.bytes = self.bytes.saturating_sub(removed.len());
-        }
-        self.bytes = self.bytes.saturating_add(line.len());
-        self.lines.push_back(line);
-    }
-
-    fn push_front_bounded(&mut self, line: String, max_lines: usize, max_bytes: usize) {
-        while self.lines.len() >= max_lines || self.bytes.saturating_add(line.len()) > max_bytes {
-            let Some(removed) = self.lines.pop_back() else {
-                break;
-            };
-            self.bytes = self.bytes.saturating_sub(removed.len());
-        }
-        self.bytes = self.bytes.saturating_add(line.len());
-        self.lines.push_front(line);
-    }
-
-    fn from_one(line: String) -> Self {
-        let mut buffer = Self::new();
-        buffer.push_bounded(line, MAX_VISIBLE_OUTPUT_LINES, MAX_VISIBLE_OUTPUT_BYTES);
-        buffer
-    }
-
-    fn clear(&mut self) {
-        self.lines.clear();
-        self.bytes = 0;
-    }
-
-    #[cfg(test)]
-    fn bytes(&self) -> usize {
-        self.bytes
-    }
-}
-
-impl Deref for BoundedLineBuffer {
-    type Target = VecDeque<String>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.lines
-    }
-}
-
 fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
@@ -9666,3 +9606,4 @@ mod tests {
         assert!(empty_override.contains("set but empty"));
     }
 }
+mod output;
