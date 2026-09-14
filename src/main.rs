@@ -47,6 +47,7 @@ use controller::{
     prepare_selected_batch_jobs, selected_batch_indices, single_start_decision, spawn_batch_worker,
     spawn_single_run_worker, suggested_batch_project_name,
 };
+pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
 use credentials::CleanupGuard;
 use credentials::{
@@ -267,72 +268,6 @@ fn decode_report_run_snapshot(snapshot: &str) -> Result<Option<RunPlanSnapshot>,
     toml::from_str(snapshot)
         .map(Some)
         .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
-}
-
-pub(crate) enum Event {
-    Line(String),
-    RunLine {
-        run_id: String,
-        job_id: String,
-        text: String,
-    },
-    EngineVersion {
-        run_id: String,
-        job_id: String,
-        version: String,
-    },
-    ProcessStarted(
-        String,
-        String,
-        u32,
-        Option<u64>,
-        Option<u32>,
-        Option<u32>,
-        String,
-        mpsc::SyncSender<Result<(), String>>,
-    ),
-    ProcessEnded {
-        run_id: String,
-        job_id: String,
-    },
-    ClaimBatch {
-        project_id: String,
-        job_id: String,
-        parent_run_id: String,
-        child_run_id: String,
-        reply: mpsc::SyncSender<Result<(), String>>,
-    },
-    JobState {
-        job_id: String,
-        child_run_id: String,
-        state: String,
-    },
-    JobFinished {
-        job_id: String,
-        child_run_id: String,
-        state: String,
-        detail: String,
-        credential_fingerprint: Option<String>,
-    },
-    BatchEvidence {
-        job_id: String,
-        child_run_id: String,
-        evidence: core::MailboxEvidence,
-    },
-    Checkpoint {
-        run_id: String,
-        job_id: String,
-        value: String,
-    },
-    Evidence(core::MailboxEvidence),
-    VerificationFailed(String),
-    Finished(Result<StreamOutcome, String>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StreamOutcome {
-    Completed,
-    DeltaRequired,
 }
 
 struct PendingSheetImport {

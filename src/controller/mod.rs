@@ -4,6 +4,7 @@ mod batch;
 pub(crate) mod batch_admission;
 mod batch_completion;
 mod batch_worker;
+mod events;
 pub(crate) mod failure;
 mod orchestrator;
 mod preflight;
@@ -21,6 +22,7 @@ pub(crate) use batch_admission::{
 };
 pub(crate) use batch_completion::{BatchChildCompletion, finish_batch_child};
 pub(crate) use batch_worker::spawn_batch_worker;
+pub(crate) use events::{Event, StreamOutcome};
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use preflight::assess_plan;
 pub(crate) use run::{ActiveRunContext, LiveAuthProof, RunKind};

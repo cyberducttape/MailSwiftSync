@@ -47,6 +47,9 @@ All notable changes to MailSwiftSync are documented here.
   labels.
 - Expanded the distribution installation guide with release-manifest, SBOM
   checksum, and optional GitHub build-provenance verification instructions.
+- Moved the shared worker/event contract into `controller/events.rs`, removing
+  execution protocol definitions from the egui composition root while keeping
+  runners, batch workers, headless mode, and UI polling on one event type.
 - Hardened batch completion state mapping so evidence can upgrade only
   successful/continuable child states; late evidence can no longer mask a
   failed or cancelled transfer as `verified`.
