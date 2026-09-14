@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- The Verification workspace now disables customer-proof export until the
+  durable project is complete, all mailboxes are verified, and the cached state
+  view is current, matching the existing proof-readiness explanation.
 - Verification filter caching now keys on the loaded page row count as well as
   project, revision, offset, search, and filter, preventing index reuse across
   changed page payloads.
