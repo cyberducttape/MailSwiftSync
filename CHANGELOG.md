@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Overview evidence status now distinguishes a ready customer proof from a
+  merely complete or review-required project, matching the durable export gate.
 - Batch health summaries now expose queued and preflight rows explicitly,
   making active and partially validated batches reconcile with their total.
 - Overview batch recommendations now use the imported queue's attention count
