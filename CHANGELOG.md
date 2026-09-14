@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted evidence persistence, verification-exception acceptance, and
+  engine-version metadata operations into `core/evidence_ops.rs`, separating
+  the evidence lifecycle from the main durable state implementation.
 - Extracted run-history query helpers into `core/run_queries.rs`, keeping
   diagnostic and historical run reads separate from durable execution
   transitions.
