@@ -5559,23 +5559,29 @@ impl eframe::App for App {
                             if ui.available_width() > 900.0 {
                                 ui.columns(2, |c| {
                                     render_account(&mut c[0], "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
-                                    render_account(&mut c[1], "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
+                                    render_account(&mut c[1], if self.form.engine() == core::Engine::Dovecot { "02  LOCAL DOVECOT DESTINATION" } else { "02  DESTINATION MAILBOX" }, &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                                 });
                             } else {
                                 render_account(ui, "01  SOURCE MAILBOX", &mut self.form.profile.source_host, &mut self.form.profile.source_user, &mut self.form.profile.source_auth, &mut self.form.source_password, true, !self.form.profile.source_credential_id.trim().is_empty(), colors.info);
                                 ui.add_space(8.0);
-                                render_account(ui, "02  DESTINATION MAILBOX", &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
+                                render_account(ui, if self.form.engine() == core::Engine::Dovecot { "02  LOCAL DOVECOT DESTINATION" } else { "02  DESTINATION MAILBOX" }, &mut self.form.profile.destination_host, &mut self.form.profile.destination_user, &mut self.form.profile.destination_auth, &mut self.form.destination_password, destination_password_required, !self.form.profile.destination_credential_id.trim().is_empty(), colors.success);
                             }
+                            let dovecot_destination = self.form.engine() == core::Engine::Dovecot;
                             ui.horizontal_wrapped(|ui| {
                                 ui.label("Source port");
                                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.source_port).desired_width(70.0));
                                 ui.label("TLS");
                                 egui::ComboBox::from_id_salt("source_tls").selected_text(&self.form.profile.source_tls).show_ui(ui, |ui| for mode in ["imaps", "starttls", "plain"] { ui.selectable_value(&mut self.form.profile.source_tls, mode.into(), mode); });
-                                ui.separator();
-                                ui.label("Destination port");
-                                ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_port).desired_width(70.0));
-                                ui.label("TLS");
-                                egui::ComboBox::from_id_salt("destination_tls").selected_text(&self.form.profile.destination_tls).show_ui(ui, |ui| for mode in ["imaps", "starttls"] { ui.selectable_value(&mut self.form.profile.destination_tls, mode.into(), mode); });
+                                if dovecot_destination {
+                                    ui.separator();
+                                    ui.label(RichText::new("Destination: local Dovecot storage").color(self.theme_colors().text_secondary));
+                                } else {
+                                    ui.separator();
+                                    ui.label("Destination port");
+                                    ui.add(egui::TextEdit::singleline(&mut self.form.profile.destination_port).desired_width(70.0));
+                                    ui.label("TLS");
+                                    egui::ComboBox::from_id_salt("destination_tls").selected_text(&self.form.profile.destination_tls).show_ui(ui, |ui| for mode in ["imaps", "starttls"] { ui.selectable_value(&mut self.form.profile.destination_tls, mode.into(), mode); });
+                                }
                             });
                             ui.collapsing("Enterprise certificate trust (optional)", |ui| {
                                 if self.form.engine() == core::Engine::Dovecot {

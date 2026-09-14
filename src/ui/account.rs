@@ -49,7 +49,13 @@ pub(crate) fn render_account(
     ui.group(|ui| {
         ui.heading(RichText::new(title).color(color));
         ui.label(
-            RichText::new("IMAP connection").size(11.0).color(if ui.visuals().dark_mode {
+            RichText::new(if title.contains("DOVECOT") {
+                "Local Dovecot account"
+            } else {
+                "IMAP connection"
+            })
+            .size(11.0)
+            .color(if ui.visuals().dark_mode {
                 ThemeColors::dark().text_secondary
             } else {
                 ThemeColors::light().text_secondary

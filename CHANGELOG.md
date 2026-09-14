@@ -18,6 +18,9 @@ All notable changes to MailSwiftSync are documented here.
 - Centralized active-run output ownership checks in the controller event
   contract, with coverage for foreign and post-terminal process lines before
   they can enter the operator journal.
+- Updated the migration plan to present local Dovecot as a local destination,
+  removing misleading destination IMAP port/TLS controls while retaining the
+  symmetric remote-account form for imapsync migrations.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless
