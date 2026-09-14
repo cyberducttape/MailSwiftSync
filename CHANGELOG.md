@@ -10,6 +10,9 @@ All notable changes to MailSwiftSync are documented here.
   substitution by validating the already-open handle with
   `FILE_FLAG_OPEN_REPARSE_POINT`; validation and reading now use the same
   filesystem object on all supported platforms.
+- Unix headless secret files must also have a single directory entry, blocking
+  hard-linked operator inputs that could make the same secret inode reachable
+  through an unrelated path.
 - Legacy `.xls` validation now opens the file with calamine's BIFF parser after
   checking the OLE signature. Header-only or malformed legacy workbooks are
   rejected during validation with an actionable error instead of reaching the

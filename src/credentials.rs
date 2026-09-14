@@ -184,6 +184,9 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
         if metadata.uid() != unsafe { libc::geteuid() } {
             return Err("secret file must be owned by the effective user".into());
         }
+        if metadata.nlink() != 1 {
+            return Err("secret file must not be hard-linked".into());
+        }
     }
     let mut contents = Vec::with_capacity(metadata.len().min(MAX_SECRET_FILE_BYTES) as usize);
     file.read_to_end(&mut contents)
@@ -414,6 +417,21 @@ mod tests {
         symlink(&target, &link).unwrap();
         let error = read_secret_file(&link).unwrap_err();
         assert!(error.contains("secret file"));
+        fs::remove_file(link).unwrap();
+        fs::remove_file(target).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_reader_rejects_hard_links() {
+        use std::fs::hard_link;
+        let suffix = uuid::Uuid::new_v4();
+        let target = std::env::temp_dir().join(format!("mailswiftsync-secret-target-{suffix}"));
+        let link = std::env::temp_dir().join(format!("mailswiftsync-secret-hardlink-{suffix}"));
+        super::write_secret_file(&target, "operator-secret").unwrap();
+        hard_link(&target, &link).unwrap();
+        let error = read_secret_file(&link).unwrap_err();
+        assert!(error.contains("hard-linked"));
         fs::remove_file(link).unwrap();
         fs::remove_file(target).unwrap();
     }
