@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Removed the obsolete full-report field from the workspace read model so UI
+  code cannot accidentally treat interactive state as a complete export
+  snapshot.
 - Replaced the workspace Verification refresh's full project report load with
   a paged compact mailbox/evidence projection. Interactive verification now
   reads at most 200 rows at a time, uses grouped durable counts for totals, and

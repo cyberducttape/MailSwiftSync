@@ -45,7 +45,6 @@ pub(crate) struct WorkspaceSnapshot {
     pub(crate) projects: Vec<core::ProjectListItem>,
     pub(crate) projects_revision: u64,
     pub(crate) runs: Vec<core::RunListItem>,
-    pub(crate) report: Option<core::ProjectReportSnapshot>,
     pub(crate) verification_rows: Vec<core::ReportMailboxSnapshot>,
     pub(crate) verification_loaded: bool,
     verification_offset: u32,
@@ -61,7 +60,6 @@ pub(crate) struct WorkspaceSnapshot {
 impl WorkspaceSnapshot {
     pub(crate) fn invalidate(&mut self) {
         self.refreshed_at = None;
-        self.report = None;
         self.verification_rows.clear();
         self.verification_loaded = false;
         self.verification_offset = 0;
@@ -117,7 +115,6 @@ impl WorkspaceSnapshot {
 
         if project_changed {
             self.snapshot_project_id = project_id.clone();
-            self.report = None;
             self.verification_rows.clear();
             self.verification_loaded = false;
             self.verification_offset = 0;
