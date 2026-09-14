@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted durable event recording and active-run event batching into
+  `core/events.rs`, keeping event transaction and detail-boundary logic
+  separate from mailbox/run state transitions.
 - Extracted startup recovery, process-identity registration, orphan cleanup,
   and operator-reviewed process clearing into `core/recovery.rs`, isolating
   the durable process-safety boundary from ordinary event persistence.
