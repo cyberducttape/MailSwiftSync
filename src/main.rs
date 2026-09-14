@@ -101,9 +101,10 @@ use std::{ffi::OsString, path::PathBuf};
 use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
-    AppearancePreferences, ThemeColors, display_job_state, display_state_key, format_phase_name,
-    job_state_badge, needs_operator_review, password_visibility_id, project_health_state_counts,
-    recommended_next_action, render_account, status_color, workflow_step_index,
+    AppearancePreferences, ThemeColors, WorkspaceSnapshotRefs, display_job_state,
+    display_state_key, format_phase_name, job_state_badge, needs_operator_review,
+    password_visibility_id, project_health_state_counts, recommended_next_action,
+    refresh_workspace_snapshot, render_account, status_color, workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -1063,57 +1064,21 @@ impl App {
     /// repaint many times per second while a process is producing output;
     /// those repaints must not turn into repeated SQLite reads.
     fn refresh_ui_snapshot(&mut self) {
-        if self
-            .ui_snapshot_refreshed_at
-            .is_some_and(|at| at.elapsed() < Duration::from_millis(500))
-        {
-            return;
-        }
-        self.ui_snapshot_refreshed_at = Some(std::time::Instant::now());
-        let project_limit = if self.ui_all_projects_loaded {
-            usize::MAX
-        } else {
-            500
-        };
-        if let Ok(projects) = self.store.recent_projects(project_limit) {
-            self.ui_projects = projects;
-        }
         let project_id = self.active_project_id().map(str::to_owned);
-        if project_id != self.ui_snapshot_project_id {
-            self.ui_snapshot_project_id = project_id.clone();
-            self.ui_report = None;
-            self.ui_runs.clear();
-            self.ui_project = None;
-            self.ui_jobs.clear();
-        }
-        if let Some(project_id) = project_id {
-            if let Ok(project) = self.store.project(&project_id) {
-                self.ui_project = project;
-                if let Some(project) = self.ui_project.as_ref()
-                    && !self.ui_projects.iter().any(|item| item.id == project.id)
-                {
-                    self.ui_projects.push(core::ProjectListItem {
-                        id: project.id.clone(),
-                        name: project.name.clone(),
-                        source_endpoint: project.source_endpoint.clone(),
-                        destination_endpoint: project.destination_endpoint.clone(),
-                        phase: project.phase,
-                    });
-                }
-            }
-            if let Ok(jobs) = self.store.mailboxes(&project_id) {
-                self.ui_jobs = jobs;
-            }
-            if let Ok(Some(report)) = self.store.project_report_snapshot(&project_id) {
-                self.ui_report = Some(report);
-            }
-            if let Ok(runs) = self
-                .store
-                .recent_run_list(&project_id, MAX_ACTIVITY_HISTORY_ROWS)
-            {
-                self.ui_runs = runs;
-            }
-        }
+        refresh_workspace_snapshot(
+            &self.store,
+            project_id.as_deref(),
+            self.ui_all_projects_loaded,
+            WorkspaceSnapshotRefs {
+                refreshed_at: &mut self.ui_snapshot_refreshed_at,
+                snapshot_project_id: &mut self.ui_snapshot_project_id,
+                projects: &mut self.ui_projects,
+                runs: &mut self.ui_runs,
+                report: &mut self.ui_report,
+                project: &mut self.ui_project,
+                jobs: &mut self.ui_jobs,
+            },
+        );
     }
 
     fn refresh_ui_snapshot_now(&mut self) {

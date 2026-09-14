@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the cached workspace read-model refresh into `ui::workspace`, keeping database-backed presentation loading behind one throttled UI boundary while preserving live action-time storage checks.
+
 - Moved the pre-live dual IMAP authentication/quota gate into `imap_probe` so
   GUI, headless, and future controller callers share one readiness boundary.
 - Extracted durable state-path resolution and verified SQLite ledger restore
