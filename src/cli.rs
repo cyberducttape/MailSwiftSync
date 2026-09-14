@@ -6,7 +6,51 @@ use crate::headless::{
 };
 use crate::*;
 use eframe::egui;
+use std::ffi::OsString;
+use std::path::PathBuf;
 use std::time::Duration;
+
+const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous]";
+
+#[derive(Debug, PartialEq, Eq)]
+struct SuperviseArguments {
+    state: PathBuf,
+    poll_seconds: u64,
+    idle_polls: usize,
+}
+
+/// Parse supervisor arguments without terminating the process. Keeping this
+/// pure makes the automation boundary directly testable and prevents future
+/// changes from turning malformed maintenance-window input into a panic.
+fn parse_supervise_arguments<I>(arguments: I) -> Result<SuperviseArguments, &'static str>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut arguments = arguments.into_iter();
+    let state = arguments.next().ok_or(SUPERVISE_USAGE)?;
+    let poll_seconds = match arguments.next() {
+        Some(value) => value
+            .to_str()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or(SUPERVISE_USAGE)?,
+        None => 30,
+    };
+    let idle_polls = match arguments.next() {
+        Some(value) => value
+            .to_str()
+            .and_then(|value| value.parse::<usize>().ok())
+            .ok_or(SUPERVISE_USAGE)?,
+        None => 1,
+    };
+    if arguments.next().is_some() || !(1..=3_600).contains(&poll_seconds) {
+        return Err(SUPERVISE_USAGE);
+    }
+    Ok(SuperviseArguments {
+        state: PathBuf::from(state),
+        poll_seconds,
+        idle_polls,
+    })
+}
 
 pub(crate) fn run() -> eframe::Result<()> {
     let mut arguments = std::env::args_os();
@@ -343,41 +387,18 @@ pub(crate) fn run() -> eframe::Result<()> {
         }
     }
     if command == std::ffi::OsStr::new("supervise") {
-        let Some(state) = arguments.next() else {
-            eprintln!("Usage: mailswiftsync supervise <state.db> [poll-seconds] [idle-polls]");
-            std::process::exit(2);
+        let supervise = match parse_supervise_arguments(arguments) {
+            Ok(value) => value,
+            Err(usage) => {
+                eprintln!("{usage}");
+                std::process::exit(2);
+            }
         };
-        let poll_seconds = match arguments.next() {
-            Some(value) => value
-                .to_str()
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0),
-            None => 30,
-        };
-        let idle_polls = match arguments.next() {
-            Some(value) => value.to_str().and_then(|value| value.parse::<usize>().ok()),
-            None => Some(1),
-        };
-        if arguments.next().is_some()
-            || !(1..=3_600).contains(&poll_seconds)
-            || idle_polls.is_none()
-        {
-            eprintln!(
-                "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous]"
-            );
-            std::process::exit(2);
-        }
-        let Some(idle_polls) = idle_polls else {
-            // Keep this invariant explicit at the command boundary. This is
-            // unreachable after the validation above, but a future edit must
-            // not turn malformed supervisor input into a process panic.
-            eprintln!(
-                "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous]"
-            );
-            std::process::exit(2);
-        };
-        let state = std::path::PathBuf::from(state);
-        match headless_supervise(&state, Duration::from_secs(poll_seconds), idle_polls) {
+        match headless_supervise(
+            &supervise.state,
+            Duration::from_secs(supervise.poll_seconds),
+            supervise.idle_polls,
+        ) {
             Ok(message) => {
                 println!("{message}");
                 return Ok(());
@@ -495,4 +516,55 @@ fn print_cli_help() {
     println!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SuperviseArguments, parse_supervise_arguments};
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn supervise_arguments_use_safe_defaults() {
+        assert_eq!(
+            parse_supervise_arguments(args(&["state.db"])),
+            Ok(SuperviseArguments {
+                state: PathBuf::from("state.db"),
+                poll_seconds: 30,
+                idle_polls: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn supervise_arguments_accept_continuous_polling() {
+        assert_eq!(
+            parse_supervise_arguments(args(&["state.db", "60", "0"])),
+            Ok(SuperviseArguments {
+                state: PathBuf::from("state.db"),
+                poll_seconds: 60,
+                idle_polls: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn supervise_arguments_reject_malformed_values_and_extras() {
+        for values in [
+            vec!["state.db", "0"],
+            vec!["state.db", "3601"],
+            vec!["state.db", "30", "not-a-number"],
+            vec!["state.db", "30", "1", "extra"],
+            vec!["state.db", "30", "1", ""],
+        ] {
+            assert!(
+                parse_supervise_arguments(args(&values)).is_err(),
+                "{values:?}"
+            );
+        }
+    }
 }

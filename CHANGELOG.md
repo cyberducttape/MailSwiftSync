@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted pure `supervise` argument parsing from CLI process control and
+  added coverage for defaults, continuous polling, bounds, malformed values,
+  and extra arguments.
 - Removed the CLI supervisor's panic-based idle-poll invariant so malformed
   maintenance-window arguments always fail through the usage path.
 - Corrected the CI `actions/upload-artifact` SHA to the actual reviewed
