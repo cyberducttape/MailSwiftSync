@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Cached best-effort engine version probes by executable content identity for
+  both single and batch starts. Repeated launches no longer pay the blocking
+  probe timeout, while replacing an executable invalidates the cache key.
 - Hardened ledger restore durability: the verified temporary database is
   flushed before installation and the destination directory is synchronized
   after the atomic rename, so a successful restore now reflects the on-disk

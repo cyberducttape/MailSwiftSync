@@ -512,6 +512,9 @@ struct App {
     activity_search: String,
     activity_status_filter: String,
     reopen_reason: String,
+    /// Best-effort engine metadata is cached by executable content identity;
+    /// replacing a binary at the same path therefore gets a fresh probe.
+    engine_version_cache: HashMap<String, Option<String>>,
     /// Database-backed UI read model. Rendering consumes this cache instead
     /// of issuing SQLite queries on every egui repaint.
     ui_snapshot: WorkspaceSnapshot,
@@ -920,6 +923,7 @@ impl App {
             activity_search: String::new(),
             activity_status_filter: "all".into(),
             reopen_reason: String::new(),
+            engine_version_cache: HashMap::new(),
             ui_snapshot: WorkspaceSnapshot::default(),
             historical_mailbox_offset: 0,
         }
@@ -948,6 +952,20 @@ impl App {
         } else {
             ThemeColors::light()
         }
+    }
+
+    fn cached_engine_version(&mut self, executable: &str) -> Option<String> {
+        let key = format!(
+            "{}\0{}",
+            executable,
+            plan_identity::executable_content_identity(executable)
+        );
+        if let Some(version) = self.engine_version_cache.get(&key) {
+            return version.clone();
+        }
+        let version = probe_engine_version(executable);
+        self.engine_version_cache.insert(key, version.clone());
+        version
     }
 
     fn cached_report_mailbox(&self, job_id: &str) -> Option<&core::ReportMailboxSnapshot> {
@@ -3360,7 +3378,6 @@ impl App {
         // Version metadata is a property of the executable, not the mailbox.
         // Probe each distinct path once so a large batch does not synchronously
         // spawn one --version process per row on the UI thread.
-        let mut engine_versions = HashMap::<String, Option<String>>::new();
         let child_plans = jobs
             .iter()
             .zip(queue_checkpoints.iter())
@@ -3369,10 +3386,7 @@ impl App {
                     core::Engine::Dovecot => &job.form.profile.doveadm_path,
                     core::Engine::Auto | core::Engine::ImapSync => &job.form.profile.imapsync_path,
                 };
-                let engine_version = engine_versions
-                    .entry(executable.clone())
-                    .or_insert_with(|| probe_engine_version(executable))
-                    .clone();
+                let engine_version = self.cached_engine_version(executable);
                 job.form
                     .plan_snapshot_with_checkpoint(checkpoint.as_deref())
                     .map(|plan_snapshot| core::BatchChildPlan {
@@ -4277,7 +4291,7 @@ impl App {
         let args = prepared.args;
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
-        let observed_engine_version = probe_engine_version(&exe);
+        let observed_engine_version = self.cached_engine_version(&exe);
         let run_id = uuid::Uuid::new_v4().to_string();
         if let Err(error) = self.store.begin_run_with_snapshot(
             &run_project_id,
