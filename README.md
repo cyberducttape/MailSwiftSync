@@ -261,7 +261,7 @@ ownership left behind.
 
 ![Mailboxes workspace](docs/wiki/assets/batch-queue.png)
 
-The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the redacted durable event ledger remains the longer-lived audit record.
+The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the structured durable event ledger remains the longer-lived audit record. Raw engine transcripts stay process-local and are not written to SQLite.
 
 ```bash
 cargo fmt --check

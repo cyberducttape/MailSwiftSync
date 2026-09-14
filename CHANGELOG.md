@@ -34,6 +34,9 @@ All notable changes to MailSwiftSync are documented here.
   the SQLite evidence ledger.
 - Locked the batch customer/project identity field while a batch is running so
   the displayed name cannot diverge from the already-admitted durable project.
+- Clarified the README’s audit-storage wording: the durable ledger contains
+  structured lifecycle/evidence events, while raw engine transcripts remain
+  process-local diagnostics.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
