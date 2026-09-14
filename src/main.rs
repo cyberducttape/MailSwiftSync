@@ -4523,9 +4523,11 @@ impl App {
                 self.bulk_live_confirmed = false;
                 self.bulk_confirmation_summary = None;
             }
+            let queue_editable = !self.running();
             ui.horizontal(|ui| {
                 ui.label("Customer/project name");
-                ui.add(
+                ui.add_enabled(
+                    queue_editable,
                     egui::TextEdit::singleline(&mut self.form.profile.name)
                         .desired_width(280.0)
                         .hint_text("e.g. Acme Corp cutover"),
@@ -4538,7 +4540,6 @@ impl App {
                 .size(11.0)
                 .color(self.theme_colors().text_secondary),
             );
-            let queue_editable = !self.running();
             ui.horizontal(|ui| {
                 if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / Excel…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
                 if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() {

@@ -32,6 +32,8 @@ All notable changes to MailSwiftSync are documented here.
 - Corrected architecture and operations documentation to state that raw engine
   transcripts remain bounded process-local diagnostics and are not persisted in
   the SQLite evidence ledger.
+- Locked the batch customer/project identity field while a batch is running so
+  the displayed name cannot diverge from the already-admitted durable project.
 - Extracted batch-child terminal-state policy into the controller module. Run
   status and mailbox verification-state mapping now have one tested contract
   instead of being embedded in the egui event loop, reducing GUI/headless
