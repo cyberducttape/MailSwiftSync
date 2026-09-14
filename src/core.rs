@@ -17,7 +17,10 @@ mod engine;
 mod evidence;
 mod state;
 pub use engine::Engine;
-pub use evidence::{EvidenceScope, MailboxEvidence, VerificationAcceptance};
+pub use evidence::{
+    EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
+    ReportRunSnapshot, VerificationAcceptance,
+};
 pub use state::{AttentionReason, MailboxState, Phase};
 
 fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
@@ -266,31 +269,6 @@ pub struct ActiveProcess {
     pub session_id: Option<u32>,
     pub executable: String,
 }
-/// Read model used by forensic and customer proof exports. It deliberately
-/// gathers the related mailbox, acceptance, evidence, run, and engine-version
-/// rows in a small fixed number of queries so large projects do not turn
-/// report generation into a per-mailbox/per-run N+1 workload.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReportMailboxSnapshot {
-    pub job: MailboxJob,
-    pub attention_reason: Option<AttentionReason>,
-    pub acceptance: Option<VerificationAcceptance>,
-    pub evidence: Option<(String, MailboxEvidence, Option<String>)>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReportRunSnapshot {
-    pub run: RunSummary,
-    pub engine_version: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectReportSnapshot {
-    pub project: Project,
-    pub mailboxes: Vec<ReportMailboxSnapshot>,
-    pub runs: Vec<ReportRunSnapshot>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerCapabilities {
     pub values: BTreeSet<String>,

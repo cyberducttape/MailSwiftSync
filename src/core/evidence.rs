@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::{AttentionReason, MailboxJob, Project, RunSummary};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxEvidence {
     pub source_messages: u64,
@@ -22,6 +24,30 @@ pub struct VerificationAcceptance {
     pub operator: String,
     pub reason: String,
     pub accepted_at: String,
+}
+
+/// Read model used by forensic and customer proof exports. It deliberately
+/// gathers related rows in a small fixed number of queries so large projects
+/// do not turn report generation into a per-mailbox/per-run N+1 workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportMailboxSnapshot {
+    pub job: MailboxJob,
+    pub attention_reason: Option<AttentionReason>,
+    pub acceptance: Option<VerificationAcceptance>,
+    pub evidence: Option<(String, MailboxEvidence, Option<String>)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportRunSnapshot {
+    pub run: RunSummary,
+    pub engine_version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectReportSnapshot {
+    pub project: Project,
+    pub mailboxes: Vec<ReportMailboxSnapshot>,
+    pub runs: Vec<ReportRunSnapshot>,
 }
 
 /// The strongest claim supported by the current verifier adapter.
