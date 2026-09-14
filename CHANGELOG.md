@@ -52,6 +52,9 @@ All notable changes to MailSwiftSync are documented here.
   appearance/workspace navigation behavior with the settings presentation.
 - Moved the stop/cancellation confirmation into `ui/activity.rs`, keeping
   active-run controls with the live output and run-history surface.
+- Tightened the service-manager deployment checklist around credentialless
+  queue restoration, keyring references, approved runtime paths, and operator
+  recovery ownership.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution

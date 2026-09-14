@@ -51,6 +51,21 @@ sudo systemctl enable --now mailswiftsync-supervise.service
 sudo journalctl -u mailswiftsync-supervise.service -f
 ```
 
+Before starting the service, confirm the operational hand-off:
+
+- The imported queue has been reviewed and its plan fingerprints are the ones
+  approved for this window.
+- Every row selected for automation has a usable OS-keyring credential
+  reference. Passwords and OAuth tokens are never restored from the SQLite
+  ledger, and a queue containing only transient in-memory credentials will
+  remain blocked until an operator provisions credentials again.
+- The service account can access the approved engine executable, runtime
+  directory, ledger, and any explicitly configured trust bundle, but not
+  unrelated customer files.
+- A separate operator has a recovery path for Attention, verification
+  differences, cancellation, and storage failures. The service intentionally
+  leaves those states for review instead of retrying them blindly.
+
 Keep the GUI closed while the service owns the ledger. The instance lock is
 intentional; never delete it to bypass ownership. Back up the ledger while the
 service is stopped or use the `backup` command, which takes the same lock.
@@ -81,4 +96,3 @@ that has already passed MailSwiftSync’s durable gates. It is not evidence that
 MailSwiftSync supports unattended production cutovers: provider OAuth consent
 and refresh, secret-safe remote Dovecot execution, and independent approval of
 Attention rows remain operator responsibilities.
-

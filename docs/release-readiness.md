@@ -78,7 +78,10 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - A foreground `supervise <state.db>` controller can continuously watch and
   process automation-safe durable batch work while leaving operator-review
   rows untouched; external service-manager integration and scheduling policy
-  are still deployment responsibilities.
+  are still deployment responsibilities. The service deployment guide now
+  documents the credential hand-off and recovery checklist; supervision does
+  not turn a credentialless restored queue into an unattended production
+  approval.
 - Run metadata records the version string returned by each engine when its
   executable supports `--version`; unavailable versions remain explicit in
   exports rather than being guessed.
