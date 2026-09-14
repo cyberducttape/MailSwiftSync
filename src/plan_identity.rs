@@ -28,7 +28,7 @@ fn resolve_executable(executable: &str) -> Option<PathBuf> {
         }
         #[cfg(windows)]
         if executable.extension().is_none() {
-            let candidate = directory.join(format!("{executable}.exe"));
+            let candidate = directory.join(format!("{}.exe", executable.display()));
             if candidate.is_file() {
                 return Some(candidate);
             }

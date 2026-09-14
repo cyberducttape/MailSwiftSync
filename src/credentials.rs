@@ -381,9 +381,12 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SecretString, cleanup_stale_secret_directories_at, read_secret_file};
+    #[cfg(unix)]
+    use super::cleanup_stale_secret_directories_at;
+    use super::{SecretString, read_secret_file};
+    use std::fs;
+    #[cfg(unix)]
     use std::{
-        fs,
         path::PathBuf,
         time::{Duration, SystemTime},
     };
