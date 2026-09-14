@@ -4516,7 +4516,14 @@ impl App {
         });
     }
     fn poll(&mut self) {
+        let was_workspace_stale = self.ui_snapshot.is_stale();
         self.refresh_ui_snapshot();
+        if !was_workspace_stale && self.ui_snapshot.is_stale() && !self.running() {
+            self.set_status(
+                "Durable state view is stale; execution is disabled until SQLite refresh succeeds.",
+                StatusSeverity::Error,
+            );
+        }
         if self.invalidate_stale_capability_observation() {
             self.set_status(
                 "Readiness observations expired because the migration plan changed; run discovery again.",
@@ -6329,6 +6336,14 @@ impl eframe::App for App {
                         self.settings_open = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.ui_snapshot.is_stale() {
+                            ui.label(
+                                RichText::new("⚠ DURABLE VIEW STALE")
+                                    .strong()
+                                    .color(colors.warning),
+                            );
+                            ui.separator();
+                        }
                         if self.running() {
                             ui.add(egui::Spinner::new());
                             if let Some(started) = self.run_started_at {

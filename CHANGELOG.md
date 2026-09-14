@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added a persistent global-header `DURABLE VIEW STALE` indicator and an
+  explicit application status when workspace refresh fails, so retained
+  cached state cannot look current merely because the operator is on another
+  page or scrolled past the warning.
 - Made failed workspace read-model refreshes explicit: retained cached data
   is marked stale, the UI shows the last successful refresh age and error, and
   single/batch execution is blocked until durable state can be refreshed.
