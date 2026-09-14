@@ -115,11 +115,11 @@ use std::{ffi::OsString, path::PathBuf};
 use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
-    AppearancePreferences, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
+    AppearancePreferences, SettingsAction, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot,
     display_job_state, display_state_key, filter_project_indices, format_elapsed,
     format_phase_name, job_state_badge, needs_operator_review, password_visibility_id,
-    project_health_state_counts, recommended_next_action, render_account, status_color,
-    successful_run_severity, successful_run_status, workflow_step_index,
+    project_health_state_counts, recommended_next_action, render_account, show_settings,
+    status_color, successful_run_severity, successful_run_status, workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -1478,67 +1478,25 @@ impl App {
     }
 
     fn settings_dialog(&mut self, ctx: &egui::Context) {
-        if !self.settings_open {
-            return;
+        let result = show_settings(
+            ctx,
+            &mut self.settings_open,
+            &mut self.dark_mode,
+            &mut self.ui_scale,
+            self.form.engine(),
+        );
+        if let Some(error) = result.error {
+            self.set_status(error, StatusSeverity::Error);
         }
-        let mut open = self.settings_open;
-        let mut close_requested = false;
-        egui::Window::new("Settings")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.heading("Operator settings");
-                ui.label(RichText::new("Appearance and workspace tools live here. Migration connection and engine choices belong on the Migration plan so the active plan stays visible while you configure it.").color(self.theme_colors().text_secondary));
-                ui.add_space(8.0);
-                ui.group(|ui| {
-                    ui.heading("Appearance");
-                    ui.horizontal(|ui| {
-                        ui.label("Theme");
-                        let label = if self.dark_mode { "Dark" } else { "Light" };
-                        if ui.button(label).clicked() {
-                            self.dark_mode = !self.dark_mode;
-                            if let Err(error) = (AppearancePreferences { dark_mode: self.dark_mode, ui_scale: self.ui_scale }).save() {
-                                self.set_status(
-                                    format!("Could not save appearance preference: {error}"),
-                                    StatusSeverity::Error,
-                                );
-                            }
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(format!("Interface size: {:.0}%", self.ui_scale * 100.0));
-                        if ui.button("Decrease").clicked() {
-                            self.ui_scale = (self.ui_scale - 0.10).max(0.90);
-                        }
-                        if ui.button("Increase").clicked() {
-                            self.ui_scale = (self.ui_scale + 0.10).min(1.50);
-                        }
-                    });
-                    if ui.button("Save appearance preferences").clicked()
-                        && let Err(error) = (AppearancePreferences { dark_mode: self.dark_mode, ui_scale: self.ui_scale }).save()
-                    {
-                        self.set_status(
-                            format!("Could not save appearance preference: {error}"),
-                            StatusSeverity::Error,
-                        );
-                    }
-                });
-                ui.add_space(8.0);
-                ui.group(|ui| {
-                    ui.heading("Workspace tools");
-                    if ui.button("Open Migration plan").clicked() {
-                        self.active_view = WorkspaceView::Plan;
-                        close_requested = true;
-                    }
-                    if ui.button("Project browser").clicked() {
-                        self.projects_open = true;
-                        close_requested = true;
-                    }
-                    ui.label(RichText::new("Connection, credentials, engine, advanced options, and readiness are available from the Migration plan.").size(11.0).color(self.theme_colors().text_secondary));
-                });
-            });
-        self.settings_open = open && !close_requested;
+        match result.action {
+            Some(SettingsAction::OpenMigrationPlan) => {
+                self.active_view = WorkspaceView::Plan;
+            }
+            Some(SettingsAction::OpenProjectBrowser) => {
+                self.projects_open = true;
+            }
+            None => {}
+        }
     }
 
     fn lifecycle_stepper(&self, ui: &mut egui::Ui) {
