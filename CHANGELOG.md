@@ -22,6 +22,8 @@ All notable changes to MailSwiftSync are documented here.
   into the batch UI module, keeping destructive prompts localized.
 - Extracted advanced migration-plan controls into `ui/plan.rs`, separating
   engine tuning presentation from the application composition root.
+- Extracted the batch queue presentation dialog into `ui/batch.rs`, leaving
+  `main.rs` focused on shared workspace composition and lifecycle dispatch.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
