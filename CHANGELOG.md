@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- The verification workspace now shows an explicit customer-proof readiness
+  message, distinguishing a deliverable-ready project from a proof that is
+  still gated by incomplete or stale durable state.
 - Verification mailbox filtering now reuses a revision/search/filter keyed
   index cache instead of allocating filtered indices on every egui repaint.
 - Added regression coverage for verification filters, including typed result

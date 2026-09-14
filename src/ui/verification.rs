@@ -19,6 +19,26 @@ impl App {
                 if ui.button("Export customer proof JSON…").clicked() { self.report_export_result("Customer proof", self.export_customer_proof()); }
                 if ui.button("Export support bundle…").clicked() { self.report_export_result("Support bundle", self.export_support_bundle_dialog()); }
                 if ui.button("Export project health…").clicked() { self.report_export_result("Project health export", self.export_project_health()); }
+                if let Some(project) = self.ui_snapshot.project.as_ref() {
+                    if project.phase == crate::core::Phase::Complete
+                        && self.ui_snapshot.mailbox_counts.needs_review == 0
+                        && !self.ui_snapshot.is_stale()
+                    {
+                        ui.label(
+                            RichText::new(
+                                "Customer proof is ready: the durable project is Complete and no mailbox requires review.",
+                            )
+                            .color(self.theme_colors().success),
+                        );
+                    } else {
+                        ui.label(
+                            RichText::new(
+                                "Customer proof remains gated until the durable project is Complete, every mailbox is verified, and the state view is current.",
+                            )
+                            .color(self.theme_colors().warning),
+                        );
+                    }
+                }
             }
             let selected_project = self.active_project_id().map(str::to_owned);
             if selected_project.is_some() {
