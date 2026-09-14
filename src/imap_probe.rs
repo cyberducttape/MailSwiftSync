@@ -1,3 +1,4 @@
+use crate::core;
 use crate::credentials::SecretString;
 use crate::imap_protocol::{
     advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
@@ -357,6 +358,52 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     }
     let _ = stream.write_all(b"a007 LOGOUT\r\n");
     Ok(caps)
+}
+
+pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), String> {
+    if !fresh_imap_authentication_applies(form) {
+        return Ok(());
+    }
+    let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)?;
+    let destination = endpoint_for_probe(
+        &form.profile.destination_host,
+        &form.profile.destination_port,
+    )?;
+    let source_capabilities = probe_tls_capabilities_with_transport(
+        &source,
+        &form.profile.source_user,
+        form.source_password.as_str(),
+        &form.profile.source_auth,
+        &form.profile.source_tls,
+        &form.profile.source_ca_bundle,
+        &form.profile.source_certificate_pin_sha256,
+    )?;
+    if source_capabilities.quota_exceeded {
+        return Err(
+            "source mailbox quota is exhausted according to the authenticated IMAP quota response"
+                .into(),
+        );
+    }
+    let destination_capabilities = probe_tls_capabilities_with_transport(
+        &destination,
+        &form.profile.destination_user,
+        form.destination_password.as_str(),
+        &form.profile.destination_auth,
+        &form.profile.destination_tls,
+        &form.profile.destination_ca_bundle,
+        &form.profile.destination_certificate_pin_sha256,
+    )?;
+    if destination_capabilities.quota_exceeded {
+        return Err("destination mailbox quota is exhausted according to the authenticated IMAP quota response".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
+    !form.dry_run
+        && form.engine() == core::Engine::ImapSync
+        && form.profile.source_tls != "plain"
+        && form.profile.destination_tls != "plain"
 }
 
 #[cfg(test)]

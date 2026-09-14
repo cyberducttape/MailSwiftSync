@@ -66,7 +66,10 @@ use eframe::{
 use egui_extras::{Column, TableBuilder};
 #[cfg(test)]
 use imap_probe::{command_endpoint_parts, command_port, imap_command_succeeded, imap_quote};
-use imap_probe::{endpoint_for_probe, probe_tls_capabilities_with_transport};
+use imap_probe::{
+    endpoint_for_probe, fresh_dual_imaps_authentication, fresh_imap_authentication_applies,
+    probe_tls_capabilities_with_transport,
+};
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, default_auth_method, default_destination_tls,
     default_imap_port, effective_destination_tls,
@@ -1012,56 +1015,8 @@ fn durable_single_identity_matches(
         && mailbox.destination_mailbox == profile.destination_user
 }
 
-/// Re-authenticate both encrypted endpoints immediately before a live imapsync
-/// child is launched. Plain transport remains excluded because it has no TLS
-/// boundary to validate and is already protected by the explicit transport
-/// acknowledgement gate.
-fn fresh_dual_imaps_authentication(form: &Form) -> Result<(), String> {
-    if !fresh_imap_authentication_applies(form) {
-        return Ok(());
-    }
-    let source = endpoint_for_probe(&form.profile.source_host, &form.profile.source_port)?;
-    let destination = endpoint_for_probe(
-        &form.profile.destination_host,
-        &form.profile.destination_port,
-    )?;
-    let source_capabilities = probe_tls_capabilities_with_transport(
-        &source,
-        &form.profile.source_user,
-        form.source_password.as_str(),
-        &form.profile.source_auth,
-        &form.profile.source_tls,
-        &form.profile.source_ca_bundle,
-        &form.profile.source_certificate_pin_sha256,
-    )?;
-    if source_capabilities.quota_exceeded {
-        return Err(
-            "source mailbox quota is exhausted according to the authenticated IMAP quota response"
-                .into(),
-        );
-    }
-    let destination_capabilities = probe_tls_capabilities_with_transport(
-        &destination,
-        &form.profile.destination_user,
-        form.destination_password.as_str(),
-        &form.profile.destination_auth,
-        &form.profile.destination_tls,
-        &form.profile.destination_ca_bundle,
-        &form.profile.destination_certificate_pin_sha256,
-    )?;
-    if destination_capabilities.quota_exceeded {
-        return Err("destination mailbox quota is exhausted according to the authenticated IMAP quota response".into());
-    }
-    Ok(())
-}
-
-fn fresh_imap_authentication_applies(form: &Form) -> bool {
-    !form.dry_run
-        && form.engine() == core::Engine::ImapSync
-        && form.profile.source_tls != "plain"
-        && form.profile.destination_tls != "plain"
-}
-
+/// Pre-live readiness and quota checks remain in `imap_probe`; this root module
+/// only wires the shared result into the application controller.
 fn quota_summary(caps: &core::ServerCapabilities) -> &'static str {
     if !caps.supports("QUOTA") {
         "quota not advertised"

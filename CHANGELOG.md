@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved the pre-live dual IMAP authentication/quota gate into `imap_probe` so
+  GUI, headless, and future controller callers share one readiness boundary.
 - Extracted durable state-path resolution and verified SQLite ledger restore
   (including WAL/SHM sidecars, rollback artifacts, and permission checks) into
   `storage_paths` so recovery code is independent of the UI dispatcher.
