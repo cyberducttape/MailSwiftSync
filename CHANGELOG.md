@@ -25,6 +25,14 @@ All notable changes to MailSwiftSync are documented here.
 - Moved durable parent/child batch-run admission and active ownership-context
   construction into `controller::admit_batch_run`, reducing persistence and
   process-ownership assembly in the egui start path.
+- Extracted typed batch-start safety decisions into the controller policy
+  module. Stale durable state, profile/read-only/process-review blocks, live
+  confirmation, and storage availability now share a tested ordering contract
+  before the GUI opens dialogs or launches work.
+- Extracted typed batch-start safety decisions into the controller policy
+  module. Stale durable state, profile/read-only/process-review blocks, live
+  confirmation, and storage availability now share a tested ordering contract
+  before the GUI opens dialogs or launches work.
 
 - Extracted deterministic batch plan materialization into
   `controller/batch_admission.rs`: selected durable IDs, Dovecot checkpoints,

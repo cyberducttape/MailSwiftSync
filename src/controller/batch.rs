@@ -40,6 +40,81 @@ pub(crate) enum BatchExecutionMode {
     Live,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BatchStartBlock {
+    StaleDurableView,
+    ProfileUnavailable,
+    ReadOnlyProject,
+    ProcessReviewRequired,
+    NoJobs,
+    DurableStorageUnavailable,
+}
+
+impl BatchStartBlock {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::StaleDurableView => {
+                "Batch execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a queue."
+            }
+            Self::ProfileUnavailable => {
+                "Batch execution is blocked because the saved migration profile is unavailable; repair it before starting a queue."
+            }
+            Self::ReadOnlyProject => {
+                "This project is being viewed read-only. Start a new migration to execute a batch."
+            }
+            Self::ProcessReviewRequired => {
+                "Execution is blocked until you confirm that no unverified migration process remains on this host."
+            }
+            Self::NoJobs => "Import a file before starting the queue.",
+            Self::DurableStorageUnavailable => "Batch execution requires durable SQLite storage.",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BatchStartDecision {
+    Block(BatchStartBlock),
+    ConfirmLive,
+    Proceed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BatchStartContext {
+    pub(crate) mode: BatchExecutionMode,
+    pub(crate) durable_view_stale: bool,
+    pub(crate) profile_available: bool,
+    pub(crate) read_only_project: bool,
+    pub(crate) process_review_required: bool,
+    pub(crate) has_jobs: bool,
+    pub(crate) live_confirmed: bool,
+    pub(crate) persistence_available: bool,
+}
+
+pub(crate) fn batch_start_decision(context: BatchStartContext) -> BatchStartDecision {
+    if context.durable_view_stale {
+        return BatchStartDecision::Block(BatchStartBlock::StaleDurableView);
+    }
+    if !context.profile_available {
+        return BatchStartDecision::Block(BatchStartBlock::ProfileUnavailable);
+    }
+    if context.read_only_project {
+        return BatchStartDecision::Block(BatchStartBlock::ReadOnlyProject);
+    }
+    if context.process_review_required {
+        return BatchStartDecision::Block(BatchStartBlock::ProcessReviewRequired);
+    }
+    if !context.has_jobs {
+        return BatchStartDecision::Block(BatchStartBlock::NoJobs);
+    }
+    if context.mode.is_live() && !context.live_confirmed {
+        return BatchStartDecision::ConfirmLive;
+    }
+    if !context.persistence_available {
+        return BatchStartDecision::Block(BatchStartBlock::DurableStorageUnavailable);
+    }
+    BatchStartDecision::Proceed
+}
+
 impl BatchExecutionMode {
     pub(crate) fn is_preflight(self) -> bool {
         matches!(self, Self::Preflight)
@@ -152,8 +227,9 @@ pub(crate) fn selected_batch_indices(
 #[cfg(test)]
 mod tests {
     use super::{
-        BulkJob, BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
-        selected_batch_indices, suggested_batch_project_name,
+        BatchExecutionMode, BatchStartBlock, BatchStartContext, BatchStartDecision, BulkJob,
+        BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
+        batch_start_decision, selected_batch_indices, suggested_batch_project_name,
     };
     use crate::migration_plan::Form;
     use std::collections::HashSet;
@@ -248,6 +324,66 @@ mod tests {
         );
         form.profile.name = "Acme cutover".into();
         assert_eq!(suggested_batch_project_name(&form.profile), "Acme cutover");
+    }
+
+    #[test]
+    fn batch_start_gate_requires_confirmation_only_for_live_mode() {
+        assert_eq!(
+            batch_start_decision(BatchStartContext {
+                mode: BatchExecutionMode::Preflight,
+                durable_view_stale: false,
+                profile_available: true,
+                read_only_project: false,
+                process_review_required: false,
+                has_jobs: true,
+                live_confirmed: false,
+                persistence_available: true,
+            }),
+            BatchStartDecision::Proceed
+        );
+        assert_eq!(
+            batch_start_decision(BatchStartContext {
+                mode: BatchExecutionMode::Live,
+                durable_view_stale: false,
+                profile_available: true,
+                read_only_project: false,
+                process_review_required: false,
+                has_jobs: true,
+                live_confirmed: false,
+                persistence_available: true,
+            }),
+            BatchStartDecision::ConfirmLive
+        );
+    }
+
+    #[test]
+    fn batch_start_gate_prioritizes_stale_state_and_storage_failures() {
+        assert_eq!(
+            batch_start_decision(BatchStartContext {
+                mode: BatchExecutionMode::Live,
+                durable_view_stale: true,
+                profile_available: false,
+                read_only_project: true,
+                process_review_required: true,
+                has_jobs: false,
+                live_confirmed: false,
+                persistence_available: false,
+            }),
+            BatchStartDecision::Block(BatchStartBlock::StaleDurableView)
+        );
+        assert_eq!(
+            batch_start_decision(BatchStartContext {
+                mode: BatchExecutionMode::Preflight,
+                durable_view_stale: false,
+                profile_available: true,
+                read_only_project: false,
+                process_review_required: false,
+                has_jobs: true,
+                live_confirmed: false,
+                persistence_available: false,
+            }),
+            BatchStartDecision::Block(BatchStartBlock::DurableStorageUnavailable)
+        );
     }
 }
 

@@ -38,9 +38,10 @@ use controller::failure::{
 #[cfg(test)]
 use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
-    ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
-    BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, admit_batch_run,
-    assess_plan, batch_mailbox_state, batch_run_status, durable_batch_profile_config,
+    ActiveRunContext, BatchExecutionMode, BatchStartContext, BatchStartDecision,
+    BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, LiveAuthProof,
+    RunKind, SingleRunWorkerSpec, admit_batch_run, assess_plan, batch_mailbox_state,
+    batch_run_status, batch_start_decision, durable_batch_profile_config,
     durable_single_identity_matches, is_verified_terminal_state, prepare_batch_project,
     prepare_batch_run, prepare_selected_batch_jobs, selected_batch_indices, spawn_batch_worker,
     spawn_single_run_worker, suggested_batch_project_name,
@@ -3147,40 +3148,32 @@ impl App {
         );
     }
     fn start_bulk(&mut self) {
-        if self.ui_snapshot.is_stale() {
-            self.bulk_message = "Batch execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a queue.".into();
-            return;
-        }
-        if !self.profile_available {
-            self.bulk_message =
-                "Batch execution is blocked because the saved migration profile is unavailable; repair it before starting a queue."
-                    .into();
-            return;
-        }
-        if self.workspace_read_only {
-            self.bulk_message =
-                "This project is being viewed read-only. Start a new migration to execute a batch."
-                    .into();
-            return;
-        }
-        if self.process_review_required {
-            self.bulk_message = "Execution is blocked until you confirm that no unverified migration process remains on this host.".into();
-            return;
-        }
-        if self.bulk_jobs.is_empty() {
-            self.bulk_message = "Import a file before starting the queue.".into();
-            return;
-        }
         let mode = self.bulk_mode;
         let live = mode.is_live();
-        if live && !self.bulk_live_confirmed {
-            // Capture the durable admission facts before opening the dialog;
-            // the dialog itself is presentation-only and must not query
-            // SQLite on every repaint.
-            self.refresh_ui_snapshot_now();
-            self.bulk_live_confirm_open = true;
-            self.bulk_confirmation_summary = None;
-            return;
+        match batch_start_decision(BatchStartContext {
+            mode,
+            durable_view_stale: self.ui_snapshot.is_stale(),
+            profile_available: self.profile_available,
+            read_only_project: self.workspace_read_only,
+            process_review_required: self.process_review_required,
+            has_jobs: !self.bulk_jobs.is_empty(),
+            live_confirmed: self.bulk_live_confirmed,
+            persistence_available: self.persistence_available,
+        }) {
+            BatchStartDecision::Block(block) => {
+                self.bulk_message = block.message().into();
+                return;
+            }
+            BatchStartDecision::ConfirmLive => {
+                // Capture the durable admission facts before opening the dialog;
+                // the dialog itself is presentation-only and must not query
+                // SQLite on every repaint.
+                self.refresh_ui_snapshot_now();
+                self.bulk_live_confirm_open = true;
+                self.bulk_confirmation_summary = None;
+                return;
+            }
+            BatchStartDecision::Proceed => {}
         }
         if live {
             self.bulk_live_confirmed = false;
@@ -3190,10 +3183,6 @@ impl App {
                         .into();
                 return;
             }
-        }
-        if !self.persistence_available {
-            self.bulk_message = "Batch execution requires durable SQLite storage.".into();
-            return;
         }
         let durable_admissions = if self.bulk_project_id.is_some()
             && self.bulk_job_ids.len() == self.bulk_jobs.len()

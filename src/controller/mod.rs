@@ -9,8 +9,9 @@ mod preflight;
 mod run;
 
 pub(crate) use batch::{
-    BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet,
-    batch_mailbox_state, batch_run_status, is_verified_terminal_state, selected_batch_indices,
+    BatchExecutionMode, BatchStartContext, BatchStartDecision, BulkConfirmationSummary,
+    BulkQueueSummary, BulkRetryScope, BulkStateSet, batch_mailbox_state, batch_run_status,
+    batch_start_decision, is_verified_terminal_state, selected_batch_indices,
     suggested_batch_project_name,
 };
 pub(crate) use batch_admission::{
