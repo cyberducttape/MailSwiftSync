@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Portable bundles now include the complete `docs/` tree, including the
+  compatibility matrix, architecture notes, wiki assets, and all operator
+  guides referenced by the README.
 - Release bundles now preserve the `docs/` hierarchy so relative links among
   installation, service, container, and readiness guides remain valid after
   extraction on every supported platform.
