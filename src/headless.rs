@@ -8,6 +8,8 @@ use crate::{
 use serde::Serialize;
 use std::{sync::atomic::Ordering, thread, time::Duration};
 
+const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
+
 #[derive(Debug, Serialize)]
 pub(crate) struct HeadlessStatus {
     pub(crate) schema_version: i64,
@@ -51,19 +53,19 @@ pub(crate) fn export_support_bundle(
         .map_err(|error| error.to_string())?;
     let mut project_values = Vec::with_capacity(projects.len());
     for project in projects {
-        let jobs = store
-            .mailboxes(&project.id)
+        let counts = store
+            .mailbox_state_counts(&project.id)
             .map_err(|error| error.to_string())?;
-        let attention_reasons = store
-            .mailbox_attention_reasons(&project.id)
+        let jobs = store
+            .mailbox_status_page(&project.id, 0, SUPPORT_MAILBOX_SAMPLE_LIMIT)
             .map_err(|error| error.to_string())?;
         let mailbox_values = jobs
             .iter()
-            .map(|job| {
+            .map(|(job, attention_reason)| {
                 Ok(serde_json::json!({
                     "id": job.id,
                     "state": job.state,
-                    "attention_reason": attention_reasons.get(&job.id).map(|reason| reason.as_str()),
+                    "attention_reason": attention_reason.as_ref().map(|reason| reason.as_str()),
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -92,7 +94,15 @@ pub(crate) fn export_support_bundle(
             "project_id": project.id,
             "project_name": project.name,
             "phase": project.phase.as_str(),
-            "mailbox_count": jobs.len(),
+            "mailbox_count": counts.total,
+            "mailbox_sample_limit": SUPPORT_MAILBOX_SAMPLE_LIMIT,
+            "mailboxes_truncated": counts.total > jobs.len(),
+            "mailbox_state_counts": {
+                "ready": counts.ready,
+                "running": counts.running,
+                "verified": counts.verified,
+                "needs_review": counts.needs_review,
+            },
             "mailboxes": mailbox_values,
             "recent_runs": run_values,
         }));

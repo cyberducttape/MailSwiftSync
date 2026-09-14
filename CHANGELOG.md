@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Bounded support-bundle mailbox data to a 1,000-row status sample while
+  retaining exact mailbox totals and state counts, so incident exports remain
+  usable for large projects without materializing the full queue in memory.
 - Moved capability-probe results and stale-result matching into the preflight
   controller module, keeping asynchronous readiness identity policy out of the
   egui composition root and covered by controller-level regression tests.

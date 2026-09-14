@@ -5819,9 +5819,10 @@ mod tests {
         let project = store
             .create_project("Support fixture", "source.internal", "destination.internal")
             .unwrap();
-        store
-            .add_mailbox(&project.id, "alice@example.test", "alice@example.test")
-            .unwrap();
+        for index in 0..1_001 {
+            let mailbox = format!("user-{index}@example.test");
+            store.add_mailbox(&project.id, &mailbox, &mailbox).unwrap();
+        }
         drop(store);
 
         export_support_bundle(&state, &output).unwrap();
@@ -5832,6 +5833,13 @@ mod tests {
         assert!(!text.contains("destination.internal"));
         assert_eq!(value["redaction"]["credentials"], "excluded");
         assert_eq!(value["redaction"]["diagnostic_text"], "excluded");
+        assert_eq!(value["projects"][0]["mailbox_count"], 1_001);
+        assert_eq!(value["projects"][0]["mailbox_sample_limit"], 1_000);
+        assert_eq!(value["projects"][0]["mailboxes_truncated"], true);
+        assert_eq!(
+            value["projects"][0]["mailboxes"].as_array().unwrap().len(),
+            1_000
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 

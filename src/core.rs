@@ -2679,6 +2679,38 @@ impl StateStore {
             .collect()
     }
 
+    /// Load a bounded, secret-free mailbox status page with its attention
+    /// classification in the same query. This is intended for summaries and
+    /// support views; full mailbox configuration remains available through
+    /// `mailbox_page` for callers that explicitly need it.
+    pub fn mailbox_status_page(
+        &self,
+        project_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> rusqlite::Result<Vec<(MailboxJob, Option<AttentionReason>)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id,source_mailbox,destination_mailbox,state,config,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
+        )?;
+        statement
+            .query_map(params![project_id, limit, offset], |row| {
+                let reason = row.get::<_, Option<String>>(5)?.map(|value| {
+                    AttentionReason::parse(&value).unwrap_or(AttentionReason::Unknown)
+                });
+                Ok((
+                    MailboxJob {
+                        id: row.get(0)?,
+                        source_mailbox: row.get(1)?,
+                        destination_mailbox: row.get(2)?,
+                        state: row.get(3)?,
+                        config: row.get(4)?,
+                    },
+                    reason,
+                ))
+            })?
+            .collect()
+    }
+
     pub fn mailbox_state_counts(&self, project_id: &str) -> rusqlite::Result<MailboxStateCounts> {
         self.connection.query_row(
             "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
