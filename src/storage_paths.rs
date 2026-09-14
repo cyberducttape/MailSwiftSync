@@ -1,6 +1,7 @@
 //! Durable state-path selection and verified SQLite ledger restoration.
 
-use crate::{core, restrict_directory_permissions, restrict_file_permissions};
+use crate::credentials::restrict_file_permissions;
+use crate::{core, restrict_directory_permissions};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},

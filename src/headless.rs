@@ -1,8 +1,9 @@
+use crate::atomic_artifact::write_private_atomic;
 use crate::credentials::SecretString;
 use crate::{
     App, BatchExecutionMode, BulkRetryScope, cleanup_stale_secret_directories, core,
     is_verified_terminal_state, plan_fingerprint_digest, recorded_process_matches,
-    secret_runtime_base, terminate_recorded_process_group, write_private_atomic,
+    secret_runtime_base, terminate_recorded_process_group,
 };
 use serde::Serialize;
 use std::{sync::atomic::Ordering, thread, time::Duration};

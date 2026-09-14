@@ -1,3 +1,4 @@
+mod atomic_artifact;
 mod bulk_import;
 mod cli;
 mod command;
@@ -20,6 +21,7 @@ mod storage_paths;
 mod ui;
 mod verification;
 
+use atomic_artifact::write_private_atomic;
 #[cfg(test)]
 use command::{parse_shell_words, remove_option, shell_quote};
 #[cfg(test)]
@@ -40,8 +42,8 @@ use controller::{
 };
 use credentials::{
     CleanupGuard, SecretString, cleanup_paths, cleanup_stale_secret_directories,
-    create_secret_directory, restrict_directory_permissions, restrict_file_permissions,
-    secret_runtime_base, write_secret_file,
+    create_secret_directory, restrict_directory_permissions, secret_runtime_base,
+    write_secret_file,
 };
 use headless::export_support_bundle;
 #[cfg(test)]
@@ -91,7 +93,6 @@ use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    io::Write,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -5999,39 +6000,6 @@ fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
         .as_bytes()
         .windows(needle.len())
         .any(|window| window.eq_ignore_ascii_case(needle))
-}
-
-fn write_private_atomic(path: &std::path::Path, content: &str) -> std::io::Result<()> {
-    let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
-    let result = (|| {
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut file = options.open(&temporary)?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-        restrict_file_permissions(&temporary)?;
-        std::fs::rename(&temporary, path)?;
-        sync_directory(path.parent())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result
-}
-
-#[cfg(unix)]
-fn sync_directory(path: Option<&std::path::Path>) -> std::io::Result<()> {
-    if let Some(path) = path {
-        std::fs::File::open(path)?.sync_all()?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_: Option<&std::path::Path>) -> std::io::Result<()> {
-    Ok(())
 }
 
 impl eframe::App for App {
