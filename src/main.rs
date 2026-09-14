@@ -27,12 +27,14 @@ use atomic_artifact::write_private_atomic;
 #[cfg(test)]
 use command::{parse_shell_words, remove_option, shell_quote};
 #[cfg(test)]
+use controller::batch_admission::apply_keyring_id;
+#[cfg(test)]
 use controller::batch_admission::canonical_destination_identity;
 #[cfg(test)]
 use controller::batch_admission::duplicate_destination;
 #[cfg(test)]
 use controller::batch_admission::matches_queue;
-use controller::batch_admission::{apply_keyring_id, selection_value};
+use controller::batch_admission::selection_value;
 #[cfg(test)]
 use controller::batch_admission::{durable_batch_profile_config, validate_batch_throttle};
 use controller::failure::{
@@ -2844,15 +2846,6 @@ impl App {
         self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
     }
 
-    fn rebuild_bulk_job_index(&mut self) {
-        self.bulk_job_index_by_id = self
-            .bulk_job_ids
-            .iter()
-            .enumerate()
-            .map(|(index, job_id)| (job_id.clone(), index))
-            .collect();
-    }
-
     fn mark_bulk_jobs_changed(&mut self) {
         self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
         self.bulk_summary = None;
@@ -2860,42 +2853,6 @@ impl App {
         self.bulk_filter_cache_generation = u64::MAX;
     }
 
-    fn mark_bulk_state_changed(&mut self) {
-        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
-        self.bulk_summary = None;
-        self.bulk_filter_cache_generation = u64::MAX;
-    }
-
-    fn bulk_queue_summary(&mut self) -> BulkQueueSummary {
-        if let Some((generation, summary)) = self.bulk_summary
-            && generation == self.bulk_jobs_generation
-        {
-            return summary;
-        }
-        let summary = BulkQueueSummary::from_jobs(&self.bulk_jobs);
-        self.bulk_summary = Some((self.bulk_jobs_generation, summary));
-        summary
-    }
-
-    fn apply_bulk_keyring_id(&mut self, source: bool) {
-        let value = if source {
-            self.bulk_source_keyring_apply.trim().to_owned()
-        } else {
-            self.bulk_destination_keyring_apply.trim().to_owned()
-        };
-        if value.is_empty() {
-            self.bulk_message = format!(
-                "Enter a {} keyring ID before applying it.",
-                if source { "source" } else { "destination" }
-            );
-            return;
-        }
-        let applied = apply_keyring_id(&mut self.bulk_jobs, &value, source);
-        self.bulk_message = format!(
-            "Applied the {} keyring ID to {applied} row(s) without a credential reference.",
-            if source { "source" } else { "destination" }
-        );
-    }
     fn running(&self) -> bool {
         self.receiver.is_some()
     }

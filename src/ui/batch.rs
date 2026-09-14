@@ -4,6 +4,7 @@
 //! only translates an admitted batch into the presentation state needed by
 //! the egui shell.
 
+use crate::controller::batch_admission::apply_keyring_id;
 use crate::controller::{
     BatchLaunchRequest, BatchStartContext, BatchStartDecision, admit_batch_launch,
     launch_batch_worker,
@@ -12,6 +13,52 @@ use crate::{App, StatusSeverity};
 use std::time::Instant;
 
 impl App {
+    pub(crate) fn rebuild_bulk_job_index(&mut self) {
+        self.bulk_job_index_by_id = self
+            .bulk_job_ids
+            .iter()
+            .enumerate()
+            .map(|(index, job_id)| (job_id.clone(), index))
+            .collect();
+    }
+
+    pub(crate) fn mark_bulk_state_changed(&mut self) {
+        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
+        self.bulk_summary = None;
+        self.bulk_filter_cache_generation = u64::MAX;
+    }
+
+    pub(crate) fn bulk_queue_summary(&mut self) -> crate::controller::BulkQueueSummary {
+        if let Some((generation, summary)) = self.bulk_summary
+            && generation == self.bulk_jobs_generation
+        {
+            return summary;
+        }
+        let summary = crate::controller::BulkQueueSummary::from_jobs(&self.bulk_jobs);
+        self.bulk_summary = Some((self.bulk_jobs_generation, summary));
+        summary
+    }
+
+    pub(crate) fn apply_bulk_keyring_id(&mut self, source: bool) {
+        let value = if source {
+            self.bulk_source_keyring_apply.trim().to_owned()
+        } else {
+            self.bulk_destination_keyring_apply.trim().to_owned()
+        };
+        if value.is_empty() {
+            self.bulk_message = format!(
+                "Enter a {} keyring ID before applying it.",
+                if source { "source" } else { "destination" }
+            );
+            return;
+        }
+        let applied = apply_keyring_id(&mut self.bulk_jobs, &value, source);
+        self.bulk_message = format!(
+            "Applied the {} keyring ID to {applied} row(s) without a credential reference.",
+            if source { "source" } else { "destination" }
+        );
+    }
+
     pub(crate) fn start_bulk(&mut self) {
         let mode = self.bulk_mode;
         let live = mode.is_live();
