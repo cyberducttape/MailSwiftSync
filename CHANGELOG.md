@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted run-history query helpers into `core/run_queries.rs`, keeping
+  diagnostic and historical run reads separate from durable execution
+  transitions.
 - Extracted project and mailbox read-model queries—including revisions,
   pagination, status counts, and verification status pages—into
   `core/queries.rs`, keeping scalable presentation reads separate from
