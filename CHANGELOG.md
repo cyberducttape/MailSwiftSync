@@ -66,6 +66,8 @@ All notable changes to MailSwiftSync are documented here.
   direct tests, reducing another pure selection rule in `main.rs`.
 - Moved persisted batch-plan decoding into batch admission so corrupt or
   missing queue configuration has one controller-owned failure policy.
+- Moved the durable run-snapshot schema and decoder into `migration_plan.rs`,
+  so plan serialization and report reconstruction share one domain owner.
 - Corrected the architecture documentation to state that raw engine
   transcripts are process-local diagnostics, not durable ledger data.
 - Centralized ownership checks for asynchronous process lifecycle and engine

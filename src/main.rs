@@ -89,8 +89,10 @@ use imap_probe::{command_endpoint_parts, command_port, imap_command_succeeded, i
 use imap_probe::{
     endpoint_for_probe, fresh_imap_authentication_applies, probe_tls_capabilities_with_transport,
 };
+#[cfg(test)]
+use migration_plan::decode_report_run_snapshot;
 use migration_plan::{
-    Form, Profile, auth_method_is_oauth, completeness as plan_completeness, default_auth_method,
+    Form, Profile, auth_method_is_oauth, completeness as plan_completeness,
     default_destination_tls, default_imap_port, effective_destination_tls,
 };
 #[cfg(test)]
@@ -99,7 +101,6 @@ use plan_identity::{
     fingerprint_digest as plan_fingerprint_digest, snapshot_sha256 as plan_snapshot_sha256,
 };
 use reports::integrity::{evidence_digest, with_proof_digest};
-use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use sha2::{Digest, Sha256};
 use std::fmt::Display;
@@ -155,73 +156,6 @@ const MAX_UI_SCALE: f32 = 1.50;
 
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
-/// The durable run snapshot deliberately does not serialize `Profile`.
-/// Operator-supplied extra options are retained only as a digest so a
-/// password or token embedded in an expert option cannot enter SQLite or an
-/// exported report.
-#[derive(Serialize, Deserialize)]
-struct RunPlanSnapshot {
-    dry_run: bool,
-    profile: RunProfileSnapshot,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RunProfileSnapshot {
-    name: String,
-    source_host: String,
-    source_port: String,
-    source_tls: String,
-    source_ca_bundle: String,
-    source_certificate_pin_sha256: String,
-    allow_insecure_source_transport: bool,
-    source_user: String,
-    #[serde(default = "default_auth_method")]
-    source_auth: String,
-    source_credential_id: String,
-    destination_host: String,
-    destination_user: String,
-    #[serde(default = "default_auth_method")]
-    destination_auth: String,
-    destination_credential_id: String,
-    destination_port: String,
-    destination_tls: String,
-    destination_ca_bundle: String,
-    destination_certificate_pin_sha256: String,
-    imapsync_path: String,
-    engine: core::Engine,
-    doveadm_path: String,
-    ssh_path: String,
-    dovecot_execution: String,
-    dovecot_ssh_user: String,
-    dovecot_config: String,
-    batch_concurrency: usize,
-    batch_retry_count: usize,
-    max_messages_per_second: u32,
-    max_bytes_per_second: u64,
-    migration_timeout_hours: u64,
-    allow_remote_password_in_argv: bool,
-    automap: bool,
-    addheader: bool,
-    justfolders: bool,
-    sync_internaldates: bool,
-    useuid: bool,
-    usecache: bool,
-    fastio1: bool,
-    fastio2: bool,
-    allowsizemismatch: bool,
-    delete2: bool,
-    extra_options_sha256: String,
-    dovecot_checkpoint_sha256: Option<String>,
-    #[serde(default)]
-    execution_executable_sha256: String,
-    #[serde(default)]
-    source_ca_bundle_sha256: String,
-    #[serde(default)]
-    destination_ca_bundle_sha256: String,
-    #[serde(default)]
-    dovecot_config_sha256: String,
-}
-
 fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
     let pin = value.trim();
     if pin.is_empty() {
@@ -233,15 +167,6 @@ fn validate_certificate_pin(value: &str, label: &str) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-fn decode_report_run_snapshot(snapshot: &str) -> Result<Option<RunPlanSnapshot>, String> {
-    if snapshot.trim().is_empty() {
-        return Ok(None);
-    }
-    toml::from_str(snapshot)
-        .map(Some)
-        .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
 }
 
 struct PendingSheetImport {

@@ -2,8 +2,7 @@ use crate::atomic_artifact::write_private_atomic;
 use crate::command::{remove_option, shell_quote};
 use crate::imap_probe::{command_endpoint_parts, command_port};
 use crate::{
-    DOVECOT_SYNC_LOCK_WAIT_SECONDS, RunPlanSnapshot, RunProfileSnapshot, core,
-    create_secret_directory,
+    DOVECOT_SYNC_LOCK_WAIT_SECONDS, core, create_secret_directory,
     credentials::{self, SecretString},
     endpoint, engine,
     plan_identity::{
@@ -15,6 +14,84 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+
+/// The durable run snapshot deliberately does not serialize `Profile`.
+/// Operator-supplied extra options are retained only as a digest so a
+/// password or token embedded in an expert option cannot enter SQLite or an
+/// exported report.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RunPlanSnapshot {
+    pub(crate) dry_run: bool,
+    pub(crate) profile: RunProfileSnapshot,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct RunProfileSnapshot {
+    pub(crate) name: String,
+    pub(crate) source_host: String,
+    pub(crate) source_port: String,
+    pub(crate) source_tls: String,
+    pub(crate) source_ca_bundle: String,
+    pub(crate) source_certificate_pin_sha256: String,
+    pub(crate) allow_insecure_source_transport: bool,
+    pub(crate) source_user: String,
+    #[serde(default = "default_auth_method")]
+    pub(crate) source_auth: String,
+    pub(crate) source_credential_id: String,
+    pub(crate) destination_host: String,
+    pub(crate) destination_user: String,
+    #[serde(default = "default_auth_method")]
+    pub(crate) destination_auth: String,
+    pub(crate) destination_credential_id: String,
+    pub(crate) destination_port: String,
+    pub(crate) destination_tls: String,
+    pub(crate) destination_ca_bundle: String,
+    pub(crate) destination_certificate_pin_sha256: String,
+    pub(crate) imapsync_path: String,
+    pub(crate) engine: core::Engine,
+    pub(crate) doveadm_path: String,
+    pub(crate) ssh_path: String,
+    pub(crate) dovecot_execution: String,
+    pub(crate) dovecot_ssh_user: String,
+    pub(crate) dovecot_config: String,
+    pub(crate) batch_concurrency: usize,
+    pub(crate) batch_retry_count: usize,
+    pub(crate) max_messages_per_second: u32,
+    pub(crate) max_bytes_per_second: u64,
+    pub(crate) migration_timeout_hours: u64,
+    pub(crate) allow_remote_password_in_argv: bool,
+    pub(crate) automap: bool,
+    pub(crate) addheader: bool,
+    pub(crate) justfolders: bool,
+    pub(crate) sync_internaldates: bool,
+    pub(crate) useuid: bool,
+    pub(crate) usecache: bool,
+    pub(crate) fastio1: bool,
+    pub(crate) fastio2: bool,
+    pub(crate) allowsizemismatch: bool,
+    pub(crate) delete2: bool,
+    pub(crate) extra_options_sha256: String,
+    pub(crate) dovecot_checkpoint_sha256: Option<String>,
+    #[serde(default)]
+    pub(crate) execution_executable_sha256: String,
+    #[serde(default)]
+    pub(crate) source_ca_bundle_sha256: String,
+    #[serde(default)]
+    pub(crate) destination_ca_bundle_sha256: String,
+    #[serde(default)]
+    pub(crate) dovecot_config_sha256: String,
+}
+
+pub(crate) fn decode_report_run_snapshot(
+    snapshot: &str,
+) -> Result<Option<RunPlanSnapshot>, String> {
+    if snapshot.trim().is_empty() {
+        return Ok(None);
+    }
+    toml::from_str(snapshot)
+        .map(Some)
+        .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
+}
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Profile {
