@@ -22,6 +22,8 @@ All notable changes to MailSwiftSync are documented here.
 - Moved the terminal durability/lifecycle admission predicate into the
   controller policy module, keeping durable phase advancement out of the UI
   shell.
+- Hardened Markdown operator reports by escaping durable identifiers, states,
+  timestamps, and plan-fence delimiters before rendering untrusted values.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

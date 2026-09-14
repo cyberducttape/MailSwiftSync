@@ -6345,6 +6345,14 @@ mod tests {
     }
 
     #[test]
+    fn markdown_escape_protects_report_cells_and_line_structure() {
+        assert_eq!(
+            markdown_escape("folder|name\nsecond\\entry"),
+            "folder\\|name second\\\\entry"
+        );
+    }
+
+    #[test]
     fn dovecot_plan_uses_additive_sync_by_default() {
         let mut form = dovecot_form();
         form.dry_run = false;
