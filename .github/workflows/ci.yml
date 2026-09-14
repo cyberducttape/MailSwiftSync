@@ -65,6 +65,13 @@ jobs:
       - name: Initialize MSVC build environment
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Select the MSVC linker explicitly
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
+          if (-not (Test-Path $linker)) { throw "Could not locate the x64 MSVC linker at $linker" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Compile release target
         shell: bash
         run: |
@@ -111,6 +118,13 @@ jobs:
       - name: Initialize MSVC build environment
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Select the MSVC linker explicitly
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
+          if (-not (Test-Path $linker)) { throw "Could not locate the x64 MSVC linker at $linker" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run native test suite
         if: matrix.os != 'macos-latest'
         env:
