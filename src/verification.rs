@@ -35,7 +35,12 @@ fn number_after(line: &str, marker: &str, unit: &str) -> Option<u64> {
         .split_whitespace()
         .collect::<Vec<_>>();
     let token = remainder.first().copied()?;
-    if remainder.len() != 2
+    let suffix_is_valid = remainder.len() == 2
+        || (remainder.len() >= 4
+            && remainder[1] == unit
+            && remainder[2].starts_with('(')
+            && remainder.last().is_some_and(|value| value.ends_with(')')));
+    if !suffix_is_valid
         || remainder[1] != unit
         || !token.chars().all(|character| character.is_ascii_digit())
     {
@@ -345,6 +350,24 @@ mod tests {
             accumulator.observe(line);
         }
         assert!(accumulator.evidence().is_none());
+    }
+
+    #[test]
+    fn imapsync_parser_accepts_documented_human_readable_size_suffix() {
+        let lines = [
+            "Host1 Nb folders:           1 folders".into(),
+            "Host2 Nb folders:           1 folders".into(),
+            "Host1 Nb messages:          1 messages".into(),
+            "Host2 Nb messages:          1 messages".into(),
+            "Host1 Total size:             295 bytes (295 B)".into(),
+            "Host2 Total size:             295 bytes (295 B)".into(),
+            "The sync looks good, all 1 identified messages in host1 are on host2.".into(),
+            "Detected 0 errors".into(),
+        ];
+        let evidence = parse_imapsync_evidence(&lines).expect("documented summary parses");
+        assert_eq!(evidence.source_bytes, 295);
+        assert_eq!(evidence.destination_bytes, 295);
+        assert!(evidence.authoritative);
     }
 
     #[test]

@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Fixed imapsync verification for the packaged engine's documented human-readable
+  byte-size suffix, so valid `Total size: ... bytes (...)` summaries no longer
+  become operator-attention states.
 - Extracted per-mailbox batch execution—durable claim coordination, retries,
   engine invocation, evidence/checkpoint staging, cancellation, and terminal
   events—into `controller/batch_work_item.rs`, leaving the batch scheduler
