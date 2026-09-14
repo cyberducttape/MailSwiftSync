@@ -3968,29 +3968,27 @@ impl App {
                         // evidence-backed running -> verified transition
                         // without weakening ordinary state transitions.
                         self.pending_evidence = Some(evidence);
-                        if let Some(_project) =
-                            active_run.as_ref().map(|run| run.project_id.as_str())
+                        if active_run.is_some()
                             && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
-                            pending_db_events.push(PendingDbEvent {
-                                run_id: run_id.to_owned(),
-                                kind: "verification_evidence".into(),
-                                detail: format!("evidence level: {evidence_level}"),
-                            });
+                            pending_db_events.push(PendingDbEvent::new(
+                                run_id.to_owned(),
+                                "verification_evidence".into(),
+                                format!("evidence level: {evidence_level}"),
+                            ));
                         }
                     }
                     Event::VerificationFailed(detail) => {
                         let safe = self.redact_output(&detail);
                         push_visible_output(&mut self.output, format!("[verification] {safe}"));
-                        if let Some(_project) =
-                            active_run.as_ref().map(|run| run.project_id.as_str())
+                        if active_run.is_some()
                             && let Some(run_id) = active_run.as_ref().map(|run| run.run_id.as_str())
                         {
-                            pending_db_events.push(PendingDbEvent {
-                                run_id: run_id.to_owned(),
-                                kind: "verification_pending".into(),
-                                detail: safe,
-                            });
+                            pending_db_events.push(PendingDbEvent::new(
+                                run_id.to_owned(),
+                                "verification_pending".into(),
+                                safe,
+                            ));
                         }
                     }
                     Event::Finished(r) => done = Some(r),

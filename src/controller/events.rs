@@ -14,6 +14,16 @@ pub(crate) struct PendingDbEvent {
     pub(crate) detail: String,
 }
 
+impl PendingDbEvent {
+    pub(crate) fn new(run_id: String, kind: String, detail: String) -> Self {
+        Self {
+            run_id,
+            kind,
+            detail,
+        }
+    }
+}
+
 /// Presentation output is accepted only from the currently owned process
 /// and only until that process has emitted its terminal event.
 pub(crate) fn run_line_is_current(

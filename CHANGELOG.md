@@ -84,6 +84,8 @@ All notable changes to MailSwiftSync are documented here.
   `runner.rs`, keeping child-supervision policy with execution code.
 - Replaced the poller’s positional pending-event tuples with named durable
   event records, making run/event ownership explicit during commit batching.
+- Simplified pending durable-event construction so the poller no longer binds
+  unused project metadata while creating run-scoped commits.
 - Centralized ownership checks for asynchronous process lifecycle and engine
   metadata events, extending the tested controller event contract beyond output
   lines and reducing duplicated safety predicates in `poll()`.
