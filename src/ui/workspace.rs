@@ -93,6 +93,13 @@ impl WorkspaceSnapshot {
         ))
     }
 
+    /// Whether any part of the cached durable view failed to refresh. A stale
+    /// projection may remain visible for continuity, but callers must not
+    /// treat it as current state for actions that can mutate a migration.
+    pub(crate) fn is_stale(&self) -> bool {
+        self.refresh_error.is_some()
+    }
+
     /// Refresh the UI's durable read model when it is stale or the selected
     /// project changed. Rendering itself never calls SQLite.
     pub(crate) fn refresh(&mut self, store: &StateStore, options: WorkspaceRefreshOptions<'_>) {
@@ -136,6 +143,7 @@ impl WorkspaceSnapshot {
             && observed_revision.is_some()
             && observed_revision == self.durable_revision
             && observed_project_revision == self.project_revision
+            && refresh_errors.is_empty()
         {
             self.refresh_error = None;
             self.last_successful_refresh = Some(Instant::now());
@@ -293,6 +301,20 @@ mod tests {
 
     #[test]
     fn fresh_snapshot_has_no_stale_notice() {
-        assert!(WorkspaceSnapshot::default().stale_notice().is_none());
+        let snapshot = WorkspaceSnapshot::default();
+        assert!(!snapshot.is_stale());
+        assert!(snapshot.stale_notice().is_none());
+    }
+
+    #[test]
+    fn failed_refresh_is_explicitly_stale_even_when_old_data_is_retained() {
+        let snapshot = WorkspaceSnapshot {
+            refresh_error: Some("database is busy".into()),
+            ..WorkspaceSnapshot::default()
+        };
+        assert!(snapshot.is_stale());
+        let notice = snapshot.stale_notice().unwrap();
+        assert!(notice.contains("no successful refresh yet"));
+        assert!(notice.contains("database is busy"));
     }
 }

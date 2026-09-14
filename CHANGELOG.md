@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Made failed workspace read-model refreshes explicit: retained cached data
+  is marked stale, the UI shows the last successful refresh age and error, and
+  single/batch execution is blocked until durable state can be refreshed.
 - Bound imapsync verification to the packaged `2.314` output profile when
   engine version metadata is available. Explicitly unknown versions now
   produce incomplete evidence instead of being treated as compatible; the

@@ -3142,6 +3142,10 @@ impl App {
         );
     }
     fn start_bulk(&mut self) {
+        if self.ui_snapshot.is_stale() {
+            self.bulk_message = "Batch execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a queue.".into();
+            return;
+        }
         if !self.profile_available {
             self.bulk_message =
                 "Batch execution is blocked because the saved migration profile is unavailable; repair it before starting a queue."
@@ -4130,6 +4134,13 @@ impl App {
     }
 
     fn start(&mut self) {
+        if self.ui_snapshot.is_stale() {
+            self.set_status(
+                "Execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a migration.",
+                StatusSeverity::Error,
+            );
+            return;
+        }
         if !self.profile_available {
             self.set_status(
                 "Execution is blocked because the saved migration profile is unavailable; repair it before starting a migration.",
@@ -6219,7 +6230,8 @@ impl eframe::App for App {
         ctx.set_zoom_factor(self.ui_scale);
         self.poll();
         let colors = self.theme_colors();
-        let plan_controls_enabled = !self.running() && !self.workspace_read_only;
+        let plan_controls_enabled =
+            !self.running() && !self.workspace_read_only && !self.ui_snapshot.is_stale();
         if !plan_controls_enabled {
             ctx.data_mut(|data| {
                 for title in ["01  SOURCE MAILBOX", "02  DESTINATION MAILBOX"] {
