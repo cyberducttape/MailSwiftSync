@@ -8,7 +8,9 @@ use crate::App;
 use crate::atomic_artifact::write_private_atomic;
 use crate::bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
 use crate::controller::batch_admission::{apply_keyring_id, selection_value};
-use crate::controller::{BatchExecutionMode, BulkRetryScope, BulkStateSet};
+use crate::controller::{
+    BatchExecutionMode, BulkRetryScope, BulkStateSet, suggested_batch_project_name,
+};
 use crate::ui::{WorkspaceView, contains_ascii_case_insensitive, display_state_key};
 use crate::{core, ui::job_state_badge};
 use eframe::egui::{self, Color32, RichText};
@@ -312,6 +314,15 @@ impl App {
                     ui.label("Customer/project name");
                     ui.add_enabled(queue_editable, egui::TextEdit::singleline(&mut self.form.profile.name).desired_width(280.0).hint_text("e.g. Acme Corp cutover"));
                 });
+                if matches!(self.form.profile.name.trim(), "" | "New migration" | "Batch migration" | "Batch validation") {
+                    let suggested_name = suggested_batch_project_name(&self.form.profile);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("Suggested durable name: {suggested_name}")).color(self.theme_colors().text_secondary));
+                        if ui.add_enabled(queue_editable, egui::Button::new("Use suggestion")).clicked() {
+                            self.form.profile.name = suggested_name;
+                        }
+                    });
+                }
                 ui.label(RichText::new("Used for the durable project and customer evidence when imported rows do not provide project_name.").size(11.0).color(self.theme_colors().text_secondary));
                 ui.horizontal(|ui| {
                     if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / Excel…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
