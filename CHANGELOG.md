@@ -26,6 +26,8 @@ All notable changes to MailSwiftSync are documented here.
   `main.rs` focused on shared workspace composition and lifecycle dispatch.
 - Extracted the OS-keyring credential dialog into `ui/account.rs`, keeping
   credential presentation and storage controls out of `main.rs`.
+- Extracted engine selection and local Dovecot execution settings into
+  `ui/engine.rs`, keeping migration-engine presentation out of `main.rs`.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
