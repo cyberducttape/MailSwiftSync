@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Windows Job Object native-test failures now print the OS attachment error
+  before asserting, making nested-runner or permission failures actionable in
+  CI diagnostics.
 - Extracted batch queue lifecycle, selection, import, keyring application, and
   summary state into `ui/batch_queue.rs`, leaving the batch view focused on
   rendering and user actions.

@@ -343,8 +343,13 @@ mod tests {
         let mut command = Command::new("cmd.exe");
         command.args(["/C", "ping.exe -t 127.0.0.1"]);
         let mut child = command.spawn().expect("Windows command shell must exist");
-        let supervisor = attach_child_supervisor(&child)
-            .expect("engine child must be assignable to a kill-on-close job");
+        let supervisor = match attach_child_supervisor(&child) {
+            Ok(supervisor) => supervisor,
+            Err(error) => {
+                eprintln!("Windows Job Object attachment failed: {error:?}");
+                panic!("engine child must be assignable to a kill-on-close job");
+            }
+        };
 
         thread::sleep(Duration::from_millis(200));
         assert!(
