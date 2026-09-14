@@ -2723,6 +2723,7 @@ impl StateStore {
             )
             .optional()
     }
+    #[cfg(test)]
     pub fn run(&self, run_id: &str) -> rusqlite::Result<Option<RunSummary>> {
         self.connection
             .query_row(
@@ -2979,6 +2980,7 @@ impl StateStore {
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
         self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)?, authoritative:r.get::<_, i64>(8)? != 0 })).optional()
     }
+    #[cfg(test)]
     pub fn latest_evidence_for_run(
         &self,
         job_id: &str,
@@ -3153,15 +3155,6 @@ impl StateStore {
                 "SELECT source_mailbox,destination_mailbox,state FROM mailbox_jobs WHERE id=?1",
                 [job_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-    }
-    pub fn project_id_for_mailbox(&self, job_id: &str) -> rusqlite::Result<Option<String>> {
-        self.connection
-            .query_row(
-                "SELECT project_id FROM mailbox_jobs WHERE id=?1",
-                [job_id],
-                |row| row.get(0),
             )
             .optional()
     }

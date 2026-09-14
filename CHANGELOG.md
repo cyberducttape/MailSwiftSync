@@ -6,6 +6,7 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved verification-report assembly into `reports::operator` and made it consume one durable project snapshot, preventing mixed-commit mailbox/evidence/run artifacts; obsolete single-query helpers are now test-only.
 - Extracted operator JSON report construction into `reports::operator`, keeping the GUI wrapper focused on project selection and private atomic writing while preserving proof digests and complete run manifests.
 - Extracted operator project-report assembly into `reports::operator`, leaving the GUI responsible only for project selection and private artifact writing while preserving the existing snapshot and evidence contract.
 - Replaced per-frame batch state-count allocation with a typed, generation-cached queue summary, reducing large-batch UI repaint overhead while preserving immediate invalidation on queue or state changes.

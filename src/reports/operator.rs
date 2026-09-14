@@ -1,6 +1,6 @@
 use crate::{
-    core, evidence_digest, markdown_escape, needs_operator_review, plan_snapshot_sha256,
-    project_health_state_counts, with_proof_digest, write_private_atomic,
+    core, decode_report_run_snapshot, evidence_digest, markdown_escape, needs_operator_review,
+    plan_snapshot_sha256, project_health_state_counts, with_proof_digest, write_private_atomic,
 };
 use std::path::Path;
 
@@ -211,6 +211,96 @@ pub(crate) fn build_project_json(
         "note": "The run manifest contains every durable run for this project. Aggregate evidence is not message-level reconciliation; unresolved or missing evidence requires operator review."
     });
     serde_json::to_string_pretty(&with_proof_digest(value)?).map_err(|e| e.to_string())
+}
+
+pub(crate) fn build_verification_report(
+    store: &core::StateStore,
+    project_id: &str,
+    job_id: &str,
+) -> Result<String, String> {
+    let snapshot = store
+        .project_report_snapshot(project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("The mailbox project no longer exists.")?;
+    let mailbox = snapshot
+        .mailboxes
+        .iter()
+        .find(|mailbox| mailbox.job.id == job_id)
+        .ok_or("The mailbox job no longer exists.")?;
+    let (evidence_run_id, evidence, plan_snapshot) = mailbox
+        .evidence
+        .clone()
+        .ok_or("No mailbox evidence is available yet.")?;
+    let plan_snapshot = plan_snapshot.ok_or("The evidence run no longer exists.")?;
+    let run = snapshot
+        .runs
+        .iter()
+        .find(|run| run.run.id == evidence_run_id)
+        .map(|run| run.run.clone())
+        .ok_or("The evidence refers to a run that is no longer available.")?;
+    let snapshot_profile = decode_report_run_snapshot(&run.plan_snapshot)?.map(|run| run.profile);
+    let source_endpoint = snapshot_profile
+        .as_ref()
+        .map(|profile| profile.source_host.as_str())
+        .unwrap_or(snapshot.project.source_endpoint.as_str());
+    let destination_endpoint = snapshot_profile
+        .as_ref()
+        .map(|profile| profile.destination_host.as_str())
+        .unwrap_or(snapshot.project.destination_endpoint.as_str());
+    let source_identity = snapshot_profile
+        .as_ref()
+        .map(|profile| profile.source_user.as_str())
+        .unwrap_or(mailbox.job.source_mailbox.as_str());
+    let destination_identity = snapshot_profile
+        .as_ref()
+        .map(|profile| profile.destination_user.as_str())
+        .unwrap_or(mailbox.job.destination_mailbox.as_str());
+    let identity_note = if snapshot_profile.is_some() {
+        "run snapshot"
+    } else {
+        "durable project/mailbox fallback (legacy run snapshot unavailable)"
+    };
+    let evidence_reference = evidence_digest(&run.id, &plan_snapshot, &evidence);
+    let mut report = format!(
+        "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
+        markdown_escape(&snapshot.project.name),
+        markdown_escape(source_endpoint),
+        markdown_escape(destination_endpoint),
+        markdown_escape(source_identity),
+        markdown_escape(destination_identity),
+        identity_note,
+        markdown_escape(&run.engine),
+        run.id,
+        run.status,
+        run.started_at,
+        run.finished_at.as_deref().unwrap_or("in progress"),
+        mailbox.job.state,
+        evidence.evidence_level(),
+        match evidence.evidence_scope() {
+            core::EvidenceScope::EngineConfirmed => "engine-confirmed summary",
+            core::EvidenceScope::AggregateReconciled => "aggregate mailbox totals",
+        },
+        evidence_reference,
+        run.plan_snapshot,
+        evidence.source_folders,
+        evidence.destination_folders,
+        evidence.source_messages,
+        evidence.destination_messages,
+        evidence.source_bytes,
+        evidence.destination_bytes,
+        evidence.unmatched_messages,
+        evidence.failed_messages,
+    );
+    if let Some(index) = report.find("- Run ID:") {
+        report.insert_str(
+            index,
+            &format!(
+                "- Project phase at run start: `{}`\n",
+                markdown_escape(&run.phase_at_start)
+            ),
+        );
+    }
+    Ok(report)
 }
 
 pub(crate) fn export_health(

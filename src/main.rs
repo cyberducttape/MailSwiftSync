@@ -2707,114 +2707,14 @@ impl App {
             .job_id
             .as_deref()
             .ok_or("No mailbox evidence is available yet.")?;
-        let (evidence_run_id, evidence) = self
-            .store
-            .latest_evidence_for_run(job)
-            .map_err(|e| e.to_string())?
-            .ok_or("No mailbox evidence is available yet.")?;
-        let state = self
-            .store
-            .mailbox_state(job)
-            .map_err(|e| e.to_string())?
-            .ok_or("The mailbox job has no durable state; evidence export is blocked.")?;
         let project_id = self
-            .store
-            .project_id_for_mailbox(job)
-            .map_err(|e| e.to_string())?
-            .ok_or("The mailbox job no longer belongs to a project.")?;
-        if self.active_project_id() != Some(project_id.as_str()) {
-            return Err(
-                "The selected project does not contain this mailbox; select its project before exporting mailbox evidence."
-                    .into(),
-            );
-        }
-        let project = self
-            .store
-            .project(&project_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("The mailbox project no longer exists.")?;
-        let (source_mailbox, destination_mailbox) = self
-            .store
-            .mailbox_identity(job)
-            .map_err(|e| e.to_string())?
-            .map(|(source, destination, _)| (source, destination))
-            .ok_or("The mailbox job no longer exists.")?;
-        let run = self
-            .store
-            .run(&evidence_run_id)
-            .map_err(|e| e.to_string())?
-            .ok_or("The evidence refers to a run that is no longer available.")?;
-        // An empty snapshot is the only legacy case that can safely use the
-        // project/mailbox fallback. A non-empty but malformed snapshot must
-        // fail closed; otherwise a report could silently describe the
-        // current project instead of the plan that produced the evidence.
-        let snapshot_profile =
-            decode_report_run_snapshot(&run.plan_snapshot)?.map(|run| run.profile);
-        let source_endpoint = snapshot_profile
-            .as_ref()
-            .map(|profile| profile.source_host.as_str())
-            .unwrap_or(project.source_endpoint.as_str());
-        let destination_endpoint = snapshot_profile
-            .as_ref()
-            .map(|profile| profile.destination_host.as_str())
-            .unwrap_or(project.destination_endpoint.as_str());
-        let source_identity = snapshot_profile
-            .as_ref()
-            .map(|profile| profile.source_user.as_str())
-            .unwrap_or(source_mailbox.as_str());
-        let destination_identity = snapshot_profile
-            .as_ref()
-            .map(|profile| profile.destination_user.as_str())
-            .unwrap_or(destination_mailbox.as_str());
-        let identity_note = if snapshot_profile.is_some() {
-            "run snapshot"
-        } else {
-            "durable project/mailbox fallback (legacy run snapshot unavailable)"
-        };
-        let evidence_reference = evidence_digest(&run.id, &run.plan_snapshot, &evidence);
+            .active_project_id()
+            .ok_or("No durable migration project is available yet.")?;
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-verification.md")
             .save_file()
             .ok_or("Report export cancelled.")?;
-        let mut report = format!(
-            "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
-            markdown_escape(&project.name),
-            markdown_escape(source_endpoint),
-            markdown_escape(destination_endpoint),
-            markdown_escape(source_identity),
-            markdown_escape(destination_identity),
-            identity_note,
-            markdown_escape(&run.engine),
-            run.id,
-            run.status,
-            run.started_at,
-            run.finished_at.as_deref().unwrap_or("in progress"),
-            state,
-            evidence.evidence_level(),
-            match evidence.evidence_scope() {
-                core::EvidenceScope::EngineConfirmed => "engine-confirmed summary",
-                core::EvidenceScope::AggregateReconciled => "aggregate mailbox totals",
-            },
-            evidence_reference,
-            run.plan_snapshot,
-            evidence.source_folders,
-            evidence.destination_folders,
-            evidence.source_messages,
-            evidence.destination_messages,
-            evidence.source_bytes,
-            evidence.destination_bytes,
-            evidence.unmatched_messages,
-            evidence.failed_messages
-        );
-        if let Some(index) = report.find("- Run ID:") {
-            report.insert_str(
-                index,
-                &format!(
-                    "- Project phase at run start: `{}`\n",
-                    markdown_escape(&run.phase_at_start)
-                ),
-            );
-        }
+        let report = reports::operator::build_verification_report(&self.store, project_id, job)?;
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
