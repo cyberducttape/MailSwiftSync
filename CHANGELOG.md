@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted the batch workbook worksheet-selection dialog into its own UI
+  module, keeping spreadsheet interaction separate from mailbox queue rendering
+  and batch execution controls.
 - Moved batch launch orchestration out of the egui batch view into
   `controller/batch_start.rs`, keeping admission, durable ownership, worker
   startup, and run-state locking in the controller layer.
