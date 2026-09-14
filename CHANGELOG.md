@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted startup recovery, process-identity registration, orphan cleanup,
+  and operator-reviewed process clearing into `core/recovery.rs`, isolating
+  the durable process-safety boundary from ordinary event persistence.
 - Extracted transactional project-report assembly and paged verification
   projections into `core/reports.rs`, separating evidence read models from
   the main SQLite state-transition implementation.
