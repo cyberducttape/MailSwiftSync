@@ -1,9 +1,7 @@
 //! Verification workspace and evidence-review presentation.
 
 use crate::App;
-use crate::ui::{
-    StatusSeverity, contains_ascii_case_insensitive, job_state_badge, needs_operator_review,
-};
+use crate::ui::{StatusSeverity, job_state_badge, verification_row_matches};
 use eframe::egui::{self, RichText};
 
 impl App {
@@ -42,19 +40,18 @@ impl App {
                             });
                     });
                     let search = self.verification_search.trim();
-                    let visible = verification_rows.iter().enumerate().filter(|(_, mailbox)| {
-                        let state = mailbox.job.state.as_str();
-                        let result_match = match self.verification_filter.as_str() {
-                            "review" => needs_operator_review(state),
-                            "verified" => matches!(state, "verified" | "verified_with_exceptions"),
-                            "difference" => state == "verification_difference",
-                            _ => true,
-                        };
-                        let text_match = search.is_empty()
-                            || contains_ascii_case_insensitive(&mailbox.job.source_mailbox, search)
-                            || contains_ascii_case_insensitive(&mailbox.job.destination_mailbox, search);
-                        result_match && text_match
-                    }).map(|(index, _)| index).collect::<Vec<_>>();
+                    let visible = verification_rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, mailbox)| {
+                            verification_row_matches(
+                                mailbox,
+                                &self.verification_filter,
+                                search,
+                            )
+                        })
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>();
                     ui.label(RichText::new(format!("{} visible on page · showing {}–{} of {}", visible.len(), self.verification_offset + 1, (self.verification_offset as usize + verification_rows.len()).min(mailbox_counts.total), mailbox_counts.total)).color(self.theme_colors().text_secondary));
                     egui::ScrollArea::vertical().id_salt("verification_mailbox_list").max_height(360.0).show_rows(ui, 32.0, visible.len(), |ui, visible_rows| {
                         egui::Grid::new("verification_mailboxes").striped(true).min_col_width(140.0).show(ui, |ui| {

@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Centralized verification mailbox filtering in a pure presentation-policy
+  helper, keeping evidence-result semantics independent from egui rendering.
 - Documented the Windows service-wrapper prerequisite for Job Object breakaway
   and the fail-closed behavior when the host policy denies child containment.
 - Windows engine launches now request breakaway from an enclosing job before
