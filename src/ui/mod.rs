@@ -14,4 +14,6 @@ pub(crate) use status::{
 };
 #[cfg(test)]
 pub(crate) use theme::contrast_ratio;
+#[cfg(test)]
+pub(crate) use theme::next_ui_scale;
 pub(crate) use theme::{AppearancePreferences, ThemeColors};

@@ -121,3 +121,13 @@ impl AppearancePreferences {
         crate::write_private_atomic(&path, &content).map_err(|error| error.to_string())
     }
 }
+
+#[cfg(test)]
+pub(crate) fn next_ui_scale(current: f32) -> f32 {
+    const SCALES: [f32; 5] = [0.90, 1.00, 1.10, 1.25, 1.50];
+    SCALES
+        .iter()
+        .copied()
+        .find(|scale| *scale > current + f32::EPSILON)
+        .unwrap_or(SCALES[0])
+}

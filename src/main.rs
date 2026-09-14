@@ -99,7 +99,7 @@ use ui::{
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
-use ui::{contrast_ratio, password_reveal_allowed};
+use ui::{contrast_ratio, next_ui_scale, password_reveal_allowed};
 
 const MAX_VISIBLE_OUTPUT_LINES: usize = 10_000;
 const MAX_VISIBLE_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -1114,16 +1114,6 @@ fn format_elapsed(elapsed: std::time::Duration) -> String {
     } else {
         format!("{minutes:02}:{seconds:02}")
     }
-}
-
-#[cfg(test)]
-fn next_ui_scale(current: f32) -> f32 {
-    const SCALES: [f32; 5] = [0.90, 1.00, 1.10, 1.25, 1.50];
-    SCALES
-        .iter()
-        .copied()
-        .find(|scale| *scale > current + f32::EPSILON)
-        .unwrap_or(SCALES[0])
 }
 
 fn terminal_phase_advance_allowed(

@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved the readable UI-scale cycle policy into the theme module alongside
+  appearance preferences.
 - Moved persisted appearance preferences into the UI theme module so
   application startup retains only workspace and execution state.
 - Moved proof digests, canonical signed-payload handling, and hexadecimal
