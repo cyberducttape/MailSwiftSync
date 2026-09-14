@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted durable state-path resolution and verified SQLite ledger restore
+  (including WAL/SHM sidecars, rollback artifacts, and permission checks) into
+  `storage_paths` so recovery code is independent of the UI dispatcher.
 - Moved the readable UI-scale cycle policy into the theme module alongside
   appearance preferences.
 - Moved persisted appearance preferences into the UI theme module so
