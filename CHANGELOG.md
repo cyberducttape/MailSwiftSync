@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted batch queue lifecycle, selection, import, keyring application, and
+  summary state into `ui/batch_queue.rs`, leaving the batch view focused on
+  rendering and user actions.
 - Extracted cached batch search and state-filter policy into a dedicated UI
   module, keeping large-queue filtering separate from mailbox rendering.
 - Windows CI now publishes the tail of native-test and cross-build logs in the
