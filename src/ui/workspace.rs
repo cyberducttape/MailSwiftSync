@@ -4,8 +4,10 @@
 //! egui view. The controller refreshes the model at a low frequency and
 //! invalidates it immediately when the selected project changes.
 
+use crate::App;
 use crate::core::{self, StateStore};
-use crate::ui::contains_ascii_case_insensitive;
+use crate::ui::{contains_ascii_case_insensitive, format_phase_name};
+use eframe::egui::{self, RichText};
 use std::time::{Duration, Instant};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
@@ -270,6 +272,87 @@ impl WorkspaceSnapshot {
         } else {
             self.refresh_error = Some(refresh_errors.join("; "));
         }
+    }
+}
+
+impl App {
+    fn refresh_project_filter_cache(&mut self) {
+        let query = self.project_search.trim().to_owned();
+        let source_revision = self.ui_snapshot.projects_revision;
+        if self.project_filter_query == query
+            && self.project_filter_source_revision == source_revision
+        {
+            return;
+        }
+
+        self.project_filter_query = query.clone();
+        self.project_filter_source_revision = source_revision;
+        filter_project_indices(
+            &self.ui_snapshot.projects,
+            &query,
+            &mut self.project_visible_indices,
+        );
+    }
+
+    pub(crate) fn projects_dialog(&mut self, ctx: &egui::Context) {
+        if !self.projects_open {
+            return;
+        }
+        self.refresh_project_filter_cache();
+        let mut open = self.projects_open;
+        let mut selected_project = None;
+        let mut new_migration_requested = false;
+        egui::Window::new("Projects")
+            .open(&mut open)
+            .default_width(760.0)
+            .default_height(520.0)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.heading("Migration projects");
+                ui.label(RichText::new("Select a durable project to make it the workspace for reports, mailboxes, activity, and verification.").color(self.theme_colors().text_secondary));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label("Search");
+                    ui.add(egui::TextEdit::singleline(&mut self.project_search)
+                        .hint_text("project name, source, or destination")
+                        .desired_width(320.0));
+                });
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("{} project(s)", self.project_visible_indices.len())).color(self.theme_colors().text_secondary));
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    egui::Grid::new("project_browser").striped(true).show(ui, |ui| {
+                        ui.strong("Project");
+                        ui.strong("Phase");
+                        ui.strong("Source");
+                        ui.strong("Destination");
+                        ui.end_row();
+                        for &index in &self.project_visible_indices {
+                            let project = &self.ui_snapshot.projects[index];
+                            let selected = self.selected_project_id.as_deref() == Some(project.id.as_str());
+                            if ui.selectable_label(selected, &project.name).clicked() {
+                                selected_project = Some(project.id.clone());
+                            }
+                            ui.label(format_phase_name(project.phase));
+                            ui.label(&project.source_endpoint);
+                            ui.label(&project.destination_endpoint);
+                            ui.end_row();
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+                if ui.button("New migration plan").clicked() {
+                    new_migration_requested = true;
+                }
+            });
+        if let Some(project_id) = selected_project {
+            self.select_workspace_project(project_id);
+            open = false;
+        }
+        if new_migration_requested {
+            self.start_new_migration();
+            open = false;
+        }
+        self.projects_open = open && self.projects_open;
     }
 }
 

@@ -37,6 +37,8 @@ All notable changes to MailSwiftSync are documented here.
 - Extracted GUI report-export actions into `ui/reports.rs`, keeping customer
   proof, operator reports, health exports, and support bundles at the UI/report
   boundary while leaving artifact construction in `reports/`.
+- Moved project-browser filtering and project selection into `ui/workspace.rs`,
+  keeping durable project navigation with the cached workspace read model.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
