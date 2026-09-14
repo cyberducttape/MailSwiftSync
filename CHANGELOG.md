@@ -19,6 +19,9 @@ All notable changes to MailSwiftSync are documented here.
 - Restore now rejects live SQLite sources with `-wal` or `-shm` sidecars. This
   prevents a changing ledger from being silently restored at an ambiguous point
   in time; operators must first create a standalone snapshot with `backup`.
+- Immutable run-plan snapshots now hash the canonical typed imapsync option
+  sequence, keeping plan identity aligned with the exact arguments generated
+  after validation (for example, `--timeout=30` and `--timeout 30`).
 - Expanded the Dovecot pinning regression coverage to assert that both source
   and destination certificate pins are rejected rather than silently treated
   as enforced controls.

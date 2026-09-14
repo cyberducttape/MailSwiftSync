@@ -700,9 +700,10 @@ impl Form {
         &self,
         checkpoint: Option<&str>,
     ) -> Result<String, String> {
+        let canonical_extra_options = engine::canonical_extra_options(&self.profile.extra_options)?;
         let extra_options_sha256 = format!(
             "{:x}",
-            Sha256::digest(self.profile.extra_options.as_bytes())
+            Sha256::digest(canonical_extra_options.join("\u{1f}").as_bytes())
         );
         let profile = &self.profile;
         let execution_executable = match self.engine() {

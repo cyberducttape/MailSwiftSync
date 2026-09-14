@@ -6950,15 +6950,12 @@ mod tests {
     #[test]
     fn plan_snapshot_excludes_raw_extra_options() {
         let mut form = dovecot_form();
-        form.profile.extra_options = "--custom-secret bearer-token-value".into();
+        form.profile.extra_options = "--timeout=30".into();
         let snapshot = form.plan_snapshot();
-        assert!(!snapshot.contains("bearer-token-value"));
         assert!(snapshot.contains("extra_options_sha256"));
-        let expected = format!(
-            "{:x}",
-            Sha256::digest(form.profile.extra_options.as_bytes())
-        );
+        let expected = format!("{:x}", Sha256::digest("--timeout\u{1f}30".as_bytes()));
         assert!(snapshot.contains(&expected));
+        assert!(!snapshot.contains("--timeout"));
     }
 
     #[test]
@@ -7260,6 +7257,20 @@ mod tests {
                 .unwrap_err()
                 .contains("between 0 and 100000")
         );
+    }
+
+    #[test]
+    fn equivalent_extra_option_spellings_share_plan_identity() {
+        let mut inline = dovecot_form();
+        inline.profile.engine = core::Engine::ImapSync;
+        inline.profile.extra_options = "--timeout=030".into();
+        let mut separated = inline.clone();
+        separated.profile.extra_options = "--timeout 30".into();
+
+        assert!(inline.validate().is_ok());
+        assert!(separated.validate().is_ok());
+        assert_eq!(inline.args(true), separated.args(true));
+        assert_eq!(inline.plan_snapshot(), separated.plan_snapshot());
     }
 
     #[test]
