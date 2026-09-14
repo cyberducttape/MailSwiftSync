@@ -1,8 +1,9 @@
 //! Untrusted mailbox-list import and structural validation.
 //!
-//! Parsing is deliberately independent from egui state. The UI owns the
-//! worker thread and queue presentation; this module owns file limits,
-//! worksheet selection, row validation, and conversion into import jobs.
+//! Parsing is deliberately independent from egui state. This module owns the
+//! worker thread, file limits, worksheet selection, row validation, and
+//! conversion into import jobs; the UI owns only queue presentation and
+//! result application.
 
 use crate::{Form, SecretString};
 use calamine::{Reader, Xls, open_workbook, open_workbook_auto};
