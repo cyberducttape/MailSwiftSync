@@ -5,6 +5,7 @@ mod activity;
 mod app_state;
 mod batch;
 mod batch_confirmations;
+mod batch_filter;
 mod batch_sheet;
 mod engine;
 mod output;

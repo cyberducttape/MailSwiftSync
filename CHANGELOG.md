@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted cached batch search and state-filter policy into a dedicated UI
+  module, keeping large-queue filtering separate from mailbox rendering.
 - Windows CI now publishes the tail of native-test and cross-build logs in the
   GitHub job summary when those gates fail, making platform regressions
   diagnosable without requiring artifact-download credentials.
