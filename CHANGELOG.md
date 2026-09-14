@@ -17,6 +17,8 @@ All notable changes to MailSwiftSync are documented here.
   into `core::capabilities`, keeping protocol policy independently testable.
 - Moved run-completion status wording and severity policy into the shared UI
   status module so controller polling no longer owns presentation rules.
+- Expanded the distribution installation guide with the attended-operation
+  boundary and macOS fail-closed process-supervision limitation.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.

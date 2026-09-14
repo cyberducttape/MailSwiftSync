@@ -51,6 +51,21 @@ Get-Content .\mailswiftsync-x86_64-pc-windows-msvc.zip.sha256
    plan. Keep **Preflight** selected, test with a representative destination
    mailbox, and only then approve a live pilot.
 
+## Operational suitability
+
+The current release is intended for attended technical-operator pilots on
+known endpoints. Keep the dry preflight, live confirmation, and evidence
+review gates in place; a service-manager deployment is not equivalent to
+unattended production approval. Provider OAuth consent/refresh, secret-safe
+remote Dovecot execution, independent message-level reconciliation, and
+signed native installers are not included yet.
+
+On macOS, process identity checks are deliberately conservative. If the
+native process query cannot prove that a recorded child is the expected
+process, MailSwiftSync refuses to signal it and leaves the work for operator
+review. Use a Linux/Unix administration host for high-stakes migration
+windows when stronger process supervision is required.
+
 Release artifacts also carry GitHub build provenance and are published with a
 release manifest. Native installers and platform code-signing/notarization are
 not published yet; the checksum and provenance checks above are the release
