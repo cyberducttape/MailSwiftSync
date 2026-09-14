@@ -4,7 +4,7 @@ use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
 use crate::ui::{StatusSeverity, WorkspaceView, format_phase_name};
-use crate::ui::{recommended_next_action, workflow_step_index};
+use crate::ui::{recommended_batch_next_action, recommended_next_action, workflow_step_index};
 use eframe::egui::{self, RichText};
 
 impl App {
@@ -26,12 +26,16 @@ impl App {
         let has_bulk_jobs = batch_summary.total > 0;
         let has_durable_jobs = mailbox_counts.total > 0;
         let has_mailboxes = has_durable_jobs || has_bulk_jobs;
-        let next_action = recommended_next_action(
-            phase,
-            !self.preflight.is_empty(),
-            attention_count,
-            self.running(),
-        );
+        let next_action =
+            recommended_batch_next_action(has_bulk_jobs, attention_count, self.running())
+                .unwrap_or_else(|| {
+                    recommended_next_action(
+                        phase,
+                        !self.preflight.is_empty(),
+                        attention_count,
+                        self.running(),
+                    )
+                });
         self.overview_readiness_controls(ui);
         ui.add_space(14.0);
         let workflow_index = workflow_step_index(phase, !self.preflight.is_empty(), has_mailboxes);
