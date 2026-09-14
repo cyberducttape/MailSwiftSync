@@ -86,7 +86,7 @@ jobs:
           exit "$status"
       - name: Upload cross-platform build log
         if: failure() && matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549e4d5b24149cf08 # v4.6.0
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: windows-cross-build-log
           path: cross-build.log
@@ -142,7 +142,7 @@ jobs:
           exit "$status"
       - name: Upload Windows native test log
         if: failure() && matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549e4d5b24149cf08 # v4.6.0
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: windows-native-test-log
           path: native-test.log
