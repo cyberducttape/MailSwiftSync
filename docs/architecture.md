@@ -19,6 +19,16 @@ Preflight Scheduler Verify
 
 The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, and verification evidence. It intentionally never persists passwords or mailbox content.
 
+The implementation keeps the controller boundary explicit even while the
+desktop shell continues to evolve. `migration_plan` owns profile validation,
+engine argument construction, credential-file preparation, and immutable run
+plan snapshots. `controller` owns worker admission, process/run orchestration,
+failure classification, retry policy, and recovery-facing state transitions.
+`output` owns the shared line/byte-bounded journal and process-tail buffer.
+`ui` contains presentation helpers and semantic status/theme primitives; it
+does not define migration policy. Headless and GUI entry points should call
+these shared controller/plan boundaries rather than reimplementing them.
+
 Batch validation and migration use a bounded worker pool (1–16 workers) over an immutable in-memory job list. Admission creates a parent wave run plus one mailbox-specific child run and snapshot per row in one transaction. Mailbox rows remain `queued` until a worker claims them; process identity and terminal results are then attributed to the child run. Worker output is redacted in the UI and committed to the event ledger in batches per UI cycle rather than issuing one disk transaction per output line. Verbose `run_output` events retain a bounded per-project tail; lifecycle, run, phase, and evidence events are not pruned.
 
 Batch destination collision checks use a canonical endpoint/port/mailbox identity

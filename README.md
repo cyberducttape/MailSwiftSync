@@ -44,6 +44,10 @@ Experimental or planned:
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
 - Published large-scale migration case studies and compatibility matrix.
 
+The current tested scope and explicit gaps are tracked in the
+[compatibility matrix](docs/compatibility-matrix.md); an entry is not treated
+as supported until its dry/live/recovery/evidence gates are complete.
+
 ## Why use this instead of the alternatives?
 
 | Approach | Good at | What MailSwiftSync adds or avoids |

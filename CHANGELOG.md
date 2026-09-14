@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Documented the extracted migration-plan, controller-policy, and bounded
+  output boundaries in the architecture guide, and linked the compatibility
+  matrix from the README with its release-gate meaning.
 - Extracted bounded operator-journal and process-tail storage into the
   dedicated `output` module, keeping line and aggregate-byte limits together
   as one reusable memory-safety boundary.
