@@ -6,6 +6,8 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Added regression coverage for verification filters, including typed result
+  states, review classification, differences, and mailbox search matching.
 - Centralized verification mailbox filtering in a pure presentation-policy
   helper, keeping evidence-result semantics independent from egui rendering.
 - Documented the Windows service-wrapper prerequisite for Job Object breakaway

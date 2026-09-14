@@ -20,3 +20,43 @@ pub(crate) fn verification_row_matches(
         || contains_ascii_case_insensitive(&mailbox.job.destination_mailbox, search);
     result_match && text_match
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mailbox(state: &str) -> ReportMailboxSnapshot {
+        ReportMailboxSnapshot {
+            job: crate::core::MailboxJob {
+                id: "job".into(),
+                source_mailbox: "Alice@Source.example".into(),
+                destination_mailbox: "alice@destination.example".into(),
+                state: state.into(),
+                config: None,
+            },
+            attention_reason: None,
+            acceptance: None,
+            evidence: None,
+        }
+    }
+
+    #[test]
+    fn verification_filter_matches_typed_result_states_and_mailbox_search() {
+        let verified = mailbox("verified");
+        let review = mailbox("attention");
+
+        assert!(verification_row_matches(
+            &verified,
+            "verified",
+            "alice@dest"
+        ));
+        assert!(!verification_row_matches(&verified, "review", "alice"));
+        assert!(verification_row_matches(
+            &review,
+            "review",
+            "source.example"
+        ));
+        assert!(!verification_row_matches(&review, "difference", "alice"));
+        assert!(!verification_row_matches(&verified, "all", "missing"));
+    }
+}
