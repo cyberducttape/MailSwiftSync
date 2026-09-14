@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Hardened native CI with a per-job timeout and uncaptured platform test
+  output, preventing an indefinitely stuck runner and making cross-platform
+  failures actionable from the workflow log.
 - Added an explicit `status --summary` headless projection that uses exact
   SQLite mailbox state counts without materializing mailbox rows, while
   preserving the existing detailed status output for callers that need it.

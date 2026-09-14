@@ -65,6 +65,7 @@ jobs:
 
   native-runtime-tests:
     name: Native runtime tests (${{ matrix.os }})
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -79,17 +80,17 @@ jobs:
         if: matrix.os != 'macos-latest'
         env:
           RUST_BACKTRACE: full
-        run: cargo test --locked --all-targets --all-features -- --test-threads=1
+        run: cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture
       - name: Run macOS core tests
         if: matrix.os == 'macos-latest'
         env:
           RUST_BACKTRACE: full
-        run: cargo test --locked --all-targets --all-features core::tests -- --test-threads=1
+        run: cargo test --locked --all-targets --all-features core::tests -- --test-threads=1 --nocapture
       - name: Run macOS process tests
         if: matrix.os == 'macos-latest'
         env:
           RUST_BACKTRACE: full
-        run: cargo test --locked --all-targets --all-features process::tests -- --test-threads=1
+        run: cargo test --locked --all-targets --all-features process::tests -- --test-threads=1 --nocapture
       - name: Run macOS controller tests
         if: matrix.os == 'macos-latest'
         env:
@@ -97,7 +98,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          cargo test --locked --all-targets --all-features 'tests::' -- --test-threads=1 2>&1 | tee macos-controller-tests.log
+          cargo test --locked --all-targets --all-features 'tests::' -- --test-threads=1 --nocapture 2>&1 | tee macos-controller-tests.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             failed_tests=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' macos-controller-tests.log | paste -sd ', ' -)
