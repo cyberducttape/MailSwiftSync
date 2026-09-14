@@ -32,6 +32,8 @@ All notable changes to MailSwiftSync are documented here.
   migration-plan controls.
 - Extracted the activity workspace, bounded output viewer, and durable run
   history presentation into `ui/activity.rs`.
+- Extracted the verification workspace and mailbox evidence review into
+  `ui/verification.rs`, keeping report actions and exception review together.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution

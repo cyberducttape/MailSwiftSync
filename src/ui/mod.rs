@@ -9,6 +9,7 @@ mod plan;
 mod settings;
 mod status;
 mod theme;
+mod verification;
 mod workspace;
 
 #[cfg(test)]
