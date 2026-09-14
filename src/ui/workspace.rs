@@ -6,7 +6,7 @@
 
 use crate::App;
 use crate::core::{self, StateStore};
-use crate::ui::{contains_ascii_case_insensitive, format_phase_name};
+use crate::ui::{contains_ascii_case_insensitive, format_phase_name, job_state_badge};
 use eframe::egui::{self, RichText};
 use std::time::{Duration, Instant};
 
@@ -276,6 +276,79 @@ impl WorkspaceSnapshot {
 }
 
 impl App {
+    /// Render a paged historical mailbox view from the cached workspace
+    /// snapshot. Returning whether the view handled the request keeps the
+    /// mutable Mailboxes workspace focused on live/batch actions.
+    pub(crate) fn historical_mailbox_view(&mut self, ui: &mut egui::Ui) -> bool {
+        if !self.workspace_read_only {
+            return false;
+        }
+        if self.active_project_id().is_none() || self.ui_snapshot.project.is_none() {
+            ui.label("No historical project is selected.");
+            return true;
+        }
+        let colors = self.theme_colors();
+        let page_len = self.ui_snapshot.jobs.len();
+        let total_jobs = self.ui_snapshot.mailbox_counts.total;
+        ui.label(
+            RichText::new(format!(
+                "Showing {}–{} of {total_jobs} durable mailbox record(s) · read-only",
+                self.historical_mailbox_offset + 1,
+                (self.historical_mailbox_offset as usize + page_len).min(total_jobs)
+            ))
+            .strong(),
+        );
+        let jobs = &self.ui_snapshot.jobs;
+        egui::ScrollArea::vertical().max_height(520.0).show_rows(
+            ui,
+            32.0,
+            jobs.len(),
+            |ui, rows| {
+                egui::Grid::new("historical_mailboxes")
+                    .striped(true)
+                    .show(ui, |ui| {
+                        if rows.start == 0 {
+                            ui.strong("Source");
+                            ui.strong("Destination");
+                            ui.strong("State");
+                            ui.end_row();
+                        }
+                        for index in rows {
+                            let job = &jobs[index];
+                            ui.label(&job.source_mailbox);
+                            ui.label(&job.destination_mailbox);
+                            let (badge, color) = job_state_badge(&job.state, colors);
+                            ui.label(RichText::new(badge).color(color));
+                            ui.end_row();
+                        }
+                    });
+            },
+        );
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.historical_mailbox_offset > 0,
+                    egui::Button::new("← Previous 200"),
+                )
+                .clicked()
+            {
+                self.historical_mailbox_offset = self.historical_mailbox_offset.saturating_sub(200);
+                self.refresh_ui_snapshot_now();
+            }
+            if ui
+                .add_enabled(
+                    self.historical_mailbox_offset as usize + page_len < total_jobs,
+                    egui::Button::new("Next 200 →"),
+                )
+                .clicked()
+            {
+                self.historical_mailbox_offset = self.historical_mailbox_offset.saturating_add(200);
+                self.refresh_ui_snapshot_now();
+            }
+        });
+        true
+    }
+
     fn refresh_project_filter_cache(&mut self) {
         let query = self.project_search.trim().to_owned();
         let source_revision = self.ui_snapshot.projects_revision;

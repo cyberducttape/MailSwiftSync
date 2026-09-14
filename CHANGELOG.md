@@ -55,6 +55,8 @@ All notable changes to MailSwiftSync are documented here.
 - Tightened the service-manager deployment checklist around credentialless
   queue restoration, keyring references, approved runtime paths, and operator
   recovery ownership.
+- Moved the paged historical mailbox renderer into `ui/workspace.rs`, keeping
+  read-only mailbox navigation on the cached durable read-model boundary.
 - Added regression coverage proving credential-free bulk form clones preserve
   plan defaults while clearing both password fields.
 - Centralized conversion and persistence of pending structured execution
