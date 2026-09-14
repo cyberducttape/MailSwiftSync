@@ -6,7 +6,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crc32fast::Hasher as Crc32Hasher;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, backup, params};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
@@ -14,8 +14,10 @@ use std::{
 use uuid::Uuid;
 
 mod engine;
+mod evidence;
 mod state;
 pub use engine::Engine;
+pub use evidence::{EvidenceScope, MailboxEvidence, VerificationAcceptance};
 pub use state::{AttentionReason, MailboxState, Phase};
 
 fn normalized_destination_identity(destination_mailbox: &str, config: Option<&str>) -> String {
@@ -264,34 +266,6 @@ pub struct ActiveProcess {
     pub session_id: Option<u32>,
     pub executable: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MailboxEvidence {
-    pub source_messages: u64,
-    pub destination_messages: u64,
-    pub source_bytes: u64,
-    pub destination_bytes: u64,
-    /// A literal unresolved-message count when the verifier provides one.
-    /// The current imapsync summary adapter uses `1` as an unresolved-proof
-    /// sentinel when its success line is absent; reports must therefore not
-    /// describe that value as a literal message count for that engine.
-    pub unmatched_messages: u64,
-    pub failed_messages: u64,
-    pub source_folders: u64,
-    pub destination_folders: u64,
-    /// True only when the engine supplied a stronger engine-confirmed summary.
-    /// Aggregate mailbox totals must never be presented as message-level proof.
-    pub authoritative: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VerificationAcceptance {
-    pub job_id: String,
-    pub run_id: String,
-    pub operator: String,
-    pub reason: String,
-    pub accepted_at: String,
-}
-
 /// Read model used by forensic and customer proof exports. It deliberately
 /// gathers the related mailbox, acceptance, evidence, run, and engine-version
 /// rows in a small fixed number of queries so large projects do not turn
@@ -315,102 +289,6 @@ pub struct ProjectReportSnapshot {
     pub project: Project,
     pub mailboxes: Vec<ReportMailboxSnapshot>,
     pub runs: Vec<ReportRunSnapshot>,
-}
-
-/// The strongest claim supported by the current verifier adapter. This is a
-/// typed interpretation of the legacy durable `authoritative` bit; keeping
-/// the interpretation here prevents reports and UI code from inventing
-/// stronger meanings for aggregate totals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvidenceScope {
-    EngineConfirmed,
-    AggregateReconciled,
-}
-
-impl EvidenceScope {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::EngineConfirmed => "engine-confirmed",
-            Self::AggregateReconciled => "aggregate-reconciled",
-        }
-    }
-}
-
-impl MailboxEvidence {
-    pub fn evidence_scope(&self) -> EvidenceScope {
-        if self.authoritative {
-            EvidenceScope::EngineConfirmed
-        } else {
-            EvidenceScope::AggregateReconciled
-        }
-    }
-
-    /// Human-readable evidence category for operators and exported reports.
-    /// The percentage remains available for compatibility, but it is not a
-    /// probability of correctness.
-    pub fn evidence_level(&self) -> &'static str {
-        if self.failed_messages > 0 || self.unmatched_messages > 0 {
-            return "Incomplete evidence";
-        }
-        let exact = self.source_messages == self.destination_messages
-            && self.source_bytes == self.destination_bytes
-            && self.source_folders == self.destination_folders;
-        if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
-            "Engine-confirmed exact match"
-        } else if exact {
-            "Aggregate match"
-        } else {
-            "Aggregate mismatch"
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn confidence_percent(&self) -> u8 {
-        let exact = self.source_messages == self.destination_messages
-            && self.source_bytes == self.destination_bytes
-            && self.source_folders == self.destination_folders;
-        if !self.authoritative {
-            return if exact && self.unmatched_messages == 0 && self.failed_messages == 0 {
-                85
-            } else {
-                0
-            };
-        }
-        if self.source_messages == 0
-            && self.destination_messages == 0
-            && self.source_folders == self.destination_folders
-            && self.unmatched_messages == 0
-            && self.failed_messages == 0
-        {
-            return 100;
-        }
-        let count_ok = self.source_messages == self.destination_messages;
-        let bytes_ok = self.source_bytes == self.destination_bytes;
-        let folders_ok = self.source_folders == self.destination_folders;
-        if count_ok
-            && bytes_ok
-            && folders_ok
-            && self.unmatched_messages == 0
-            && self.failed_messages == 0
-        {
-            100
-        } else if self.unmatched_messages == 0 && self.failed_messages == 0 {
-            85
-        } else {
-            0
-        }
-    }
-
-    /// Whether all available aggregate dimensions reconcile without reported
-    /// failures. This is separate from the compatibility score: a score is
-    /// not a probability of correctness.
-    pub fn is_exact_match(&self) -> bool {
-        self.source_messages == self.destination_messages
-            && self.source_bytes == self.destination_bytes
-            && self.source_folders == self.destination_folders
-            && self.unmatched_messages == 0
-            && self.failed_messages == 0
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

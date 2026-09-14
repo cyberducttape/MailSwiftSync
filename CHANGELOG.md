@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved mailbox evidence values, evidence-scope semantics, and verification
+  acceptance records into a dedicated durable-core module while preserving the
+  existing `core::*` API.
 - Cached project-browser filter indices and render rows from the durable
   snapshot without cloning the full project list on every repaint, preserving
   searchable project selection for large operator portfolios.
