@@ -16,6 +16,9 @@ All notable changes to MailSwiftSync are documented here.
   recognizing the protected Owner Rights ACE used by private-file ACLs.
 - Windows headless secret-file reads now validate the opened handle's
   protected Owner Rights/System DACL before accepting credential material.
+- Windows secret-file ACL validation now requests owner metadata together with
+  the DACL, ensuring the handle-based check validates the complete security
+  descriptor it relies on.
 - Windows CI now uses the pinned Visual Studio x64 developer-environment
   action before MSVC builds and native tests, ensuring Rust dependencies can
   locate the required `lib.exe` tool across runner image layouts.
