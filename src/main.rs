@@ -46,12 +46,13 @@ use controller::failure::{
 use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
-    BulkRetryScope, CapabilityProbeResult, LiveAuthProof, PendingDbEvent, RunKind,
-    SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext, SingleStartDecision,
-    admit_single_run, assess_plan, batch_mailbox_state, capability_observation_matches,
-    capability_probe_result_matches, decode_persisted_batch_profile,
-    durable_single_identity_matches, finish_batch_child, is_verified_terminal_state,
-    persist_pending_events, process_event_is_current, run_line_is_current, single_start_decision,
+    BulkRetryScope, CapabilityProbeResult, CapabilityProbeSpec, ImapProbeEndpoint,
+    LiveAuthProbeSpec, LiveAuthProof, PendingDbEvent, RunKind, SingleRunAdmission,
+    SingleRunWorkerSpec, SingleStartContext, SingleStartDecision, admit_single_run, assess_plan,
+    batch_mailbox_state, capability_observation_matches, capability_probe_result_matches,
+    decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
+    is_verified_terminal_state, persist_pending_events, process_event_is_current,
+    run_line_is_current, single_start_decision, spawn_capability_probe, spawn_live_auth_probe,
     spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
@@ -89,9 +90,7 @@ use eframe::{
 use egui_extras::{Column, TableBuilder};
 #[cfg(test)]
 use imap_probe::{command_endpoint_parts, command_port, imap_command_succeeded, imap_quote};
-use imap_probe::{
-    endpoint_for_probe, fresh_imap_authentication_applies, probe_tls_capabilities_with_transport,
-};
+use imap_probe::{endpoint_for_probe, fresh_imap_authentication_applies};
 use migration_plan::{
     Form, Profile, auth_method_is_oauth, default_destination_tls, default_imap_port,
     effective_destination_tls,
@@ -960,8 +959,6 @@ impl App {
                 return;
             }
         };
-        let (tx, rx) = mpsc::channel();
-        self.capability_receiver = Some(rx);
         let request_id = uuid::Uuid::new_v4().to_string();
         let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
         self.capability_probe_request_id = Some(request_id.clone());
@@ -970,47 +967,32 @@ impl App {
             "Authenticating and inspecting IMAPS readiness…",
             StatusSeverity::Info,
         );
-        let source_user = self.form.profile.source_user.clone();
-        let source_password = self.form.source_password.clone();
-        let destination_user = self.form.profile.destination_user.clone();
-        let destination_password = self.form.destination_password.clone();
-        let source_tls = self.form.profile.source_tls.clone();
-        let source_auth = self.form.profile.source_auth.clone();
-        let destination_tls = self.form.profile.destination_tls.clone();
-        let destination_auth = self.form.profile.destination_auth.clone();
-        let source_ca_bundle = self.form.profile.source_ca_bundle.clone();
-        let source_certificate_pin_sha256 = self.form.profile.source_certificate_pin_sha256.clone();
-        let destination_ca_bundle = self.form.profile.destination_ca_bundle.clone();
-        let destination_certificate_pin_sha256 =
-            self.form.profile.destination_certificate_pin_sha256.clone();
-        thread::spawn(move || {
-            let result = probe_tls_capabilities_with_transport(
-                &source,
-                &source_user,
-                source_password.as_str(),
-                &source_auth,
-                &source_tls,
-                &source_ca_bundle,
-                &source_certificate_pin_sha256,
-            )
-            .and_then(|left| {
-                probe_tls_capabilities_with_transport(
-                    &destination,
-                    &destination_user,
-                    destination_password.as_str(),
-                    &destination_auth,
-                    &destination_tls,
-                    &destination_ca_bundle,
-                    &destination_certificate_pin_sha256,
-                )
-                .map(|right| (left, right))
-            });
-            let _ = tx.send(CapabilityProbeResult {
-                request_id,
-                plan_fingerprint,
-                result,
-            });
-        });
+        self.capability_receiver = Some(spawn_capability_probe(CapabilityProbeSpec {
+            request_id,
+            plan_fingerprint,
+            source: ImapProbeEndpoint {
+                endpoint: source,
+                user: self.form.profile.source_user.clone(),
+                password: self.form.source_password.clone(),
+                auth: self.form.profile.source_auth.clone(),
+                tls: self.form.profile.source_tls.clone(),
+                ca_bundle: self.form.profile.source_ca_bundle.clone(),
+                certificate_pin_sha256: self.form.profile.source_certificate_pin_sha256.clone(),
+            },
+            destination: ImapProbeEndpoint {
+                endpoint: destination,
+                user: self.form.profile.destination_user.clone(),
+                password: self.form.destination_password.clone(),
+                auth: self.form.profile.destination_auth.clone(),
+                tls: self.form.profile.destination_tls.clone(),
+                ca_bundle: self.form.profile.destination_ca_bundle.clone(),
+                certificate_pin_sha256: self
+                    .form
+                    .profile
+                    .destination_certificate_pin_sha256
+                    .clone(),
+            },
+        }));
     }
 
     fn requires_live_imaps_auth_probe(&self) -> bool {
@@ -1051,52 +1033,36 @@ impl App {
                 return;
             }
         };
-        let source_user = self.form.profile.source_user.clone();
-        let source_password = self.form.source_password.clone();
-        let destination_user = self.form.profile.destination_user.clone();
-        let destination_password = self.form.destination_password.clone();
-        let source_tls = self.form.profile.source_tls.clone();
-        let source_auth = self.form.profile.source_auth.clone();
-        let destination_tls = self.form.profile.destination_tls.clone();
-        let destination_auth = self.form.profile.destination_auth.clone();
-        let source_ca_bundle = self.form.profile.source_ca_bundle.clone();
-        let source_certificate_pin_sha256 = self.form.profile.source_certificate_pin_sha256.clone();
-        let destination_ca_bundle = self.form.profile.destination_ca_bundle.clone();
-        let destination_certificate_pin_sha256 =
-            self.form.profile.destination_certificate_pin_sha256.clone();
-        let (tx, rx) = mpsc::channel();
-        self.live_auth_receiver = Some(rx);
         self.set_status(
             "Re-authenticating encrypted IMAP endpoints before live execution…",
             StatusSeverity::Info,
         );
-        thread::spawn(move || {
-            let result = probe_tls_capabilities_with_transport(
-                &source,
-                &source_user,
-                source_password.as_str(),
-                &source_auth,
-                &source_tls,
-                &source_ca_bundle,
-                &source_certificate_pin_sha256,
-            )
-            .and_then(|_| {
-                probe_tls_capabilities_with_transport(
-                    &destination,
-                    &destination_user,
-                    destination_password.as_str(),
-                    &destination_auth,
-                    &destination_tls,
-                    &destination_ca_bundle,
-                    &destination_certificate_pin_sha256,
-                )
-                .map(|_| LiveAuthProof {
-                    plan_fingerprint,
-                    credential_fingerprint,
-                })
-            });
-            let _ = tx.send(result);
-        });
+        self.live_auth_receiver = Some(spawn_live_auth_probe(LiveAuthProbeSpec {
+            plan_fingerprint,
+            credential_fingerprint,
+            source: ImapProbeEndpoint {
+                endpoint: source,
+                user: self.form.profile.source_user.clone(),
+                password: self.form.source_password.clone(),
+                auth: self.form.profile.source_auth.clone(),
+                tls: self.form.profile.source_tls.clone(),
+                ca_bundle: self.form.profile.source_ca_bundle.clone(),
+                certificate_pin_sha256: self.form.profile.source_certificate_pin_sha256.clone(),
+            },
+            destination: ImapProbeEndpoint {
+                endpoint: destination,
+                user: self.form.profile.destination_user.clone(),
+                password: self.form.destination_password.clone(),
+                auth: self.form.profile.destination_auth.clone(),
+                tls: self.form.profile.destination_tls.clone(),
+                ca_bundle: self.form.profile.destination_ca_bundle.clone(),
+                certificate_pin_sha256: self
+                    .form
+                    .profile
+                    .destination_certificate_pin_sha256
+                    .clone(),
+            },
+        }));
     }
     fn invalidate_stale_capability_observation(&mut self) -> bool {
         let current = plan_fingerprint_digest(&self.form.plan_fingerprint());

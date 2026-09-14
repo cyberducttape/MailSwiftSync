@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Extracted capability and live IMAP authentication probe workers into the
+  controller layer, keeping network I/O and secret-bearing probe requests out
+  of the egui composition root.
 - Extended the packaged controller recovery lab to interrupt an active engine
   and verify durable `attention` classification, closing the release matrix's
   engine-interruption evidence gap.

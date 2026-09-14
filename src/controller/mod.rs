@@ -8,6 +8,7 @@ mod events;
 pub(crate) mod failure;
 mod orchestrator;
 mod preflight;
+pub(crate) mod probe;
 mod run;
 mod single_admission;
 
@@ -30,6 +31,10 @@ pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use preflight::{
     CapabilityProbeResult, assess_plan, capability_observation_matches,
     capability_probe_result_matches,
+};
+pub(crate) use probe::{
+    CapabilityProbeSpec, ImapProbeEndpoint, LiveAuthProbeSpec, spawn_capability_probe,
+    spawn_live_auth_probe,
 };
 pub(crate) use run::{ActiveRunContext, LiveAuthProof, RunKind};
 pub(crate) use single_admission::{
