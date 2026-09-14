@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved bulk file and worksheet worker creation into `bulk_import`, leaving
+  the egui shell responsible only for starting an import and applying its
+  result while keeping parsing and background dispatch together.
 - Moved batch event-channel creation, cancellation ownership, and worker
   startup behind the controller boundary so the egui shell retains only the
   handles needed to render and cancel an admitted batch.

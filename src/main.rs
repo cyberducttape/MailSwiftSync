@@ -2796,31 +2796,13 @@ impl App {
             self.bulk_message = "A mailbox file is already being imported.".into();
             return;
         }
-        let base = self.form.clone();
-        let (sender, receiver) = mpsc::channel();
         self.bulk_message = format!(
             "Importing {} in the background…",
             path.file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("mailbox file")
         );
-        self.bulk_import_receiver = Some(receiver);
-        thread::spawn(move || {
-            let ext = path
-                .extension()
-                .and_then(|x| x.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            let result = if ext == "csv" {
-                bulk_import::read_csv(&path, &base).map(BulkImportResult::Jobs)
-            } else if ext == "xls" || ext == "xlsx" {
-                bulk_import::workbook_sheets(&path)
-                    .map(|sheets| BulkImportResult::Workbook { path, sheets })
-            } else {
-                Err("Choose a .csv, .xls, or .xlsx file.".into())
-            };
-            let _ = sender.send(result);
-        });
+        self.bulk_import_receiver = Some(bulk_import::spawn_import(path, self.form.clone()));
     }
 
     fn begin_sheet_import(&mut self, path: std::path::PathBuf, sheet_index: usize) {
@@ -2828,15 +2810,12 @@ impl App {
             self.bulk_message = "A mailbox file is already being imported.".into();
             return;
         }
-        let base = self.form.clone();
-        let (sender, receiver) = mpsc::channel();
         self.bulk_message = "Importing the selected worksheet in the background…".into();
-        self.bulk_import_receiver = Some(receiver);
-        thread::spawn(move || {
-            let result =
-                bulk_import::read_sheet(&path, &base, sheet_index).map(BulkImportResult::Jobs);
-            let _ = sender.send(result);
-        });
+        self.bulk_import_receiver = Some(bulk_import::spawn_sheet_import(
+            path,
+            self.form.clone(),
+            sheet_index,
+        ));
     }
 
     fn import_bulk(&mut self, path: &std::path::Path) {

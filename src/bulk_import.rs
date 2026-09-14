@@ -9,6 +9,8 @@ use calamine::{Reader, Xls, open_workbook, open_workbook_auto};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
 #[derive(Clone)]
 pub(crate) struct BulkJob {
@@ -25,6 +27,48 @@ pub(crate) struct PendingSheetImport {
 pub(crate) enum BulkImportResult {
     Jobs(Vec<BulkJob>),
     Workbook { path: PathBuf, sheets: Vec<String> },
+}
+
+/// Start a bounded/validated mailbox-file import away from the egui thread.
+/// The caller receives only the future result; file-format dispatch and
+/// parser ownership remain with the import domain.
+pub(crate) fn spawn_import(
+    path: PathBuf,
+    base: Form,
+) -> Receiver<Result<BulkImportResult, String>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let ext = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let result = if ext == "csv" {
+            read_csv(&path, &base).map(BulkImportResult::Jobs)
+        } else if ext == "xls" || ext == "xlsx" {
+            workbook_sheets(&path).map(|sheets| BulkImportResult::Workbook { path, sheets })
+        } else {
+            Err("Choose a .csv, .xls, or .xlsx file.".into())
+        };
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+/// Start parsing one selected worksheet without blocking the UI.
+pub(crate) fn spawn_sheet_import(
+    path: PathBuf,
+    base: Form,
+    sheet_index: usize,
+) -> Receiver<Result<BulkImportResult, String>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let result = read_sheet(&path, &base, sheet_index)
+            .map(BulkImportResult::Jobs)
+            .map_err(|error| error.to_string());
+        let _ = sender.send(result);
+    });
+    receiver
 }
 
 pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String> {
