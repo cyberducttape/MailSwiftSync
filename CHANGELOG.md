@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Moved durable batch project reuse/creation policy into
+  `controller/batch_admission.rs`, keeping exact queue matching and atomic
+  project creation outside the egui dispatcher.
 - Extracted the batch worker-pool coordinator from `main.rs` into
   `controller/batch_worker.rs`. GUI batch admission now hands an explicit,
   already-admitted work specification to the controller worker, keeping

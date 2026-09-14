@@ -27,9 +27,10 @@ use atomic_artifact::write_private_atomic;
 use command::{parse_shell_words, remove_option, shell_quote};
 #[cfg(test)]
 use controller::batch_admission::canonical_destination_identity;
+#[cfg(test)]
+use controller::batch_admission::matches_queue;
 use controller::batch_admission::{
-    apply_keyring_id, duplicate_destination, matches_queue, selection_value,
-    validate_batch_throttle,
+    apply_keyring_id, duplicate_destination, selection_value, validate_batch_throttle,
 };
 use controller::failure::{
     FailureClass, classified_failure_detail, classify_failure, terminal_phase_advance_allowed,
@@ -39,8 +40,9 @@ use controller::failure::{is_transient_batch_error, transient_retry_delay};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, BulkStateSet, LiveAuthProof, RunKind, SingleRunWorkerSpec, assess_plan,
-    durable_single_identity_matches, is_verified_terminal_state, selected_batch_indices,
-    spawn_batch_worker, spawn_single_run_worker, suggested_batch_project_name,
+    durable_single_identity_matches, is_verified_terminal_state, prepare_batch_project,
+    selected_batch_indices, spawn_batch_worker, spawn_single_run_worker,
+    suggested_batch_project_name,
 };
 #[cfg(test)]
 use credentials::CleanupGuard;
@@ -3366,40 +3368,24 @@ impl App {
                 return;
             }
         };
-        let reusable_project = if let Some(project_id) = self.bulk_project_id.clone() {
-            match self.store.mailboxes(&project_id) {
-                Ok(stored) if matches_queue(&stored, &mailboxes) => Some(project_id),
-                Ok(_) => None,
-                Err(error) => {
-                    self.bulk_message = format!(
-                        "Could not inspect the existing durable batch; no new batch was created: {error}"
-                    );
-                    return;
-                }
+        let project_name = suggested_batch_project_name(
+            jobs.first()
+                .map(|job| &job.form.profile)
+                .unwrap_or(&self.form.profile),
+        );
+        let (project_id, job_ids) = match prepare_batch_project(
+            &self.store,
+            self.bulk_project_id.as_deref(),
+            &mailboxes,
+            &project_name,
+            "batch",
+            "batch",
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                self.bulk_message = error;
+                return;
             }
-        } else {
-            None
-        };
-        let (project_id, job_ids) = if let Some(project_id) = reusable_project {
-            (project_id, self.bulk_job_ids.clone())
-        } else {
-            let (project, job_ids) = match self.store.create_project_with_mailbox_configs(
-                &suggested_batch_project_name(
-                    jobs.first()
-                        .map(|job| &job.form.profile)
-                        .unwrap_or(&self.form.profile),
-                ),
-                "batch",
-                "batch",
-                &mailboxes,
-            ) {
-                Ok(value) => value,
-                Err(error) => {
-                    self.bulk_message = format!("Could not create durable batch: {error}");
-                    return;
-                }
-            };
-            (project.id, job_ids)
         };
         self.bulk_project_id = Some(project_id.clone());
         self.selected_project_id = Some(project_id.clone());

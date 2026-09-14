@@ -107,6 +107,50 @@ pub(crate) fn matches_queue(
         )
 }
 
+/// Reuse a durable batch only when its mailbox/configuration rows exactly
+/// match the admitted queue; otherwise create a new project atomically. This
+/// keeps SQLite project-selection policy out of the egui start dispatcher.
+pub(crate) fn prepare_batch_project(
+    store: &core::StateStore,
+    requested_project_id: Option<&str>,
+    mailboxes: &[(String, String, String)],
+    project_name: &str,
+    source_endpoint: &str,
+    destination_endpoint: &str,
+) -> Result<(String, Vec<String>), String> {
+    let reusable_project = if let Some(project_id) = requested_project_id {
+        match store.mailboxes(project_id) {
+            Ok(stored) if matches_queue(&stored, mailboxes) => Some(project_id.to_owned()),
+            Ok(_) => None,
+            Err(error) => {
+                return Err(format!(
+                    "Could not inspect the existing durable batch; no new batch was created: {error}"
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(project_id) = reusable_project {
+        let job_ids = store
+            .mailboxes(&project_id)
+            .map_err(|error| format!("Could not read the reusable durable batch: {error}"))?
+            .into_iter()
+            .map(|job| job.id)
+            .collect();
+        return Ok((project_id, job_ids));
+    }
+    let (project, job_ids) = store
+        .create_project_with_mailbox_configs(
+            project_name,
+            source_endpoint,
+            destination_endpoint,
+            mailboxes,
+        )
+        .map_err(|error| format!("Could not create durable batch: {error}"))?;
+    Ok((project.id, job_ids))
+}
+
 pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {
     let mut applied = 0;
     for job in jobs {
