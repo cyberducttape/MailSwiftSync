@@ -3,6 +3,7 @@
 mod account;
 mod batch;
 mod output;
+mod plan;
 mod settings;
 mod status;
 mod theme;
