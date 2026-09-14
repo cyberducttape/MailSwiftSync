@@ -9,6 +9,33 @@ use std::time::{Duration, Instant};
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Rebuild the project-browser index without cloning project rows. Keeping
+/// this policy beside the workspace read model gives the UI a stable, tested
+/// searchable view over durable project metadata.
+pub(crate) fn filter_project_indices(
+    projects: &[core::ProjectListItem],
+    query: &str,
+    visible_indices: &mut Vec<usize>,
+) {
+    visible_indices.clear();
+    for (index, project) in projects.iter().enumerate() {
+        if query.is_empty()
+            || contains_ascii_case_insensitive(&project.name, query)
+            || contains_ascii_case_insensitive(&project.source_endpoint, query)
+            || contains_ascii_case_insensitive(&project.destination_endpoint, query)
+        {
+            visible_indices.push(index);
+        }
+    }
+}
+
+fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 /// The durable read model rendered by the workspace views. Individual read
 /// failures retain the last successful value so a transient SQLite contention
 /// event does not blank the operator's view.
@@ -92,5 +119,39 @@ impl WorkspaceSnapshot {
         if let Ok(value) = store.recent_run_list(&project_id, crate::MAX_ACTIVITY_HISTORY_ROWS) {
             self.runs = value;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_project_indices;
+    use crate::core::{Phase, ProjectListItem};
+
+    #[test]
+    fn project_filter_matches_name_and_endpoints_without_copying_rows() {
+        let projects = vec![
+            ProjectListItem {
+                id: "one".into(),
+                name: "Acme migration".into(),
+                source_endpoint: "imap.acme.test".into(),
+                destination_endpoint: "mail.example.test".into(),
+                phase: Phase::Discovery,
+            },
+            ProjectListItem {
+                id: "two".into(),
+                name: "Contoso migration".into(),
+                source_endpoint: "old.contoso.test".into(),
+                destination_endpoint: "mail.example.test".into(),
+                phase: Phase::Preflight,
+            },
+        ];
+        let mut visible = vec![99];
+
+        filter_project_indices(&projects, "ACME", &mut visible);
+        assert_eq!(visible, vec![0]);
+        filter_project_indices(&projects, "CONTOSO.TEST", &mut visible);
+        assert_eq!(visible, vec![1]);
+        filter_project_indices(&projects, "", &mut visible);
+        assert_eq!(visible, vec![0, 1]);
     }
 }

@@ -102,9 +102,9 @@ use storage_paths::persistent_state_path_from;
 use storage_paths::{persistent_state_path, restore_ledger};
 use ui::{
     AppearancePreferences, ThemeColors, WorkspaceSnapshot, display_job_state, display_state_key,
-    format_elapsed, format_phase_name, job_state_badge, needs_operator_review,
-    password_visibility_id, project_health_state_counts, recommended_next_action, render_account,
-    status_color, workflow_step_index,
+    filter_project_indices, format_elapsed, format_phase_name, job_state_badge,
+    needs_operator_review, password_visibility_id, project_health_state_counts,
+    recommended_next_action, render_account, status_color, workflow_step_index,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -1356,16 +1356,11 @@ impl App {
 
         self.project_filter_query = query.clone();
         self.project_filter_source_revision = source_revision;
-        self.project_visible_indices.clear();
-        for (index, project) in self.ui_snapshot.projects.iter().enumerate() {
-            if query.is_empty()
-                || contains_ascii_case_insensitive(&project.name, &query)
-                || contains_ascii_case_insensitive(&project.source_endpoint, &query)
-                || contains_ascii_case_insensitive(&project.destination_endpoint, &query)
-            {
-                self.project_visible_indices.push(index);
-            }
-        }
+        filter_project_indices(
+            &self.ui_snapshot.projects,
+            &query,
+            &mut self.project_visible_indices,
+        );
     }
 
     fn projects_dialog(&mut self, ctx: &egui::Context) {
