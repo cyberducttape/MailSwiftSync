@@ -180,9 +180,11 @@ or recovered without opening the GUI:
 ```text
 mailswiftsync status /path/to/state.db
 mailswiftsync status /path/to/state.db <project-id>
+mailswiftsync fleet-status /path/to/ledger-directory
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
 mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
+mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc123
 mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls] [maintenance-window]
 mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
@@ -215,7 +217,19 @@ GUI and refuses to export until the selected project is durably complete with
 verified mailbox evidence. For an explicitly labeled progress artifact only,
 pass `--allow-incomplete`; that artifact is never a completion certificate.
 It excludes internal topology and forensic detail; sign it separately with
-`mailswiftsync sign` before treating it as an authenticated deliverable.
+`mailswiftsync sign` before treating it as an authenticated deliverable. An
+optional operator/agency name and contact line — set once under **Settings →
+Report branding** in the GUI, independent of any migration plan or profile —
+is included as `issued_by` when either field is non-blank, for MSPs and
+consultants who want their own name on the artifact they hand to a customer.
+`fleet-status` aggregates secret-free `status --summary` output across every
+MailSwiftSync ledger found under a directory (read-only, no instance lock
+taken), for operators running multiple instances or
+[sharding a large migration](docs/wiki/Scaling-large-migrations.md) across
+several ledgers. `notify-webhook` POSTs that same secret-free summary as
+JSON to one operator-configured `https://` URL — for updating a PSA/ticketing
+system without a vendor-specific integration; see
+[PSA and ticketing notifications](docs/wiki/PSA-notifications.md).
 `supervise` is a foreground, GUI-independent batch controller. It processes
 only automation-safe queued/retryable work, waits through GUI lock ownership,
 and leaves Attention and verification-difference rows untouched. The optional

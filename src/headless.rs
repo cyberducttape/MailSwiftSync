@@ -301,6 +301,118 @@ pub(crate) fn headless_status_summary(
     })
 }
 
+const FLEET_MAX_LEDGER_CANDIDATES: usize = 10_000;
+const FLEET_MAX_SCAN_DEPTH: usize = 8;
+
+#[derive(Debug, Serialize)]
+pub(crate) struct FleetStatus {
+    pub(crate) root: String,
+    pub(crate) ledger_count: usize,
+    pub(crate) totals: core::MailboxStateCounts,
+    pub(crate) ledgers: Vec<FleetLedgerSummary>,
+    pub(crate) unreadable: Vec<FleetUnreadableLedger>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct FleetLedgerSummary {
+    pub(crate) path: String,
+    pub(crate) summary: HeadlessStatusSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct FleetUnreadableLedger {
+    pub(crate) path: String,
+    pub(crate) error: String,
+}
+
+/// Find candidate MailSwiftSync ledger files under `root`. A file only
+/// qualifies by its `.db` extension; anything that is not actually a
+/// MailSwiftSync ledger (an unrelated SQLite file, a stray backup with a
+/// different extension) fails to summarize later and is reported in
+/// `unreadable` rather than silently skipped, so a misconfigured scan root
+/// is visible instead of quietly under-counting. Symlinks are not followed
+/// (avoids directory-cycle loops); depth and candidate count are bounded so
+/// an unexpectedly large or cyclical tree fails closed instead of running
+/// unbounded.
+fn discover_ledger_candidates(root: &std::path::Path) -> Result<Vec<std::path::PathBuf>, String> {
+    let mut found = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0_usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let entries = std::fs::read_dir(&dir)
+            .map_err(|error| format!("could not read {}: {error}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                format!("could not read an entry under {}: {error}", dir.display())
+            })?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("could not inspect {}: {error}", path.display()))?;
+            if file_type.is_dir() {
+                if depth < FLEET_MAX_SCAN_DEPTH {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            if path.extension().is_some_and(|extension| extension == "db") {
+                found.push(path);
+                if found.len() > FLEET_MAX_LEDGER_CANDIDATES {
+                    return Err(format!(
+                        "more than {FLEET_MAX_LEDGER_CANDIDATES} candidate ledger files found under {}; narrow the scan directory",
+                        root.display()
+                    ));
+                }
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Aggregate secret-free status across every MailSwiftSync ledger found
+/// under `root`, for operators sharding a large migration across multiple
+/// instances (see the "Scaling large migrations" wiki page). This is
+/// read-only and never takes an instance lock, so it is safe to run
+/// alongside live shards; it reuses the exact same summary `status
+/// --summary` produces for each ledger it finds.
+pub(crate) fn fleet_status(root: &std::path::Path) -> Result<FleetStatus, String> {
+    let candidates = discover_ledger_candidates(root)?;
+    let mut ledgers = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut totals = core::MailboxStateCounts::default();
+    for path in candidates {
+        match headless_status_summary(&path, None) {
+            Ok(summary) => {
+                for project in &summary.projects {
+                    totals.total += project.mailbox_state_counts.total;
+                    totals.ready += project.mailbox_state_counts.ready;
+                    totals.running += project.mailbox_state_counts.running;
+                    totals.verified += project.mailbox_state_counts.verified;
+                    totals.needs_review += project.mailbox_state_counts.needs_review;
+                }
+                ledgers.push(FleetLedgerSummary {
+                    path: path.display().to_string(),
+                    summary,
+                });
+            }
+            Err(error) => unreadable.push(FleetUnreadableLedger {
+                path: path.display().to_string(),
+                error,
+            }),
+        }
+    }
+    Ok(FleetStatus {
+        root: root.display().to_string(),
+        ledger_count: ledgers.len(),
+        totals,
+        ledgers,
+        unreadable,
+    })
+}
+
 pub(crate) fn headless_recover(
     state_path: &std::path::Path,
 ) -> Result<HeadlessRecoveryResult, String> {

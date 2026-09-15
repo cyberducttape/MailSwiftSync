@@ -1,6 +1,6 @@
 use crate::credentials::read_secret_file;
 use crate::headless::{
-    HeadlessCredentials, export_support_bundle, headless_batch_execute,
+    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute,
     headless_execute_with_credentials, headless_recover, headless_status, headless_status_summary,
     headless_supervise,
 };
@@ -287,6 +287,30 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("fleet-status") {
+        let Some(root) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync fleet-status <directory>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync fleet-status <directory>");
+            std::process::exit(2);
+        }
+        let root = std::path::PathBuf::from(root);
+        match fleet_status(&root).and_then(|status| {
+            serde_json::to_string_pretty(&status)
+                .map_err(|error| format!("could not serialize fleet status: {error}"))
+        }) {
+            Ok(status) => {
+                println!("{status}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Could not read fleet status: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("recover") {
         let Some(state) = arguments.next() else {
             eprintln!("Usage: mailswiftsync recover <state.db>");
@@ -406,11 +430,13 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Customer-proof export refused: no durable migration project is available");
             std::process::exit(1);
         };
+        let branding = crate::branding::OperatorBranding::load();
         match reports::customer::export_from_store_with_options(
             &store,
             &project_id,
             &output,
             allow_incomplete,
+            &branding,
         ) {
             Ok(()) => {
                 println!("Created customer migration proof: {}", output.display());
@@ -418,6 +444,71 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
             Err(error) => {
                 eprintln!("Customer-proof export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("notify-webhook") {
+        let (Some(state), Some(url)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id]");
+            std::process::exit(2);
+        };
+        let mut project_id = None;
+        for argument in arguments {
+            if project_id.is_none() {
+                project_id = Some(argument);
+            } else {
+                eprintln!(
+                    "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id]"
+                );
+                std::process::exit(2);
+            }
+        }
+        let url = match url.to_str() {
+            Some(url) => url.to_owned(),
+            None => {
+                eprintln!("Webhook notification refused: URL must be valid UTF-8");
+                std::process::exit(2);
+            }
+        };
+        let state = std::path::PathBuf::from(state);
+        let project_id = match project_id.as_deref() {
+            Some(value) => match value.to_str() {
+                Some(value) => Some(value),
+                None => {
+                    eprintln!("Webhook notification refused: project ID must be valid UTF-8");
+                    std::process::exit(2);
+                }
+            },
+            None => None,
+        };
+        let summary = match headless_status_summary(&state, project_id) {
+            Ok(summary) => summary,
+            Err(error) => {
+                eprintln!("Webhook notification refused: could not read migration status: {error}");
+                std::process::exit(1);
+            }
+        };
+        let body = match serde_json::to_string(&summary) {
+            Ok(body) => body,
+            Err(error) => {
+                eprintln!(
+                    "Webhook notification refused: could not serialize migration status: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        match webhook::post_json(&url, &body) {
+            Ok(status_code) if (200..300).contains(&status_code) => {
+                println!("Webhook notification delivered (HTTP {status_code}).");
+                return Ok(());
+            }
+            Ok(status_code) => {
+                eprintln!("Webhook endpoint rejected the notification (HTTP {status_code}).");
+                std::process::exit(1);
+            }
+            Err(error) => {
+                eprintln!("Webhook notification failed: {error}");
                 std::process::exit(1);
             }
         }
@@ -546,7 +637,7 @@ fn print_cli_help() {
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
     println!(
-        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate secret-free status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST secret-free status JSON to an operator-configured https:// URL\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
     );
     println!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."

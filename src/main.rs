@@ -1,5 +1,6 @@
 mod atomic_artifact;
 mod bootstrap;
+mod branding;
 mod bulk_import;
 mod cli;
 mod command;
@@ -25,6 +26,7 @@ mod storage;
 mod storage_paths;
 mod ui;
 mod verification;
+mod webhook;
 
 #[cfg(test)]
 use atomic_artifact::write_private_atomic;
@@ -2645,6 +2647,78 @@ mod tests {
         let summary = headless::headless_status_summary(&state, Some(&project.id)).unwrap();
         assert!(summary.projects[0].batch);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fleet_status_aggregates_every_ledger_under_a_directory() {
+        let root = std::env::temp_dir().join(format!("mailswiftsync-fleet-{}", Uuid::new_v4()));
+        let shard_a = root.join("shard-a");
+        let shard_b = root.join("nested").join("shard-b");
+        std::fs::create_dir_all(&shard_a).unwrap();
+        std::fs::create_dir_all(&shard_b).unwrap();
+
+        let state_a = shard_a.join("state.db");
+        let db_a = core::StateStore::open(&state_a).unwrap();
+        db_a.create_project_with_mailbox(
+            "shard-a",
+            "source.example",
+            "destination.example",
+            "user-a",
+            "user-a",
+        )
+        .unwrap();
+        drop(db_a);
+
+        let state_b = shard_b.join("state.db");
+        let db_b = core::StateStore::open(&state_b).unwrap();
+        db_b.create_project_with_mailbox(
+            "shard-b",
+            "source.example",
+            "destination.example",
+            "user-b",
+            "user-b",
+        )
+        .unwrap();
+        drop(db_b);
+
+        // A non-ledger file with the same extension must be reported, not
+        // silently skipped or allowed to abort the whole scan.
+        std::fs::write(root.join("junk.db"), b"not a database").unwrap();
+        // A file with a different extension must never be treated as a
+        // candidate ledger.
+        std::fs::write(root.join("notes.txt"), b"irrelevant").unwrap();
+
+        let fleet = headless::fleet_status(&root).unwrap();
+        assert_eq!(fleet.ledger_count, 2);
+        assert_eq!(fleet.totals.total, 2);
+        assert_eq!(fleet.unreadable.len(), 1);
+        assert_eq!(
+            fleet.unreadable[0].path,
+            root.join("junk.db").display().to_string()
+        );
+        let mut ledger_paths: Vec<_> = fleet
+            .ledgers
+            .iter()
+            .map(|ledger| ledger.path.clone())
+            .collect();
+        ledger_paths.sort();
+        let mut expected = vec![state_a.display().to_string(), state_b.display().to_string()];
+        expected.sort();
+        assert_eq!(ledger_paths, expected);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fleet_status_on_an_empty_directory_reports_zero_ledgers() {
+        let root =
+            std::env::temp_dir().join(format!("mailswiftsync-fleet-empty-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fleet = headless::fleet_status(&root).unwrap();
+        assert_eq!(fleet.ledger_count, 0);
+        assert_eq!(fleet.totals, core::MailboxStateCounts::default());
+        assert!(fleet.unreadable.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

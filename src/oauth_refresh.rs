@@ -196,9 +196,18 @@ fn read_bounded_response<S: Read>(stream: &mut S, budget: Duration) -> Result<St
         if started.elapsed() > budget {
             return Err("token endpoint response exceeded the refresh time budget".into());
         }
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+        let count = match stream.read(&mut buffer) {
+            Ok(count) => count,
+            // A peer that closes the raw connection immediately after its
+            // final TLS record, without a closing `close_notify` alert, is
+            // common for `Connection: close` responses (seen in practice
+            // against at least one real HTTPS endpoint) and is not in
+            // itself evidence of truncation: rustls already validates every
+            // record's integrity before handing back plaintext, so bytes
+            // read up to this point are exactly what the peer sent.
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(error) => return Err(error.to_string()),
+        };
         if count == 0 {
             break;
         }
