@@ -31,9 +31,14 @@ docker run --rm \
 
 For continuous supervision, run `supervise` under an external service manager
 or container restart policy; see [service-manager deployment](distribution/SERVICE.md)
-for a hardened systemd example. The container does not grant the process access
-to a secret manager, OAuth provider, host Dovecot socket, or a display; those
-must be explicitly integrated and documented by the deployment owner.
+for a hardened systemd example. Pass an optional maintenance window as the
+fourth argument (for example `supervise /var/lib/mailswiftsync/state.db 30 0
+22:00-06:00`) to confine new batch passes to overnight hours without an
+external cron start/stop that could abandon a mailbox mid-run; a batch
+already admitted before the window closes still runs to completion. The
+container does not grant the process access to a secret manager, OAuth
+provider, host Dovecot socket, or a display; those must be explicitly
+integrated and documented by the deployment owner.
 
 The image installs pinned Debian Bookworm `dovecot-core` and `dovecot-imapd`
 packages and a pinned upstream `imapsync` Debian artifact because Bookworm does not provide `imapsync` in its

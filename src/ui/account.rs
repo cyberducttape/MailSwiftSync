@@ -87,7 +87,7 @@ pub(crate) fn render_account(
         if auth_method_is_oauth(auth_method) {
             ui.label(
                 RichText::new(
-                    "Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring; MailSwiftSync does not request consent or refresh tokens yet.",
+                    "Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. MailSwiftSync does not request provider consent, but can refresh an expired token automatically if you configure a refresh token in the OS keyring dialog's Automatic OAuth refresh section.",
                 )
                 .size(11.0)
                 .color(if ui.visuals().dark_mode {
@@ -245,7 +245,147 @@ impl App {
                     .size(11.0)
                     .color(self.theme_colors().danger),
                 );
+                ui.separator();
+                self.oauth_refresh_section(ui, editable);
             });
         self.keyring_open = open;
+    }
+
+    /// Optional automatic-refresh configuration: an operator who has
+    /// registered their own OAuth application with the provider and holds a
+    /// refresh token can store it here so `reload_configured_keyring_credentials`
+    /// exchanges it for a fresh access token before each live launch instead
+    /// of requiring a freshly copied token every time.
+    fn oauth_refresh_section(&mut self, ui: &mut egui::Ui, editable: bool) {
+        ui.label(RichText::new("Automatic OAuth refresh (optional)").strong());
+        ui.label(
+            RichText::new(
+                "Requires an OAuth application you have already registered with the provider and a refresh token obtained through its consent flow. MailSwiftSync does not perform consent; it only exchanges an existing refresh token for a fresh access token before each live launch.",
+            )
+            .size(11.0)
+            .color(self.theme_colors().text_secondary),
+        );
+        ui.add_enabled_ui(editable, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Source refresh ID");
+                ui.text_edit_singleline(&mut self.form.profile.source_oauth_refresh_credential_id);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Destination refresh ID");
+                ui.text_edit_singleline(
+                    &mut self.form.profile.destination_oauth_refresh_credential_id,
+                );
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Token endpoint");
+                ui.text_edit_singleline(&mut self.oauth_refresh_editor_endpoint);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Client ID");
+                ui.text_edit_singleline(&mut self.oauth_refresh_editor_client_id);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Client secret (if required)");
+                ui.add(
+                    egui::TextEdit::singleline(
+                        self.oauth_refresh_editor_client_secret.as_mut_string(),
+                    )
+                    .password(true),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Refresh token");
+                ui.add(
+                    egui::TextEdit::singleline(
+                        self.oauth_refresh_editor_refresh_token.as_mut_string(),
+                    )
+                    .password(true),
+                );
+            });
+            ui.label(
+                RichText::new(
+                    "The fields above are entered once per store; they are cleared from memory immediately afterward and are never written to the profile or durable ledger.",
+                )
+                .size(11.0)
+                .color(self.theme_colors().text_secondary),
+            );
+            ui.horizontal(|ui| {
+                if ui.button("Store for source").clicked() {
+                    self.store_oauth_refresh_editor(true);
+                }
+                if ui.button("Store for destination").clicked() {
+                    self.store_oauth_refresh_editor(false);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Refresh source now").clicked() {
+                    self.run_manual_oauth_refresh(true);
+                }
+                if ui.button("Refresh destination now").clicked() {
+                    self.run_manual_oauth_refresh(false);
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Delete source refresh config").clicked() {
+                    match self.form.delete_oauth_refresh_config(true) {
+                        Ok(()) => self.set_status(
+                            "Source OAuth refresh configuration deleted",
+                            StatusSeverity::Success,
+                        ),
+                        Err(error) => self.set_status(error, StatusSeverity::Error),
+                    }
+                }
+                if ui.button("Delete destination refresh config").clicked() {
+                    match self.form.delete_oauth_refresh_config(false) {
+                        Ok(()) => self.set_status(
+                            "Destination OAuth refresh configuration deleted",
+                            StatusSeverity::Success,
+                        ),
+                        Err(error) => self.set_status(error, StatusSeverity::Error),
+                    }
+                }
+            });
+        });
+    }
+
+    fn run_manual_oauth_refresh(&mut self, source: bool) {
+        let side = if source { "Source" } else { "Destination" };
+        match self.form.refresh_oauth_access_token(source) {
+            Ok(crate::migration_plan::OAuthRefreshOutcome::Refreshed { expires_in }) => {
+                let message = match expires_in {
+                    Some(seconds) => {
+                        format!("{side} OAuth access token refreshed (expires in {seconds}s)")
+                    }
+                    None => format!("{side} OAuth access token refreshed"),
+                };
+                self.set_status(message, StatusSeverity::Success);
+            }
+            Ok(crate::migration_plan::OAuthRefreshOutcome::NotConfigured) => self.set_status(
+                format!(
+                    "No automatic refresh is configured for the {}",
+                    side.to_lowercase()
+                ),
+                StatusSeverity::Info,
+            ),
+            Err(error) => self.set_status(error, StatusSeverity::Error),
+        }
+    }
+
+    fn store_oauth_refresh_editor(&mut self, source: bool) {
+        let config = crate::oauth_refresh::OAuthRefreshConfig {
+            token_endpoint: std::mem::take(&mut self.oauth_refresh_editor_endpoint),
+            client_id: std::mem::take(&mut self.oauth_refresh_editor_client_id),
+            client_secret: std::mem::take(&mut self.oauth_refresh_editor_client_secret),
+            refresh_token: std::mem::take(&mut self.oauth_refresh_editor_refresh_token),
+        };
+        let side = if source { "Source" } else { "Destination" };
+        match self.form.store_oauth_refresh_config(source, &config) {
+            Ok(()) => self.set_status(
+                format!("{side} OAuth refresh configuration stored in OS keyring"),
+                StatusSeverity::Success,
+            ),
+            Err(error) => self.set_status(error, StatusSeverity::Error),
+        }
     }
 }

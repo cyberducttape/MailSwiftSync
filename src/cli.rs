@@ -4,19 +4,21 @@ use crate::headless::{
     headless_execute_with_credentials, headless_recover, headless_status, headless_status_summary,
     headless_supervise,
 };
+use crate::maintenance_window::MaintenanceWindow;
 use crate::*;
 use eframe::egui;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous]";
+const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]]";
 
 #[derive(Debug, PartialEq, Eq)]
 struct SuperviseArguments {
     state: PathBuf,
     poll_seconds: u64,
     idle_polls: usize,
+    maintenance_window: Option<MaintenanceWindow>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,6 +68,15 @@ where
             .ok_or(SUPERVISE_USAGE)?,
         None => 1,
     };
+    let maintenance_window = match arguments.next() {
+        Some(value) => Some(
+            value
+                .to_str()
+                .ok_or(SUPERVISE_USAGE)
+                .and_then(|value| MaintenanceWindow::parse(value).map_err(|_| SUPERVISE_USAGE))?,
+        ),
+        None => None,
+    };
     if arguments.next().is_some() || !(1..=3_600).contains(&poll_seconds) {
         return Err(SUPERVISE_USAGE);
     }
@@ -73,6 +84,7 @@ where
         state: PathBuf::from(state),
         poll_seconds,
         idle_polls,
+        maintenance_window,
     })
 }
 
@@ -422,6 +434,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             &supervise.state,
             Duration::from_secs(supervise.poll_seconds),
             supervise.idle_polls,
+            supervise.maintenance_window,
         ) {
             Ok(message) => {
                 println!("{message}");
@@ -533,7 +546,7 @@ fn print_cli_help() {
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
     println!(
-        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  supervise <state> [poll] [n]   Run automation-safe supervision\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
     );
     println!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
@@ -543,6 +556,7 @@ fn print_cli_help() {
 #[cfg(test)]
 mod tests {
     use super::{HeadlessMode, SuperviseArguments, parse_supervise_arguments};
+    use crate::maintenance_window::MaintenanceWindow;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -558,6 +572,7 @@ mod tests {
                 state: PathBuf::from("state.db"),
                 poll_seconds: 30,
                 idle_polls: 1,
+                maintenance_window: None,
             })
         );
     }
@@ -570,6 +585,20 @@ mod tests {
                 state: PathBuf::from("state.db"),
                 poll_seconds: 60,
                 idle_polls: 0,
+                maintenance_window: None,
+            })
+        );
+    }
+
+    #[test]
+    fn supervise_arguments_accept_a_maintenance_window() {
+        assert_eq!(
+            parse_supervise_arguments(args(&["state.db", "60", "0", "22:00-06:00@Mon,Tue"])),
+            Ok(SuperviseArguments {
+                state: PathBuf::from("state.db"),
+                poll_seconds: 60,
+                idle_polls: 0,
+                maintenance_window: Some(MaintenanceWindow::parse("22:00-06:00@Mon,Tue").unwrap()),
             })
         );
     }
@@ -580,8 +609,9 @@ mod tests {
             vec!["state.db", "0"],
             vec!["state.db", "3601"],
             vec!["state.db", "30", "not-a-number"],
-            vec!["state.db", "30", "1", "extra"],
+            vec!["state.db", "30", "1", "not-a-window"],
             vec!["state.db", "30", "1", ""],
+            vec!["state.db", "30", "1", "22:00-06:00", "extra"],
         ] {
             assert!(
                 parse_supervise_arguments(args(&values)).is_err(),
