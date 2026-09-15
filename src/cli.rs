@@ -430,11 +430,13 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Customer-proof export refused: no durable migration project is available");
             std::process::exit(1);
         };
+        let branding = crate::branding::OperatorBranding::load();
         match reports::customer::export_from_store_with_options(
             &store,
             &project_id,
             &output,
             allow_incomplete,
+            &branding,
         ) {
             Ok(()) => {
                 println!("Created customer migration proof: {}", output.display());

@@ -6,6 +6,14 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Optional customer-proof report branding: an agency/operator name and
+  contact line, set once under **Settings → Report branding** in the GUI
+  (`src/branding.rs`, stored independently of any migration plan/profile —
+  it is never part of the plan fingerprint and has no effect on execution).
+  When either field is non-blank it is included in the customer-proof JSON
+  as `issued_by`, covered by the same proof digest as the rest of the
+  artifact. Left blank (the default), the field is omitted entirely and the
+  artifact is unchanged.
 - `fleet-status <directory>`: aggregates secret-free `status --summary`
   output across every MailSwiftSync ledger found under a directory. It is
   read-only and takes no instance lock, so it is safe to run continuously

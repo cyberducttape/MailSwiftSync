@@ -21,6 +21,7 @@ pub(crate) fn show(
     open: &mut bool,
     dark_mode: &mut bool,
     ui_scale: &mut f32,
+    branding: &mut crate::branding::OperatorBranding,
     engine: core::Engine,
 ) -> SettingsResult {
     if !*open {
@@ -79,6 +80,24 @@ pub(crate) fn show(
             });
             ui.add_space(8.0);
             ui.group(|ui| {
+                ui.heading("Report branding");
+                ui.label(RichText::new("Optional. Applied to customer-proof exports as an \"issued by\" line; independent of the migration plan and never affects preflight/live execution. Leave blank to omit it entirely.").size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                ui.horizontal(|ui| {
+                    ui.label("Agency/operator name");
+                    ui.text_edit_singleline(&mut branding.name);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Contact");
+                    ui.text_edit_singleline(&mut branding.contact);
+                });
+                if ui.button("Save report branding").clicked()
+                    && let Err(value) = branding.save()
+                {
+                    error = Some(format!("Could not save report branding: {value}"));
+                }
+            });
+            ui.add_space(8.0);
+            ui.group(|ui| {
                 ui.heading("Workspace tools");
                 if ui.button("Open Migration plan").clicked() {
                     action = Some(SettingsAction::OpenMigrationPlan);
@@ -102,6 +121,7 @@ impl App {
             &mut self.settings_open,
             &mut self.dark_mode,
             &mut self.ui_scale,
+            &mut self.branding,
             self.form.engine(),
         );
         if let Some(error) = result.error {
