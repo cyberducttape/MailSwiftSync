@@ -24,9 +24,12 @@ impl App {
                     match std::fs::metadata(parent) {
                         Ok(_) => {
                             // Parent exists. Verify we can write to it, but do NOT chmod it.
-                            match std::fs::OpenOptions::new().create(true).write(true).open(
-                                parent.join(".mailswiftsync_test_write"),
-                            ) {
+                            match std::fs::OpenOptions::new()
+                                .create(true)
+                                .truncate(true)
+                                .write(true)
+                                .open(parent.join(".mailswiftsync_test_write"))
+                            {
                                 Ok(f) => {
                                     let _ = std::fs::remove_file(parent.join(".mailswiftsync_test_write"));
                                     drop(f);
@@ -404,6 +407,10 @@ impl App {
             durability_recovery_pending: false,
             stop_confirm_open: false,
             keyring_open: false,
+            oauth_refresh_editor_endpoint: String::new(),
+            oauth_refresh_editor_client_id: String::new(),
+            oauth_refresh_editor_client_secret: SecretString::default(),
+            oauth_refresh_editor_refresh_token: SecretString::default(),
             active_view: WorkspaceView::Overview,
             pending_evidence: None,
             pending_batch_evidence: HashMap::new(),

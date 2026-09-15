@@ -36,11 +36,14 @@ Stable today:
 
 Experimental or planned:
 
-- Interactive provider authorization, token refresh, and unattended secret
-  brokering (the current imapsync path accepts operator-supplied OAuth 2.0
-  access tokens through the OS keyring or session form).
+- Interactive provider consent/authorization and unattended secret brokering
+  (the imapsync path accepts operator-supplied OAuth 2.0 access tokens
+  through the OS keyring or session form, and can automatically refresh them
+  from an operator-supplied refresh token; it still does not implement an
+  authorization flow, so the operator obtains that refresh token through the
+  provider's own tooling).
 - Native installers, signed releases, and cross-platform binary distribution.
-- Maintenance windows, scheduler/API operation, and message-level verification for live batches.
+- A scheduler/API that can survive the desktop closing, and message-level verification for live batches. (`supervise` provides a foreground, maintenance-window-aware batch controller; see below.)
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
 - Published large-scale migration case studies and compatibility matrix.
 
@@ -122,7 +125,7 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 
 ### Current security boundary
 
-The desktop runner does not persist passwords or OAuth access tokens. For imapsync, choose **OAuth 2.0 / XOAUTH2** per endpoint and enter a currently valid access token, or load it through an OS-keyring ID; live runs write it to a short-lived owner-only token file that imapsync reads without exposing it in argv. The readiness probe performs the same XOAUTH2 authentication before live admission. MailSwiftSync does not yet perform provider consent flows or refresh expired tokens, so operators must obtain and rotate tokens through their approved provider tooling. Dovecot native execution currently supports password authentication only. Remote Dovecot execution is unavailable because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Never put real passwords or tokens in a committed CSV.
+The desktop runner does not persist passwords or OAuth access tokens. For imapsync, choose **OAuth 2.0 / XOAUTH2** per endpoint and enter a currently valid access token, or load it through an OS-keyring ID; live runs write it to a short-lived owner-only token file that imapsync reads without exposing it in argv. The readiness probe performs the same XOAUTH2 authentication before live admission. MailSwiftSync does not perform provider consent (there is no in-app "sign in with Google/Microsoft" flow), so the operator must still register their own OAuth application with the provider and obtain an initial refresh token through that provider's documented flow. Once that refresh token, the token endpoint, and the client ID/secret are stored under an OS-keyring ID (in the OAuth keyring dialog's "Automatic OAuth refresh" section, separate from the plain credential entry), MailSwiftSync exchanges it for a fresh access token before every live launch, including each mailbox in a batch queue, so a long unattended run does not stall on a token that expired while it waited. Refresh-token rotation is followed automatically. Without a configured refresh entry, behavior is unchanged: operators obtain and rotate tokens by hand. Dovecot native execution currently supports password authentication only. Remote Dovecot execution is unavailable because its current compatibility path uses `-o imapc_password=...`, which can expose the secret through process inspection on the destination host. Never put real passwords, tokens, refresh tokens, or client secrets in a committed CSV.
 
 ### Dovecot mode
 
@@ -177,7 +180,7 @@ mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
 mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
-mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls]
+mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls] [maintenance-window]
 mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
 mailswiftsync headless /path/to/state.db batch-preflight
@@ -214,8 +217,15 @@ It excludes internal topology and forensic detail; sign it separately with
 only automation-safe queued/retryable work, waits through GUI lock ownership,
 and leaves Attention and verification-difference rows untouched. The optional
 `idle-polls` value defaults to one quiet poll; set it to `0` for continuous
-watching of a maintenance window. It is a supervisor process, not a remote API
-or a replacement for an external service manager.
+watching. An optional fourth argument, `maintenance-window`, confines new
+batch passes to a `HH:MM-HH:MM` local time-of-day range (which may wrap past
+midnight, for example `22:00-06:00`) and, with an `@Mon,Tue,...` suffix, to
+specific days; a batch already admitted before the window closes still runs
+to completion. Outside the window `supervise` only waits and re-checks the
+clock, so a bounded (`idle-polls` != 0) invocation launched by an external
+scheduler at the start of each window still exits at the end of it rather
+than running through every subsequent one. It is a supervisor process, not a
+remote API or a replacement for an external service manager.
 For single-mailbox headless runs, credentials can be supplied through paired
 owner-only secret files rather than a profile or command line:
 
@@ -262,6 +272,16 @@ The container integration workflow also runs
 engine to simulate an ungraceful controller crash and verifies that durable
 running state is recovered into operator attention with no active process
 ownership left behind.
+
+A third lab, `scripts/controller-chaos-smoke.sh`, covers ledger-level storage
+faults without needing root or a real full disk: a file-size limit hit while
+the ledger is first written, and a corrupted or truncated ledger/backup file.
+It verifies the controller stops instead of completing silently, that
+`restore` rejects a bad source without touching the live ledger, that
+`status`/`recover` refuse to operate on a corrupted ledger, and that
+restoring an earlier verified backup returns the ledger to normal operation.
+It does not cover the transfer engine itself running out of destination
+storage.
 
 ![Mailboxes workspace](docs/wiki/assets/batch-queue.png)
 
