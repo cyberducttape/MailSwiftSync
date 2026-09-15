@@ -1,5 +1,6 @@
 mod atomic_artifact;
 mod bootstrap;
+mod branding;
 mod bulk_import;
 mod cli;
 mod command;

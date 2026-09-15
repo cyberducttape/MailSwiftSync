@@ -217,7 +217,11 @@ GUI and refuses to export until the selected project is durably complete with
 verified mailbox evidence. For an explicitly labeled progress artifact only,
 pass `--allow-incomplete`; that artifact is never a completion certificate.
 It excludes internal topology and forensic detail; sign it separately with
-`mailswiftsync sign` before treating it as an authenticated deliverable.
+`mailswiftsync sign` before treating it as an authenticated deliverable. An
+optional operator/agency name and contact line — set once under **Settings →
+Report branding** in the GUI, independent of any migration plan or profile —
+is included as `issued_by` when either field is non-blank, for MSPs and
+consultants who want their own name on the artifact they hand to a customer.
 `fleet-status` aggregates secret-free `status --summary` output across every
 MailSwiftSync ledger found under a directory (read-only, no instance lock
 taken), for operators running multiple instances or
