@@ -6,6 +6,29 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- `fleet-status <directory>`: aggregates secret-free `status --summary`
+  output across every MailSwiftSync ledger found under a directory. It is
+  read-only and takes no instance lock, so it is safe to run continuously
+  alongside live ledgers. Built for operators running several instances at
+  once — several techs, several client engagements, or several shards of one
+  large migration (see the new "Scaling large migrations" and "Fleet
+  visibility" wiki pages) — where nothing previously aggregated status
+  across ledgers. A candidate `.db` file that is not actually a MailSwiftSync
+  ledger is reported under `unreadable` with its error rather than silently
+  skipped.
+- `notify-webhook <state> <https-url> [project-id]`: POSTs the same
+  secret-free JSON `status --summary` produces to an operator-configured
+  `https://` URL, over a fresh certificate-validated TLS connection. Built so
+  MSPs can update a PSA/ticketing system (ConnectWise, Autotask, Halo,
+  Syncro, or a generic automation endpoint) without a vendor-specific
+  integration — almost every such platform can ingest a generic webhook and
+  route it from there. See the new "PSA and ticketing notifications" wiki
+  page.
+- Two new wiki pages, "Scaling large migrations" and "Fleet visibility",
+  documenting the instance-sharding scale-out story (the 1–16 worker cap
+  per queue is a deliberate provider-throttling safeguard, not something to
+  widen; scale by running more instances instead) and how `fleet-status`
+  gives one combined view across those shards.
 - An engine-side destination storage-fault lab
   (`scripts/engine-storage-fault-smoke.sh`), run in CI alongside the
   existing IMAP integration and controller chaos labs, closing the
@@ -50,6 +73,17 @@ All notable changes to MailSwiftSync are documented here.
 
 - Bumped `rustls` to 0.23.45, resolving RUSTSEC-2026-0285 (TLS 1.3 handshake
   messages incorrectly accepted across encryption level boundaries).
+- The OAuth token-refresh HTTPS response reader treated a peer closing the
+  raw TCP connection immediately after its final TLS record, without a
+  closing `close_notify` alert, as a hard failure rather than the end of a
+  `Connection: close` response — a real, reproducible interop failure mode
+  found and confirmed against a live HTTPS endpoint (not every server sends
+  `close_notify`), not merely a theoretical one. rustls already validates
+  every record's integrity before handing back plaintext, so bytes already
+  read are exactly what the peer sent; an `UnexpectedEof` at that point is
+  now treated as end of response instead of an error. Applied to both the
+  OAuth refresh reader and the new webhook-notification reader, which shares
+  the same pattern.
 
 ### Changed
 
