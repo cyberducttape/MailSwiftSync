@@ -24,9 +24,12 @@ impl App {
                     match std::fs::metadata(parent) {
                         Ok(_) => {
                             // Parent exists. Verify we can write to it, but do NOT chmod it.
-                            match std::fs::OpenOptions::new().create(true).write(true).open(
-                                parent.join(".mailswiftsync_test_write"),
-                            ) {
+                            match std::fs::OpenOptions::new()
+                                .create(true)
+                                .truncate(true)
+                                .write(true)
+                                .open(parent.join(".mailswiftsync_test_write"))
+                            {
                                 Ok(f) => {
                                     let _ = std::fs::remove_file(parent.join(".mailswiftsync_test_write"));
                                     drop(f);
