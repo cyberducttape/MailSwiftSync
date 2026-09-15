@@ -1,4 +1,5 @@
 use crate::atomic_artifact::write_private_atomic;
+use crate::branding::OperatorBranding;
 use crate::{
     core,
     reports::integrity::{evidence_digest, with_proof_digest},
@@ -12,8 +13,9 @@ pub(crate) fn export_from_store(
     store: &core::StateStore,
     project_id: &str,
     path: &Path,
+    branding: &OperatorBranding,
 ) -> Result<(), String> {
-    export_from_store_with_options(store, project_id, path, false)
+    export_from_store_with_options(store, project_id, path, false, branding)
 }
 
 pub(crate) fn export_from_store_with_options(
@@ -21,6 +23,7 @@ pub(crate) fn export_from_store_with_options(
     project_id: &str,
     path: &Path,
     allow_incomplete: bool,
+    branding: &OperatorBranding,
 ) -> Result<(), String> {
     let snapshot = store
         .project_report_snapshot(project_id)
@@ -107,6 +110,14 @@ pub(crate) fn export_from_store_with_options(
         "project": {
             "name": project.name,
             "phase": format!("{:?}", project.phase),
+        },
+        "issued_by": if branding.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!({
+                "name": branding.name.trim(),
+                "contact": branding.contact.trim(),
+            })
         },
         "mailboxes": mailboxes,
         "runs": run_manifest,
@@ -243,12 +254,71 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("proof.json");
 
-        assert!(export_from_store(&store, &project.id, &path).is_err());
-        export_from_store_with_options(&store, &project.id, &path, true).unwrap();
+        let branding = OperatorBranding::default();
+        assert!(export_from_store(&store, &project.id, &path, &branding).is_err());
+        export_from_store_with_options(&store, &project.id, &path, true, &branding).unwrap();
         let value: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["completion_claim"]["status"], "incomplete");
         assert_eq!(value["completion_claim"]["independent_certificate"], false);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn customer_proof_omits_issued_by_without_branding() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("unbranded", "source", "destination")
+            .unwrap();
+        store
+            .add_mailbox(&project.id, "source@example.com", "destination@example.com")
+            .unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-unbranded-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("proof.json");
+
+        export_from_store_with_options(
+            &store,
+            &project.id,
+            &path,
+            true,
+            &OperatorBranding::default(),
+        )
+        .unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value["issued_by"].is_null());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn customer_proof_includes_trimmed_issued_by_with_branding() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("branded", "source", "destination")
+            .unwrap();
+        store
+            .add_mailbox(&project.id, "source@example.com", "destination@example.com")
+            .unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-branded-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("proof.json");
+        let branding = OperatorBranding {
+            name: "  Acme Managed Services  ".into(),
+            contact: "  support@acme.example  ".into(),
+        };
+
+        export_from_store_with_options(&store, &project.id, &path, true, &branding).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["issued_by"]["name"], "Acme Managed Services");
+        assert_eq!(value["issued_by"]["contact"], "support@acme.example");
         let _ = std::fs::remove_dir_all(directory);
     }
 }

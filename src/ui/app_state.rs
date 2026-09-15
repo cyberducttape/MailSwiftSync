@@ -131,6 +131,10 @@ pub(crate) struct App {
     pub(crate) run_started_at: Option<std::time::Instant>,
     pub(crate) dark_mode: bool,
     pub(crate) ui_scale: f32,
+    /// Operator/agency name and contact line applied to customer-proof
+    /// exports. Independent of the migration plan/profile; see
+    /// `branding::OperatorBranding`.
+    pub(crate) branding: crate::branding::OperatorBranding,
     pub(crate) bulk_live_confirm_open: bool,
     pub(crate) bulk_live_confirmed: bool,
     pub(crate) bulk_confirmation_summary: Option<BulkConfirmationSummary>,

@@ -423,6 +423,7 @@ impl App {
             // low-glare operator environments.
             dark_mode: appearance.dark_mode,
             ui_scale: appearance.ui_scale,
+            branding: crate::branding::OperatorBranding::load(),
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
