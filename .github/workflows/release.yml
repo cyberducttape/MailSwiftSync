@@ -120,6 +120,8 @@ jobs:
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
       - name: Run packaged controller storage-fault and corruption fixture
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
+      - name: Run packaged engine-side destination storage-fault fixture
+        run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
 
   publish:
     needs: [build, sbom, verify, packaged-integration]

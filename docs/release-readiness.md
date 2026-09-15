@@ -95,10 +95,26 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   Dovecot 2.3 or 2.4 configuration syntax to match the installed runtime and
   uses the same pinned Debian Bookworm Dovecot and imapsync packages used by
   the distributed container. Tagged release publication depends on this
-  product-level gate. This lab does not fault-inject the transfer itself
-  (for example a destination filesystem that fills up mid-transfer); that
-  engine-side storage-fault coverage is still required before unattended
-  production use.
+  product-level gate. This lab does not fault-inject the transfer itself;
+  see the engine storage-fault lab below for that coverage.
+- An engine-side destination storage-fault lab
+  (`scripts/engine-storage-fault-smoke.sh`) complements the ledger-level
+  chaos lab below by fault-injecting the transfer itself rather than the
+  ledger. It launches the disposable destination Dovecot's per-connection
+  `imap` service under a small `RLIMIT_FSIZE` (substituted as
+  `service imap { executable = <wrapper> }`, which confines the limit to
+  the mail-writing worker rather than the master/auth/login services other
+  connections depend on), then transfers one message under the limit and
+  one over it. The oversized write is killed by `SIGXFSZ`, reproducing a
+  full destination filesystem refusing to grow a file past its limit
+  without root, a real full disk, or a loopback-mounted filesystem. The lab
+  asserts the run is never reported as a clean `verified` success, that the
+  ledger records an explicit non-clean terminal or attention state and
+  stays readable afterward, and that the destination actually has the
+  small message but not the oversized one, so a real per-message failure
+  cannot be silently reported as a clean run. Tagged release publication
+  depends on this gate the same way it depends on the other integration
+  labs.
 - A separate controller recovery lab uses a deterministic blocking engine to
   verify durable `running` state, simulate an ungraceful controller crash, and
   confirm `recover` clears process ownership and moves interrupted work to
@@ -114,9 +130,9 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
   and `recover` both refuse to operate on a corrupted ledger rather than
   silently continuing, and that restoring an earlier verified backup returns
   the ledger to normal operation). This closes the ledger-level half of the
-  outstanding disk-full/corruption chaos gap; engine-side storage-fault
-  coverage (the transfer itself running out of destination space) remains
-  outstanding.
+  disk-full/corruption chaos gap; the engine-side half (the transfer itself
+  running out of destination space) is covered by
+  `scripts/engine-storage-fault-smoke.sh`, described above.
 - Headless `status` and `recover` commands expose secret-free durable state and
   reuse the GUI's fail-closed process recovery path. They are control-plane
   primitives, and `headless preflight|live` now drives the existing controller
@@ -199,7 +215,8 @@ MailSwiftSync should earn a stable 1.0 label through evidence, not feature count
 - Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
 - Independent message-level mismatch reporting and reconciliation; current reports are aggregate/engine evidence plus durable exception acceptance.
 - Published migration evidence from representative datasets, including failures and recovery results.
-- Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is not yet covered.
+- Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is covered by `scripts/engine-storage-fault-smoke.sh`.
+- **Open issue found while building the engine storage-fault lab (2026-09-15):** on at least one development host, `mailswiftsync headless preflight` against a disposable Dovecot 2.4.x destination did not complete within 300 seconds, even with the unmodified `scripts/imap-integration-smoke.sh` fixture and no fault injected. The authenticated capability probe's own IMAP login/logout completes in under two seconds in the Dovecot logs, so the stall is somewhere after that: candidates include `read_imap_list_response` in `src/imap_probe.rs` (whose 60-second budget in `MAX_IMAP_LIST_DURATION` is only checked between successful reads, so it does not bound a `stream.read` call that never returns) and a possible Dovecot 2.4.x LIST/discovery response difference from the 2.3.19.1 series this project pins and tests against in CI. This was not reproduced against the pinned container image (Docker was unavailable in that environment to confirm either way) and needs a dedicated investigation before it can be ruled in or out as a real compatibility gap against Dovecot 2.4.x destinations.
 - A clean `cargo audit` result for vulnerabilities; unmaintained transitive dependencies must be tracked and reviewed before each release.
 - CI and release workflows should keep third-party GitHub Actions pinned to reviewed commit SHAs; update pins deliberately with the corresponding release version documented in a comment.
 
