@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- A new wiki page, "Provider runbooks", with concrete endpoint/auth/folder
+  guidance for the migration pairings MSPs run most often: Gmail/Google
+  Workspace ↔ Microsoft 365, hosted cPanel/Dovecot → Google Workspace or
+  Microsoft 365, and generic hosted IMAP → either. Linked from Home.md.
 - Optional customer-proof report branding: an agency/operator name and
   contact line, set once under **Settings → Report branding** in the GUI
   (`src/branding.rs`, stored independently of any migration plan/profile —
