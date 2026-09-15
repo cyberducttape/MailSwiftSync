@@ -6,6 +6,17 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- An engine-side destination storage-fault lab
+  (`scripts/engine-storage-fault-smoke.sh`), run in CI alongside the
+  existing IMAP integration and controller chaos labs, closing the
+  engine-side half of the disk-full chaos gap that
+  `scripts/controller-chaos-smoke.sh` (ledger-level) left open. It launches
+  the disposable destination Dovecot's per-connection `imap` service under
+  a small `RLIMIT_FSIZE`, transfers one message under the limit and one
+  over it, and asserts that the oversized write's failure is never reported
+  as a clean `verified` success, that the ledger records an explicit
+  non-clean state and stays readable afterward, and that the destination
+  actually has the small message but not the oversized one.
 - An optional maintenance window for `supervise`: a fourth
   `HH:MM-HH:MM[@Mon,Tue,...]` argument (the time range may wrap past
   midnight) confines new batch passes to a local time-of-day/day-of-week
