@@ -23,3 +23,7 @@ jobs:
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
       - name: Run controller crash and recovery lab
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
+      - name: Run controller storage-fault and corruption lab
+        run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
+      - name: Run engine-side destination storage-fault lab
+        run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh

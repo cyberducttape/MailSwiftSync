@@ -61,7 +61,7 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
-        reports::customer::export_from_store(&self.store, project_id, path)
+        reports::customer::export_from_store(&self.store, project_id, path, &self.branding)
     }
 
     pub(crate) fn export_support_bundle_dialog(&self) -> Result<(), String> {

@@ -16,10 +16,16 @@ MailSwiftSync executes the local `imapsync` binary or destination-side `doveadm`
 
 MailSwiftSync does not collect telemetry or retain passwords in its profile file. Passwords are held only while the application is running and passed to the active migration process. Always use dry-run mode before a live migration and use an operating system account with appropriate process visibility controls.
 
+## Recent fixes
+
+- **State directory permissions (9e37e20):** Fixed a directory permission mutation vulnerability where arbitrary state paths could cause MailSwiftSync to chmod pre-existing system directories. Now only restricts permissions on directories MailSwiftSync creates; pre-existing directories are verified writable but never modified.
+
 ## Security boundaries
 
 - **Credential lifetime:** imapsync passwords are written to short-lived owner-only passfiles and removed after the child exits. Local Dovecot runs use a child environment variable. Remote Dovecot execution is unavailable because the current compatibility path could expose the source password through process inspection on the destination host; it must not be enabled through an expert flag or wrapper.
+- **State directory ownership:** Explicit state paths undergo permission validation only if the parent directory doesn't already exist. Pre-existing parent directories are verified writable but their permissions are not modified, preventing accidental chmod of system directories.
 - **Transport:** imapsync plans explicitly select IMAPS or STARTTLS according to the plan. A plain source is an explicit warning, not a verified secure plan. The Rustls readiness probe validates certificates on both the IMAPS and STARTTLS paths; it does not magically enforce TLS behavior in an externally supplied engine or wrapper.
+- **OAuth refresh:** an optional automatic-refresh configuration (token endpoint, client ID/secret, refresh token) is stored as one JSON blob under its own OS-keyring service, distinct from the plain password/access-token entries. Refreshing only ever opens a certificate-validated `https://` connection to the operator-configured token endpoint, built with the same Rustls/WebPKI stack as the IMAP readiness probe; a non-`https://` endpoint is rejected outright. MailSwiftSync does not implement an OAuth consent/authorization flow; the operator must obtain the initial refresh token through the provider's own tooling and is responsible for that application's registered scope and redirect configuration.
 - **Persistence:** profiles, SQLite state, event output, reports, and diagnostics must remain secret-free. Output is redacted before it reaches the visible journal or durable event ledger, but operators must still treat the host, engine executable, imported spreadsheets, and crash/debug tooling as trusted infrastructure.
 - **Destructive actions:** destination deletion and expert options are controlled and require deliberate review. Do not run MailSwiftSync or an engine wrapper from an untrusted account, and do not grant it broader destination access than the migration requires.
 - **Engine trust:** MailSwiftSync orchestrates `imapsync`, `doveadm`, SSH, and their configuration; it does not audit or sandbox those programs. Verify engine provenance and versions independently.

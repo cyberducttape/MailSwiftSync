@@ -4,6 +4,99 @@ All notable changes to MailSwiftSync are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- A new wiki page, "Provider runbooks", with concrete endpoint/auth/folder
+  guidance for the migration pairings MSPs run most often: Gmail/Google
+  Workspace ↔ Microsoft 365, hosted cPanel/Dovecot → Google Workspace or
+  Microsoft 365, and generic hosted IMAP → either. Linked from Home.md.
+- Optional customer-proof report branding: an agency/operator name and
+  contact line, set once under **Settings → Report branding** in the GUI
+  (`src/branding.rs`, stored independently of any migration plan/profile —
+  it is never part of the plan fingerprint and has no effect on execution).
+  When either field is non-blank it is included in the customer-proof JSON
+  as `issued_by`, covered by the same proof digest as the rest of the
+  artifact. Left blank (the default), the field is omitted entirely and the
+  artifact is unchanged.
+- `fleet-status <directory>`: aggregates secret-free `status --summary`
+  output across every MailSwiftSync ledger found under a directory. It is
+  read-only and takes no instance lock, so it is safe to run continuously
+  alongside live ledgers. Built for operators running several instances at
+  once — several techs, several client engagements, or several shards of one
+  large migration (see the new "Scaling large migrations" and "Fleet
+  visibility" wiki pages) — where nothing previously aggregated status
+  across ledgers. A candidate `.db` file that is not actually a MailSwiftSync
+  ledger is reported under `unreadable` with its error rather than silently
+  skipped.
+- `notify-webhook <state> <https-url> [project-id]`: POSTs the same
+  secret-free JSON `status --summary` produces to an operator-configured
+  `https://` URL, over a fresh certificate-validated TLS connection. Built so
+  MSPs can update a PSA/ticketing system (ConnectWise, Autotask, Halo,
+  Syncro, or a generic automation endpoint) without a vendor-specific
+  integration — almost every such platform can ingest a generic webhook and
+  route it from there. See the new "PSA and ticketing notifications" wiki
+  page.
+- Two new wiki pages, "Scaling large migrations" and "Fleet visibility",
+  documenting the instance-sharding scale-out story (the 1–16 worker cap
+  per queue is a deliberate provider-throttling safeguard, not something to
+  widen; scale by running more instances instead) and how `fleet-status`
+  gives one combined view across those shards.
+- An engine-side destination storage-fault lab
+  (`scripts/engine-storage-fault-smoke.sh`), run in CI alongside the
+  existing IMAP integration and controller chaos labs, closing the
+  engine-side half of the disk-full chaos gap that
+  `scripts/controller-chaos-smoke.sh` (ledger-level) left open. It launches
+  the disposable destination Dovecot's per-connection `imap` service under
+  a small `RLIMIT_FSIZE`, transfers one message under the limit and one
+  over it, and asserts that the oversized write's failure is never reported
+  as a clean `verified` success, that the ledger records an explicit
+  non-clean state and stays readable afterward, and that the destination
+  actually has the small message but not the oversized one.
+- An optional maintenance window for `supervise`: a fourth
+  `HH:MM-HH:MM[@Mon,Tue,...]` argument (the time range may wrap past
+  midnight) confines new batch passes to a local time-of-day/day-of-week
+  range. A batch already admitted before the window closes still runs to
+  completion; being outside the window counts toward the same idle-poll
+  limit as having no actionable work, so a bounded, scheduler-launched
+  invocation exits at the end of its window instead of running through every
+  subsequent one. Implemented in the new `src/maintenance_window.rs` with 7
+  unit tests covering same-day and midnight-wrapping windows, day-of-week
+  restriction on both sides of a wrap, and malformed input.
+- A controller chaos lab (`scripts/controller-chaos-smoke.sh`), run in CI
+  alongside the existing recovery lab, covering two ledger-level storage
+  fault classes with no root privileges and no real full disk required: a
+  file-size (`RLIMIT_FSIZE`) limit hit while the ledger is first written, and
+  a corrupted or truncated ledger/backup file. It asserts the controller
+  stops rather than completing silently, that `restore` rejects a bad source
+  without touching the live ledger, that `status`/`recover` both refuse to
+  operate on a corrupted ledger, and that restoring an earlier verified
+  backup returns the ledger to normal operation.
+- Automatic OAuth 2.0 access-token refresh for the imapsync XOAUTH2 path. An
+  operator who has registered their own OAuth application and obtained a
+  refresh token can store the token endpoint, client ID/secret, and refresh
+  token under an OS-keyring ID (in the OS keyring dialog's new "Automatic
+  OAuth refresh" section); MailSwiftSync then exchanges it for a fresh access
+  token before each live launch, including each mailbox in a batch queue,
+  and persists refresh-token rotation. This does not add a provider consent
+  flow; the operator still obtains the initial refresh token through the
+  provider's own tooling.
+
+### Fixed
+
+- Bumped `rustls` to 0.23.45, resolving RUSTSEC-2026-0285 (TLS 1.3 handshake
+  messages incorrectly accepted across encryption level boundaries).
+- The OAuth token-refresh HTTPS response reader treated a peer closing the
+  raw TCP connection immediately after its final TLS record, without a
+  closing `close_notify` alert, as a hard failure rather than the end of a
+  `Connection: close` response — a real, reproducible interop failure mode
+  found and confirmed against a live HTTPS endpoint (not every server sends
+  `close_notify`), not merely a theoretical one. rustls already validates
+  every record's integrity before handing back plaintext, so bytes already
+  read are exactly what the peer sent; an `UnexpectedEof` at that point is
+  now treated as end of response instead of an error. Applied to both the
+  OAuth refresh reader and the new webhook-notification reader, which shares
+  the same pattern.
+
 ### Changed
 
 - The application state struct (`App`) moved from `main.rs` into

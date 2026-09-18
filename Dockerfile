@@ -48,9 +48,13 @@ RUN apt-get update \
 COPY --from=builder /build/target/release/mailswiftsync /usr/local/bin/mailswiftsync
 COPY scripts/imap-integration-smoke.sh /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
 COPY scripts/controller-recovery-smoke.sh /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
+COPY scripts/controller-chaos-smoke.sh /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
+COPY scripts/engine-storage-fault-smoke.sh /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
 RUN chmod 0755 /usr/local/bin/mailswiftsync
 RUN chmod 0755 /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
 RUN chmod 0755 /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
+RUN chmod 0755 /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
+RUN chmod 0755 /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
 
 ENV MAILSWIFTSYNC_STATE_PATH=/var/lib/mailswiftsync/state.db \
     XDG_RUNTIME_DIR=/run/user/10001
