@@ -108,6 +108,14 @@ pub(crate) struct App {
     pub(crate) durability_recovery_pending: bool,
     pub(crate) stop_confirm_open: bool,
     pub(crate) keyring_open: bool,
+    /// Session-only editor buffers for an automatic OAuth refresh
+    /// configuration. Populated by the operator, then written into the OS
+    /// keyring by `store_oauth_refresh_config`; never persisted to the
+    /// profile or the durable ledger.
+    pub(crate) oauth_refresh_editor_endpoint: String,
+    pub(crate) oauth_refresh_editor_client_id: String,
+    pub(crate) oauth_refresh_editor_client_secret: SecretString,
+    pub(crate) oauth_refresh_editor_refresh_token: SecretString,
     pub(crate) active_view: WorkspaceView,
     pub(crate) pending_evidence: Option<core::MailboxEvidence>,
     pub(crate) pending_batch_evidence: HashMap<String, core::MailboxEvidence>,
@@ -123,6 +131,10 @@ pub(crate) struct App {
     pub(crate) run_started_at: Option<std::time::Instant>,
     pub(crate) dark_mode: bool,
     pub(crate) ui_scale: f32,
+    /// Operator/agency name and contact line applied to customer-proof
+    /// exports. Independent of the migration plan/profile; see
+    /// `branding::OperatorBranding`.
+    pub(crate) branding: crate::branding::OperatorBranding,
     pub(crate) bulk_live_confirm_open: bool,
     pub(crate) bulk_live_confirmed: bool,
     pub(crate) bulk_confirmation_summary: Option<BulkConfirmationSummary>,

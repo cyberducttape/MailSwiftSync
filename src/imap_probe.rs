@@ -223,15 +223,19 @@ pub(crate) fn imap_command_succeeded(response: &str, tag: &str) -> bool {
     })
 }
 
-pub(crate) fn probe_tls_capabilities_with_transport(
+/// Open and TLS-secure a fresh IMAP connection (implicit IMAPS or STARTTLS,
+/// per `transport`) and read the server greeting. This is the connection
+/// setup shared by the readiness probe and any other caller that needs a
+/// live, certificate-validated IMAP session (for example, independent
+/// message-level reconciliation): both need the identical TLS/STARTTLS/
+/// certificate-pin handling, and must not diverge into two implementations
+/// of trust-critical connection logic.
+pub(crate) fn connect_tls_stream(
     host: &str,
-    user: &str,
-    credential: &str,
-    auth_method: &str,
     transport: &str,
     ca_bundle: &str,
     certificate_pin_sha256: &str,
-) -> Result<crate::core::ServerCapabilities, String> {
+) -> Result<(StreamOwned<ClientConnection, TcpStream>, String), String> {
     let (server_name, port) = crate::endpoint::parts(host, crate::default_imap_port(transport))
         .map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
     let address = if server_name.contains(':') {
@@ -316,14 +320,7 @@ pub(crate) fn probe_tls_capabilities_with_transport(
             .complete_io(&mut stream.sock)
             .map_err(|error| format!("{host}: TLS handshake failed: {error}"))?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
-        return complete_authenticated_imap_probe(
-            stream,
-            host,
-            user,
-            credential,
-            auth_method,
-            greeting,
-        );
+        return Ok((stream, greeting));
     }
 
     let connection = ClientConnection::new(Arc::new(config), name)
@@ -331,6 +328,20 @@ pub(crate) fn probe_tls_capabilities_with_transport(
     let mut stream = StreamOwned::new(connection, tcp);
     let greeting = read_imap_greeting(&mut stream, host)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
+    Ok((stream, greeting))
+}
+
+pub(crate) fn probe_tls_capabilities_with_transport(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+) -> Result<crate::core::ServerCapabilities, String> {
+    let (stream, greeting) =
+        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
     complete_authenticated_imap_probe(stream, host, user, credential, auth_method, greeting)
 }
 

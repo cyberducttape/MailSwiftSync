@@ -50,10 +50,32 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
     let parent = destination
         .parent()
         .ok_or("Restore destination has no parent directory.")?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("could not create restore directory: {error}"))?;
-    restrict_directory_permissions(parent)
-        .map_err(|error| format!("could not secure restore directory: {error}"))?;
+
+    // Security boundary: only restrict permissions on directories we create.
+    // If the parent already exists, verify it is writable; do not chmod system directories.
+    match std::fs::metadata(parent) {
+        Ok(_) => {
+            // Parent exists. Verify we can write to it, but do NOT chmod it.
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(parent.join(".mailswiftsync_test_write"))
+                .map(|f| {
+                    let _ = std::fs::remove_file(parent.join(".mailswiftsync_test_write"));
+                    drop(f);
+                })
+                .map_err(|e| format!("Restore directory exists but is not writable: {e}"))?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Parent does not exist. Create it and restrict permissions.
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("could not create restore directory: {error}"))?;
+            restrict_directory_permissions(parent)
+                .map_err(|error| format!("could not secure restore directory: {error}"))?;
+        }
+        Err(e) => return Err(format!("Could not access restore directory parent: {e}")),
+    }
     if !destination.exists() {
         for suffix in ["-wal", "-shm"] {
             let sidecar = PathBuf::from(format!("{}{}", destination.display(), suffix));
