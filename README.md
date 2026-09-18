@@ -48,6 +48,11 @@ The current tested scope and explicit gaps are tracked in the
 [compatibility matrix](docs/compatibility-matrix.md); an entry is not treated
 as supported until its dry/live/recovery/evidence gates are complete.
 
+To test MailSwiftSync against a new IMAP provider, see the
+[provider testing guide](docs/provider-testing-guide.md). The guide includes
+setup instructions for Gmail, Microsoft 365, and Fastmail, plus a reusable
+[provider integration test script](scripts/provider-integration-test.sh).
+
 ## Why use this instead of the alternatives?
 
 | Approach | Good at | What MailSwiftSync adds or avoids |
