@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Machine-readable release policy for hosted-provider compatibility evidence.",
+  "providers": [
+    {
+      "provider": "gmail",
+      "release_required": true,
+      "engine": "imapsync",
+      "engine_version": "2.314",
+      "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
+    },
+    {
+      "provider": "microsoft365",
+      "release_required": true,
+      "engine": "imapsync",
+      "engine_version": "2.314",
+      "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
+    },
+    {
+      "provider": "fastmail",
+      "release_required": true,
+      "engine": "imapsync",
+      "engine_version": "2.314",
+      "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
+    }
+  ]
+}

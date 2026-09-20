@@ -67,7 +67,7 @@ pub struct MailboxEvidence {
     // NEW: Message-level reconciliation
     pub missing_messages: u64,      // Present in source, absent in destination
     pub extra_messages: u64,         // Present in destination, absent in source
-    pub modified_messages: u64,      // Same UID/Message-ID but different hash/size
+    pub modified_messages: u64,      // Same portable identity but different metadata
 }
 ```
 
@@ -162,7 +162,14 @@ To achieve high-confidence verification, match messages on **combinations** rath
 - `EXTRA` — Present in destination, absent in source (unclear origin)
 - `DUPLICATED` — Multiple instances of same message-ID in destination
 - `FOLDER_MISMATCH` — Same message in different folder on destination
-- `CHANGED` — Same UID but different hash (content corruption)
+- `CHANGED` — Same portable identity but different metadata or content fingerprint
+
+The verifier distinguishes reconciliation from proof strength. A unique
+internal-date + size pair is recorded as `PROBABLE_MATCH`; it removes the
+candidate from missing/extra results but does not increment exact matches and
+cannot make `is_perfect_match()` succeed. Exact status currently requires a
+unique Message-ID with matching available metadata. A future content
+fingerprint can strengthen that classification; UID equality alone never can.
 
 **Example Output (The Killer Feature):**
 ```
@@ -221,6 +228,22 @@ Overall: 20,498 exact, 2 missing, 1 extra → ACCEPT or REMEDIATE
   ```
 - Customer proof includes summary of mismatches
 - Operator report includes full mismatch details (subject, Date, UIDs)
+
+### Production-scale reconciliation boundary
+
+The `ExtractedMessages` verifier API, keyed by `MailboxMessageKey`, is a bounded in-memory
+comparison primitive for unit tests and small, explicitly requested checks. It
+is not the production architecture for a 500,000-message mailbox. A live
+message-level verification path must stream extraction records into the
+per-run SQLite staging table, with source/destination side, mailbox,
+UIDVALIDITY, local UID, normalized Message-ID, metadata, and any content
+fingerprint stored as rows. Indexed SQL joins (or bounded batches over those
+indexes) should perform reconciliation and persist mismatches transactionally.
+
+This keeps process memory bounded and makes the evidence durable even if the
+report process is interrupted. Until that controller/database path is wired,
+message-level verification remains an engine/module capability rather than a
+production-scale feature claim.
 
 ## Phase 2: Implementation Plan
 

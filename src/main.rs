@@ -80,7 +80,7 @@ use process::{
 use process::{configure_process_group, process_identity};
 use provider::ProviderPreset;
 #[cfg(all(test, unix))]
-use runner::run_streaming;
+use runner::{RunContext, run_streaming};
 #[cfg(test)]
 use runner::{dovecot_state_candidate, record_process_tail};
 #[cfg(all(test, unix))]
@@ -1620,19 +1620,19 @@ mod tests {
         });
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
-        let outcome = run_streaming(
-            "/bin/sh",
-            &args,
-            &[],
-            &tx,
-            "test-run",
-            "test-job",
-            "",
-            &cancel,
-            &[],
-            Duration::from_secs(5),
-            true,
-        )
+        let outcome = run_streaming(RunContext {
+            executable: "/bin/sh",
+            args: &args,
+            env: &[],
+            tx: &tx,
+            run_id: "test-run",
+            job_id: "test-job",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: Duration::from_secs(5),
+            dovecot_exit_two_is_delta: true,
+        })
         .unwrap();
         drop(tx);
         acknowledger.join().unwrap();
@@ -1655,19 +1655,19 @@ mod tests {
             "-c".into(),
             "printf '%s\\n' 'Host1 Nb folders: 2 folders' 'Host2 Nb folders: 2 folders' 'Host1 Nb messages: 7 messages' 'Host2 Nb messages: 7 messages' 'Host1 Total size: 100 bytes' 'Host2 Total size: 100 bytes' 'The sync looks good, all 7 identified messages in host1 are on host2.' 'Detected 0 errors'".into(),
         ];
-        let result = run_streaming(
-            "/bin/sh",
-            &args,
-            &[],
-            &tx,
-            "test-run",
-            "test-job",
-            "",
-            &cancel,
-            &[],
-            Duration::from_secs(5),
-            false,
-        )
+        let result = run_streaming(RunContext {
+            executable: "/bin/sh",
+            args: &args,
+            env: &[],
+            tx: &tx,
+            run_id: "test-run",
+            job_id: "test-job",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: Duration::from_secs(5),
+            dovecot_exit_two_is_delta: false,
+        })
         .unwrap();
         drop(tx);
         acknowledger.join().unwrap();
@@ -1691,19 +1691,19 @@ mod tests {
         });
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
-        let outcome = run_streaming(
-            "/bin/sh",
-            &args,
-            &[],
-            &tx,
-            "test-run",
-            "test-job",
-            "",
-            &cancel,
-            &[],
-            Duration::from_secs(5),
-            false,
-        );
+        let outcome = run_streaming(RunContext {
+            executable: "/bin/sh",
+            args: &args,
+            env: &[],
+            tx: &tx,
+            run_id: "test-run",
+            job_id: "test-job",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: Duration::from_secs(5),
+            dovecot_exit_two_is_delta: false,
+        });
         drop(tx);
         acknowledger.join().unwrap();
         assert!(outcome.is_err());
@@ -1715,19 +1715,20 @@ mod tests {
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         drop(rx);
         let cancel = AtomicBool::new(false);
-        let outcome = run_streaming(
-            "/bin/sh",
-            &["-c".into(), "sleep 30".into()],
-            &[],
-            &tx,
-            "test-run",
-            "test-job",
-            "",
-            &cancel,
-            &[],
-            Duration::from_secs(5),
-            false,
-        );
+        let args = ["-c".into(), "sleep 30".into()];
+        let outcome = run_streaming(RunContext {
+            executable: "/bin/sh",
+            args: &args,
+            env: &[],
+            tx: &tx,
+            run_id: "test-run",
+            job_id: "test-job",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: Duration::from_secs(5),
+            dovecot_exit_two_is_delta: false,
+        });
 
         let error = outcome.unwrap_err();
         assert!(error.contains("event channel disconnected"));
@@ -1744,19 +1745,20 @@ mod tests {
             }
         });
         let cancel = AtomicBool::new(false);
-        let outcome = run_streaming(
-            "/bin/sh",
-            &["-c".into(), "sleep 30".into()],
-            &[],
-            &tx,
-            "test-run",
-            "test-job",
-            "",
-            &cancel,
-            &[],
-            Duration::from_secs(5),
-            false,
-        );
+        let args = ["-c".into(), "sleep 30".into()];
+        let outcome = run_streaming(RunContext {
+            executable: "/bin/sh",
+            args: &args,
+            env: &[],
+            tx: &tx,
+            run_id: "test-run",
+            job_id: "test-job",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: Duration::from_secs(5),
+            dovecot_exit_two_is_delta: false,
+        });
         drop(tx);
         acknowledger.join().unwrap();
         assert!(

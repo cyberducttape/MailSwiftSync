@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::message_extraction::ExtractedMessage;
+use super::message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 
 /// Mismatch classifications currently supported by the executable verifier.
 ///
@@ -62,12 +62,16 @@ impl MessageVerification {
     pub fn detect_mismatches(
         job_id: &str,
         run_id: &str,
-        source_messages: &HashMap<String, ExtractedMessage>,
-        dest_messages: &HashMap<String, ExtractedMessage>,
+        source_messages: &ExtractedMessages,
+        dest_messages: &ExtractedMessages,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
         let mut mismatches = Vec::new();
-        let mut unmatched_source: HashSet<String> = source_messages.keys().cloned().collect();
-        let mut unmatched_dest: HashSet<String> = dest_messages.keys().cloned().collect();
+        let mut exact_matches = 0_u64;
+        let mut probable_matches = 0_u64;
+        // UIDs are mailbox-local diagnostic metadata. Borrow them from the
+        // input maps instead of cloning every UID into a second set.
+        let mut unmatched_source: HashSet<&MailboxMessageKey> = source_messages.keys().collect();
+        let mut unmatched_dest: HashSet<&MailboxMessageKey> = dest_messages.keys().collect();
 
         let source_by_message_id = index_by_message_id(source_messages);
         let dest_by_message_id = index_by_message_id(dest_messages);
@@ -84,20 +88,45 @@ impl MessageVerification {
         for message_id in message_ids {
             let source_uids = &source_by_message_id[&message_id];
             let dest_uids = &dest_by_message_id[&message_id];
-            if source_uids.len() == 1 && !dest_uids.is_empty() {
-                let source_uid = &source_uids[0];
-                let dest_uid = &dest_uids[0];
-                let source_msg = &source_messages[source_uid];
-                let dest_msg = &dest_messages[dest_uid];
-                unmatched_source.remove(source_uid);
-                unmatched_dest.remove(dest_uid);
-                if !same_metadata(source_msg, dest_msg) {
+            // Reconcile duplicate Message-IDs by occurrence count. Pairing
+            // the common prefix preserves legitimate duplicates; only an
+            // unmatched destination excess is evidence of a new duplicate.
+            if source_uids.len() > 1 || dest_uids.len() > 1 {
+                for (source_key, dest_key) in source_uids.iter().zip(dest_uids.iter()) {
+                    let source_msg = &source_messages[source_key];
+                    let dest_msg = &dest_messages[dest_key];
+                    unmatched_source.remove(source_key);
+                    unmatched_dest.remove(dest_key);
+                    if same_metadata(source_msg, dest_msg) {
+                        exact_matches += 1;
+                    } else {
+                        mismatches.push(make_mismatch(
+                            job_id,
+                            run_id,
+                            MismatchType::MessageIdOnly,
+                            Some(source_key),
+                            Some(dest_key),
+                            Some(source_msg),
+                            Some(dest_msg),
+                        ));
+                    }
+                }
+            } else if source_uids.len() == 1 && dest_uids.len() == 1 {
+                let source_key = source_uids[0];
+                let dest_key = dest_uids[0];
+                let source_msg = &source_messages[source_key];
+                let dest_msg = &dest_messages[dest_key];
+                unmatched_source.remove(source_key);
+                unmatched_dest.remove(dest_key);
+                if same_metadata(source_msg, dest_msg) {
+                    exact_matches += 1;
+                } else {
                     mismatches.push(make_mismatch(
                         job_id,
                         run_id,
                         MismatchType::MessageIdOnly,
-                        Some(source_uid),
-                        Some(dest_uid),
+                        Some(source_key),
+                        Some(dest_key),
                         Some(source_msg),
                         Some(dest_msg),
                     ));
@@ -120,55 +149,62 @@ impl MessageVerification {
             let source_uids = &source_by_fingerprint[&fingerprint];
             let dest_uids = &dest_by_fingerprint[&fingerprint];
             if source_uids.len() == 1 && dest_uids.len() == 1 {
-                unmatched_source.remove(&source_uids[0]);
-                unmatched_dest.remove(&dest_uids[0]);
+                unmatched_source.remove(source_uids[0]);
+                unmatched_dest.remove(dest_uids[0]);
+                // Date + size is only a candidate identity. It is useful for
+                // reconciliation, but it is not proof that the messages are
+                // the same and must never contribute to exact_matches.
+                probable_matches += 1;
             }
         }
 
-        // Duplicate Message-IDs are observable even with rewritten UIDs. Do
-        // not report the additional copies as generic extras.
+        // Report only destination occurrences beyond the source multiplicity.
         let mut duplicate_dest_uids = dest_by_message_id
-            .values()
-            .filter(|uids| uids.len() > 1)
-            .flat_map(|uids| uids.iter())
+            .iter()
+            .filter(|(message_id, dest_uids)| {
+                source_by_message_id
+                    .get(*message_id)
+                    .is_some_and(|source_uids| dest_uids.len() > source_uids.len())
+            })
+            .flat_map(|(_, uids)| uids.iter())
             .filter(|uid| unmatched_dest.contains(*uid))
-            .cloned()
+            .copied()
             .collect::<Vec<_>>();
         duplicate_dest_uids.sort();
         for dest_uid in duplicate_dest_uids {
-            let dest_msg = &dest_messages[&dest_uid];
-            unmatched_dest.remove(&dest_uid);
+            let dest_msg = &dest_messages[dest_uid];
+            unmatched_dest.remove(dest_uid);
             mismatches.push(make_mismatch(
                 job_id,
                 run_id,
                 MismatchType::Duplicated,
                 None,
-                Some(&dest_uid),
+                Some(dest_uid),
                 None,
                 Some(dest_msg),
             ));
         }
 
         for source_uid in sorted_keys(&unmatched_source) {
-            let source_msg = &source_messages[&source_uid];
+            let source_msg = &source_messages[source_uid];
             mismatches.push(make_mismatch(
                 job_id,
                 run_id,
                 MismatchType::Missing,
-                Some(&source_uid),
+                Some(source_uid),
                 None,
                 Some(source_msg),
                 None,
             ));
         }
         for dest_uid in sorted_keys(&unmatched_dest) {
-            let dest_msg = &dest_messages[&dest_uid];
+            let dest_msg = &dest_messages[dest_uid];
             mismatches.push(make_mismatch(
                 job_id,
                 run_id,
                 MismatchType::Extra,
                 None,
-                Some(&dest_uid),
+                Some(dest_uid),
                 None,
                 Some(dest_msg),
             ));
@@ -178,8 +214,8 @@ impl MessageVerification {
         let summary = VerificationSummary {
             total_source: source_messages.len() as u64,
             total_destination: dest_messages.len() as u64,
-            exact_matches: source_messages.len() as u64
-                - mismatches.iter().filter(|m| m.source_uid.is_some()).count() as u64,
+            exact_matches,
+            probable_matches,
             missing_count: mismatches
                 .iter()
                 .filter(|m| m.mismatch_type == MismatchType::Missing)
@@ -202,9 +238,7 @@ impl MessageVerification {
     }
 }
 
-fn index_by_message_id(
-    messages: &HashMap<String, ExtractedMessage>,
-) -> HashMap<String, Vec<String>> {
+fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<String, Vec<&MailboxMessageKey>> {
     let mut index = HashMap::new();
     for (uid, message) in messages {
         if let Some(message_id) = message
@@ -216,48 +250,62 @@ fn index_by_message_id(
             index
                 .entry(message_id.to_owned())
                 .or_insert_with(Vec::new)
-                .push(uid.clone());
+                .push(uid);
         }
     }
     index.values_mut().for_each(|uids| uids.sort());
     index
 }
 
-fn index_by_fingerprint(
-    messages: &HashMap<String, ExtractedMessage>,
-    eligible: &HashSet<String>,
-) -> HashMap<String, Vec<String>> {
+fn index_by_fingerprint<'a>(
+    messages: &'a ExtractedMessages,
+    eligible: &HashSet<&'a MailboxMessageKey>,
+) -> HashMap<String, Vec<&'a MailboxMessageKey>> {
     let mut index = HashMap::new();
     for uid in eligible {
-        let message = &messages[uid];
+        let message = &messages[*uid];
         let (Some(date), Some(size)) = (&message.internal_date, message.size_bytes) else {
             continue;
         };
         index
             .entry(format!("{date}\0{size}"))
             .or_insert_with(Vec::new)
-            .push(uid.clone());
+            .push(*uid);
     }
     index.values_mut().for_each(|uids| uids.sort());
     index
 }
 
-fn sorted_keys(keys: &HashSet<String>) -> Vec<String> {
-    let mut sorted = keys.iter().cloned().collect::<Vec<_>>();
-    sorted.sort();
+fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxMessageKey> {
+    let mut sorted = keys.iter().copied().collect::<Vec<_>>();
+    sorted.sort_by(|left, right| {
+        left.mailbox
+            .cmp(&right.mailbox)
+            .then(left.uidvalidity.cmp(&right.uidvalidity))
+            .then(left.uid.cmp(&right.uid))
+    });
     sorted
 }
 
 fn same_metadata(source: &ExtractedMessage, destination: &ExtractedMessage) -> bool {
-    source.size_bytes == destination.size_bytes && source.internal_date == destination.internal_date
+    matches!(
+        (
+            source.size_bytes,
+            destination.size_bytes,
+            source.internal_date.as_deref(),
+            destination.internal_date.as_deref(),
+        ),
+        (Some(source_size), Some(destination_size), Some(source_date), Some(destination_date))
+            if source_size == destination_size && source_date == destination_date
+    )
 }
 
 fn make_mismatch(
     job_id: &str,
     run_id: &str,
     mismatch_type: MismatchType,
-    source_uid: Option<&String>,
-    dest_uid: Option<&String>,
+    source_key: Option<&MailboxMessageKey>,
+    dest_key: Option<&MailboxMessageKey>,
     source: Option<&ExtractedMessage>,
     destination: Option<&ExtractedMessage>,
 ) -> MessageMismatch {
@@ -271,8 +319,8 @@ fn make_mismatch(
         job_id: job_id.to_owned(),
         run_id: run_id.to_owned(),
         mismatch_type,
-        source_uid: source_uid.cloned(),
-        dest_uid: dest_uid.cloned(),
+        source_uid: source_key.map(|key| key.uid.clone()),
+        dest_uid: dest_key.map(|key| key.uid.clone()),
         source_message_id: source.and_then(|message| message.message_id.clone()),
         dest_message_id: destination.and_then(|message| message.message_id.clone()),
         source_size_bytes: source.and_then(|message| message.size_bytes),
@@ -289,6 +337,9 @@ pub struct VerificationSummary {
     pub total_source: u64,
     pub total_destination: u64,
     pub exact_matches: u64,
+    /// Unique internal-date + size pairings. These are reconciliation
+    /// candidates, not proof of message identity.
+    pub probable_matches: u64,
     pub missing_count: u64,
     pub extra_count: u64,
     pub duplicated_count: u64,
@@ -301,7 +352,9 @@ impl VerificationSummary {
             && self.extra_count == 0
             && self.duplicated_count == 0
             && self.changed_count == 0
-            && self.total_source == self.total_destination
+            && self.probable_matches == 0
+            && self.exact_matches == self.total_source
+            && self.exact_matches == self.total_destination
     }
 }
 
@@ -309,11 +362,15 @@ impl VerificationSummary {
 mod tests {
     use super::*;
 
+    fn key(uid: &str) -> MailboxMessageKey {
+        MailboxMessageKey::new("INBOX", uid)
+    }
+
     #[test]
     fn detects_missing_messages() {
         let mut source = HashMap::new();
         source.insert(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: Some("<a@example.com>".to_string()),
                 uid: Some("1".to_string()),
@@ -322,7 +379,7 @@ mod tests {
             },
         );
         source.insert(
-            "2".to_string(),
+            key("2"),
             ExtractedMessage {
                 message_id: Some("<b@example.com>".to_string()),
                 uid: Some("2".to_string()),
@@ -333,7 +390,7 @@ mod tests {
 
         let mut dest = HashMap::new();
         dest.insert(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: Some("<a@example.com>".to_string()),
                 uid: Some("1".to_string()),
@@ -360,7 +417,7 @@ mod tests {
     fn detects_extra_messages() {
         let mut source = HashMap::new();
         source.insert(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: Some("<a@example.com>".to_string()),
                 uid: Some("1".to_string()),
@@ -371,7 +428,7 @@ mod tests {
 
         let mut dest = HashMap::new();
         dest.insert(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: Some("<a@example.com>".to_string()),
                 uid: Some("1".to_string()),
@@ -380,7 +437,7 @@ mod tests {
             },
         );
         dest.insert(
-            "2".to_string(),
+            key("2"),
             ExtractedMessage {
                 message_id: Some("<c@example.com>".to_string()),
                 uid: Some("2".to_string()),
@@ -406,7 +463,7 @@ mod tests {
     fn detects_changed_messages() {
         let mut source = HashMap::new();
         source.insert(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: Some("<a@example.com>".to_string()),
                 uid: Some("1".to_string()),
@@ -417,7 +474,7 @@ mod tests {
 
         let mut dest = HashMap::new();
         dest.insert(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: Some("<a@example.com>".to_string()),
                 uid: Some("1".to_string()),
@@ -434,10 +491,61 @@ mod tests {
     }
 
     #[test]
+    fn message_id_without_metadata_is_not_exact_proof() {
+        let message = ExtractedMessage {
+            message_id: Some("<metadata-absent@example.com>".to_string()),
+            uid: Some("1".to_string()),
+            size_bytes: None,
+            internal_date: None,
+        };
+        let source = HashMap::from([(key("1"), message.clone())]);
+        let destination = HashMap::from([(key("99"), message)]);
+
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run-id-only", &source, &destination)
+                .unwrap();
+
+        assert_eq!(summary.exact_matches, 0);
+        assert_eq!(summary.changed_count, 1);
+        assert!(!mismatches.is_empty());
+        assert!(!summary.is_perfect_match());
+    }
+
+    #[test]
+    fn one_missing_metadata_field_is_not_treated_as_matching() {
+        let source = HashMap::from([(
+            key("1"),
+            ExtractedMessage {
+                message_id: Some("<one-sided@example.com>".to_string()),
+                uid: Some("1".to_string()),
+                size_bytes: Some(100),
+                internal_date: None,
+            },
+        )]);
+        let destination = HashMap::from([(
+            key("2"),
+            ExtractedMessage {
+                message_id: Some("<one-sided@example.com>".to_string()),
+                uid: Some("2".to_string()),
+                size_bytes: Some(100),
+                internal_date: None,
+            },
+        )]);
+
+        let (_, summary) =
+            MessageVerification::detect_mismatches("job1", "run-one-sided", &source, &destination)
+                .unwrap();
+
+        assert_eq!(summary.exact_matches, 0);
+        assert_eq!(summary.changed_count, 1);
+        assert!(!summary.is_perfect_match());
+    }
+
+    #[test]
     fn perfect_match_when_identical() {
         let mut source = HashMap::new();
         source.insert(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: Some("<a@example.com>".to_string()),
                 uid: Some("1".to_string()),
@@ -458,7 +566,7 @@ mod tests {
     #[test]
     fn destination_uid_rewrite_is_not_reported_as_missing_and_extra() {
         let source = HashMap::from([(
-            "17".to_string(),
+            key("17"),
             ExtractedMessage {
                 message_id: Some("<stable@example.com>".to_string()),
                 uid: Some("17".to_string()),
@@ -467,7 +575,7 @@ mod tests {
             },
         )]);
         let destination = HashMap::from([(
-            "904".to_string(),
+            key("904"),
             ExtractedMessage {
                 message_id: Some("<stable@example.com>".to_string()),
                 uid: Some("904".to_string()),
@@ -490,9 +598,9 @@ mod tests {
     }
 
     #[test]
-    fn date_and_size_fallback_is_also_uid_independent() {
+    fn date_and_size_fallback_is_probable_not_exact() {
         let source = HashMap::from([(
-            "1".to_string(),
+            key("1"),
             ExtractedMessage {
                 message_id: None,
                 uid: Some("1".to_string()),
@@ -501,7 +609,7 @@ mod tests {
             },
         )]);
         let destination = HashMap::from([(
-            "88".to_string(),
+            key("88"),
             ExtractedMessage {
                 message_id: None,
                 uid: Some("88".to_string()),
@@ -519,7 +627,9 @@ mod tests {
         .unwrap();
 
         assert!(mismatches.is_empty());
-        assert!(summary.is_perfect_match());
+        assert!(!summary.is_perfect_match());
+        assert_eq!(summary.exact_matches, 0);
+        assert_eq!(summary.probable_matches, 1);
     }
 
     #[test]
@@ -530,14 +640,8 @@ mod tests {
             size_bytes: Some(512),
             internal_date: Some("2024-01-01T00:00:00Z".to_string()),
         };
-        let source = HashMap::from([
-            ("1".to_string(), message("1")),
-            ("2".to_string(), message("2")),
-        ]);
-        let destination = HashMap::from([
-            ("88".to_string(), message("88")),
-            ("89".to_string(), message("89")),
-        ]);
+        let source = HashMap::from([(key("1"), message("1")), (key("2"), message("2"))]);
+        let destination = HashMap::from([(key("88"), message("88")), (key("89"), message("89"))]);
 
         let (mismatches, summary) =
             MessageVerification::detect_mismatches("job1", "run-ambiguous", &source, &destination)
@@ -557,11 +661,8 @@ mod tests {
             size_bytes: Some(512),
             internal_date: Some("2024-01-01T00:00:00Z".to_string()),
         };
-        let source = HashMap::from([("1".to_string(), message("1"))]);
-        let destination = HashMap::from([
-            ("88".to_string(), message("88")),
-            ("89".to_string(), message("89")),
-        ]);
+        let source = HashMap::from([(key("1"), message("1"))]);
+        let destination = HashMap::from([(key("88"), message("88")), (key("89"), message("89"))]);
 
         let (mismatches, summary) =
             MessageVerification::detect_mismatches("job1", "run-duplicate", &source, &destination)
@@ -573,6 +674,68 @@ mod tests {
             mismatches
                 .iter()
                 .any(|m| m.mismatch_type == MismatchType::Duplicated)
+        );
+    }
+
+    #[test]
+    fn preserved_source_duplicates_are_not_reported_as_created_duplicates() {
+        let message = |uid: &str| ExtractedMessage {
+            message_id: Some("<preserved@example.com>".to_string()),
+            uid: Some(uid.to_string()),
+            size_bytes: Some(512),
+            internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        };
+        let source = HashMap::from([
+            (MailboxMessageKey::new("INBOX", "1"), message("1")),
+            (MailboxMessageKey::new("Archive", "1"), message("1")),
+        ]);
+        let destination = HashMap::from([
+            (MailboxMessageKey::new("INBOX", "81"), message("81")),
+            (MailboxMessageKey::new("Archive", "92"), message("92")),
+        ]);
+
+        let (mismatches, summary) = MessageVerification::detect_mismatches(
+            "job1",
+            "run-preserved-duplicate",
+            &source,
+            &destination,
+        )
+        .unwrap();
+
+        assert!(mismatches.is_empty());
+        assert_eq!(summary.exact_matches, 2);
+        assert!(summary.is_perfect_match());
+    }
+
+    #[test]
+    fn repeated_destination_message_id_without_source_is_extra_not_duplicate() {
+        let message = |uid: &str| ExtractedMessage {
+            message_id: Some("<destination-only@example.com>".to_string()),
+            uid: Some(uid.to_string()),
+            size_bytes: Some(512),
+            internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        };
+        let source = HashMap::new();
+        let destination = HashMap::from([
+            (MailboxMessageKey::new("INBOX", "81"), message("81")),
+            (MailboxMessageKey::new("Archive", "92"), message("92")),
+        ]);
+
+        let (mismatches, summary) = MessageVerification::detect_mismatches(
+            "job1",
+            "run-destination-only",
+            &source,
+            &destination,
+        )
+        .unwrap();
+
+        assert_eq!(summary.extra_count, 2);
+        assert_eq!(
+            mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::Duplicated)
+                .count(),
+            0
         );
     }
 }

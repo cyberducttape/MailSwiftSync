@@ -15,6 +15,7 @@
 //! - `MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE` environment variable (path to file containing Bearer token)
 //! - `MAILSWIFTSYNC_WEBHOOK_HEADER_NAME` and `MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE` environment variables (for custom headers)
 //! - `MAILSWIFTSYNC_WEBHOOK_HEADER_FILE` environment variable (path to file containing custom header as "Header-Name: value")
+//! - `MAILSWIFTSYNC_WEBHOOK_URL_FILE` environment variable (path to file containing the HTTPS URL)
 //!
 //! Do NOT embed secrets in the webhook URL itself: secrets in command-line arguments
 //! leak to process listings (ps aux), shell history, /proc/<pid>/cmdline, systemd units,
@@ -46,9 +47,10 @@ const WEBHOOK_TOTAL_BUDGET: Duration = Duration::from_secs(30);
 /// backs is meant to be invoked by the operator's own automation (a scheduler,
 /// a `supervise` wrapper script), which already owns its own retry policy.
 pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
+    let url = load_webhook_url(url)?;
     let bearer_token = load_webhook_bearer_token()?;
     let custom_header = load_webhook_custom_header()?;
-    let (host, port, path) = parse_https_url(url)?;
+    let (host, port, path) = parse_https_url(&url)?;
 
     let address = format!("{host}:{port}");
     let sockets = address
@@ -194,6 +196,22 @@ fn parse_https_url(url: &str) -> Result<(String, u16, String), String> {
     let (host, port) = crate::endpoint::parts(authority, 443)
         .map_err(|error| format!("invalid webhook URL host: {error}"))?;
     Ok((host, port, path.to_owned()))
+}
+
+/// Resolve the command-line URL, allowing operators to keep secret-bearing
+/// webhook paths out of process listings, shell history, and audit logs.
+/// The file form takes precedence when configured and is read with the same
+/// owner-only/symlink-safe policy as other webhook credentials.
+fn load_webhook_url(cli_url: &str) -> Result<String, String> {
+    if let Ok(path) = std::env::var("MAILSWIFTSYNC_WEBHOOK_URL_FILE") {
+        let url = read_secret_file(std::path::Path::new(&path))
+            .map_err(|error| format!("Failed to read webhook URL file: {error}"))?;
+        if url.is_empty() {
+            return Err("webhook URL file is empty".into());
+        }
+        return Ok(url.as_str().to_owned());
+    }
+    Ok(cli_url.to_owned())
 }
 
 /// Load webhook Bearer token from environment variable or file.

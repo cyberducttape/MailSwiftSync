@@ -11,6 +11,15 @@ operator-configured URL.
 mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc123
 ```
 
+For a secret-bearing URL path, put the URL in an owner-readable file and set
+`MAILSWIFTSYNC_WEBHOOK_URL_FILE`; it takes precedence over the command-line
+URL and keeps the path out of process listings and shell history:
+
+```bash
+MAILSWIFTSYNC_WEBHOOK_URL_FILE=/run/user/1000/mailswiftsync/webhook-url \
+  mailswiftsync notify-webhook /path/to/state.db ignored
+```
+
 - With no project ID, the payload covers every project in the ledger (the
   same shape `status --summary` returns with no project ID).
 - With a project ID, the payload is scoped to that one project:
@@ -43,11 +52,11 @@ side:
 - **A generic ingest endpoint you already run**: point `notify-webhook`
   directly at it.
 
-If the receiving endpoint itself needs authentication, embed the token in
-the URL (as its own path segment or query parameter) — the same pattern
-Slack, Zapier, and PagerDuty inbound webhooks already use. MailSwiftSync
-does not attach any additional credential to the request, and does not
-persist the webhook URL anywhere but the invoking command line/script.
+If the receiving endpoint itself needs authentication, use a URL file for a
+secret path, or configure a Bearer token/custom header through the documented
+environment variables or owner-readable secret files. MailSwiftSync rejects
+control characters in those values and validates custom header names as HTTP
+tokens. It does not persist the webhook URL or credentials in the ledger.
 
 ## When to call it
 

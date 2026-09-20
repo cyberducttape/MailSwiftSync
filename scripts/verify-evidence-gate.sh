@@ -1,108 +1,180 @@
-#!/bin/bash
-# Evidence-based provider compatibility gate
-# Only allows release when each tested provider has structured evidence
-
+#!/usr/bin/env bash
+# Evidence-based provider compatibility release gate.
+# Requirements come from tests/provider-evidence/policy.json, never from
+# wording in the Markdown compatibility matrix.
 set -euo pipefail
 
 EVIDENCE_DIR="tests/provider-evidence"
-MATRIX_FILE="docs/compatibility-matrix.md"
+POLICY_FILE="$EVIDENCE_DIR/policy.json"
 SCHEMA_FILE="$EVIDENCE_DIR/schema.json"
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
+MODE="preview"
 if [[ "${1:-}" == "--release" ]]; then
-    MODE="release"
-else
-    MODE="preview"
+  MODE="release"
+fi
+
+if [[ ! -f "$POLICY_FILE" ]]; then
+  echo "FAIL: provider evidence policy not found: $POLICY_FILE" >&2
+  exit 1
+fi
+if [[ ! -f "$SCHEMA_FILE" ]]; then
+  echo "FAIL: provider evidence schema not found: $SCHEMA_FILE" >&2
+  exit 1
 fi
 
 echo "Provider Compatibility Evidence Gate (Mode: $MODE)"
 echo "=================================================="
 
-# Check if schema exists
-if [[ ! -f "$SCHEMA_FILE" ]]; then
-    echo -e "${RED}✗ FAIL: Schema not found at $SCHEMA_FILE${NC}"
-    exit 1
+# Use Python only for JSON parsing so the gate does not depend on jq being
+# installed on CI runners.
+mapfile -t POLICY_ROWS < <(python3 - "$POLICY_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    policy = json.load(handle)
+
+providers = policy.get("providers")
+if not isinstance(providers, list) or not providers:
+    raise SystemExit("provider evidence policy must contain a non-empty providers array")
+
+seen = set()
+for entry in providers:
+    required = entry.get("required_phases")
+    values = [entry.get("provider"), entry.get("engine"), entry.get("engine_version")]
+    if not all(isinstance(value, str) and value for value in values):
+        raise SystemExit("each provider policy entry needs provider, engine, and engine_version")
+    if not isinstance(required, list) or not required or not all(isinstance(value, str) and value for value in required):
+        raise SystemExit(f"{entry.get('provider', '<unknown>')}: required_phases must be non-empty strings")
+    if entry["provider"] in seen:
+        raise SystemExit(f"duplicate provider policy entry: {entry['provider']}")
+    seen.add(entry["provider"])
+    print("\t".join([
+        entry["provider"],
+        "true" if entry.get("release_required") is True else "false",
+        entry["engine"],
+        entry["engine_version"],
+        ",".join(required),
+    ]))
+PY
+)
+
+if [[ ${#POLICY_ROWS[@]} -eq 0 ]]; then
+  echo "FAIL: provider evidence policy contains no providers" >&2
+  exit 1
 fi
 
-# Parse matrix for provider rows (skip header and fixture row)
-# Look for "Generic IMAP" rows that claim testing has occurred
-declare -a TESTED_PROVIDERS
-declare -a MISSING_EVIDENCE
+mapfile -t EVIDENCE_FILES < <(find "$EVIDENCE_DIR" -maxdepth 1 -type f -name '*.json' ! -name 'schema.json' ! -name 'policy.json' | sort)
+declare -a FAILURES=()
 
-mapfile -t MATRIX_ROWS < <(grep "^| Generic IMAP" "$MATRIX_FILE")
-
-if [[ ${#MATRIX_ROWS[@]} -eq 0 ]]; then
-    echo -e "${YELLOW}ℹ No hosted providers in matrix${NC}"
-    exit 0
-fi
-
-for row in "${MATRIX_ROWS[@]}"; do
-    # Extract provider name (second column)
-    provider=$(echo "$row" | cut -d'|' -f3 | xargs)
-
-    # Normalize provider name for evidence filename
-    provider_id=$(echo "$provider" | tr '()' '_' | tr '/' '-' | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
-
-    # Check if row claims any testing (not "Code path verified" only)
-    if echo "$row" | grep -q "Code path verified"; then
-        # Check if there's actual evidence
-        dry_pilot=$(echo "$row" | cut -d'|' -f8 | xargs)
-        live_pilot=$(echo "$row" | cut -d'|' -f9 | xargs)
-        recovery=$(echo "$row" | cut -d'|' -f10 | xargs)
-
-        # If any column suggests testing beyond code path, require evidence
-        if [[ "$dry_pilot" == *"integration test"* ]] || \
-           [[ "$live_pilot" == *"integration test"* ]] || \
-           [[ "$recovery" == *"test"* ]]; then
-
-            # Look for evidence files
-            evidence_files=$(find "$EVIDENCE_DIR" -name "*${provider_id}*.json" 2>/dev/null || true)
-
-            if [[ -z "$evidence_files" ]]; then
-                MISSING_EVIDENCE+=("$provider")
-            else
-                # Validate evidence files against schema
-                for evidence_file in $evidence_files; do
-                    if ! jsonschema -i "$evidence_file" "$SCHEMA_FILE" 2>/dev/null; then
-                        echo -e "${RED}✗ FAIL: $evidence_file does not match schema${NC}"
-                        exit 1
-                    fi
-                done
-                echo -e "${GREEN}✓ $provider: Evidence found and validated${NC}"
-            fi
-        fi
+for row in "${POLICY_ROWS[@]}"; do
+  IFS=$'\t' read -r provider release_required expected_engine expected_version required_phases <<< "$row"
+  if [[ "$MODE" == "release" && "$release_required" != "true" ]]; then
+    echo "Skipped non-release provider: $provider"
+    continue
+  fi
+  provider_files=()
+  for evidence_file in "${EVIDENCE_FILES[@]}"; do
+    [[ -n "$evidence_file" ]] || continue
+    file_provider=$(python3 - "$evidence_file" <<'PY'
+import json
+import sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        value = json.load(handle).get("provider", "")
+except (OSError, json.JSONDecodeError):
+    value = ""
+print(value)
+PY
+)
+    if [[ "$file_provider" == "$provider" ]]; then
+      provider_files+=("$evidence_file")
     fi
+  done
+
+  if [[ ${#provider_files[@]} -eq 0 ]]; then
+    FAILURES+=("$provider: no evidence files")
+    continue
+  fi
+
+  policy_result=$(python3 - "$provider" "$expected_engine" "$expected_version" "$required_phases" "${provider_files[@]}" <<'PY'
+import json
+import sys
+
+provider, expected_engine, expected_version, phases_csv, *files = sys.argv[1:]
+required_phases = set(phases_csv.split(","))
+seen_phases = set()
+errors = []
+for filename in files:
+    try:
+        with open(filename, encoding="utf-8") as handle:
+            evidence = json.load(handle)
+    except (OSError, json.JSONDecodeError) as error:
+        errors.append(f"{filename}: invalid JSON ({error})")
+        continue
+    required_root = {
+        "provider", "tested_at", "testing_phase", "source_version",
+        "destination_version", "engine_version", "test_summary", "results",
+    }
+    missing_root = sorted(required_root - evidence.keys())
+    if missing_root:
+        errors.append(f"{filename}: missing required fields: {', '.join(missing_root)}")
+        continue
+    if evidence.get("provider") != provider:
+        errors.append(f"{filename}: provider does not match policy")
+    if evidence.get("testing_phase") not in {"dry_pilot", "live_pilot", "recovery_test", "edge_case"}:
+        errors.append(f"{filename}: testing_phase is not a supported evidence phase")
+    if evidence.get("engine_version") != expected_version:
+        errors.append(f"{filename}: engine_version must be {expected_version}")
+    if not evidence.get("engine_version", "").startswith(expected_engine + " "):
+        errors.append(f"{filename}: engine_version must identify {expected_engine}")
+    summary = evidence.get("test_summary")
+    if not isinstance(summary, dict) or not all(
+        isinstance(summary.get(field), int) and summary.get(field) >= minimum
+        for field, minimum in (("mailboxes_tested", 1), ("messages_total", 0), ("bytes_total", 0))
+    ):
+        errors.append(f"{filename}: test_summary has invalid required counters")
+    results = evidence.get("results")
+    if not isinstance(results, dict):
+        errors.append(f"{filename}: results must be an object")
+        continue
+    if results.get("overall_result") not in {"pass", "pass_with_exceptions", "fail"}:
+        errors.append(f"{filename}: results.overall_result is invalid")
+    if not isinstance(results.get("messages_verified"), int) or results.get("messages_verified") < 0:
+        errors.append(f"{filename}: results.messages_verified is invalid")
+    if results.get("verification_confidence") not in {"high", "medium", "low"}:
+        errors.append(f"{filename}: results.verification_confidence is invalid")
+    phase = evidence.get("testing_phase")
+    if phase in required_phases:
+        seen_phases.add(phase)
+        result = evidence.get("results", {}).get("overall_result")
+        if result != "pass":
+            errors.append(f"{filename}: {phase} overall_result must be pass, got {result!r}")
+missing = sorted(required_phases - seen_phases)
+if missing:
+    errors.append("missing required phases: " + ", ".join(missing))
+for error in errors:
+    print(error)
+PY
+  )
+  while IFS= read -r error; do
+    [[ -n "$error" ]] && FAILURES+=("$provider: $error")
+  done <<< "$policy_result"
+
+  if [[ "$release_required" == "true" ]]; then
+    echo "Checked release-required provider: $provider"
+  else
+    echo "Checked non-release provider: $provider"
+  fi
 done
 
-# Report missing evidence
-if [[ ${#MISSING_EVIDENCE[@]} -gt 0 ]]; then
-    echo ""
-    echo -e "${RED}Missing Evidence for Tested Providers:${NC}"
-    for provider in "${MISSING_EVIDENCE[@]}"; do
-        echo "  - $provider"
-    done
-
-    if [[ "$MODE" == "release" ]]; then
-        echo ""
-        echo -e "${RED}✗ FAIL: Release blocked${NC}"
-        echo "Evidence required for live-tested providers before release."
-        echo ""
-        echo "To add evidence, create a JSON file in $EVIDENCE_DIR following tests/provider-evidence/schema.json"
-        exit 1
-    else
-        echo ""
-        echo -e "${YELLOW}⚠ Preview mode: Missing evidence not blocking${NC}"
-    fi
+if [[ ${#FAILURES[@]} -gt 0 ]]; then
+  echo ""
+  printf '%s\n' "${FAILURES[@]}" | sed 's/^/FAIL: /'
+  if [[ "$MODE" == "release" ]]; then
+    echo "FAIL: release blocked by provider evidence policy" >&2
+    exit 1
+  fi
+  echo "Preview mode: evidence policy failures are non-blocking"
 else
-    echo ""
-    if [[ "$MODE" == "release" ]]; then
-        echo -e "${GREEN}✓ All tested providers have evidence${NC}"
-        echo -e "${GREEN}✓ Release gate PASSED${NC}"
-    else
-        echo -e "${GREEN}✓ Preview gate PASSED${NC}"
-    fi
+  echo "PASS: all provider evidence policy checks passed"
 fi

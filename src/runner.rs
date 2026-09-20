@@ -31,23 +31,37 @@ pub(crate) struct StreamResult {
     pub(crate) imapsync_evidence: Option<core::MailboxEvidence>,
 }
 
-// The process runner keeps each security-sensitive input explicit at the call
-// site: executable, args, environment, event sink, redaction prefix/secrets,
-// cancellation, and operator-selected timeout.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run_streaming(
-    executable: &str,
-    args: &[String],
-    env: &[(String, SecretString)],
-    tx: &mpsc::SyncSender<crate::Event>,
-    run_id: &str,
-    job_id: &str,
-    prefix: &str,
-    cancel: &AtomicBool,
-    secrets: &[SecretString],
-    timeout: Duration,
-    dovecot_exit_two_is_delta: bool,
-) -> Result<StreamResult, String> {
+/// Inputs for one externally executed migration process. Keeping these
+/// related values together prevents callers from accidentally pairing a
+/// command with the wrong run/job identity or cancellation channel.
+pub(crate) struct RunContext<'a> {
+    pub(crate) executable: &'a str,
+    pub(crate) args: &'a [String],
+    pub(crate) env: &'a [(String, SecretString)],
+    pub(crate) tx: &'a mpsc::SyncSender<crate::Event>,
+    pub(crate) run_id: &'a str,
+    pub(crate) job_id: &'a str,
+    pub(crate) prefix: &'a str,
+    pub(crate) cancel: &'a AtomicBool,
+    pub(crate) secrets: &'a [SecretString],
+    pub(crate) timeout: Duration,
+    pub(crate) dovecot_exit_two_is_delta: bool,
+}
+
+pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, String> {
+    let RunContext {
+        executable,
+        args,
+        env,
+        tx,
+        run_id,
+        job_id,
+        prefix,
+        cancel,
+        secrets,
+        timeout,
+        dovecot_exit_two_is_delta,
+    } = context;
     let mut command = Command::new(executable);
     command
         .args(args)

@@ -2,8 +2,8 @@ use crate::{
     Event, core,
     credentials::{CleanupGuard, SecretString},
     runner::{
-        request_engine_version_probe, run_dovecot_destination_preflight, run_dovecot_verification,
-        run_streaming,
+        RunContext, request_engine_version_probe, run_dovecot_destination_preflight,
+        run_dovecot_verification, run_streaming,
     },
 };
 use std::{
@@ -62,19 +62,19 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
         // probe finishes while this run is still active.
         request_engine_version_probe(&executable, &tx, &run_id, &job_id);
         let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut result = run_streaming(
-                &executable,
-                &args,
-                &env,
-                &tx,
-                &run_id,
-                &job_id,
-                "",
-                &cancel,
-                &output_secrets,
+            let mut result = run_streaming(RunContext {
+                executable: &executable,
+                args: &args,
+                env: &env,
+                tx: &tx,
+                run_id: &run_id,
+                job_id: &job_id,
+                prefix: "",
+                cancel: &cancel,
+                secrets: &output_secrets,
                 timeout,
-                engine == core::Engine::Dovecot && !dry_run,
-            );
+                dovecot_exit_two_is_delta: engine == core::Engine::Dovecot && !dry_run,
+            });
             if result.is_ok() && !destination_preflight.is_empty() {
                 result = result.and_then(|outcome| {
                     run_dovecot_destination_preflight(
