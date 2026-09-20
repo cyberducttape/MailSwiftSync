@@ -1,6 +1,8 @@
-# Reproducible Linux headless image. The desktop controller remains available
+# Version-controlled Linux headless image. The desktop controller remains available
 # in the binary, but this image deliberately defaults to the CLI help instead
-# of attempting to open a display server.
+# of attempting to open a display server. Note: base images use mutable tags
+# (debian:bookworm-slim, rust:1.92-bookworm) and apt repositories are live,
+# so rebuilds may not be byte-for-byte reproducible. imapsync .deb is SHA-256 pinned.
 
 FROM debian:bookworm-slim AS imapsync-package
 
