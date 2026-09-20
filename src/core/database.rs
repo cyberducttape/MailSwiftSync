@@ -213,15 +213,15 @@ impl StateStore {
         tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT);
-                 CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, missing_messages INTEGER NOT NULL DEFAULT 0, extra_messages INTEGER NOT NULL DEFAULT 0, modified_messages INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER NOT NULL, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, missing_messages INTEGER NOT NULL DEFAULT 0, extra_messages INTEGER NOT NULL DEFAULT 0, modified_messages INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES mailbox_jobs(id), parent_run_id TEXT REFERENCES runs(id), engine TEXT NOT NULL, phase_at_start TEXT NOT NULL DEFAULT 'legacy_unknown', plan_snapshot TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, detail TEXT NOT NULL DEFAULT '');
                  CREATE TABLE IF NOT EXISTS active_processes (run_id TEXT NOT NULL REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), pid INTEGER NOT NULL, start_ticks INTEGER, process_group INTEGER, session_id INTEGER, executable TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(run_id, job_id));
                  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER, dest_size_bytes INTEGER, source_date TEXT, dest_date TEXT, subject BLOB, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS message_extraction (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), message_id TEXT, uid TEXT, size_bytes INTEGER, internal_date TEXT, extracted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER, dest_size_bytes INTEGER, source_date TEXT, dest_date TEXT, subject BLOB, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER, destination_uidvalidity INTEGER, source_fingerprint TEXT, destination_fingerprint TEXT, source_flags TEXT, destination_flags TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS message_extraction (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), side TEXT NOT NULL DEFAULT 'unknown', mailbox TEXT, message_id TEXT, uid TEXT, uidvalidity INTEGER, size_bytes INTEGER, internal_date TEXT, content_fingerprint TEXT, flags TEXT, extracted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS message_mismatch_acceptance (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), mismatch_id TEXT NOT NULL REFERENCES message_mismatches(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
                  CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
@@ -386,12 +386,6 @@ impl StateStore {
             )?;
         }
         // Message-level verification columns (schema v7)
-        if !columns.iter().any(|column| column == "missing_messages") {
-            tx.execute(
-                "ALTER TABLE evidence ADD COLUMN missing_messages INTEGER NOT NULL DEFAULT 0",
-                [],
-            )?;
-        }
         if !columns.iter().any(|column| column == "extra_messages") {
             tx.execute(
                 "ALTER TABLE evidence ADD COLUMN extra_messages INTEGER NOT NULL DEFAULT 0",
@@ -404,12 +398,9 @@ impl StateStore {
                 [],
             )?;
         }
-        if !history_columns
-            .iter()
-            .any(|column| column == "missing_messages")
-        {
+        if !columns.iter().any(|column| column == "missing_messages") {
             tx.execute(
-                "ALTER TABLE evidence_history ADD COLUMN missing_messages INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE evidence ADD COLUMN missing_messages INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
@@ -430,6 +421,55 @@ impl StateStore {
                 "ALTER TABLE evidence_history ADD COLUMN modified_messages INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
+        }
+        if !history_columns
+            .iter()
+            .any(|column| column == "missing_messages")
+        {
+            tx.execute(
+                "ALTER TABLE evidence_history ADD COLUMN missing_messages INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+
+        let mismatch_columns = tx
+            .prepare("PRAGMA table_info(message_mismatches)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (column, definition) in [
+            ("source_folder", "TEXT"),
+            ("destination_folder", "TEXT"),
+            ("source_uidvalidity", "INTEGER"),
+            ("destination_uidvalidity", "INTEGER"),
+            ("source_fingerprint", "TEXT"),
+            ("destination_fingerprint", "TEXT"),
+            ("source_flags", "TEXT"),
+            ("destination_flags", "TEXT"),
+        ] {
+            if !mismatch_columns.iter().any(|existing| existing == column) {
+                tx.execute(
+                    &format!("ALTER TABLE message_mismatches ADD COLUMN {column} {definition}"),
+                    [],
+                )?;
+            }
+        }
+        let extraction_columns = tx
+            .prepare("PRAGMA table_info(message_extraction)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (column, definition) in [
+            ("side", "TEXT NOT NULL DEFAULT 'unknown'"),
+            ("mailbox", "TEXT"),
+            ("uidvalidity", "INTEGER"),
+            ("content_fingerprint", "TEXT"),
+            ("flags", "TEXT"),
+        ] {
+            if !extraction_columns.iter().any(|existing| existing == column) {
+                tx.execute(
+                    &format!("ALTER TABLE message_extraction ADD COLUMN {column} {definition}"),
+                    [],
+                )?;
+            }
         }
         // Older alpha versions did not enforce one active run per mailbox.
         // Reconcile those ledgers before creating the partial unique indexes;
