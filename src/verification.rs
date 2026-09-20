@@ -12,12 +12,9 @@ pub(crate) enum ImapsyncOutputProfile {
     Unknown,
 }
 
-fn imapsync_output_profile(version: Option<&str>) -> ImapsyncOutputProfile {
+pub(crate) fn imapsync_output_profile(version: Option<&str>) -> ImapsyncOutputProfile {
     let Some(version) = version else {
-        // The version probe is best-effort. Keep the strict current grammar
-        // usable when metadata is unavailable; any grammar drift still fails
-        // closed because every record and marker is exact below.
-        return ImapsyncOutputProfile::Packaged2314;
+        return ImapsyncOutputProfile::Unknown;
     };
     let supported = version
         .split_whitespace()
@@ -129,7 +126,10 @@ impl ImapsyncEvidenceAccumulator {
         self.sync_good |= is_sync_good_summary(line.trim());
     }
 
-    pub(crate) fn evidence(&self) -> Option<core::MailboxEvidence> {
+    pub(crate) fn evidence(&self, profile: ImapsyncOutputProfile) -> Option<core::MailboxEvidence> {
+        if profile != ImapsyncOutputProfile::Packaged2314 {
+            return None;
+        }
         Some(core::MailboxEvidence {
             source_messages: self.source_messages?,
             destination_messages: self.destination_messages?,
@@ -151,23 +151,22 @@ impl ImapsyncEvidenceAccumulator {
 /// constant-memory and always keeps the latest value from a noisy run.
 #[cfg(test)]
 pub(crate) fn parse_imapsync_evidence(lines: &[String]) -> Option<core::MailboxEvidence> {
-    parse_imapsync_evidence_for_version(lines, None)
+    parse_imapsync_evidence_for_version(lines, Some("imapsync 2.314"))
 }
 
 /// Parse evidence only against a parser profile covered by the compatibility
 /// contract. Explicitly unknown engine versions never become authoritative.
+#[cfg(test)]
 pub(crate) fn parse_imapsync_evidence_for_version(
     lines: &[String],
     engine_version: Option<&str>,
 ) -> Option<core::MailboxEvidence> {
-    if imapsync_output_profile(engine_version) == ImapsyncOutputProfile::Unknown {
-        return None;
-    }
+    let profile = imapsync_output_profile(engine_version);
     let mut accumulator = ImapsyncEvidenceAccumulator::default();
     for line in lines {
         accumulator.observe(line);
     }
-    accumulator.evidence()
+    accumulator.evidence(profile)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -299,7 +298,9 @@ mod tests {
         ] {
             accumulator.observe(line);
         }
-        let evidence = accumulator.evidence().unwrap();
+        let evidence = accumulator
+            .evidence(ImapsyncOutputProfile::Packaged2314)
+            .unwrap();
         assert_eq!(evidence.source_folders, 3);
         assert_eq!(evidence.source_messages, 42);
         assert_eq!(evidence.destination_messages, 42);
@@ -321,7 +322,9 @@ mod tests {
         ] {
             accumulator.observe(line);
         }
-        let evidence = accumulator.evidence().unwrap();
+        let evidence = accumulator
+            .evidence(ImapsyncOutputProfile::Packaged2314)
+            .unwrap();
         assert!(!evidence.authoritative);
         assert_eq!(evidence.failed_messages, 2);
         assert_eq!(evidence.unmatched_messages, 1);
@@ -355,7 +358,11 @@ mod tests {
         ] {
             accumulator.observe(line);
         }
-        assert!(accumulator.evidence().is_none());
+        assert!(
+            accumulator
+                .evidence(ImapsyncOutputProfile::Packaged2314)
+                .is_none()
+        );
     }
 
     #[test]
@@ -434,6 +441,21 @@ mod tests {
             "Detected 0 errors".into(),
         ];
         assert!(parse_imapsync_evidence_for_version(&lines, Some("imapsync 2.315")).is_none());
+    }
+
+    #[test]
+    fn imapsync_parser_rejects_a_missing_engine_version() {
+        let lines = [
+            "Host1 Nb folders: 1 folders".into(),
+            "Host2 Nb folders: 1 folders".into(),
+            "Host1 Nb messages: 1 messages".into(),
+            "Host2 Nb messages: 1 messages".into(),
+            "Host1 Total size: 10 bytes".into(),
+            "Host2 Total size: 10 bytes".into(),
+            "The sync looks good, all 1 identified messages in host1 are on host2.".into(),
+            "Detected 0 errors".into(),
+        ];
+        assert!(parse_imapsync_evidence_for_version(&lines, None).is_none());
     }
 
     #[test]

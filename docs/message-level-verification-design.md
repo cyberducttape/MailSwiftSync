@@ -81,6 +81,10 @@ CREATE TABLE message_mismatches (
   job_id TEXT NOT NULL,
   run_id TEXT NOT NULL,
   mismatch_type TEXT NOT NULL,  -- 'missing' | 'extra' | 'modified'
+  source_folder TEXT,
+  destination_folder TEXT,
+  source_uidvalidity INTEGER,
+  destination_uidvalidity INTEGER,
   source_uid TEXT,               -- UID from source (NULL if extra)
   dest_uid TEXT,                 -- UID from destination (NULL if missing)
   source_message_id TEXT,         -- Message-ID header (for cross-check)
@@ -128,11 +132,18 @@ coverage.
 
 #### From Dovecot (doveadm)
 
-`doveadm mailbox status` provides counts. `doveadm fetch` can extract UID + Message-ID:
+`doveadm mailbox status` provides counts and must separately obtain each
+mailbox's UIDVALIDITY. Message extraction must select a machine-readable
+formatter explicitly rather than parse Dovecot's human-oriented default:
 
 ```bash
-doveadm -u user@example.com fetch -A "uid messageids" MAILBOX "INBOX"
+doveadm -f tab fetch -u user@example.com \
+  "uid hdr.message-id size.virtual date.received.unixtime" mailbox "INBOX"
 ```
+
+This is a per-user query; it must not be combined with `-A`. The extractor is
+currently unwired and its tabular contract still requires validation against each
+admitted Dovecot runtime before it can become authoritative evidence.
 
 **Implementation:**
 - After doveadm migration, run `doveadm mailbox status` on both sides

@@ -5,7 +5,7 @@ use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
     controller::failure::{
-        FailureClass, classified_failure_detail, classify_failure, is_transient_batch_error,
+        FailureClass, classified_failure_detail, classify_failure, should_retry_batch_error,
         transient_retry_delay,
     },
     core,
@@ -13,8 +13,10 @@ use crate::{
     imap_probe::fresh_dual_imaps_authentication,
     process::ProcessLaunchLimiter,
     runner::{
-        RunContext, run_dovecot_destination_preflight, run_dovecot_verification, run_streaming,
+        ResolvedImapsyncIdentity, RunContext, persist_engine_identity_before_launch,
+        run_dovecot_destination_preflight, run_dovecot_verification, run_streaming,
     },
+    verification::ImapsyncOutputProfile,
 };
 use std::{
     collections::HashSet,
@@ -40,6 +42,7 @@ pub(crate) struct BatchWorkerContext {
     pub(crate) launch_limiter: Arc<ProcessLaunchLimiter>,
     pub(crate) batch_project_id: String,
     pub(crate) batch_run_id: String,
+    pub(crate) resolved_imapsync: Arc<std::collections::HashMap<String, ResolvedImapsyncIdentity>>,
 }
 
 /// Execute mailbox work items for one batch worker. All output is emitted as
@@ -57,6 +60,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         launch_limiter,
         batch_project_id,
         batch_run_id,
+        resolved_imapsync,
     } = context;
     let live = mode.is_live();
     while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
@@ -83,6 +87,32 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             job_id: job_id.clone(),
             text: format!("══ Job {}: {} ══", index + 1, job.label),
         });
+        let imapsync_output_profile = if job.form.engine() == core::Engine::ImapSync {
+            let identity = resolved_imapsync.get(&job.form.profile.imapsync_path);
+            let version = identity
+                .map(|identity| identity.version.clone())
+                .unwrap_or_else(|| "unknown".into());
+            let profile = identity
+                .map(|identity| identity.output_profile)
+                .unwrap_or(ImapsyncOutputProfile::Unknown);
+            if let Err(error) =
+                persist_engine_identity_before_launch(&tx, &child_run_id, &job_id, &version)
+            {
+                let _ = tx.send(Event::RunLine {
+                    run_id: child_run_id.clone(),
+                    job_id: job_id.clone(),
+                    text: format!(
+                        "[{}] [verification] engine identity is not durable; output evidence disabled: {error}",
+                        index + 1
+                    ),
+                });
+                ImapsyncOutputProfile::Unknown
+            } else {
+                profile
+            }
+        } else {
+            ImapsyncOutputProfile::Unknown
+        };
         let mut completed = false;
         let mut delta_required = false;
         let mut claimed = false;
@@ -91,6 +121,34 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 break;
             }
             if live && let Err(error) = fresh_dual_imaps_authentication(&job.form) {
+                if should_retry_batch_error(&error, attempt, retry_count) {
+                    let _ = tx.send(Event::RunLine {
+                        run_id: child_run_id.clone(),
+                        job_id: job_id.clone(),
+                        text: format!(
+                            "[{}] [{}] transient fresh authentication probe failure; retrying: {error}",
+                            index + 1,
+                            classify_failure(&error).label()
+                        ),
+                    });
+                    let _ = tx.send(Event::JobState {
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        state: "Retrying".into(),
+                    });
+                    let delay = transient_retry_delay(&error, attempt);
+                    let started = std::time::Instant::now();
+                    while started.elapsed() < delay {
+                        if cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    continue;
+                }
                 failed.store(true, Ordering::Relaxed);
                 let _ = tx.send(Event::RunLine {
                     run_id: child_run_id.clone(),
@@ -109,9 +167,10 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     job_id: job_id.clone(),
                     child_run_id: child_run_id.clone(),
                     state: "failed".into(),
-                    detail: classified_failure_detail(&format!(
-                        "fresh live authentication failed before launch: {error}"
-                    )),
+                    // Classify the raw probe result. Prefixing it with
+                    // "authentication failed" would incorrectly mask a DNS,
+                    // TCP, TLS-disconnect, or provider-capacity failure.
+                    detail: classified_failure_detail(&error),
                     credential_fingerprint: None,
                 });
                 if let Ok(mut terminal) = terminal_jobs.lock() {
@@ -221,6 +280,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         ),
                         dovecot_exit_two_is_delta: job.form.engine() == core::Engine::Dovecot
                             && !job.form.dry_run,
+                        imapsync_output_profile,
                     })
                     .map(|stream| {
                         if !job.form.dry_run
@@ -315,11 +375,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     completed = true;
                     break;
                 }
-                Err(error)
-                    if classify_failure(&error) != FailureClass::Cancellation
-                        && attempt < retry_count
-                        && is_transient_batch_error(&error) =>
-                {
+                Err(error) if should_retry_batch_error(&error, attempt, retry_count) => {
                     let _ = tx.send(Event::RunLine {
                         run_id: child_run_id.clone(),
                         job_id: job_id.clone(),

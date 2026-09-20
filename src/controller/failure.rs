@@ -90,19 +90,6 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
     {
         FailureClass::Cancellation
     } else if [
-        "authentication",
-        "auth failed",
-        "authentification",
-        "invalid credentials",
-        "login denied",
-        "login failed",
-        "authenticationfailed",
-    ]
-    .iter()
-    .any(|marker| error.contains(marker))
-    {
-        FailureClass::Authentication
-    } else if [
         "rate limit",
         "rate-limit",
         "throttl",
@@ -150,12 +137,39 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
     {
         FailureClass::Verification
     } else if [
+        "invalid peer certificate",
+        "certificate verify failed",
+        "certificate validation",
+        "certificate expired",
+        "certificate sha-256 pin mismatch",
+        "unknown issuer",
+        "not valid for name",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Configuration
+    } else if [
         "timed out",
         "timeout",
+        "operation would block",
         "connection reset",
         "connection refused",
+        "connection closed",
+        "peer closed connection",
+        "connection aborted",
         "network is unreachable",
+        "host is unreachable",
         "broken pipe",
+        "unexpected eof",
+        "failed to lookup address",
+        "name or service not known",
+        "nodename nor servname provided",
+        "temporary failure in name resolution",
+        "no address found",
+        "tls handshake eof",
+        "handshake timed out",
+        "list response exceeded the 60-second processing limit",
         "temporarily unavailable",
         "try again",
         "throttl",
@@ -165,6 +179,23 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
     .any(|marker| error.contains(marker))
     {
         FailureClass::Transport
+    } else if [
+        "authentication",
+        "auth failed",
+        "authentification",
+        "invalid credentials",
+        "login denied",
+        "login failed",
+        "authenticationfailed",
+        "permission denied",
+        "not authorized",
+        "authorization failed",
+        "access denied",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+    {
+        FailureClass::Authentication
     } else if [
         "invalid option",
         "unknown option",
@@ -189,6 +220,12 @@ pub(crate) fn is_transient_batch_error(error: &str) -> bool {
         classify_failure(error),
         FailureClass::Transport | FailureClass::Capacity
     )
+}
+
+pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count: usize) -> bool {
+    classify_failure(error) != FailureClass::Cancellation
+        && attempt < retry_count
+        && is_transient_batch_error(error)
 }
 
 pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {

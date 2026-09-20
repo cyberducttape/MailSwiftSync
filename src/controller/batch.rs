@@ -335,6 +335,15 @@ mod tests {
             batch_mailbox_state("completed", Some(&exact_evidence)),
             "verified"
         );
+        let balanced_message_mismatch = MailboxEvidence {
+            missing_messages: 1,
+            extra_messages: 1,
+            ..exact_evidence
+        };
+        assert_eq!(
+            batch_mailbox_state("completed", Some(&balanced_message_mismatch)),
+            "verification_difference"
+        );
     }
 
     #[test]

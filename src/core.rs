@@ -540,6 +540,38 @@ mod tests {
     }
 
     #[test]
+    fn balanced_aggregate_totals_cannot_hide_message_level_mismatches() {
+        let evidence = MailboxEvidence {
+            source_messages: 10_000,
+            destination_messages: 10_000,
+            source_bytes: 50_000_000,
+            destination_bytes: 50_000_000,
+            unmatched_messages: 0,
+            failed_messages: 0,
+            source_folders: 12,
+            destination_folders: 12,
+            authoritative: true,
+            missing_messages: 1,
+            extra_messages: 1,
+            modified_messages: 0,
+        };
+
+        assert_eq!(evidence.evidence_level(), "Message-level mismatch");
+        assert_eq!(evidence.confidence_percent(), 0);
+        assert!(!evidence.is_exact_match());
+
+        let modified = MailboxEvidence {
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 1,
+            ..evidence
+        };
+        assert_eq!(modified.evidence_level(), "Message-level mismatch");
+        assert_eq!(modified.confidence_percent(), 0);
+        assert!(!modified.is_exact_match());
+    }
+
+    #[test]
     fn empty_mailbox_with_failures_is_not_verified() {
         let evidence = MailboxEvidence {
             source_messages: 0,

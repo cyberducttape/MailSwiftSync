@@ -1,8 +1,14 @@
 use super::batch::BatchExecutionMode;
 use super::batch_work_item::{BatchWorkerContext, process_batch_work_items};
-use crate::{Event, StreamOutcome, bulk_import::BulkJob, process::ProcessLaunchLimiter};
+use crate::{
+    Event, StreamOutcome,
+    bulk_import::BulkJob,
+    core,
+    process::ProcessLaunchLimiter,
+    runner::{ResolvedImapsyncIdentity, resolve_imapsync_identity},
+};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -69,6 +75,19 @@ pub(crate) fn spawn_batch_worker(
     thread::spawn(move || {
         let failed = Arc::new(AtomicBool::new(false));
         let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
+        // Resolve each distinct imapsync executable once before any mailbox
+        // process starts. Every child receives the same immutable identity;
+        // there is no first-wave subscriber race and no lossy metadata send.
+        let mut resolved_imapsync = HashMap::<String, ResolvedImapsyncIdentity>::new();
+        for job in &jobs {
+            if job.form.engine() == core::Engine::ImapSync {
+                let executable = job.form.profile.imapsync_path.clone();
+                resolved_imapsync
+                    .entry(executable.clone())
+                    .or_insert_with(|| resolve_imapsync_identity(&executable));
+            }
+        }
+        let resolved_imapsync = Arc::new(resolved_imapsync);
         // Keep only a small number of full job plans in flight.  In
         // particular, do not eagerly enqueue hundreds of Forms (which
         // may contain credential material) before workers have even
@@ -89,6 +108,7 @@ pub(crate) fn spawn_batch_worker(
             let launch_limiter = Arc::clone(&launch_limiter);
             let batch_project_id = batch_project_id.clone();
             let batch_run_id = batch_run_id.clone();
+            let resolved_imapsync = Arc::clone(&resolved_imapsync);
             workers.push(thread::spawn(move || {
                 process_batch_work_items(BatchWorkerContext {
                     concurrency,
@@ -102,6 +122,7 @@ pub(crate) fn spawn_batch_worker(
                     launch_limiter,
                     batch_project_id,
                     batch_run_id,
+                    resolved_imapsync,
                 });
             }));
         }

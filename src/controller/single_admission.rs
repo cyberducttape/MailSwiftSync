@@ -102,7 +102,6 @@ pub(crate) fn admit_single_run(
         batch_plan_fingerprints: Vec::new(),
         kind: RunKind::Single,
         dry_run: admission.dry_run,
-        engine: admission.engine,
         plan_fingerprint: admission.plan_fingerprint,
         credential_fingerprint: admission.credential_fingerprint,
     })

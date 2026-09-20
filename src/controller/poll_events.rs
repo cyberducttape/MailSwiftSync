@@ -150,20 +150,31 @@ impl App {
                         run_id,
                         job_id,
                         version,
+                        reply,
                     } => {
                         let owns_version =
                             process_event_is_current(active_run.as_ref(), &run_id, &job_id);
-                        if owns_version {
-                            // Version probing is advisory metadata. A
-                            // storage failure must not turn a successful
-                            // migration into a false execution failure.
-                            if let Err(error) = self.store.record_engine_version(&run_id, &version)
-                            {
-                                durability_errors.push(format!(
-                                    "could not persist engine version metadata for {run_id}: {error}"
-                                ));
-                            }
+                        let result = if owns_version {
+                            // Engine identity is resolved before launch and
+                            // is part of the verification trust boundary.
+                            // Preserve any persistence failure for terminal
+                            // durability review.
+                            self.store
+                                .record_engine_version(&run_id, &version)
+                                .map_err(|error| {
+                                    format!(
+                                        "could not persist engine version metadata for {run_id}: {error}"
+                                    )
+                                })
+                        } else {
+                            Err(format!(
+                                "ignored engine version for unknown run {run_id} and job {job_id}"
+                            ))
+                        };
+                        if let Err(error) = &result {
+                            durability_errors.push(error.clone());
                         }
+                        let _ = reply.send(result);
                     }
                     Event::ProcessEnded { run_id, job_id } => {
                         if process_event_is_current(active_run.as_ref(), &run_id, &job_id) {

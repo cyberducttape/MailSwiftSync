@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Reproducible product-level lab for the supported generic-IMAP path. It
+# Reproducible product-level lab for the selected migration engine. It
 # exercises the packaged MailSwiftSync binary, its generated plan and secret
-# delivery, the real Dovecot servers/imapsync binary, durable evidence, and
-# the customer-proof verifier. Direct engine checks remain supplemental.
+# delivery, real Dovecot servers, durable evidence, and the customer-proof
+# verifier. The default remains the packaged imapsync path; CI invokes the
+# native Dovecot path separately.
+
+test_engine="${MAILSWIFTSYNC_TEST_ENGINE:-ImapSync}"
+if [[ "$test_engine" != "ImapSync" && "$test_engine" != "Dovecot" ]]; then
+  echo "FAIL: MAILSWIFTSYNC_TEST_ENGINE must be ImapSync or Dovecot" >&2
+  exit 1
+fi
 
 if ! command -v dovecot >/dev/null 2>&1 || ! command -v imapsync >/dev/null 2>&1 || \
   ! command -v mailswiftsync >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || \
@@ -27,7 +34,7 @@ if [[ "$imapsync_version" != "2.314" ]]; then
   echo "FAIL: product integration requires packaged imapsync 2.314; found ${imapsync_version:-unknown}" >&2
   exit 1
 fi
-echo "Using Dovecot ${dovecot_version} and imapsync ${imapsync_version}"
+echo "Using migration engine ${test_engine}, Dovecot ${dovecot_version}, and imapsync ${imapsync_version}"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
 cleanup() {
@@ -224,6 +231,11 @@ EOF
 
 binary="$(command -v mailswiftsync)"
 imapsync_path="$(command -v imapsync)"
+doveadm_path="$(command -v doveadm)"
+dovecot_config=""
+if [[ "$test_engine" == "Dovecot" ]]; then
+  dovecot_config="$workspace/destination.conf"
+fi
 state="$workspace/state.db"
 export XDG_CONFIG_HOME="$workspace/config"
 mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
@@ -248,12 +260,12 @@ destination_tls = "starttls"
 destination_ca_bundle = "$workspace/destination/ca.crt"
 destination_certificate_pin_sha256 = ""
 imapsync_path = "$imapsync_path"
-engine = "ImapSync"
-doveadm_path = "doveadm"
+engine = "$test_engine"
+doveadm_path = "$doveadm_path"
 ssh_path = "ssh"
-dovecot_execution = "automatic"
+dovecot_execution = "local"
 dovecot_ssh_user = ""
-dovecot_config = ""
+dovecot_config = "$dovecot_config"
 batch_concurrency = 1
 batch_retry_count = 0
 max_messages_per_second = 0
@@ -338,7 +350,7 @@ echo "PASS: incremental orchestration preserved verified terminal state"
 
 destination_messages="$(find "$workspace/destination/mail/$user/Maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
 if [[ "$destination_messages" -lt 1 ]]; then
-  echo "FAIL: imapsync reported success but destination Maildir has no fixture message" >&2
+  echo "FAIL: ${test_engine} reported success but destination Maildir has no fixture message" >&2
   exit 1
 fi
 if ! grep -R -F -l -- "Message-ID: <mailswiftsync-integration-fixture@example.test>" \
@@ -355,4 +367,4 @@ if [[ "$destination_messages" -lt 2 ]] || ! grep -R -F -l -- "Message-ID: <mails
   exit 1
 fi
 echo "PASS: destination retained both initial and incremental Message-IDs"
-echo "PASS: MailSwiftSync product integration copied $destination_messages message(s) through the packaged engine"
+echo "PASS: MailSwiftSync product integration copied $destination_messages message(s) through ${test_engine}"

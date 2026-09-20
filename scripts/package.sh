@@ -16,9 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 cp target/release/mailswiftsync "$package_dir/mailswiftsync"
-mkdir -p "$package_dir/docs"
-cp README.md LICENSE "$package_dir/"
-cp -R docs/. "$package_dir/docs/"
+scripts/stage-release-docs.sh "$package_dir"
 chmod 0755 "$package_dir/mailswiftsync"
 archive="dist/${target_name}.tar.gz"
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
@@ -27,6 +25,7 @@ fi
 export SOURCE_DATE_EPOCH
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner \
   -C "$package_dir" -czf "$archive" .
+scripts/verify-release-bundle.sh "$archive"
 if command -v sha256sum >/dev/null 2>&1; then
   (cd dist && sha256sum "$(basename "$archive")") > "${archive}.sha256"
 else

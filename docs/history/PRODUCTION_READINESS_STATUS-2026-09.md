@@ -227,7 +227,7 @@ This document tracks progress toward MailSwiftSync 1.0 production-ready release.
 | docs/message-level-verification-design.md | ✅ NEW | 293-line design spec |
 | docs/scheduler-design.md | ✅ NEW | 292-line design spec |
 | README.md | ✅ UPDATED | Referenced provider testing |
-| PRODUCTION_READINESS_STATUS.md | ✅ NEW | This document |
+| PRODUCTION_READINESS_STATUS-2026-09.md | ✅ ARCHIVED | This historical document |
 
 ---
 
@@ -304,7 +304,7 @@ From `docs/release-readiness.md`:
 **Since last update:**
 - ✅ Scheduler maintenance-window support implemented and integrated
 - ✅ OAuth automatic token refresh implemented and tested
-- ✅ Critical production-readiness issues identified and fixed (see FIXES.md)
+- ✅ Historical production-readiness issues were recorded in this archived snapshot
   - Windows atomic rename bug
   - Symlink/TOCTOU vulnerabilities
   - Webhook secret handling

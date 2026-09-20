@@ -48,20 +48,10 @@ workaround after Basic Authentication removal.
 
 ### Step 2: Obtain Initial Refresh Token
 
-You must use Google's official tools or library to get the initial refresh token:
+Use Google's OAuth library to obtain the raw refresh token required by
+MailSwiftSync:
 
-**Option A: Using Google CLI (recommended)**
-
-```bash
-# Install Google Cloud CLI if not already installed
-# See: https://cloud.google.com/sdk/docs/install
-
-gcloud auth application-default login
-# Follow the browser flow to grant consent
-# This creates local OAuth token
-```
-
-**Option B: Using a Python script**
+**Installed application flow (recommended)**
 
 ```python
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -81,6 +71,14 @@ print("Refresh token:", creds.refresh_token)
 print("Client ID:", creds.client_id)
 print("Client Secret:", creds.client_secret)
 ```
+
+Application Default Credentials are not a supported MailSwiftSync handoff.
+`gcloud auth application-default login` writes an ADC credential cache for
+Google client libraries; MailSwiftSync neither reads that cache nor accepts it
+in place of its raw refresh-token setting. Even when gcloud is supplied the
+required `--client-id-file` and `--scopes=https://mail.google.com/` arguments,
+the resulting ADC file is a different credential-storage model. Do not extract
+or copy tokens from the ADC cache into MailSwiftSync.
 
 ### Step 3: Store in MailSwiftSync
 
@@ -183,34 +181,53 @@ use `https://outlook.office365.com/.default` for this delegated IMAP request.
 See [Microsoft's IMAP OAuth documentation](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth)
 for the provider's current flow and scope details.
 
-**Option A: MSAL device flow (public client)**
+### Step 4: Bootstrap a raw refresh token
 
-```python
-import msal
+MailSwiftSync currently consumes a raw OAuth refresh token. It does not consume
+an MSAL token cache or broker session. Do not use an MSAL device-flow sample to
+bootstrap this setting: MSAL Python reserves and adds `offline_access` itself,
+stores refresh tokens in its cache, and does not define a dependable workflow
+for printing a raw refresh token from the authentication result.
 
-CLIENT_ID = "YOUR_PUBLIC_CLIENT_ID"
-AUTHORITY = "https://login.microsoftonline.com/YOUR_TENANT_ID"
-SCOPES = [
-    "https://outlook.office.com/IMAP.AccessAsUser.All",
-    "offline_access",
-]
+Use a delegated authorization-code client whose registered redirect URI you
+control. Send the administrator to the tenant-specific authorization endpoint:
 
-app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
-flow = app.initiate_device_flow(scopes=SCOPES)
-if "user_code" not in flow:
-    raise RuntimeError(flow)
-print(flow["message"])
-result = app.acquire_token_by_device_flow(flow)
-print(result.keys())
-print("Refresh token:", result.get("refresh_token"))
+```text
+https://login.microsoftonline.com/TENANT_ID/oauth2/v2.0/authorize
+  ?client_id=CLIENT_ID
+  &response_type=code
+  &redirect_uri=REGISTERED_REDIRECT_URI
+  &response_mode=query
+  &scope=https%3A%2F%2Foutlook.office.com%2FIMAP.AccessAsUser.All%20offline_access
+  &state=UNPREDICTABLE_CSRF_VALUE
 ```
 
-For an authorization-code flow, register the exact redirect URI and exchange
-the returned code at the tenant's `/oauth2/v2.0/token` endpoint. The token
-request uses `grant_type=authorization_code`, the code, the same redirect URI,
-and the delegated IMAP scope plus `offline_access`. Confidential clients also
-send `client_secret`; public clients do not. Store the resulting refresh token,
-client ID, optional client secret, and token endpoint in MailSwiftSync.
+After validating that the returned `state` is identical to the value stored
+before authorization, exchange the one-time code directly at:
+
+```text
+POST https://login.microsoftonline.com/TENANT_ID/oauth2/v2.0/token
+Content-Type: application/x-www-form-urlencoded
+
+client_id=CLIENT_ID
+&client_secret=CLIENT_SECRET
+&grant_type=authorization_code
+&code=RETURNED_AUTHORIZATION_CODE
+&redirect_uri=REGISTERED_REDIRECT_URI
+&scope=https%3A%2F%2Foutlook.office.com%2FIMAP.AccessAsUser.All%20offline_access
+```
+
+The successful OAuth response contains the raw `refresh_token` required by the
+current MailSwiftSync account configuration. Keep the authorization code,
+client secret, access token, and refresh token out of shell history, process
+arguments, logs, and screenshots. Public authorization-code clients must use
+PKCE and omit `client_secret`; use a maintained OAuth bootstrap tool that can
+return the raw token rather than adapting the confidential-client request
+above without PKCE.
+
+If an organization requires MSAL cache or broker-backed credential handling,
+that integration is not currently supported. Keep refresh handling in MSAL and
+do not attempt to extract its cached refresh-token records manually.
 
 ### Application access (app-only; separate workflow)
 
@@ -237,10 +254,10 @@ In MailSwiftSync account settings, configure OAuth:
 
 ```
 Provider: Microsoft 365 (OAuth)
-Token Endpoint: https://login.microsoftonline.com/common/oauth2/v2.0/token
+Token Endpoint: https://login.microsoftonline.com/YOUR_TENANT_ID/oauth2/v2.0/token
 Client ID: [from Step 1]
 Client Secret: [from Step 3]
-Refresh Token: [from Step 4 - the refresh_token value from the OAuth response]
+Refresh Token: [the refresh_token value returned by Step 4]
 ```
 
 MailSwiftSync will automatically:

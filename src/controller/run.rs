@@ -1,4 +1,3 @@
-use crate::core;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -18,7 +17,6 @@ pub(crate) struct ActiveRunContext {
     pub(crate) batch_plan_fingerprints: Vec<String>,
     pub(crate) kind: RunKind,
     pub(crate) dry_run: bool,
-    pub(crate) engine: core::Engine,
     pub(crate) plan_fingerprint: String,
     pub(crate) credential_fingerprint: String,
 }

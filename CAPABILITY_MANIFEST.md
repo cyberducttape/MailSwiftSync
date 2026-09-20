@@ -21,8 +21,8 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
 | IMAP message transfer (imapsync) | yes | yes | integration | pending | Engine: imapsync 2.314 |
-| IMAP message transfer (Dovecot) | yes | yes | integration | pending | Engine: Dovecot 2.3+ |
-| Folder/label mapping | yes | yes | integration | pending | Generic imapsync mapping/automap; no provider-specific namespace translation engine |
+| Native IMAP message transfer (Dovecot) | yes | yes | no | pending | Dedicated native-engine fixture added; no successful CI execution has yet been recorded |
+| Folder/label mapping | yes | yes | integration | pending | Integration coverage is through generic imapsync mapping/automap; no provider-specific namespace translation engine |
 | Message extraction (imapsync) | yes | no | unit | no | Parser exists and is tested locally; no production runner/controller call site |
 | Message extraction (Dovecot) | yes | no | unit | no | Parser exists and is tested locally; no production runner/controller call site |
 
@@ -32,7 +32,7 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
-| **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Works on local Dovecot fixture |
+| **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Exercised by imapsync against local Dovecot server fixtures; native-Dovecot coverage pending |
 | **Message-level mismatch detection** | yes | no | unit+scenario | no | Code complete, NOT wired to migration pipeline |
 | **Named message evidence levels** | yes | no | unit | no | Single fail-closed classification in the verifier; not used operationally |
 | **Checkpoint persistence** per message | no | no | none | no | NOT implemented; evidence persists per run, not per message |
@@ -109,7 +109,7 @@ particular target.
 ## What Actually Works
 
 ✅ **Fully integrated and tested:**
-- Basic IMAP transfer (imapsync, Dovecot)
+- Basic IMAP transfer through imapsync against disposable Dovecot servers
 - Folder mapping and discovery
 - Aggregate evidence (folder/message counts)
 - Exception recording and acceptance
@@ -128,6 +128,7 @@ particular target.
 - Recovery guidance (text exists, not surfaced)
 
 ⚠️ **Unit-tested but not integration-tested:**
+- Native Dovecot engine execution (`doveadm sync`, native preflight, and native verification)
 - OAuth token refresh (refreshes correctly, not tested end-to-end with actual IMAP session)
 - Provider-specific error handling (classifies correctly, not tested against real errors)
 - Confidence scoring algorithms (match correctly, not validated with mixed message sets)

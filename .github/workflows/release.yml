@@ -61,12 +61,11 @@ jobs:
           mkdir -p dist
           mkdir -p bundle
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}
-          mkdir -p bundle/docs
-          cp README.md LICENSE bundle/
-          cp -R docs/. bundle/docs/
+          scripts/stage-release-docs.sh bundle
           chmod 0755 bundle/mailswiftsync-${{ matrix.target }}
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
           tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -C bundle -czf dist/mailswiftsync-${{ matrix.target }}.tar.gz .
+          scripts/verify-release-bundle.sh dist/mailswiftsync-${{ matrix.target }}.tar.gz
           (cd dist && shasum -a 256 mailswiftsync-${{ matrix.target }}.tar.gz) > dist/mailswiftsync-${{ matrix.target }}.tar.gz.sha256
       - name: Package Windows binary
         if: runner.os == 'Windows'
@@ -75,10 +74,9 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           New-Item -ItemType Directory -Force bundle | Out-Null
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}.exe
-          New-Item -ItemType Directory -Force bundle/docs | Out-Null
-          Copy-Item README.md,LICENSE bundle/
-          Copy-Item docs/* bundle/docs/ -Recurse -Force
+          bash scripts/stage-release-docs.sh bundle
           Compress-Archive -Path bundle/* -DestinationPath dist/mailswiftsync-${{ matrix.target }}.zip
+          bash scripts/verify-release-bundle.sh dist/mailswiftsync-${{ matrix.target }}.zip
           (Get-FileHash dist/mailswiftsync-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower() + '  ' + 'mailswiftsync-${{ matrix.target }}.zip' | Out-File dist/mailswiftsync-${{ matrix.target }}.zip.sha256 -Encoding ascii
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -117,6 +115,13 @@ jobs:
         run: docker build --tag mailswiftsync:release-integration .
       - name: Run packaged IMAP transfer fixture
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+      - name: Run packaged native Dovecot engine fixture
+        run: >-
+          docker run --rm
+          --env MAILSWIFTSYNC_TEST_ENGINE=Dovecot
+          --entrypoint /bin/bash
+          mailswiftsync:release-integration
+          /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
       - name: Run packaged controller recovery fixture
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
       - name: Run packaged controller storage-fault and corruption fixture

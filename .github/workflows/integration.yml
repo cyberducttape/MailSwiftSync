@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  real-engine-transfer:
-    name: Packaged product integration
+  packaged-imapsync-transfer:
+    name: Packaged imapsync product integration
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -27,3 +27,19 @@ jobs:
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
       - name: Run engine-side destination storage-fault lab
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
+
+  native-dovecot-transfer:
+    name: Native Dovecot engine integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build the distributed runtime image
+        run: docker build --tag mailswiftsync:dovecot-integration .
+      - name: Run native doveadm transfer, preflight, and verification
+        run: >-
+          docker run --rm
+          --env MAILSWIFTSYNC_TEST_ENGINE=Dovecot
+          --entrypoint /bin/bash
+          mailswiftsync:dovecot-integration
+          /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
