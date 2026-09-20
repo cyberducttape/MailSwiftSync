@@ -94,10 +94,10 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 
 | Category | Count | Status |
 |----------|-------|--------|
-| Core unit/integration tests | 372 | ✅ Passing |
+| Core unit/integration tests | 376 | ✅ Passing |
 | Documentation validation tests | 9 | ✅ Passing |
 | Message verification scenarios | 14 | ✅ Passing |
-| **Total** | **395** | ✅ 100% pass rate |
+| **Total** | **399** | ✅ 100% pass rate |
 
 ---
 

@@ -12,7 +12,9 @@ use crate::{
     credentials::CleanupGuard,
     imap_probe::fresh_dual_imaps_authentication,
     process::ProcessLaunchLimiter,
-    runner::{run_dovecot_destination_preflight, run_dovecot_verification, run_streaming},
+    runner::{
+        RunContext, run_dovecot_destination_preflight, run_dovecot_verification, run_streaming,
+    },
 };
 use std::{
     collections::HashSet,
@@ -184,22 +186,27 @@ pub(crate) fn process_batch_work_items(
             let result = match prepared {
                 Ok(command) => {
                     let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
-                    let result = run_streaming(
-                        &command.executable,
-                        &command.args,
-                        &command.env,
-                        &tx,
-                        &child_run_id,
-                        &job_id,
-                        &format!("[{}] ", index + 1),
-                        &cancel,
-                        &[
-                            job.form.source_password.clone(),
-                            job.form.destination_password.clone(),
-                        ],
-                        Duration::from_secs(job.form.profile.migration_timeout_hours * 60 * 60),
-                        job.form.engine() == core::Engine::Dovecot && !job.form.dry_run,
-                    )
+                    let prefix = format!("[{}] ", index + 1);
+                    let secrets = [
+                        job.form.source_password.clone(),
+                        job.form.destination_password.clone(),
+                    ];
+                    let result = run_streaming(RunContext {
+                        executable: &command.executable,
+                        args: &command.args,
+                        env: &command.env,
+                        tx: &tx,
+                        run_id: &child_run_id,
+                        job_id: &job_id,
+                        prefix: &prefix,
+                        cancel: &cancel,
+                        secrets: &secrets,
+                        timeout: Duration::from_secs(
+                            job.form.profile.migration_timeout_hours * 60 * 60,
+                        ),
+                        dovecot_exit_two_is_delta: job.form.engine() == core::Engine::Dovecot
+                            && !job.form.dry_run,
+                    })
                     .map(|stream| {
                         if !job.form.dry_run
                             && let Some(evidence) = stream.imapsync_evidence

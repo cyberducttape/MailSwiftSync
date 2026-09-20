@@ -21,6 +21,7 @@ jobs:
       - run: cargo fmt --check
       - run: bash -n scripts/*.sh
       - run: scripts/verify-compatibility-matrix.sh --release docs/compatibility-matrix.md
+      - run: scripts/verify-evidence-gate.sh --release
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
       - name: Install cargo-audit

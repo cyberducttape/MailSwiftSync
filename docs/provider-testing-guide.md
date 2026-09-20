@@ -10,6 +10,13 @@ Each compatibility matrix row requires evidence for four outcomes:
 3. **Recovery** — interrupted work can be resumed correctly
 4. **Evidence** — customer proof, integrity, and verification paths work
 
+The release gate reads `tests/provider-evidence/policy.json`. That file is the
+authoritative list of providers, required phases, and supported engine
+version; changing prose in the compatibility matrix cannot weaken the gate.
+Each phase must be recorded in its own JSON evidence file with
+`results.overall_result: "pass"`. A single file cannot stand in for multiple
+phases.
+
 ## Setup Requirements
 
 ### For each provider test:

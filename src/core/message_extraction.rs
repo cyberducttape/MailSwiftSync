@@ -1,5 +1,26 @@
 use std::collections::HashMap;
 
+/// A message's local identity. IMAP UIDs are unique only within a mailbox
+/// and UIDVALIDITY context, so a bare UID is never a valid map key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MailboxMessageKey {
+    pub mailbox: String,
+    pub uidvalidity: Option<u64>,
+    pub uid: String,
+}
+
+impl MailboxMessageKey {
+    pub fn new(mailbox: impl Into<String>, uid: impl Into<String>) -> Self {
+        Self {
+            mailbox: mailbox.into(),
+            uidvalidity: None,
+            uid: uid.into(),
+        }
+    }
+}
+
+pub type ExtractedMessages = HashMap<MailboxMessageKey, ExtractedMessage>;
+
 /// Extracted message-level details from a migration source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedMessage {
@@ -31,14 +52,17 @@ pub struct ImapsyncMessageExtractor;
 
 impl ImapsyncMessageExtractor {
     /// Parse imapsync copy-progress output to extract source UIDs and sizes.
-    /// Returns a map of source UID -> ExtractedMessage.
-    pub fn extract_from_output(output: &str) -> Result<HashMap<String, ExtractedMessage>, String> {
+    /// Returns a map keyed by source mailbox and local UID.
+    pub fn extract_from_output(output: &str) -> Result<ExtractedMessages, String> {
         let mut messages = HashMap::new();
 
         for line in output.lines() {
             if let Some(record) = Self::parse_copy_line(line) {
                 messages.insert(
-                    record.source_uid.clone(),
+                    MailboxMessageKey::new(
+                        record.source_mailbox.clone(),
+                        record.source_uid.clone(),
+                    ),
                     ExtractedMessage {
                         message_id: None,
                         uid: Some(record.source_uid),
@@ -103,15 +127,16 @@ impl DovecotMessageExtractor {
     /// Extract message UIDs and metadata from Dovecot using doveadm fetch.
     /// Command: doveadm -u user@example.com fetch -A "uid messageids" MAILBOX "INBOX"
     pub fn extract_from_doveadm_output(
+        mailbox: &str,
         output: &str,
-    ) -> Result<HashMap<String, ExtractedMessage>, String> {
+    ) -> Result<ExtractedMessages, String> {
         let mut messages = HashMap::new();
 
         for line in output.lines() {
             if let Some(extracted) = Self::parse_doveadm_line(line)
                 && let Some(uid) = extracted.uid.clone()
             {
-                messages.insert(uid, extracted);
+                messages.insert(MailboxMessageKey::new(mailbox, uid), extracted);
             }
         }
 
@@ -151,7 +176,10 @@ mod tests {
         let output = "msg INBOX/5 {279010} copied to backup/INBOX/49 0.57 msgs/s 154.916 KiB/s 272.471 KiB copied\n";
 
         let messages = ImapsyncMessageExtractor::extract_from_output(output).unwrap();
-        assert_eq!(messages["5"].size_bytes, Some(279010));
+        assert_eq!(
+            messages[&MailboxMessageKey::new("INBOX", "5")].size_bytes,
+            Some(279010)
+        );
 
         let records = ImapsyncMessageExtractor::extract_copy_records(output);
         assert_eq!(records.len(), 1);
@@ -177,13 +205,43 @@ mod tests {
         let output = "uid=123 messageid=\"<abc@example.com>\"\n\
                       uid=124 messageid=\"<def@example.com>\"\n";
 
-        let messages = DovecotMessageExtractor::extract_from_doveadm_output(output).unwrap();
+        let messages =
+            DovecotMessageExtractor::extract_from_doveadm_output("INBOX", output).unwrap();
 
         assert_eq!(messages.len(), 2);
-        assert!(messages.contains_key("123"));
+        assert!(messages.contains_key(&MailboxMessageKey::new("INBOX", "123")));
 
-        let msg = &messages["123"];
+        let msg = &messages[&MailboxMessageKey::new("INBOX", "123")];
         assert_eq!(msg.uid, Some("123".to_string()));
         assert_eq!(msg.message_id, Some("<abc@example.com>".to_string()));
+    }
+
+    #[test]
+    fn imapsync_extractor_preserves_same_uid_in_different_mailboxes() {
+        let output = "msg INBOX/5 {100} copied to backup/INBOX/50\n\
+                      msg Sent/5 {200} copied to backup/Sent/51\n";
+
+        let messages = ImapsyncMessageExtractor::extract_from_output(output).unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[&MailboxMessageKey::new("INBOX", "5")].size_bytes,
+            Some(100)
+        );
+        assert_eq!(
+            messages[&MailboxMessageKey::new("Sent", "5")].size_bytes,
+            Some(200)
+        );
+    }
+
+    #[test]
+    fn doveadm_extractor_preserves_same_uid_in_different_mailboxes() {
+        let output = "uid=5 messageid=\"<sent@example.com>\"\n";
+        let inbox = DovecotMessageExtractor::extract_from_doveadm_output("INBOX", output).unwrap();
+        let sent = DovecotMessageExtractor::extract_from_doveadm_output("Sent", output).unwrap();
+
+        assert_ne!(inbox.keys().next(), sent.keys().next());
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(sent.len(), 1);
     }
 }

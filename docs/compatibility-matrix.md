@@ -10,6 +10,12 @@ This matrix documents provider support and test coverage.
 
 A row is not considered generally supported (1.0 release) until it has a successful live pilot using disposable or fully backed-up mailboxes. Current status shows code-level support and is suitable for technical previews and early adoption.
 
+Release enforcement is defined by the machine-readable
+`tests/provider-evidence/policy.json`, not by wording in this document. The
+release workflow requires a separate passing evidence record for every policy
+phase (dry pilot, live pilot, and recovery test), with the expected imapsync
+engine and version. This Markdown matrix remains the human-readable report.
+
 | Source | Destination | Engine | TLS/auth | Folder namespace | Dovecot/provider version | Dry pilot | Live pilot | Recovery | Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Disposable local Dovecot | Disposable local Dovecot | imapsync | STARTTLS with fixture CA bundles and password files | Maildir default / automap | Pinned Debian Bookworm Dovecot 2.3.x, imapsync 2.314 | Automated product lab | Automated product lab, including incremental pass | Packaged controller recovery lab covers controller crash and engine interruption with durable review state | Durable state, destination Message-ID, customer-proof export and verifier checks | Reproducible CI fixture; evidence for the generic IMAP path, not a hosted-provider compatibility claim. |

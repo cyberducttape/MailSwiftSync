@@ -1,7 +1,7 @@
 # MailSwiftSync Production Readiness Status
 
 **Last Updated:** September 20, 2026  
-**Test Coverage:** 393 tests (370 core + 9 doc validation + 14 integration)
+**Test Coverage:** 399 tests (376 core + 9 doc validation + 14 integration)
 **Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
 
 > **Adoption-critical clarification:** A passing unit or integration test for a
@@ -111,7 +111,7 @@ prototype verification/guidance subsystems into the migration path.
 - Empty mailbox handling
 - Folder structure preservation
 
-**Total: 393 tests — 100% pass rate**
+**Total: 399 tests — 100% pass rate**
 
 These tests establish library behavior and controller invariants; they do not
 establish that every tested library module is reachable from a live migration.
@@ -211,7 +211,7 @@ establish that every tested library module is reachable from a live migration.
 - ⚠️ Pre/post-migration reporting helpers (not live-wired)
 - ✅ Comprehensive setup documentation
 - ✅ OAuth token lifecycle management
-- ✅ 393 automated tests
+- ✅ 399 automated tests
 
 ### Recommended (Next Release)
 - 🔲 Live provider validation (Gmail, O365, Fastmail)
@@ -242,7 +242,7 @@ establish that every tested library module is reachable from a live migration.
 8. Export customer proof for audit trail
 
 ### For Developers
-1. Run test suite: `cargo test` (393 tests)
+1. Run test suite: `cargo test` (399 tests)
 2. Review PROVIDER_SETUP.md and OAUTH_SETUP.md
 3. Check provider_runbooks.rs for setup requirements
 4. Review verification_details.rs for mismatch types
