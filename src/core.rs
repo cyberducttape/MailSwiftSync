@@ -28,6 +28,7 @@ mod message_extraction;
 mod message_verification;
 mod pre_migration_report;
 mod post_migration_report;
+mod provider_intelligence;
 mod mailboxes;
 mod models;
 mod phases;
@@ -49,6 +50,7 @@ pub use message_extraction::{DovecotMessageExtractor, ExtractedMessage, Imapsync
 pub use message_verification::{MessageMismatch, MessageVerification, MismatchType, VerificationSummary};
 pub use pre_migration_report::{MigrationReadiness, PreMigrationRisk, RiskWarning, WarningSeverity};
 pub use post_migration_report::{ExceptionSeverity, MigrationException, PostMigrationReport};
+pub use provider_intelligence::{ProviderErrorClassifier, ProviderErrorType, ProviderThrottleConfig};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,
     ProjectListItem, RunListItem, RunSummary,
