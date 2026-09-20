@@ -166,7 +166,18 @@ fn read_imap_list_response<S: Read>(
             if is_tagged_response(text, tag) {
                 let status = text.split_whitespace().nth(1);
                 if !status.is_some_and(|status| atom_eq(status, "OK")) {
-                    return Err(format!("IMAP LIST command {tag} failed"));
+                    let detail = text
+                        .chars()
+                        .map(|character| {
+                            if character.is_control() {
+                                ' '
+                            } else {
+                                character
+                            }
+                        })
+                        .take(512)
+                        .collect::<String>();
+                    return Err(format!("IMAP LIST command {tag} failed: {detail}"));
                 }
                 return Ok(summary);
             }
@@ -221,6 +232,29 @@ pub(crate) fn imap_command_succeeded(response: &str, tag: &str) -> bool {
         let mut fields = line.split_whitespace();
         fields.next() == Some(tag) && fields.next().is_some_and(|status| atom_eq(status, "OK"))
     })
+}
+
+fn imap_command_failure(response: &str, tag: &str, operation: &str, host: &str) -> String {
+    let detail = response
+        .lines()
+        .find(|line| is_tagged_response(line, tag))
+        .map(|line| {
+            line.chars()
+                .map(|character| {
+                    if character.is_control() {
+                        ' '
+                    } else {
+                        character
+                    }
+                })
+                .take(512)
+                .collect::<String>()
+        })
+        .filter(|line| !line.is_empty());
+    match detail {
+        Some(detail) => format!("{host}: {operation} failed: {detail}"),
+        None => format!("{host}: {operation} failed"),
+    }
 }
 
 /// Open and TLS-secure a fresh IMAP connection (implicit IMAPS or STARTTLS,
@@ -382,7 +416,12 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
         .map_err(|e| e.to_string())?;
     read_imap_tagged(&mut stream, "a001", &mut response, &mut buffer)?;
     if !imap_command_succeeded(&response, "a001") {
-        return Err(format!("{host}: pre-auth CAPABILITY failed"));
+        return Err(imap_command_failure(
+            &response,
+            "a001",
+            "pre-auth CAPABILITY",
+            host,
+        ));
     }
     let preauth = greeting
         .lines()
@@ -415,7 +454,12 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
             read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
         }
         if !imap_command_succeeded(&response, "a002") {
-            return Err(format!("{host}: IMAP authentication failed"));
+            return Err(imap_command_failure(
+                &response,
+                "a002",
+                "IMAP authentication",
+                host,
+            ));
         }
     }
     // RFC 9051 permits capabilities to change after authentication, so the
@@ -426,7 +470,12 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     let mut post_auth_response = String::new();
     read_imap_tagged(&mut stream, "a003", &mut post_auth_response, &mut buffer)?;
     if !imap_command_succeeded(&post_auth_response, "a003") {
-        return Err(format!("{host}: post-auth CAPABILITY failed"));
+        return Err(imap_command_failure(
+            &post_auth_response,
+            "a003",
+            "post-auth CAPABILITY",
+            host,
+        ));
     }
     stream
         .write_all(b"a004 NAMESPACE\r\n")
@@ -537,6 +586,17 @@ mod tests {
             authenticated_list_command(false),
             b"a005 LIST \"\" \"*\"\r\n"
         );
+    }
+
+    #[test]
+    fn list_failure_preserves_bounded_provider_status_for_classification() {
+        let mut stream = Cursor::new(b"a005 NO [UNAVAILABLE] Server busy\r\n");
+        let mut buffer = [0_u8; 4096];
+
+        let error = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap_err();
+
+        assert!(error.contains("[UNAVAILABLE] Server busy"));
+        assert!(error.len() < 600);
     }
 
     #[test]

@@ -1,8 +1,7 @@
 use std::{
-    collections::{HashMap, HashSet},
     process::{Command, Stdio},
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -46,6 +45,7 @@ pub(crate) struct RunContext<'a> {
     pub(crate) secrets: &'a [SecretString],
     pub(crate) timeout: Duration,
     pub(crate) dovecot_exit_two_is_delta: bool,
+    pub(crate) imapsync_output_profile: verification::ImapsyncOutputProfile,
 }
 
 pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, String> {
@@ -61,6 +61,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         secrets,
         timeout,
         dovecot_exit_two_is_delta,
+        imapsync_output_profile,
     } = context;
     let mut command = Command::new(executable);
     command
@@ -324,7 +325,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             let imapsync_evidence = evidence
                 .lock()
                 .map_err(|_| "imapsync evidence collector was poisoned".to_owned())?;
-            let imapsync_evidence = imapsync_evidence.evidence();
+            let imapsync_evidence = imapsync_evidence.evidence(imapsync_output_profile);
             let checkpoint = dovecot_checkpoint
                 .lock()
                 .map_err(|_| "Dovecot checkpoint collector was poisoned".to_owned())?
@@ -529,75 +530,43 @@ pub(crate) fn probe_engine_version(executable: &str) -> Option<String> {
     None
 }
 
-#[derive(Default)]
-struct EngineVersionProbeCache {
-    completed: HashMap<String, Option<String>>,
-    in_flight: HashSet<String>,
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedImapsyncIdentity {
+    pub(crate) version: String,
+    pub(crate) output_profile: verification::ImapsyncOutputProfile,
 }
 
-fn engine_version_probe_cache() -> &'static Mutex<EngineVersionProbeCache> {
-    static CACHE: OnceLock<Mutex<EngineVersionProbeCache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(EngineVersionProbeCache::default()))
+/// Resolve the executable identity before launch. An unreadable version is
+/// recorded explicitly and maps to an unknown parser profile, so it can never
+/// produce trusted verification evidence.
+pub(crate) fn resolve_imapsync_identity(executable: &str) -> ResolvedImapsyncIdentity {
+    let probed = probe_engine_version(executable);
+    ResolvedImapsyncIdentity {
+        output_profile: verification::imapsync_output_profile(probed.as_deref()),
+        version: probed.unwrap_or_else(|| "unknown".into()),
+    }
 }
 
-/// Schedule best-effort version metadata without blocking the controller.
-/// The key includes executable contents so replacing a binary at the same
-/// path gets a fresh probe. Completed and in-flight entries are shared across
-/// workers, which keeps a large batch from spawning one metadata process per
-/// mailbox.
-pub(crate) fn request_engine_version_probe(
-    executable: &str,
+/// Persist the resolved engine identity before process registration. The
+/// acknowledgment makes version/profile selection part of the durable launch
+/// boundary instead of lossy telemetry.
+pub(crate) fn persist_engine_identity_before_launch(
     tx: &mpsc::SyncSender<crate::Event>,
     run_id: &str,
     job_id: &str,
-) {
-    let key = format!(
-        "{}\0{}",
-        executable,
-        crate::plan_identity::executable_content_identity(executable)
-    );
-    let cached = {
-        let Ok(mut cache) = engine_version_probe_cache().lock() else {
-            return;
-        };
-        if let Some(version) = cache.completed.get(&key) {
-            Some(version.clone())
-        } else if cache.in_flight.insert(key.clone()) {
-            None
-        } else {
-            return;
-        }
-    };
-    if let Some(Some(version)) = cached {
-        let _ = tx.try_send(crate::Event::EngineVersion {
-            run_id: run_id.to_owned(),
-            job_id: job_id.to_owned(),
-            version,
-        });
-        return;
-    }
-    if cached.is_some() {
-        return;
-    }
-
-    let executable = executable.to_owned();
-    let run_id = run_id.to_owned();
-    let job_id = job_id.to_owned();
-    let tx = tx.clone();
-    std::thread::spawn(move || {
-        let version = probe_engine_version(&executable);
-        if let Ok(mut cache) = engine_version_probe_cache().lock() {
-            cache.in_flight.remove(&key);
-            cache.completed.insert(key, version.clone());
-        }
-        if let Some(version) = version {
-            let _ = tx.try_send(crate::Event::EngineVersion {
-                run_id,
-                job_id,
-                version,
-            });
-        }
-    });
+    version: &str,
+) -> Result<(), String> {
+    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+    tx.send(crate::Event::EngineVersion {
+        run_id: run_id.to_owned(),
+        job_id: job_id.to_owned(),
+        version: version.to_owned(),
+        reply: reply_tx,
+    })
+    .map_err(|_| "engine identity event channel disconnected before launch".to_owned())?;
+    reply_rx
+        .recv_timeout(PROCESS_REGISTRATION_ACK_TIMEOUT)
+        .map_err(|_| "engine identity was not durably acknowledged before launch".to_owned())?
 }
 
 pub(crate) fn run_dovecot_destination_preflight(
@@ -699,40 +668,52 @@ pub(crate) fn run_dovecot_verification(
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::request_engine_version_probe;
-    use crate::Event;
-    use std::{
-        fs,
-        os::unix::fs::PermissionsExt,
-        sync::mpsc,
-        time::{Duration, Instant},
-    };
+    use super::{persist_engine_identity_before_launch, resolve_imapsync_identity};
+    use crate::{Event, verification::ImapsyncOutputProfile};
+    use std::{fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
 
     #[test]
-    fn engine_version_probe_is_asynchronous() {
+    fn imapsync_identity_is_resolved_before_execution() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-version-probe-{}-{}.sh",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        fs::write(&path, "#!/bin/sh\nsleep 1\nprintf 'test-engine 1.0\\n'\n").unwrap();
+        fs::write(&path, "#!/bin/sh\nprintf 'imapsync 2.314\\n'\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        let (tx, rx) = mpsc::sync_channel(2);
-
-        let started = Instant::now();
-        request_engine_version_probe(&path.to_string_lossy(), &tx, "run", "job");
-        assert!(
-            started.elapsed() < Duration::from_millis(500),
-            "version probe blocked the caller"
-        );
-
-        let event = rx
-            .recv_timeout(Duration::from_secs(3))
-            .expect("asynchronous version result");
-        assert!(matches!(
-            event,
-            Event::EngineVersion { version, .. } if version == "test-engine 1.0"
-        ));
+        let identity = resolve_imapsync_identity(&path.to_string_lossy());
+        assert_eq!(identity.version, "imapsync 2.314");
+        assert_eq!(identity.output_profile, ImapsyncOutputProfile::Packaged2314);
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unreadable_imapsync_identity_is_unknown() {
+        let identity = resolve_imapsync_identity("/path/that/does/not/exist/imapsync");
+        assert_eq!(identity.version, "unknown");
+        assert_eq!(identity.output_profile, ImapsyncOutputProfile::Unknown);
+    }
+
+    #[test]
+    fn engine_identity_requires_a_durable_acknowledgment() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let receiver = thread::spawn(move || {
+            let Event::EngineVersion {
+                run_id,
+                job_id,
+                version,
+                reply,
+            } = rx.recv().unwrap()
+            else {
+                panic!("expected engine identity event");
+            };
+            assert_eq!(run_id, "run");
+            assert_eq!(job_id, "job");
+            assert_eq!(version, "imapsync 2.314");
+            reply.send(Ok(())).unwrap();
+        });
+
+        persist_engine_identity_before_launch(&tx, "run", "job", "imapsync 2.314").unwrap();
+        receiver.join().unwrap();
     }
 }

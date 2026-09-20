@@ -77,6 +77,7 @@ pub(crate) enum Event {
         run_id: String,
         job_id: String,
         version: String,
+        reply: mpsc::SyncSender<Result<(), String>>,
     },
     ProcessStarted(
         String,
@@ -136,7 +137,6 @@ pub(crate) enum StreamOutcome {
 mod tests {
     use super::{process_event_is_current, run_line_is_current};
     use crate::controller::run::{ActiveRunContext, RunKind};
-    use crate::core;
     use std::collections::{HashMap, HashSet};
 
     fn single_context() -> ActiveRunContext {
@@ -150,7 +150,6 @@ mod tests {
             batch_plan_fingerprints: Vec::new(),
             kind: RunKind::Single,
             dry_run: true,
-            engine: core::Engine::ImapSync,
             plan_fingerprint: "plan-a".into(),
             credential_fingerprint: "credential-a".into(),
         }

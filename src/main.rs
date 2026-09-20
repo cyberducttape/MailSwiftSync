@@ -48,7 +48,9 @@ use controller::failure::{
     FailureClass, classified_failure_detail, classify_failure, terminal_phase_advance_allowed,
 };
 #[cfg(test)]
-use controller::failure::{is_transient_batch_error, transient_retry_delay};
+use controller::failure::{
+    is_transient_batch_error, should_retry_batch_error, transient_retry_delay,
+};
 use controller::{
     ActiveRunContext, BatchExecutionMode, BulkConfirmationSummary, BulkQueueSummary,
     BulkRetryScope, CapabilityProbeResult, LiveAuthProof, PendingDbEvent, RunKind,
@@ -1215,6 +1217,42 @@ mod tests {
     }
 
     #[test]
+    fn prelaunch_connectivity_uses_bounded_batch_retry_policy() {
+        for error in [
+            "temporary failure in name resolution",
+            "could not connect: connection refused",
+            "TLS handshake unexpected EOF",
+            "IMAP authentication failed: a002 NO [UNAVAILABLE] server busy",
+            "folder inventory failed: IMAP LIST response exceeded the 60-second processing limit",
+            "too many connections",
+        ] {
+            assert!(
+                should_retry_batch_error(error, 0, 3),
+                "expected transient retry for: {error}"
+            );
+            assert!(
+                !should_retry_batch_error(error, 3, 3),
+                "retry budget must be bounded for: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn prelaunch_credentials_and_trust_failures_remain_fail_fast() {
+        for error in [
+            "IMAP authentication failed: invalid credentials",
+            "a002 NO permission denied",
+            "TLS invalid peer certificate: unknown issuer",
+            "TLS certificate SHA-256 pin mismatch",
+        ] {
+            assert!(
+                !should_retry_batch_error(error, 0, 3),
+                "expected permanent prelaunch failure for: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn capacity_retries_back_off_longer_than_transport_retries() {
         assert_eq!(
             classify_failure("too many connections"),
@@ -1545,7 +1583,6 @@ mod tests {
             batch_plan_fingerprints: vec!["plan-a".into(), "plan-b".into()],
             kind: RunKind::Batch,
             dry_run: true,
-            engine: core::Engine::ImapSync,
             plan_fingerprint: String::new(),
             credential_fingerprint: String::new(),
         };
@@ -1632,6 +1669,7 @@ mod tests {
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: true,
+            imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         })
         .unwrap();
         drop(tx);
@@ -1667,6 +1705,7 @@ mod tests {
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: verification::ImapsyncOutputProfile::Packaged2314,
         })
         .unwrap();
         drop(tx);
@@ -1676,6 +1715,43 @@ mod tests {
         assert_eq!(evidence.source_messages, 7);
         assert_eq!(evidence.destination_messages, 7);
         assert!(evidence.authoritative);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streaming_rejects_evidence_for_an_unknown_imapsync_profile() {
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let acknowledger = thread::spawn(move || {
+            while let Ok(event) = rx.recv() {
+                if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
+                    let _ = reply.send(Ok(()));
+                }
+            }
+        });
+        let cancel = AtomicBool::new(false);
+        let args = vec![
+            "-c".into(),
+            "printf '%s\\n' 'Host1 Nb folders: 2 folders' 'Host2 Nb folders: 2 folders' 'Host1 Nb messages: 7 messages' 'Host2 Nb messages: 7 messages' 'Host1 Total size: 100 bytes' 'Host2 Total size: 100 bytes' 'The sync looks good, all 7 identified messages in host1 are on host2.' 'Detected 0 errors'".into(),
+        ];
+        let result = run_streaming(RunContext {
+            executable: "/bin/sh",
+            args: &args,
+            env: &[],
+            tx: &tx,
+            run_id: "test-run",
+            job_id: "test-job",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: Duration::from_secs(5),
+            dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+        })
+        .unwrap();
+        drop(tx);
+        acknowledger.join().unwrap();
+        assert_eq!(result.outcome, StreamOutcome::Completed);
+        assert!(result.imapsync_evidence.is_none());
     }
 
     #[cfg(unix)]
@@ -1703,6 +1779,7 @@ mod tests {
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         });
         drop(tx);
         acknowledger.join().unwrap();
@@ -1728,6 +1805,7 @@ mod tests {
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         });
 
         let error = outcome.unwrap_err();
@@ -1758,6 +1836,7 @@ mod tests {
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
         });
         drop(tx);
         acknowledger.join().unwrap();

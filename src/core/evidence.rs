@@ -74,6 +74,20 @@ impl EvidenceScope {
 }
 
 impl MailboxEvidence {
+    fn aggregate_totals_match(&self) -> bool {
+        self.source_messages == self.destination_messages
+            && self.source_bytes == self.destination_bytes
+            && self.source_folders == self.destination_folders
+    }
+
+    fn has_message_level_mismatch(&self) -> bool {
+        self.missing_messages > 0 || self.extra_messages > 0 || self.modified_messages > 0
+    }
+
+    fn has_verification_exception(&self) -> bool {
+        self.failed_messages > 0 || self.unmatched_messages > 0 || self.has_message_level_mismatch()
+    }
+
     pub fn evidence_scope(&self) -> EvidenceScope {
         if self.authoritative {
             EvidenceScope::EngineConfirmed
@@ -86,9 +100,10 @@ impl MailboxEvidence {
         if self.failed_messages > 0 || self.unmatched_messages > 0 {
             return "Incomplete evidence";
         }
-        let exact = self.source_messages == self.destination_messages
-            && self.source_bytes == self.destination_bytes
-            && self.source_folders == self.destination_folders;
+        if self.has_message_level_mismatch() {
+            return "Message-level mismatch";
+        }
+        let exact = self.aggregate_totals_match();
         if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
             "Engine-confirmed exact match"
         } else if exact {
@@ -100,46 +115,17 @@ impl MailboxEvidence {
 
     #[allow(dead_code)]
     pub fn confidence_percent(&self) -> u8 {
-        let exact = self.source_messages == self.destination_messages
-            && self.source_bytes == self.destination_bytes
-            && self.source_folders == self.destination_folders;
+        if self.has_verification_exception() {
+            return 0;
+        }
+        let exact = self.aggregate_totals_match();
         if !self.authoritative {
-            return if exact && self.unmatched_messages == 0 && self.failed_messages == 0 {
-                85
-            } else {
-                0
-            };
+            return if exact { 85 } else { 0 };
         }
-        if self.source_messages == 0
-            && self.destination_messages == 0
-            && self.source_folders == self.destination_folders
-            && self.unmatched_messages == 0
-            && self.failed_messages == 0
-        {
-            return 100;
-        }
-        let count_ok = self.source_messages == self.destination_messages;
-        let bytes_ok = self.source_bytes == self.destination_bytes;
-        let folders_ok = self.source_folders == self.destination_folders;
-        if count_ok
-            && bytes_ok
-            && folders_ok
-            && self.unmatched_messages == 0
-            && self.failed_messages == 0
-        {
-            100
-        } else if self.unmatched_messages == 0 && self.failed_messages == 0 {
-            85
-        } else {
-            0
-        }
+        if exact { 100 } else { 85 }
     }
 
     pub fn is_exact_match(&self) -> bool {
-        self.source_messages == self.destination_messages
-            && self.source_bytes == self.destination_bytes
-            && self.source_folders == self.destination_folders
-            && self.unmatched_messages == 0
-            && self.failed_messages == 0
+        self.aggregate_totals_match() && !self.has_verification_exception()
     }
 }

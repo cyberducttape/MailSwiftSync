@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 pub struct MismatchDetail {
     pub id: String,
     pub mismatch_type: String,
+    pub source_folder: Option<String>,
+    pub destination_folder: Option<String>,
+    pub source_uidvalidity: Option<u64>,
+    pub destination_uidvalidity: Option<u64>,
     pub source_uid: Option<String>,
     pub dest_uid: Option<String>,
     pub source_message_id: Option<String>,

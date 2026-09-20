@@ -134,14 +134,7 @@ pub(crate) fn admit_batch_launch(
         &durable_admissions,
         mode,
     )?;
-    let active_run = admit_batch_run(
-        store,
-        &project_id,
-        run_id,
-        mode,
-        fallback_profile.engine,
-        prepared.clone(),
-    )?;
+    let active_run = admit_batch_run(store, &project_id, run_id, mode, prepared.clone())?;
     Ok(BatchLaunchAdmission {
         project_id,
         job_ids,
@@ -469,7 +462,6 @@ pub(crate) fn admit_batch_run(
     project_id: &str,
     run_id: &str,
     mode: BatchExecutionMode,
-    engine: core::Engine,
     prepared: PreparedBatchRun,
 ) -> Result<ActiveRunContext, String> {
     let child_run_ids = store
@@ -501,7 +493,6 @@ pub(crate) fn admit_batch_run(
         batch_plan_fingerprints: prepared.batch_plan_fingerprints,
         kind: RunKind::Batch,
         dry_run: mode.is_preflight(),
-        engine,
         plan_fingerprint: String::new(),
         credential_fingerprint: String::new(),
     })

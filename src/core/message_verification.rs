@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 
@@ -38,6 +38,10 @@ pub struct MessageMismatch {
     pub job_id: String,
     pub run_id: String,
     pub mismatch_type: MismatchType,
+    pub source_folder: Option<String>,
+    pub destination_folder: Option<String>,
+    pub source_uidvalidity: Option<u64>,
+    pub destination_uidvalidity: Option<u64>,
     pub source_uid: Option<String>,
     pub dest_uid: Option<String>,
     pub source_message_id: Option<String>,
@@ -88,49 +92,62 @@ impl MessageVerification {
         for message_id in message_ids {
             let source_uids = &source_by_message_id[&message_id];
             let dest_uids = &dest_by_message_id[&message_id];
-            // Reconcile duplicate Message-IDs by occurrence count. Pairing
-            // the common prefix preserves legitimate duplicates; only an
-            // unmatched destination excess is evidence of a new duplicate.
-            if source_uids.len() > 1 || dest_uids.len() > 1 {
-                for (source_key, dest_key) in source_uids.iter().zip(dest_uids.iter()) {
-                    let source_msg = &source_messages[source_key];
-                    let dest_msg = &dest_messages[dest_key];
+            // A repeated Message-ID identifies a group, not an ordering.
+            // Reconcile the group's metadata multiset first so UID/mailbox
+            // ordering cannot turn preserved duplicates into false changes.
+            let mut destination_by_metadata =
+                HashMap::<MetadataFingerprint<'_>, VecDeque<&MailboxMessageKey>>::new();
+            for dest_key in dest_uids {
+                if let Some(fingerprint) = metadata_fingerprint(&dest_messages[*dest_key]) {
+                    destination_by_metadata
+                        .entry(fingerprint)
+                        .or_default()
+                        .push_back(*dest_key);
+                }
+            }
+            for source_key in source_uids {
+                let source_msg = &source_messages[source_key];
+                let Some(fingerprint) = metadata_fingerprint(source_msg) else {
+                    continue;
+                };
+                if let Some(dest_key) = destination_by_metadata
+                    .get_mut(&fingerprint)
+                    .and_then(VecDeque::pop_front)
+                {
                     unmatched_source.remove(source_key);
                     unmatched_dest.remove(dest_key);
-                    if same_metadata(source_msg, dest_msg) {
-                        exact_matches += 1;
-                    } else {
-                        mismatches.push(make_mismatch(
-                            job_id,
-                            run_id,
-                            MismatchType::MessageIdOnly,
-                            Some(source_key),
-                            Some(dest_key),
-                            Some(source_msg),
-                            Some(dest_msg),
-                        ));
-                    }
+                    exact_matches += 1;
                 }
-            } else if source_uids.len() == 1 && dest_uids.len() == 1 {
-                let source_key = source_uids[0];
-                let dest_key = dest_uids[0];
+            }
+
+            // The remaining common multiplicity shares only Message-ID.
+            // Pair it deterministically for diagnostics and classify it as
+            // changed; source or destination excess remains for the explicit
+            // missing/duplicate passes below.
+            let remaining_source = source_uids
+                .iter()
+                .copied()
+                .filter(|key| unmatched_source.contains(key))
+                .collect::<Vec<_>>();
+            let remaining_dest = dest_uids
+                .iter()
+                .copied()
+                .filter(|key| unmatched_dest.contains(key))
+                .collect::<Vec<_>>();
+            for (source_key, dest_key) in remaining_source.iter().zip(remaining_dest.iter()) {
                 let source_msg = &source_messages[source_key];
                 let dest_msg = &dest_messages[dest_key];
                 unmatched_source.remove(source_key);
                 unmatched_dest.remove(dest_key);
-                if same_metadata(source_msg, dest_msg) {
-                    exact_matches += 1;
-                } else {
-                    mismatches.push(make_mismatch(
-                        job_id,
-                        run_id,
-                        MismatchType::MessageIdOnly,
-                        Some(source_key),
-                        Some(dest_key),
-                        Some(source_msg),
-                        Some(dest_msg),
-                    ));
-                }
+                mismatches.push(make_mismatch(
+                    job_id,
+                    run_id,
+                    MismatchType::MessageIdOnly,
+                    Some(source_key),
+                    Some(dest_key),
+                    Some(source_msg),
+                    Some(dest_msg),
+                ));
             }
         }
 
@@ -261,16 +278,10 @@ fn index_by_fingerprint<'a>(
     let mut index = HashMap::new();
     for uid in eligible {
         let message = &messages[*uid];
-        let (Some(date), Some(size)) = (&message.internal_date, message.size_bytes) else {
+        let Some(fingerprint) = metadata_fingerprint(message) else {
             continue;
         };
-        index
-            .entry(MetadataFingerprint {
-                internal_date: date,
-                size_bytes: size,
-            })
-            .or_insert_with(Vec::new)
-            .push(*uid);
+        index.entry(fingerprint).or_insert_with(Vec::new).push(*uid);
     }
     index.values_mut().for_each(|uids| uids.sort());
     index
@@ -298,17 +309,11 @@ fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxM
     sorted
 }
 
-fn same_metadata(source: &ExtractedMessage, destination: &ExtractedMessage) -> bool {
-    matches!(
-        (
-            source.size_bytes,
-            destination.size_bytes,
-            source.internal_date.as_deref(),
-            destination.internal_date.as_deref(),
-        ),
-        (Some(source_size), Some(destination_size), Some(source_date), Some(destination_date))
-            if source_size == destination_size && source_date == destination_date
-    )
+fn metadata_fingerprint(message: &ExtractedMessage) -> Option<MetadataFingerprint<'_>> {
+    Some(MetadataFingerprint {
+        internal_date: message.internal_date.as_deref()?,
+        size_bytes: message.size_bytes?,
+    })
 }
 
 fn make_mismatch(
@@ -330,6 +335,10 @@ fn make_mismatch(
         job_id: job_id.to_owned(),
         run_id: run_id.to_owned(),
         mismatch_type,
+        source_folder: source_key.map(|key| key.mailbox.clone()),
+        destination_folder: dest_key.map(|key| key.mailbox.clone()),
+        source_uidvalidity: source_key.and_then(|key| key.uidvalidity),
+        destination_uidvalidity: dest_key.and_then(|key| key.uidvalidity),
         source_uid: source_key.map(|key| key.uid.clone()),
         dest_uid: dest_key.map(|key| key.uid.clone()),
         source_message_id: source.and_then(|message| message.message_id.clone()),
@@ -557,6 +566,50 @@ mod tests {
     }
 
     #[test]
+    fn mismatches_preserve_complete_mailbox_local_identity() {
+        let source_key = MailboxMessageKey::with_uidvalidity("INBOX", 101, "42");
+        let destination_key = MailboxMessageKey::with_uidvalidity("Migrated/INBOX", 909, "7742");
+        let source = HashMap::from([(
+            source_key,
+            ExtractedMessage {
+                message_id: Some("<identity@example.com>".to_owned()),
+                uid: Some("42".to_owned()),
+                size_bytes: Some(1_000),
+                internal_date: Some("2024-01-01".to_owned()),
+            },
+        )]);
+        let destination = HashMap::from([(
+            destination_key,
+            ExtractedMessage {
+                message_id: Some("<identity@example.com>".to_owned()),
+                uid: Some("7742".to_owned()),
+                size_bytes: Some(1_001),
+                internal_date: Some("2024-01-02".to_owned()),
+            },
+        )]);
+
+        let (mismatches, _) = MessageVerification::detect_mismatches(
+            "job1",
+            "run-local-identity",
+            &source,
+            &destination,
+        )
+        .unwrap();
+
+        assert_eq!(mismatches.len(), 1);
+        let mismatch = &mismatches[0];
+        assert_eq!(mismatch.source_folder.as_deref(), Some("INBOX"));
+        assert_eq!(
+            mismatch.destination_folder.as_deref(),
+            Some("Migrated/INBOX")
+        );
+        assert_eq!(mismatch.source_uidvalidity, Some(101));
+        assert_eq!(mismatch.destination_uidvalidity, Some(909));
+        assert_eq!(mismatch.source_uid.as_deref(), Some("42"));
+        assert_eq!(mismatch.dest_uid.as_deref(), Some("7742"));
+    }
+
+    #[test]
     fn message_id_without_metadata_is_not_exact_proof() {
         let message = ExtractedMessage {
             message_id: Some("<metadata-absent@example.com>".to_string()),
@@ -771,6 +824,74 @@ mod tests {
         assert!(mismatches.is_empty());
         assert_eq!(summary.exact_matches, 2);
         assert!(summary.is_perfect_match());
+    }
+
+    #[test]
+    fn duplicate_message_id_groups_match_metadata_multisets_not_key_order() {
+        let message = |uid: &str, size: u64, date: &str| ExtractedMessage {
+            message_id: Some("<same-id@example.com>".to_string()),
+            uid: Some(uid.to_string()),
+            size_bytes: Some(size),
+            internal_date: Some(date.to_string()),
+        };
+        let source = HashMap::from([
+            (key("1"), message("1", 10_000, "2024-01-01")),
+            (key("2"), message("2", 30_000, "2024-01-02")),
+        ]);
+        // Destination key order is deliberately the inverse of the source
+        // metadata order: UID 10 contains source B and UID 20 contains A.
+        let destination = HashMap::from([
+            (key("10"), message("10", 30_000, "2024-01-02")),
+            (key("20"), message("20", 10_000, "2024-01-01")),
+        ]);
+
+        let (mismatches, summary) = MessageVerification::detect_mismatches(
+            "job1",
+            "run-reordered-duplicates",
+            &source,
+            &destination,
+        )
+        .unwrap();
+
+        assert!(mismatches.is_empty());
+        assert_eq!(summary.exact_matches, 2);
+        assert_eq!(summary.changed_count, 0);
+        assert!(summary.is_perfect_match());
+    }
+
+    #[test]
+    fn duplicate_message_id_groups_report_only_genuine_changed_leftovers() {
+        let message = |uid: &str, size: u64, date: &str| ExtractedMessage {
+            message_id: Some("<same-id@example.com>".to_string()),
+            uid: Some(uid.to_string()),
+            size_bytes: Some(size),
+            internal_date: Some(date.to_string()),
+        };
+        let source = HashMap::from([
+            (key("1"), message("1", 10_000, "2024-01-01")),
+            (key("2"), message("2", 30_000, "2024-01-02")),
+        ]);
+        let destination = HashMap::from([
+            (key("10"), message("10", 30_000, "2024-01-02")),
+            (key("20"), message("20", 31_000, "2024-01-03")),
+        ]);
+
+        let (mismatches, summary) = MessageVerification::detect_mismatches(
+            "job1",
+            "run-changed-duplicate",
+            &source,
+            &destination,
+        )
+        .unwrap();
+
+        assert_eq!(summary.exact_matches, 1);
+        assert_eq!(summary.changed_count, 1);
+        assert_eq!(summary.missing_count, 0);
+        assert_eq!(summary.extra_count, 0);
+        assert_eq!(summary.duplicated_count, 0);
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].mismatch_type, MismatchType::MessageIdOnly);
+        assert!(!summary.is_perfect_match());
     }
 
     #[test]

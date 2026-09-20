@@ -69,12 +69,38 @@ fn capability_manifest_is_current() {
         "Capability manifest should not claim unwired extractors are operational"
     );
     assert!(
+        manifest.contains("Native IMAP message transfer (Dovecot) | yes | yes | no"),
+        "Capability manifest must not call the native Dovecot path integration-tested"
+    );
+    assert!(
         manifest.contains("Gmail-specific throttling presets")
             && manifest.contains("Microsoft 365-specific throttling presets")
             && manifest.contains("Fastmail-specific throttling presets")
             && manifest.matches("| no | no |").count() >= 3,
         "Capability manifest should not claim provider-specific throttle presets"
     );
+}
+
+#[test]
+fn microsoft_oauth_docs_match_raw_refresh_token_model() {
+    let guide = fs::read_to_string("OAUTH_SETUP.md").expect("OAuth setup guide should exist");
+
+    assert!(guide.contains("MailSwiftSync currently consumes a raw OAuth refresh token"));
+    assert!(guide.contains("MSAL token cache or broker session"));
+    assert!(guide.contains("grant_type=authorization_code"));
+    assert!(guide.contains("IMAP.AccessAsUser.All%20offline_access"));
+    assert!(!guide.contains("result.get(\"refresh_token\")"));
+    assert!(!guide.contains("\"offline_access\","));
+}
+
+#[test]
+fn gmail_oauth_docs_match_raw_refresh_token_model() {
+    let guide = fs::read_to_string("OAUTH_SETUP.md").expect("OAuth setup guide should exist");
+
+    assert!(guide.contains("Installed application flow (recommended)"));
+    assert!(guide.contains("scopes=['https://mail.google.com/']"));
+    assert!(guide.contains("Application Default Credentials are not a supported"));
+    assert!(!guide.contains("gcloud auth application-default login\n"));
 }
 
 #[test]

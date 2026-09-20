@@ -22,26 +22,11 @@ impl App {
                 .is_ok_and(|outcome| *outcome == StreamOutcome::DeltaRequired);
             let was_bulk_run = matches!(run_context.kind, RunKind::Batch);
             let mut direct_final_state = None;
-            let terminal_evidence = if succeeded && !run_context.dry_run {
-                self.pending_evidence.clone().or_else(|| {
-                    (run_context.engine == core::Engine::ImapSync)
-                        .then(|| {
-                            let output = self.output.iter().cloned().collect::<Vec<_>>();
-                            let engine_version = self
-                                .store
-                                .engine_version(&run_context.run_id)
-                                .ok()
-                                .flatten();
-                            verification::parse_imapsync_evidence_for_version(
-                                &output,
-                                engine_version.as_deref(),
-                            )
-                        })
-                        .flatten()
-                })
-            } else {
-                self.pending_evidence.clone()
-            };
+            // The streaming parser profile is selected from the executable
+            // version before launch. Never re-parse the bounded UI transcript
+            // as a fallback, because that would bypass the profile invariant
+            // and could promote incomplete output.
+            let terminal_evidence = self.pending_evidence.clone();
             let terminal_checkpoint = if !was_bulk_run && succeeded {
                 self.pending_checkpoint.clone()
             } else {

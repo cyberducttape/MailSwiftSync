@@ -17,6 +17,18 @@ impl MailboxMessageKey {
             uid: uid.into(),
         }
     }
+
+    pub fn with_uidvalidity(
+        mailbox: impl Into<String>,
+        uidvalidity: u64,
+        uid: impl Into<String>,
+    ) -> Self {
+        Self {
+            mailbox: mailbox.into(),
+            uidvalidity: Some(uidvalidity),
+            uid: uid.into(),
+        }
+    }
 }
 
 pub type ExtractedMessages = HashMap<MailboxMessageKey, ExtractedMessage>;
@@ -154,47 +166,121 @@ fn split_mailbox_uid(value: &str) -> Option<(String, String)> {
 pub struct DovecotMessageExtractor;
 
 impl DovecotMessageExtractor {
-    /// Extract message UIDs and metadata from Dovecot using doveadm fetch.
-    /// Command: doveadm -u user@example.com fetch -A "uid messageids" MAILBOX "INBOX"
-    pub fn extract_from_doveadm_output(
+    /// Fields requested from `doveadm fetch`. The explicit tab formatter is
+    /// part of this parser contract; default human-oriented output is not
+    /// accepted.
+    const FETCH_FIELDS: &'static str = "uid hdr.message-id size.virtual date.received.unixtime";
+
+    /// Build arguments for one user's mailbox. UIDVALIDITY is obtained from a
+    /// separate mailbox-status query and supplied to the parser below; it is
+    /// not fabricated from fetch output.
+    pub fn fetch_command_args(user: &str, mailbox: &str) -> Vec<String> {
+        vec![
+            "-f".to_owned(),
+            "tab".to_owned(),
+            "fetch".to_owned(),
+            "-u".to_owned(),
+            user.to_owned(),
+            Self::FETCH_FIELDS.to_owned(),
+            "mailbox".to_owned(),
+            mailbox.to_owned(),
+        ]
+    }
+
+    /// Extract message metadata from the tab formatter selected by
+    /// `fetch_command_args`. A caller may attach UIDVALIDITY only when it was
+    /// actually returned by a separate mailbox-status operation.
+    pub fn extract_from_doveadm_tab(
         mailbox: &str,
+        uidvalidity: Option<u64>,
         output: &str,
     ) -> Result<ExtractedMessages, String> {
+        let mut lines = output.lines();
+        let header = lines
+            .next()
+            .ok_or_else(|| "doveadm tab output is missing its header".to_owned())?;
+        let expected_header = [
+            "uid",
+            "hdr.message-id",
+            "size.virtual",
+            "date.received.unixtime",
+        ];
+        if header
+            .trim_end_matches('\r')
+            .split('\t')
+            .collect::<Vec<_>>()
+            != expected_header
+        {
+            return Err("unexpected doveadm tab header".to_owned());
+        }
         let mut messages = HashMap::new();
 
-        for line in output.lines() {
-            if let Some(extracted) = Self::parse_doveadm_line(line)
-                && let Some(uid) = extracted.uid.clone()
+        for (index, line) in lines.enumerate() {
+            let fields = line.trim_end_matches('\r').split('\t').collect::<Vec<_>>();
+            if fields.len() != expected_header.len() {
+                return Err(format!(
+                    "doveadm fetch record {index} has {} fields; expected {}",
+                    fields.len(),
+                    expected_header.len()
+                ));
+            }
+            let uid = fields[0].to_owned();
+            if uid.parse::<u64>().is_err() {
+                return Err(format!("doveadm fetch record {index} has invalid uid"));
+            }
+            let size_bytes = parse_optional_u64(fields[2], "size.virtual", index)?;
+            let internal_date = parse_optional_u64(fields[3], "date.received.unixtime", index)?
+                .map(|value| value.to_string());
+            let message_id = nonempty(fields[1])
+                .map(normalize_message_id)
+                .filter(|value| !value.is_empty());
+            let key = match uidvalidity {
+                Some(value) => MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone()),
+                None => MailboxMessageKey::new(mailbox, uid.clone()),
+            };
+            if messages
+                .insert(
+                    key,
+                    ExtractedMessage {
+                        message_id,
+                        uid: Some(uid),
+                        size_bytes,
+                        internal_date,
+                    },
+                )
+                .is_some()
             {
-                messages.insert(MailboxMessageKey::new(mailbox, uid), extracted);
+                return Err(format!(
+                    "doveadm returned a duplicate local UID for mailbox {mailbox}"
+                ));
             }
         }
 
         Ok(messages)
     }
+}
 
-    /// Parse doveadm fetch output line.
-    /// Expected format: uid=123 messageid="<id@example.com>"
-    fn parse_doveadm_line(line: &str) -> Option<ExtractedMessage> {
-        let uid = line
-            .split("uid=")
-            .nth(1)
-            .and_then(|part| part.split_whitespace().next())
-            .map(|s| s.to_string());
+fn nonempty(value: &str) -> Option<&str> {
+    (!value.is_empty()).then_some(value)
+}
 
-        let message_id = line
-            .split("messageid=\"")
-            .nth(1)
-            .and_then(|part| part.split('\"').next())
-            .map(|s| s.to_string());
-
-        Some(ExtractedMessage {
-            message_id,
-            uid,
-            size_bytes: None, // Dovecot fetch would need additional flag
-            internal_date: None,
+fn parse_optional_u64(value: &str, field: &str, index: usize) -> Result<Option<u64>, String> {
+    nonempty(value)
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("doveadm fetch record {index} has invalid {field}"))
         })
-    }
+        .transpose()
+}
+
+fn normalize_message_id(value: &str) -> String {
+    value
+        .trim()
+        .strip_prefix("Message-ID:")
+        .unwrap_or(value.trim())
+        .trim()
+        .to_owned()
 }
 
 #[cfg(test)]
@@ -258,19 +344,48 @@ mod tests {
     }
 
     #[test]
-    fn doveadm_extractor_parses_fetch_output() {
-        let output = "uid=123 messageid=\"<abc@example.com>\"\n\
-                      uid=124 messageid=\"<def@example.com>\"\n";
+    fn doveadm_extractor_parses_explicit_tab_fetch_output() {
+        let output = "uid\thdr.message-id\tsize.virtual\tdate.received.unixtime\n\
+                      123\t<abc@example.com>\t4096\t1704067200\n\
+                      124\tMessage-ID: <def@example.com>\t8192\t1704153600\n";
 
         let messages =
-            DovecotMessageExtractor::extract_from_doveadm_output("INBOX", output).unwrap();
+            DovecotMessageExtractor::extract_from_doveadm_tab("INBOX", Some(9876), output).unwrap();
 
         assert_eq!(messages.len(), 2);
-        assert!(messages.contains_key(&MailboxMessageKey::new("INBOX", "123")));
+        let key = MailboxMessageKey::with_uidvalidity("INBOX", 9876, "123");
+        assert!(messages.contains_key(&key));
 
-        let msg = &messages[&MailboxMessageKey::new("INBOX", "123")];
+        let msg = &messages[&key];
         assert_eq!(msg.uid, Some("123".to_string()));
         assert_eq!(msg.message_id, Some("<abc@example.com>".to_string()));
+        assert_eq!(msg.size_bytes, Some(4096));
+        assert_eq!(msg.internal_date, Some("1704067200".to_string()));
+    }
+
+    #[test]
+    fn doveadm_fetch_contract_selects_tab_for_one_user() {
+        assert_eq!(
+            DovecotMessageExtractor::fetch_command_args("user@example.com", "Sent Items"),
+            [
+                "-f",
+                "tab",
+                "fetch",
+                "-u",
+                "user@example.com",
+                "uid hdr.message-id size.virtual date.received.unixtime",
+                "mailbox",
+                "Sent Items",
+            ]
+        );
+    }
+
+    #[test]
+    fn doveadm_extractor_rejects_default_human_output() {
+        let output = "uid=123 messageid=\"<abc@example.com>\"\n";
+        let error =
+            DovecotMessageExtractor::extract_from_doveadm_tab("INBOX", None, output).unwrap_err();
+        assert_eq!(error, "unexpected doveadm tab header");
     }
 
     #[test]
@@ -293,9 +408,11 @@ mod tests {
 
     #[test]
     fn doveadm_extractor_preserves_same_uid_in_different_mailboxes() {
-        let output = "uid=5 messageid=\"<sent@example.com>\"\n";
-        let inbox = DovecotMessageExtractor::extract_from_doveadm_output("INBOX", output).unwrap();
-        let sent = DovecotMessageExtractor::extract_from_doveadm_output("Sent", output).unwrap();
+        let output = "uid\thdr.message-id\tsize.virtual\tdate.received.unixtime\n\
+                      5\t<sent@example.com>\t\t\n";
+        let inbox =
+            DovecotMessageExtractor::extract_from_doveadm_tab("INBOX", None, output).unwrap();
+        let sent = DovecotMessageExtractor::extract_from_doveadm_tab("Sent", None, output).unwrap();
 
         assert_ne!(inbox.keys().next(), sent.keys().next());
         assert_eq!(inbox.len(), 1);

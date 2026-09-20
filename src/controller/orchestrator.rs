@@ -2,9 +2,11 @@ use crate::{
     Event, core,
     credentials::{CleanupGuard, SecretString},
     runner::{
-        RunContext, request_engine_version_probe, run_dovecot_destination_preflight,
-        run_dovecot_verification, run_streaming,
+        RunContext, persist_engine_identity_before_launch, probe_engine_version,
+        resolve_imapsync_identity, run_dovecot_destination_preflight, run_dovecot_verification,
+        run_streaming,
     },
+    verification::ImapsyncOutputProfile,
 };
 use std::{
     path::PathBuf,
@@ -56,11 +58,29 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             timeout,
         } = spec;
         let _cleanup_guard = CleanupGuard::new(cleanup);
-        // Version metadata is best effort and must never delay admission or
-        // block the UI. Probe it alongside the actual worker instead of on
-        // the controller/render thread; the durable event is applied if the
-        // probe finishes while this run is still active.
-        request_engine_version_probe(&executable, &tx, &run_id, &job_id);
+        // Resolve the executable before launch. Imapsync's result selects the
+        // only parser grammar permitted to create verification evidence.
+        let (engine_version, mut imapsync_output_profile) = if engine == core::Engine::ImapSync {
+            let identity = resolve_imapsync_identity(&executable);
+            (identity.version, identity.output_profile)
+        } else {
+            (
+                probe_engine_version(&executable).unwrap_or_else(|| "unknown".into()),
+                ImapsyncOutputProfile::Unknown,
+            )
+        };
+        if let Err(error) =
+            persist_engine_identity_before_launch(&tx, &run_id, &job_id, &engine_version)
+        {
+            imapsync_output_profile = ImapsyncOutputProfile::Unknown;
+            let _ = tx.send(Event::RunLine {
+                run_id: run_id.clone(),
+                job_id: job_id.clone(),
+                text: format!(
+                    "[verification] engine identity is not durable; output evidence disabled: {error}"
+                ),
+            });
+        }
         let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut result = run_streaming(RunContext {
                 executable: &executable,
@@ -74,6 +94,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 secrets: &output_secrets,
                 timeout,
                 dovecot_exit_two_is_delta: engine == core::Engine::Dovecot && !dry_run,
+                imapsync_output_profile,
             });
             if result.is_ok() && !destination_preflight.is_empty() {
                 result = result.and_then(|outcome| {
