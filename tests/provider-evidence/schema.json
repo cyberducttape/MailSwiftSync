@@ -5,6 +5,8 @@
   "type": "object",
   "required": [
     "provider",
+    "source_provider",
+    "destination_provider",
     "tested_at",
     "testing_phase",
     "source_version",
@@ -17,8 +19,16 @@
   "properties": {
     "provider": {
       "type": "string",
-      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"],
-      "description": "Provider identifier from compatibility matrix"
+      "pattern": "^[a-z0-9_]+->[a-z0-9_]+$",
+      "description": "Directed provider-pair compatibility identifier"
+    },
+    "source_provider": {
+      "type": "string",
+      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"]
+    },
+    "destination_provider": {
+      "type": "string",
+      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"]
     },
     "tested_at": {
       "type": "string",

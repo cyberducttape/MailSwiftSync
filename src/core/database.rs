@@ -37,6 +37,12 @@ impl StateStore {
     /// private in-memory database and migrated there, so recovery/status tools
     /// can inspect historical state without rewriting the source file.
     pub fn open_readonly(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+        let path = path.as_ref();
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         let stored_schema_version: i64 =

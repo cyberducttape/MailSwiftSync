@@ -3,21 +3,27 @@
   "description": "Machine-readable release policy for hosted-provider compatibility evidence.",
   "providers": [
     {
-      "provider": "gmail",
+      "pair": "gmail->gmail",
+      "source_provider": "gmail",
+      "destination_provider": "gmail",
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
     {
-      "provider": "microsoft365",
+      "pair": "gmail->microsoft365",
+      "source_provider": "gmail",
+      "destination_provider": "microsoft365",
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
     {
-      "provider": "fastmail",
+      "pair": "fastmail->fastmail",
+      "source_provider": "fastmail",
+      "destination_provider": "fastmail",
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",

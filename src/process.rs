@@ -108,13 +108,35 @@ pub(crate) fn attach_child_supervisor(child: &Child) -> std::io::Result<ChildSup
 
 pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, String> {
     let lock_path = state_path.with_extension("lock");
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&lock_path)
+    };
+    #[cfg(not(unix))]
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(&lock_path)
-        .map_err(|error| format!("could not open application lock: {error}"))?;
+        .open(&lock_path);
+    let file = file.map_err(|error| format!("could not open application lock: {error}"))?;
+    if !file
+        .metadata()
+        .map_err(|error| format!("could not inspect application lock: {error}"))?
+        .is_file()
+    {
+        return Err("application lock is not a regular file".to_owned());
+    }
+    #[cfg(unix)]
+    crate::credentials::restrict_open_file_permissions(&file).map_err(|error| error.to_string())?;
+    #[cfg(not(unix))]
     crate::credentials::restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
     if file.try_lock_exclusive().is_err() {
         // Explicitly close a denied contender before returning. This keeps a

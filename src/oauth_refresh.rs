@@ -12,6 +12,7 @@
 //! every exchange) is honored and persisted by the caller.
 use crate::credentials::SecretString;
 use std::{io::Read, sync::OnceLock, time::Duration};
+use zeroize::Zeroizing;
 
 /// Bound on the token endpoint response so a hostile or misbehaving endpoint
 /// cannot exhaust memory during an unattended refresh.
@@ -58,14 +59,16 @@ impl OAuthRefreshConfig {
 /// secret type itself; the encoded text exists only as long as it takes to
 /// hand it to the keyring backend, mirroring how the existing password path
 /// hands `entry.set_password` a borrowed `&str`.
-pub(crate) fn encode_refresh_config(config: &OAuthRefreshConfig) -> String {
-    serde_json::json!({
-        "token_endpoint": config.token_endpoint,
-        "client_id": config.client_id,
-        "client_secret": config.client_secret.as_str(),
-        "refresh_token": config.refresh_token.as_str(),
-    })
-    .to_string()
+pub(crate) fn encode_refresh_config(config: &OAuthRefreshConfig) -> Zeroizing<String> {
+    Zeroizing::new(
+        serde_json::json!({
+            "token_endpoint": config.token_endpoint,
+            "client_id": config.client_id,
+            "client_secret": config.client_secret.as_str(),
+            "refresh_token": config.refresh_token.as_str(),
+        })
+        .to_string(),
+    )
 }
 
 pub(crate) fn decode_refresh_config(json: &str) -> Result<OAuthRefreshConfig, String> {
@@ -143,7 +146,7 @@ pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<Refre
             "{host}: token endpoint response exceeded {MAX_RESPONSE_BYTES} bytes"
         ));
     }
-    let mut raw = Vec::new();
+    let mut raw = Zeroizing::new(Vec::new());
     let mut buffer = [0_u8; 4096];
     loop {
         let count = match response.read(&mut buffer) {
@@ -160,7 +163,7 @@ pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<Refre
             ));
         }
     }
-    let response_body = String::from_utf8_lossy(&raw);
+    let response_body = Zeroizing::new(String::from_utf8_lossy(&raw).into_owned());
     parse_token_response(&format!("HTTP/1.1 {status}"), &response_body)
 }
 

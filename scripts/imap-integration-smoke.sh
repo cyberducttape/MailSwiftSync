@@ -326,6 +326,10 @@ proof="$workspace/customer-proof.json"
 run_product customer-proof "$state" "$proof"
 run_product verify "$proof"
 echo "PASS: packaged customer proof exported and verified"
+if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+  mkdir -p "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
+  cp -- "$proof" "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/customer-proof.json"
+fi
 
 second_message="$workspace/source/mail/$user/Maildir/new/delta-fixture.eml"
 cat > "$second_message" <<'EOF'
