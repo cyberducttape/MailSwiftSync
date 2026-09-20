@@ -63,7 +63,7 @@ pub use models::{
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 pub(crate) use policy::{
     attention_reason_for, normalized_destination_identity, valid_dovecot_checkpoint,
@@ -295,6 +295,35 @@ mod tests {
             db.project(&project.id).unwrap().unwrap().phase,
             Phase::Verification
         );
+    }
+
+    #[test]
+    fn message_level_evidence_counts_round_trip_through_the_ledger() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("message-counts", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "a@example", "a@example")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 10,
+            destination_messages: 9,
+            source_bytes: 100,
+            destination_bytes: 90,
+            unmatched_messages: 3,
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 3,
+            extra_messages: 2,
+            modified_messages: 1,
+        };
+
+        db.record_evidence(&job, &evidence).unwrap();
+
+        assert_eq!(db.evidence(&job).unwrap(), Some(evidence));
     }
 
     #[test]
@@ -1404,7 +1433,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         drop(db);
 
         let directory =
@@ -1533,7 +1562,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
         let migration_backups = std::fs::read_dir(&directory)
             .unwrap()
             .filter_map(Result::ok)
@@ -1780,6 +1809,24 @@ mod tests {
         db.record_engine_version("run-report", "imapsync 2.300")
             .unwrap();
         db.finish_run("run-report", "completed", "ok").unwrap();
+        db.record_evidence(
+            &job,
+            &MailboxEvidence {
+                source_messages: 10,
+                destination_messages: 9,
+                source_bytes: 100,
+                destination_bytes: 90,
+                unmatched_messages: 3,
+                failed_messages: 0,
+                source_folders: 1,
+                destination_folders: 1,
+                authoritative: false,
+                missing_messages: 3,
+                extra_messages: 2,
+                modified_messages: 1,
+            },
+        )
+        .unwrap();
 
         let snapshot = db.project_report_snapshot(&project.id).unwrap().unwrap();
         assert_eq!(snapshot.mailboxes.len(), 1);
@@ -1789,6 +1836,10 @@ mod tests {
             Some("imapsync 2.300")
         );
         assert_eq!(snapshot.mailboxes[0].job.id, job);
+        let evidence = snapshot.mailboxes[0].evidence.as_ref().unwrap().1.clone();
+        assert_eq!(evidence.missing_messages, 3);
+        assert_eq!(evidence.extra_messages, 2);
+        assert_eq!(evidence.modified_messages, 1);
     }
 
     #[test]
