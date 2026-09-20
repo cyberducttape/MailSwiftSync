@@ -43,7 +43,7 @@ awk -v strict="$strict" '
       # including work that is still pending. Release publication must only
       # proceed when every evidence gate is resolved. Columns 7–10 are the
       # dry pilot, live pilot, recovery, and evidence results.
-      if (strict && column >= 7 && column <= 10 && tolower(trim(columns[column + 1])) ~ /(pending|not tested|outstanding|tbd|n\/a)/) {
+      if (strict && column >= 7 && column <= 10 && tolower(trim(columns[column + 1])) ~ /(pending|not tested|not run|no live evidence|outstanding|tbd|n\/a)/) {
         printf "FAIL: release matrix row has unresolved evidence in column %d: %s\n", column, $0 > "/dev/stderr"
         failed = 1
       }

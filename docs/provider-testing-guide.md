@@ -111,7 +111,9 @@ Mark each evidence column with one of:
 
 **Setup:**
 - Create disposable Google Workspace accounts (source and destination)
-- Generate app passwords (IMAP access requires app password, not account password)
+- Prefer OAuth/XOAUTH2 for IMAP. An app password may be used only for accounts
+  eligible for Google app passwords when testing password-based IMAP tooling;
+  it is not required for OAuth and is not the preferred modern sign-in path.
 - Ensure accounts have different folder structures (to test namespace)
 
 **Dry pilot:**
@@ -137,15 +139,21 @@ mailswiftsync --headless /tmp/gmail-test.db live
 - **Namespace:** Gmail uses labels (not folders); IMAP exposes them as folders with `[Gmail]/` prefix
 - **SPECIAL-USE:** `All Mail` (\All), `Sent Mail` (\Sent), `Drafts` (\Drafts), `Trash` (\Trash)
 - **Quirks:** Sent messages may appear on both source and destination; aggregate counts may not match exactly
-- **Auth:** Requires app password (not regular Gmail password)
-- **Rate limits:** Up to 2,500 IMAP commands/second per account
+- **Auth:** OAuth/XOAUTH2 preferred. App passwords are an optional fallback for
+  eligible accounts using password-based IMAP authentication.
+- **Usage limits:** Gmail enforces connection and usage limits. Start
+  conservatively, respond to observed provider throttling, and validate live
+  limits against current Google documentation; this guide does not assert a
+  fixed commands-per-second rate.
 
 ### Microsoft 365 / Outlook
 
 - **Namespace:** Flat folder structure; special folders prefixed (e.g., `Deleted Items`, `Sent Items`)
 - **SPECIAL-USE:** Mailbox has explicit special-use attributes
 - **Quirks:** Some folders may be read-only or system-generated
-- **Auth:** Supports OAuth2 Modern Auth or app password
+- **Auth:** OAuth2 delegated Modern Authentication is required for Exchange
+  Online IMAP. App passwords do not restore the removed Basic Authentication
+  path.
 - **Rate limits:** Connection throttling possible under load
 
 ### Fastmail

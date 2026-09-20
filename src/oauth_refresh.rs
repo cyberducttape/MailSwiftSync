@@ -11,13 +11,15 @@
 //! hand. Refresh-token rotation (a provider issuing a new refresh token with
 //! every exchange) is honored and persisted by the caller.
 use crate::credentials::SecretString;
-use std::{io::Read, time::Duration};
+use std::{io::Read, sync::OnceLock, time::Duration};
 
 /// Bound on the token endpoint response so a hostile or misbehaving endpoint
 /// cannot exhaust memory during an unattended refresh.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const REFRESH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_TOTAL_BUDGET: Duration = Duration::from_secs(30);
+
+static OAUTH_HTTP_CLIENT: OnceLock<Result<reqwest::blocking::Client, String>> = OnceLock::new();
 
 pub(crate) struct RefreshRequest<'a> {
     pub(crate) token_endpoint: &'a str,
@@ -124,23 +126,12 @@ pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<Refre
         .host_str()
         .ok_or_else(|| "the OAuth token endpoint is missing a host".to_owned())?
         .to_owned();
-    let body = build_refresh_body(request);
-    let client = reqwest::blocking::Client::builder()
-        .use_rustls_tls()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(REFRESH_CONNECT_TIMEOUT)
-        .timeout(REFRESH_TOTAL_BUDGET)
-        .build()
-        .map_err(|error| format!("{host}: could not build HTTPS client: {error}"))?;
+    let client = oauth_http_client().map_err(|error| format!("{host}: {error}"))?;
     let mut response = client
         .post(endpoint)
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
         .header(reqwest::header::ACCEPT, "application/json")
         .header(reqwest::header::USER_AGENT, "mailswiftsync-oauth-refresh")
-        .body(body)
+        .form(&refresh_form(request))
         .send()
         .map_err(|error| format!("{host}: token endpoint request failed: {error}"))?;
     let status = response.status().as_u16();
@@ -171,6 +162,21 @@ pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<Refre
     }
     let response_body = String::from_utf8_lossy(&raw);
     parse_token_response(&format!("HTTP/1.1 {status}"), &response_body)
+}
+
+fn oauth_http_client() -> Result<&'static reqwest::blocking::Client, String> {
+    match OAUTH_HTTP_CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .use_rustls_tls()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(REFRESH_CONNECT_TIMEOUT)
+            .timeout(REFRESH_TOTAL_BUDGET)
+            .build()
+            .map_err(|error| format!("could not build HTTPS client: {error}"))
+    }) {
+        Ok(client) => Ok(client),
+        Err(error) => Err(error.clone()),
+    }
 }
 
 fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken, String> {
@@ -217,44 +223,16 @@ fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken,
     })
 }
 
-fn build_refresh_body(request: &RefreshRequest<'_>) -> String {
+fn refresh_form<'a>(request: &'a RefreshRequest<'a>) -> Vec<(&'a str, &'a str)> {
     let mut pairs = vec![
-        ("grant_type".to_owned(), "refresh_token".to_owned()),
-        ("refresh_token".to_owned(), request.refresh_token.to_owned()),
-        ("client_id".to_owned(), request.client_id.to_owned()),
+        ("grant_type", "refresh_token"),
+        ("refresh_token", request.refresh_token),
+        ("client_id", request.client_id),
     ];
     if let Some(secret) = request.client_secret.filter(|s| !s.is_empty()) {
-        pairs.push(("client_secret".to_owned(), secret.to_owned()));
+        pairs.push(("client_secret", secret));
     }
     pairs
-        .into_iter()
-        .map(|(key, value)| {
-            format!(
-                "{}={}",
-                percent_encode_form(&key),
-                percent_encode_form(&value)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("&")
-}
-
-/// `application/x-www-form-urlencoded` encoding (RFC 3986 unreserved
-/// characters pass through; space becomes `+`; everything else is
-/// percent-encoded). A refresh token or client secret can contain any byte a
-/// provider chooses to issue, so this must not assume a restricted alphabet.
-fn percent_encode_form(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            b' ' => encoded.push('+'),
-            _ => encoded.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    encoded
 }
 
 #[cfg(test)]
@@ -262,17 +240,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refresh_body_encodes_reserved_characters_and_includes_client_secret() {
+    fn refresh_form_includes_all_credentials_without_manual_encoding() {
         let request = RefreshRequest {
             token_endpoint: "https://oauth2.googleapis.com/token",
             client_id: "client id/with space",
             client_secret: Some("s&cret+val=ue"),
             refresh_token: "refresh/token+value",
         };
-        let body = build_refresh_body(&request);
         assert_eq!(
-            body,
-            "grant_type=refresh_token&refresh_token=refresh%2Ftoken%2Bvalue&client_id=client+id%2Fwith+space&client_secret=s%26cret%2Bval%3Due"
+            refresh_form(&request),
+            vec![
+                ("grant_type", "refresh_token"),
+                ("refresh_token", "refresh/token+value"),
+                ("client_id", "client id/with space"),
+                ("client_secret", "s&cret+val=ue"),
+            ]
         );
     }
 
@@ -284,8 +266,11 @@ mod tests {
             client_secret: Some(""),
             refresh_token: "token",
         };
-        let body = build_refresh_body(&request);
-        assert!(!body.contains("client_secret"));
+        assert!(
+            !refresh_form(&request)
+                .iter()
+                .any(|(name, _)| *name == "client_secret")
+        );
     }
 
     #[test]

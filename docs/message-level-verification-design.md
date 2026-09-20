@@ -114,6 +114,12 @@ tests for this grammar, but does not claim that a captured 2.314 integration
 log fixture has been validated until the packaged integration container is
 available.
 
+The checked-in message verification tests are scenario/model tests, not
+product-level integration tests: they do not invoke the binary, SQLite, or
+report generation. Real imapsync 2.314 parser fixtures still need to be
+captured from the packaged runtime before this parser can claim that level of
+coverage.
+
 **Implementation:**
 - Add optional imapsync flag in plan: `--debug 2` (message-level output)
 - Parse output for `msg <folder>/<uid> {<size>} copied to <folder>/<uid>` records
@@ -148,17 +154,17 @@ To achieve high-confidence verification, match messages on **combinations** rath
 - ✅ Content hash (SHA-256 of message body) — detects corruption
 - ✅ Internal date + size — near-unique combination
 
-**Secondary Signals (confidence booster):**
+**Secondary Signals (supporting evidence):**
 - ✅ Folder path — identifies routing errors
 - ✅ IMAP UID — engine-specific, may not cross-host
 - ✅ Subject + From + Date — heuristic recovery
 
 **Mismatch Classifications:**
-- `EXACT_MATCH` — Message-ID + hash + date all match (100% confidence)
-- `CONTENT_MATCH` — Hash + date match, Message-ID missing/differs (99%)
-- `DATE_SIZE_MATCH` — Internal date + size match (95%, detects renames)
-- `MESSAGE_ID_ONLY` — Message-ID matches but date/size differ (80%, detects corruption)
-- `MISSING` — Present in source, absent in destination (0% confidence)
+- `EXACT_MATCH` — Message-ID plus available metadata match (verified evidence)
+- `CONTENT_MATCH` — Hash and date match, Message-ID missing/differs (strongly matched)
+- `DATE_SIZE_MATCH` — Internal date + size match (probable match only)
+- `MESSAGE_ID_ONLY` — Message-ID matches but date/size differ (changed evidence requiring review)
+- `MISSING` — Present in source, absent in destination
 - `EXTRA` — Present in destination, absent in source (unclear origin)
 - `DUPLICATED` — Multiple instances of same message-ID in destination
 - `FOLDER_MISMATCH` — Same message in different folder on destination
@@ -170,6 +176,22 @@ candidate from missing/extra results but does not increment exact matches and
 cannot make `is_perfect_match()` succeed. Exact status currently requires a
 unique Message-ID with matching available metadata. A future content
 fingerprint can strengthen that classification; UID equality alone never can.
+
+The current library verifier still receives complete in-memory extraction maps.
+Its transient indexes borrow mailbox keys and message IDs, and its metadata
+fallback uses a typed borrowed key rather than allocating delimiter-joined
+fingerprint strings. This reduces avoidable duplication but does not make
+500,000-message verification bounded-memory. MSP-scale operation still requires
+streaming source and destination metadata into the existing SQLite evidence
+store, then reconciling through indexed queries before this feature is wired to
+the migration controller.
+
+The authoritative summary exposes named evidence levels rather than a
+percentage: `verified`, `strongly_matched`, `probable_match`, `ambiguous`,
+`missing`, `changed`, or `unexpected`. Negative categories take precedence, so
+successful matches cannot conceal missing, changed, duplicate, or extra
+messages. The legacy display structures retain mismatch counts only; they do
+not calculate an independent confidence score.
 
 **Example Output (The Killer Feature):**
 ```

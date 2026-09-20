@@ -7,7 +7,7 @@ This guide describes how to set up disposable test accounts and run the MailSwif
 - MailSwiftSync binary installed and in PATH
 - `imapsync 2.314` installed and in PATH
 - Google Workspace domain with admin access (or personal Gmail accounts for testing)
-- OpenSSL for generating test credentials
+- OAuth/XOAUTH2 credentials, or an eligible account for optional app-password testing
 
 ## Creating Test Accounts
 
@@ -25,9 +25,9 @@ If you have admin access to a Google Workspace domain:
      --email=mailswiftsync-dest-test@your-workspace.example.com
    ```
 
-2. **Reset passwords and save them securely:**
-   - Set temporary passwords (or use app passwords below)
-   - Store in `/run/secrets/gmail-source` and `/run/secrets/gmail-dest` (600 permissions)
+2. **Prepare authentication:**
+   - Prefer OAuth/XOAUTH2 for IMAP.
+   - For password-based IMAP testing only, use app passwords when the account is eligible; store secrets in `/run/secrets/gmail-source` and `/run/secrets/gmail-dest` with 600 permissions.
 
 3. **Enable IMAP access:**
    - In Google Admin Console → Security → API Controls → Domain-wide Delegation
@@ -43,13 +43,9 @@ For testing without Workspace:
    - Source: `mailswiftsync-source-test+XXXXXX@gmail.com`
    - Destination: `mailswiftsync-dest-test+XXXXXX@gmail.com`
 
-2. **Enable IMAP access:**
-   - Sign in to each account
-   - Go to https://myaccount.google.com/lesssecureapps
-   - Enable "Less secure app access" OR
-
-3. **Generate app passwords (recommended):**
-   - Go to https://myaccount.google.com/apppasswords
+2. **Choose authentication:**
+   - Prefer OAuth/XOAUTH2 using the `https://mail.google.com/` scope.
+   - For password-based IMAP testing, generate an app password at https://myaccount.google.com/apppasswords
    - Select `Mail` and `Windows Computer`
    - Google will generate a 16-character password
    - Save these in `/run/secrets/gmail-source` and `/run/secrets/gmail-dest`
@@ -142,9 +138,10 @@ Evidence: /tmp/mailswiftsync-provider-test.XXXXXX/gmail-proof.json
 
 After a successful test run, document the results:
 
-1. **Test metadata** — create or update `docs/provider-tests/gmail-test-YYYY-MM-DD.md`:
+1. **Test metadata template** — create this file only after an actual pilot; the
+   example below is a template and is not evidence:
    ```markdown
-   # Gmail Provider Test — 2025-09-17
+   # Gmail Provider Test — YYYY-MM-DD
    
    **Accounts:**
    - Source: mailswiftsync-source-test@gmail.com (disposable)
@@ -155,10 +152,10 @@ After a successful test run, document the results:
    - imapsync: 2.314
    
    **Test Results:**
-   - Dry pilot: ✓ Preflight validation successful, 4 mailboxes discovered, namespace: [Gmail]/ prefix
-   - Live pilot: ✓ Migration completed, 1,247 messages transferred, 0 errors
-   - Recovery: ✓ Simulated interruption and delta sync; no duplicates
-   - Evidence: ✓ Customer proof integrity verified, run manifest recorded
+   - Dry pilot: [record actual result]
+   - Live pilot: [record actual result]
+   - Recovery: [record actual result]
+   - Evidence: [record actual result]
    
    **Discovered Quirks:**
    - Gmail's [Gmail]/All Mail folder contains all messages (including sent); not migrated by default
@@ -179,7 +176,7 @@ After a successful test run, document the results:
 3. **Update compatibility matrix row:**
    Edit `docs/compatibility-matrix.md` and update the Gmail row:
    ```markdown
-   | Gmail/Workspace | Gmail/Workspace | imapsync | IMAPS with app passwords | Gmail labels → [Gmail]/ folders | Google Workspace 2024+, imapsync 2.314 | Manual test 2025-09-17 | Manual test with delta 2025-09-17 | Manual interruption/resume 2025-09-17 | Durable state verified, 1,247 messages transferred, customer-proof integrity checked | Accounts cleaned up. [Gmail]/All Mail not migrated (provider behavior). Test metadata: docs/provider-tests/gmail-test-2025-09-17.md |
+   | Gmail/Workspace | Gmail/Workspace | imapsync | [TLS/auth] | Gmail labels → [Gmail]/ folders | [versions] | [actual dry-pilot evidence] | [actual live-pilot evidence] | [actual recovery evidence] | [actual evidence result] | Test metadata: docs/provider-tests/gmail-test-YYYY-MM-DD.md |
    ```
 
 ## Cleanup
@@ -202,11 +199,11 @@ shred -u /run/secrets/gmail-source /run/secrets/gmail-dest
 ## Troubleshooting
 
 ### "IMAP access is disabled for your account"
-- **Workspace:** Ensure IMAP is not restricted via Security → API Controls
-- **Gmail:** Enable app passwords (https://myaccount.google.com/apppasswords)
+- **Workspace:** Ensure IMAP is not restricted via Security → API Controls and that the OAuth client has the required scope
+- **Gmail:** Prefer OAuth/XOAUTH2; use an app password only if the account is eligible for password-based IMAP
 
 ### "Invalid credentials"
-- Verify app password is correct (16 characters, no hyphens needed in MailSwiftSync)
+- Verify the OAuth scope/token, or verify the app password if using password-based IMAP
 - Check that secret files contain only the password (no extra newlines)
 - Test with `imapsync` directly first to isolate MailSwiftSync issues
 

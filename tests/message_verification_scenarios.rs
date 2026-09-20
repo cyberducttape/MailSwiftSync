@@ -1,8 +1,6 @@
-/// Comprehensive message verification integration tests.
-/// Validates the complete message-level verification pipeline.
-// Note: This would import from mailswiftsync crate in real implementation
-// For now, we test the verification logic patterns
-
+//! Message verification scenario tests.
+//! These exercise reconciliation models directly; they are not product-level
+//! integration tests because they do not invoke the binary, SQLite, or reports.
 #[test]
 fn verify_exact_match_detection() {
     // Scenario: Source and destination have identical messages
@@ -236,66 +234,6 @@ fn verify_mixed_scenario() {
     assert_eq!(changed, 1);
     assert_eq!(missing.len(), 1);
     assert_eq!(extra.len(), 1);
-}
-
-#[test]
-fn verify_confidence_levels_calculation() {
-    // Scenario: Calculate confidence based on match distribution
-    // Expected: Proper confidence levels (100%, 99%, 95%, 80%)
-
-    struct MatchResult {
-        exact_match_count: u64,
-        content_match_count: u64,
-        date_size_match_count: u64,
-        message_id_only_count: u64,
-    }
-
-    impl MatchResult {
-        fn confidence_level(&self) -> f64 {
-            let total = self.exact_match_count
-                + self.content_match_count
-                + self.date_size_match_count
-                + self.message_id_only_count;
-            if total == 0 {
-                return 0.0;
-            }
-
-            ((self.exact_match_count as f64 * 100.0)
-                + (self.content_match_count as f64 * 99.0)
-                + (self.date_size_match_count as f64 * 95.0)
-                + (self.message_id_only_count as f64 * 80.0))
-                / total as f64
-        }
-    }
-
-    // Test: Perfect match (100%)
-    let perfect = MatchResult {
-        exact_match_count: 100,
-        content_match_count: 0,
-        date_size_match_count: 0,
-        message_id_only_count: 0,
-    };
-    assert_eq!(perfect.confidence_level(), 100.0);
-
-    // Test: Mostly exact, some content matches (99%+)
-    let high_confidence = MatchResult {
-        exact_match_count: 95,
-        content_match_count: 5,
-        date_size_match_count: 0,
-        message_id_only_count: 0,
-    };
-    assert!(high_confidence.confidence_level() > 99.0);
-    assert!(high_confidence.confidence_level() < 100.0);
-
-    // Test: Mixed matches (lower confidence)
-    let mixed = MatchResult {
-        exact_match_count: 50,
-        content_match_count: 25,
-        date_size_match_count: 15,
-        message_id_only_count: 10,
-    };
-    assert!(mixed.confidence_level() > 90.0);
-    assert!(mixed.confidence_level() < 99.0);
 }
 
 #[test]

@@ -78,22 +78,12 @@ impl ImapsyncMessageExtractor {
 
     /// Parse imapsync's actual copy-progress line and retain both local UIDs.
     fn parse_copy_line(line: &str) -> Option<ImapsyncCopyRecord> {
-        let mut fields = line.split_whitespace();
-        if fields.next()? != "msg" {
-            return None;
-        }
-        let source = fields.next()?;
-        let size_bytes = fields
-            .next()?
-            .strip_prefix('{')
-            .and_then(|value| value.strip_suffix('}'))
-            .and_then(|value| value.parse::<u64>().ok());
-        if fields.next()? != "copied" || fields.next()? != "to" {
-            return None;
-        }
-        let destination = fields.next()?;
-        let (source_mailbox, source_uid) = split_mailbox_uid(source)?;
-        let (destination_mailbox, destination_uid) = split_mailbox_uid(destination)?;
+        let rest = line.strip_prefix("msg ")?;
+        let (source, rest) = rest.split_once(" {")?;
+        let (size, rest) = rest.split_once("} copied to ")?;
+        let size_bytes = size.parse::<u64>().ok();
+        let (source_mailbox, source_uid) = split_mailbox_uid(unquote_path(source.trim()))?;
+        let (destination_mailbox, destination_uid) = split_destination_path(rest)?;
         Some(ImapsyncCopyRecord {
             source_mailbox,
             source_uid,
@@ -108,6 +98,46 @@ impl ImapsyncMessageExtractor {
     pub fn extract_copy_records(output: &str) -> Vec<ImapsyncCopyRecord> {
         output.lines().filter_map(Self::parse_copy_line).collect()
     }
+}
+
+/// Extract the destination path from the copy-progress suffix. The destination
+/// may contain spaces and the line may continue with throughput statistics,
+/// so whitespace tokenization cannot identify its end. The final `/digits`
+/// component is the destination UID; everything before it is the mailbox.
+fn split_destination_path(value: &str) -> Option<(String, String)> {
+    let value = value.trim_start();
+    if let Some(quoted) = value.strip_prefix('"')
+        && let Some(end) = quoted.find('"')
+    {
+        return split_mailbox_uid(&quoted[..end]);
+    }
+    for (index, character) in value.char_indices().rev() {
+        if character != '/' {
+            continue;
+        }
+        let uid_start = index + character.len_utf8();
+        let Some(uid) = value[uid_start..]
+            .split_whitespace()
+            .next()
+            .filter(|uid| !uid.is_empty() && uid.bytes().all(|byte| byte.is_ascii_digit()))
+        else {
+            continue;
+        };
+        let path_end = uid_start + uid.len();
+        let remainder = &value[path_end..];
+        if !remainder.is_empty() && !remainder.chars().next().is_some_and(char::is_whitespace) {
+            continue;
+        }
+        return split_mailbox_uid(unquote_path(&value[..path_end]));
+    }
+    None
+}
+
+fn unquote_path(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
 }
 
 fn split_mailbox_uid(value: &str) -> Option<(String, String)> {
@@ -198,6 +228,33 @@ mod tests {
                 .is_empty()
         );
         assert!(ImapsyncMessageExtractor::extract_copy_records(output).is_empty());
+    }
+
+    #[test]
+    fn imapsync_extractor_accepts_quoted_space_and_unicode_mailboxes() {
+        let output = "msg \"Sent Items/5\" {100} copied to \"backup/Sent Items/50\" 1.0 msgs/s\n\
+                      msg \"客户邮件/6\" {200} copied to \"backup/客户邮件/60\" 1.0 msgs/s\n";
+
+        let records = ImapsyncMessageExtractor::extract_copy_records(output);
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].source_mailbox, "Sent Items");
+        assert_eq!(records[0].destination_mailbox, "backup/Sent Items");
+        assert_eq!(records[1].source_mailbox, "客户邮件");
+        assert_eq!(records[1].destination_mailbox, "backup/客户邮件");
+    }
+
+    #[test]
+    fn imapsync_extractor_accepts_unquoted_space_in_source_and_destination() {
+        let output = "msg INBOX/Project Alpha/7 {300} copied to backup/INBOX/Project Alpha/70\n";
+
+        let records = ImapsyncMessageExtractor::extract_copy_records(output);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].source_mailbox, "INBOX/Project Alpha");
+        assert_eq!(records[0].destination_mailbox, "backup/INBOX/Project Alpha");
+        assert_eq!(records[0].source_uid, "7");
+        assert_eq!(records[0].destination_uid, "70");
     }
 
     #[test]

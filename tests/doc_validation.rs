@@ -1,5 +1,7 @@
-/// Documentation validation test suite.
-/// Ensures docs remain consistent with code and don't contain outdated claims.
+/// Basic documentation smoke tests.
+/// These verify required files and selected safety-critical wording only. They
+/// do not prove live provider evidence, controller wiring, or semantic parity
+/// between documentation and implementation.
 use std::fs;
 use std::path::Path;
 
@@ -24,8 +26,9 @@ fn doc_files_exist() {
 fn readme_mentions_production_status() {
     let readme = fs::read_to_string("README.md").expect("Could not read README.md");
     assert!(
-        readme.contains("production") || readme.contains("Production"),
-        "README should mention production status"
+        readme.contains("docs/compatibility-matrix.md")
+            && readme.contains("docs/provider-testing-guide.md"),
+        "README should link the active compatibility and provider-testing documents"
     );
 }
 
@@ -48,14 +51,29 @@ fn security_md_exists_and_complete() {
 }
 
 #[test]
-fn production_readiness_status_updated() {
-    let status = fs::read_to_string("PRODUCTION_READINESS_STATUS.md")
-        .expect("Could not read PRODUCTION_READINESS_STATUS.md");
+fn capability_manifest_is_current() {
+    let manifest = fs::read_to_string("CAPABILITY_MANIFEST.md")
+        .expect("Could not read CAPABILITY_MANIFEST.md");
 
-    // Should mention message-level verification as complete
     assert!(
-        status.contains("message") || status.contains("verification"),
-        "Status should mention message verification"
+        manifest.contains("Manually maintained from source call-site review"),
+        "Capability manifest should identify its maintenance basis"
+    );
+    assert!(
+        manifest.contains("Message-level mismatch detection"),
+        "Capability manifest should document message verification"
+    );
+    assert!(
+        manifest.contains("Message extraction (imapsync) | yes | no")
+            && manifest.contains("Message extraction (Dovecot) | yes | no"),
+        "Capability manifest should not claim unwired extractors are operational"
+    );
+    assert!(
+        manifest.contains("Gmail-specific throttling presets")
+            && manifest.contains("Microsoft 365-specific throttling presets")
+            && manifest.contains("Fastmail-specific throttling presets")
+            && manifest.matches("| no | no |").count() >= 3,
+        "Capability manifest should not claim provider-specific throttle presets"
     );
 }
 
@@ -64,10 +82,10 @@ fn no_outdated_oauth_warnings() {
     let oauth_docs =
         fs::read_to_string("docs/wiki/PSA-notifications.md").unwrap_or_else(|_| String::new());
 
-    // If webhook docs exist, they should warn against embedding secrets
+    // If webhook docs exist, require concrete secret-handling wording.
     if !oauth_docs.is_empty() {
         assert!(
-            oauth_docs.contains("https://") || oauth_docs.contains("environment"),
+            oauth_docs.contains("environment") && oauth_docs.contains("secret"),
             "Webhook docs should mention secure secret handling"
         );
     }
@@ -78,18 +96,26 @@ fn compatibility_matrix_references_tested_providers() {
     let matrix =
         fs::read_to_string("docs/compatibility-matrix.md").unwrap_or_else(|_| String::new());
 
-    if !matrix.is_empty() {
-        // Should mention major providers
-        let has_providers = matrix.contains("Gmail")
-            || matrix.contains("gmail")
-            || matrix.contains("Microsoft")
-            || matrix.contains("Office 365");
-
+    assert!(
+        !matrix.trim().is_empty(),
+        "Compatibility matrix must not be empty"
+    );
+    for provider in [
+        "Generic IMAP (Gmail/Workspace)",
+        "Generic IMAP (Microsoft 365)",
+        "Generic IMAP (Fastmail)",
+    ] {
         assert!(
-            has_providers,
-            "Compatibility matrix should reference tested providers"
+            matrix.contains(provider),
+            "Compatibility matrix is missing {provider}"
         );
     }
+    assert!(
+        matrix.contains(
+            "Aggregate verification is wired; message-level reconciliation is a prototype"
+        ),
+        "Compatibility matrix must distinguish aggregate evidence from message-level proof"
+    );
 }
 
 #[test]
@@ -97,9 +123,11 @@ fn provider_testing_guide_exists() {
     let guide = fs::read_to_string("docs/provider-testing-guide.md")
         .expect("Provider testing guide should exist");
 
+    assert!(guide.contains("OAuth/XOAUTH2 preferred"));
+    assert!(guide.contains("do not restore the removed Basic Authentication"));
     assert!(
-        !guide.trim().is_empty(),
-        "Provider testing guide should not be empty"
+        guide.contains("this guide does not assert a")
+            && guide.contains("fixed commands-per-second rate")
     );
 }
 
@@ -107,21 +135,13 @@ fn provider_testing_guide_exists() {
 fn architecture_documents_message_verification() {
     let arch = fs::read_to_string("docs/architecture.md").unwrap_or_else(|_| String::new());
 
-    if !arch.is_empty() {
-        assert!(
-            arch.contains("verification") || arch.contains("message"),
-            "Architecture doc should mention message verification"
-        );
-    }
+    assert!(arch.contains("The ledger records project lifecycle, structured run events"));
+    assert!(arch.contains("verbose engine transcripts remain bounded process-local diagnostics"));
 }
 
 #[test]
 fn no_references_to_unreleased_versions() {
-    let files = vec![
-        "README.md",
-        "CHANGELOG.md",
-        "PRODUCTION_READINESS_STATUS.md",
-    ];
+    let files = vec!["README.md", "CHANGELOG.md", "CAPABILITY_MANIFEST.md"];
 
     for file in files {
         let content = fs::read_to_string(file).unwrap_or_else(|_| String::new());

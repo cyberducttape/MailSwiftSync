@@ -1,8 +1,8 @@
 //! Batch launch orchestration owned by the controller layer.
 
 use crate::controller::{
-    BatchLaunchRequest, BatchStartContext, BatchStartDecision, admit_batch_launch,
-    launch_batch_worker,
+    BatchExecutionContext, BatchLaunchRequest, BatchStartContext, BatchStartDecision,
+    admit_batch_launch, launch_batch_worker,
 };
 use crate::{App, StatusSeverity};
 use std::time::Instant;
@@ -92,21 +92,22 @@ impl App {
             }
         }
         self.mark_bulk_state_changed();
-        let worker = launch_batch_worker(
+        let worker = launch_batch_worker(BatchExecutionContext {
             concurrency,
             mode,
-            self.form.profile.batch_retry_count.min(3),
+            retry_count: self.form.profile.batch_retry_count.min(3),
             job_count,
-            selected_job_ids,
-            self.active_run
+            queue_job_ids: selected_job_ids,
+            child_run_ids: self
+                .active_run
                 .as_ref()
                 .map(|run| run.batch_child_run_ids.clone())
                 .unwrap_or_default(),
             queue_checkpoints,
-            project_id.clone(),
-            run_id.clone(),
+            batch_project_id: project_id.clone(),
+            batch_run_id: run_id.clone(),
             jobs,
-        );
+        });
         self.cancel_requested = Some(worker.cancel.clone());
         self.receiver = Some(worker.receiver);
         self.run_started_at = Some(Instant::now());
