@@ -385,7 +385,7 @@ impl StateStore {
                 [],
             )?;
         }
-        // Message-level verification columns (schema v7)
+        // Message-level verification columns (schema v8)
         if !columns.iter().any(|column| column == "extra_messages") {
             tx.execute(
                 "ALTER TABLE evidence ADD COLUMN extra_messages INTEGER NOT NULL DEFAULT 0",

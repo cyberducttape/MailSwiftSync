@@ -1,7 +1,7 @@
 # MailSwiftSync Production Readiness Status
 
 **Last Updated:** September 20, 2026  
-**Test Coverage:** 394 tests (371 core + 9 doc validation + 14 integration)
+**Test Coverage:** 395 tests (372 core + 9 doc validation + 14 integration)
 **Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
 
 > **Adoption-critical clarification:** A passing unit or integration test for a
@@ -39,8 +39,8 @@ prototype verification/guidance subsystems into the migration path.
 | Message-level mismatch detection | ⚠️ Prototype only | `MessageVerification` is called only by unit tests |
 | Multi-factor matching | ⚠️ Prototype only | Classification helpers are not called by live runs |
 | Source/destination message extraction | ⚠️ Prototype only | Extractors have no runner/controller call sites |
-| Missing/extra/changed detection | ⚠️ Prototype only | Live evidence counters remain zero-initialized |
-| Durable aggregate evidence storage | ✅ Wired | SQLite schema v7 and live evidence adapters |
+| Missing/extra/changed detection | ⚠️ Prototype only | Persistence accepts the counters, but no live verifier produces them |
+| Durable aggregate evidence storage | ✅ Wired | SQLite schema v8; aggregate and supplied message counters survive reports |
 
 ### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
 | Provider | Status | Coverage |
@@ -111,7 +111,7 @@ prototype verification/guidance subsystems into the migration path.
 - Empty mailbox handling
 - Folder structure preservation
 
-**Total: 394 tests — 100% pass rate**
+**Total: 395 tests — 100% pass rate**
 
 These tests establish library behavior and controller invariants; they do not
 establish that every tested library module is reachable from a live migration.
@@ -211,7 +211,7 @@ establish that every tested library module is reachable from a live migration.
 - ⚠️ Pre/post-migration reporting helpers (not live-wired)
 - ✅ Comprehensive setup documentation
 - ✅ OAuth token lifecycle management
-- ✅ 394 automated tests
+- ✅ 395 automated tests
 
 ### Recommended (Next Release)
 - 🔲 Live provider validation (Gmail, O365, Fastmail)
@@ -242,7 +242,7 @@ establish that every tested library module is reachable from a live migration.
 8. Export customer proof for audit trail
 
 ### For Developers
-1. Run test suite: `cargo test` (394 tests)
+1. Run test suite: `cargo test` (395 tests)
 2. Review PROVIDER_SETUP.md and OAUTH_SETUP.md
 3. Check provider_runbooks.rs for setup requirements
 4. Review verification_details.rs for mismatch types

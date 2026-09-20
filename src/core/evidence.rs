@@ -19,7 +19,8 @@ pub struct MailboxEvidence {
     pub missing_messages: u64,
     /// Message-level verification: count of messages present in destination but absent in source.
     pub extra_messages: u64,
-    /// Message-level verification: count of messages with same UID but different content/metadata.
+    /// Message-level verification: count of messages with the same portable
+    /// identity but different available content/metadata.
     pub modified_messages: u64,
 }
 

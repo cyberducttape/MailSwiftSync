@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Provider Compatibility Evidence",
+  "description": "Structured evidence for provider compatibility testing",
+  "type": "object",
+  "required": [
+    "provider",
+    "tested_at",
+    "testing_phase",
+    "source_version",
+    "destination_version",
+    "engine_version",
+    "test_summary",
+    "results"
+  ],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["gmail", "microsoft365", "fastmail", "generic_imap"],
+      "description": "Provider identifier from compatibility matrix"
+    },
+    "tested_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of test execution"
+    },
+    "testing_phase": {
+      "type": "string",
+      "enum": ["dry_pilot", "live_pilot", "recovery_test", "edge_case"],
+      "description": "Type of testing performed"
+    },
+    "source_version": {
+      "type": "string",
+      "description": "Provider source account version/build"
+    },
+    "destination_version": {
+      "type": "string",
+      "description": "Provider destination account version/build"
+    },
+    "engine_version": {
+      "type": "string",
+      "description": "imapsync or doveadm version used"
+    },
+    "test_summary": {
+      "type": "object",
+      "required": ["mailboxes_tested", "messages_total", "bytes_total"],
+      "properties": {
+        "mailboxes_tested": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of mailboxes in test"
+        },
+        "messages_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total messages migrated"
+        },
+        "bytes_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total bytes migrated"
+        },
+        "special_folders_tested": {
+          "type": "boolean",
+          "description": "Whether special-use folders were included"
+        },
+        "unicode_folders_tested": {
+          "type": "boolean",
+          "description": "Whether non-ASCII folder names were tested"
+        },
+        "large_messages_tested": {
+          "type": "boolean",
+          "description": "Whether messages > 10MB were included"
+        }
+      }
+    },
+    "results": {
+      "type": "object",
+      "required": ["overall_result", "messages_verified", "verification_confidence"],
+      "properties": {
+        "overall_result": {
+          "type": "string",
+          "enum": ["pass", "pass_with_exceptions", "fail"],
+          "description": "Final test result"
+        },
+        "messages_verified": {
+          "type": "integer",
+          "description": "Messages verified via MailSwiftSync verification"
+        },
+        "verification_confidence": {
+          "type": "string",
+          "enum": ["high", "medium", "low"],
+          "description": "Confidence level of verification (based on match types)"
+        },
+        "mismatches": {
+          "type": "object",
+          "description": "Types of mismatches found",
+          "properties": {
+            "exact_match": {"type": "integer"},
+            "content_match": {"type": "integer"},
+            "missing": {"type": "integer"},
+            "extra": {"type": "integer"},
+            "changed": {"type": "integer"}
+          }
+        },
+        "exceptions_accepted": {
+          "type": "integer",
+          "description": "Number of exceptions accepted by operator"
+        },
+        "known_issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "issue": {"type": "string"},
+              "severity": {"enum": ["info", "warning", "critical"]},
+              "workaround": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "tester": {
+      "type": "object",
+      "required": ["name", "email", "organization"],
+      "properties": {
+        "name": {"type": "string"},
+        "email": {"type": "string", "format": "email"},
+        "organization": {"type": "string"}
+      },
+      "description": "Who performed the testing"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Additional context or observations"
+    }
+  }
+}
