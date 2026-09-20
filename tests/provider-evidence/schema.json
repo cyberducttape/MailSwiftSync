@@ -9,6 +9,7 @@
     "testing_phase",
     "source_version",
     "destination_version",
+    "engine",
     "engine_version",
     "test_summary",
     "results"
@@ -37,9 +38,14 @@
       "type": "string",
       "description": "Provider destination account version/build"
     },
+    "engine": {
+      "type": "string",
+      "enum": ["imapsync", "doveadm"],
+      "description": "Migration engine used"
+    },
     "engine_version": {
       "type": "string",
-      "description": "imapsync or doveadm version used"
+      "description": "Engine version used (e.g., 2.314)"
     },
     "test_summary": {
       "type": "object",
@@ -133,6 +139,44 @@
     "notes": {
       "type": "string",
       "description": "Additional context or observations"
+    },
+    "source_provider": {
+      "type": "string",
+      "description": "Source email provider (e.g., gmail, microsoft365)"
+    },
+    "destination_provider": {
+      "type": "string",
+      "description": "Destination email provider"
+    },
+    "source_auth_method": {
+      "type": "string",
+      "enum": ["password", "oauth2"],
+      "description": "Authentication method used for source"
+    },
+    "destination_auth_method": {
+      "type": "string",
+      "enum": ["password", "oauth2"],
+      "description": "Authentication method used for destination"
+    },
+    "mailswiftsync_commit": {
+      "type": "string",
+      "description": "Git commit hash of MailSwiftSync version used"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Unique identifier for the migration run"
+    },
+    "proof_digest": {
+      "type": "string",
+      "description": "SHA256 digest of the customer-proof JSON that generated this evidence"
+    },
+    "fixture_id": {
+      "type": "string",
+      "description": "Identifier for the test fixture/dataset used"
+    },
+    "test_dataset_digest": {
+      "type": "string",
+      "description": "Digest of the test dataset/mailboxes used"
     }
   }
 }
