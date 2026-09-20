@@ -140,6 +140,9 @@ impl ImapsyncEvidenceAccumulator {
             source_folders: self.source_folders?,
             destination_folders: self.destination_folders?,
             authoritative: self.sync_good,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         })
     }
 }
@@ -244,6 +247,9 @@ pub(crate) fn dovecot_evidence_from_accumulators(
             source_folders: source.folders,
             destination_folders: destination.folders,
             authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         })
 }
 

@@ -504,6 +504,27 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
     result
 }
 
+/// Securely verify that a directory is writable.
+/// Uses a UUID-based temporary file with create_new semantics and Unix-specific
+/// safety flags (O_NOFOLLOW) to prevent symlink and race-condition attacks.
+pub fn verify_directory_writable(dir: &Path) -> std::io::Result<()> {
+    let test_file = dir.join(format!(".mailswiftsync-write-test-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(&test_file)?;
+        drop(file);
+        Ok(())
+    })();
+    let _ = fs::remove_file(&test_file);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -605,5 +626,19 @@ mod tests {
         assert_eq!(fs::read_to_string(&secret).unwrap(), "test-secret");
         assert_eq!(read_secret_file(&secret).unwrap().as_str(), "test-secret");
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn verify_directory_writable_succeeds_for_temp_dir() {
+        let temp_dir = std::env::temp_dir();
+        let result = super::verify_directory_writable(&temp_dir);
+        assert!(result.is_ok(), "Failed to verify temp directory is writable: {:?}", result);
+    }
+
+    #[test]
+    fn verify_directory_writable_fails_for_nonexistent_dir() {
+        let nonexistent = std::env::temp_dir().join(format!("nonexistent-{}", uuid::Uuid::new_v4()));
+        let result = super::verify_directory_writable(&nonexistent);
+        assert!(result.is_err(), "Should fail for nonexistent directory");
     }
 }

@@ -47,7 +47,7 @@ pub use models::{
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 pub(crate) use policy::{
     attention_reason_for, normalized_destination_identity, valid_dovecot_checkpoint,
@@ -260,6 +260,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         db.record_evidence(&job, &e).unwrap();
         assert_eq!(
@@ -482,6 +485,9 @@ mod tests {
             source_folders: 4,
             destination_folders: 3,
             authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         assert_eq!(evidence.confidence_percent(), 0);
         assert_eq!(evidence.evidence_level(), "Aggregate mismatch");
@@ -500,6 +506,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         assert_eq!(evidence.confidence_percent(), 0);
         assert_eq!(evidence.evidence_level(), "Incomplete evidence");
@@ -517,6 +526,9 @@ mod tests {
             source_folders: 2,
             destination_folders: 2,
             authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         assert_eq!(evidence.confidence_percent(), 85);
         assert!(evidence.is_exact_match());
@@ -699,6 +711,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         db.begin_run(&project.id, &job, "run-with-evidence", "test")
             .unwrap();
@@ -745,6 +760,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         db.begin_run(&project.id, &job, "run-old-evidence", "imapsync")
             .unwrap();
@@ -818,6 +836,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         db.finish_run_for_mailbox_with_evidence(
             &project.id,
@@ -1169,6 +1190,9 @@ mod tests {
             source_folders: 2,
             destination_folders: 2,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         db.register_process(&ActiveProcess {
             run_id: "run-evidence".into(),
@@ -1222,6 +1246,9 @@ mod tests {
             source_folders: 2,
             destination_folders: 2,
             authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         assert!(
             db.finish_run_for_mailbox_with_evidence(
@@ -1276,6 +1303,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         db.finish_run_for_mailbox_with_evidence(
             &project.id,
@@ -1358,7 +1388,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         drop(db);
 
         let directory =
@@ -1487,7 +1517,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
         let migration_backups = std::fs::read_dir(&directory)
             .unwrap()
             .filter_map(Result::ok)
@@ -1531,6 +1561,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         db.begin_run(&project.id, &job, "exception-run", "imapsync")
             .unwrap();
@@ -3137,6 +3170,9 @@ destination_port = "000"
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         assert!(
             db.record_evidence_for_run(&job, "missing", &evidence)
@@ -3167,6 +3203,9 @@ destination_port = "000"
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
 
         assert!(

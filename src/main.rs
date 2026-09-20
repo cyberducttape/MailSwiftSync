@@ -276,6 +276,9 @@ mod tests {
             source_folders: 2,
             destination_folders: 2,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         let first = evidence_digest("run-one", "snapshot-one", &evidence);
         assert_eq!(first, evidence_digest("run-one", "snapshot-one", &evidence));
@@ -893,12 +896,14 @@ mod tests {
                     "destination_user"
                 ]
                 .map(String::from),
+                false,
             )
             .is_ok()
         );
         assert!(
             bulk_import::validate_headers(
                 &["source_host", "source_user", "destination_host"].map(String::from),
+                false,
             )
             .is_err()
         );
@@ -912,6 +917,7 @@ mod tests {
                     "extra_options",
                 ]
                 .map(String::from),
+                false,
             )
             .unwrap_err()
             .contains("cannot contain extra_options")
@@ -925,7 +931,7 @@ mod tests {
         values.insert("source_user".into(), "old@example".into());
         values.insert("destination_host".into(), "new.example".into());
         values.insert("destination_user".into(), "new@example".into());
-        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2).unwrap();
+        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, false).unwrap();
         assert_eq!(job.state, "imported");
         assert_eq!(
             job_state_badge(&job.state, ThemeColors::dark()).0,
@@ -944,7 +950,7 @@ mod tests {
         values.insert("destination_host".into(), "new.example".into());
         values.insert("destination_user".into(), "new@example".into());
         values.insert("destination_password".into(), " Destination! ".into());
-        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2).unwrap();
+        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, true).unwrap();
         assert_eq!(job.form.source_password.as_str(), " Secret123 ");
         assert_eq!(job.form.destination_password.as_str(), " Destination! ");
     }
@@ -1040,7 +1046,7 @@ mod tests {
             "destination_credential_id".into(),
             "destination-alice".into(),
         );
-        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2).unwrap();
+        let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, false).unwrap();
         assert_eq!(job.form.profile.source_credential_id, "source-alice");
         assert_eq!(
             job.form.profile.destination_credential_id,
@@ -1056,7 +1062,7 @@ mod tests {
             .into_iter()
             .filter(|(key, _)| key != "source_credential_id" && key != "destination_credential_id")
             .collect();
-        let inherited = bulk_import::job_from_values(inherited_values, &base, 3).unwrap();
+        let inherited = bulk_import::job_from_values(inherited_values, &base, 3, false).unwrap();
         assert_eq!(inherited.form.profile.source_credential_id, "shared-source");
         assert_eq!(
             inherited.form.profile.destination_credential_id,

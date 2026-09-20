@@ -15,6 +15,12 @@ pub struct MailboxEvidence {
     pub destination_folders: u64,
     /// True only when the engine supplied a stronger engine-confirmed summary.
     pub authoritative: bool,
+    /// Message-level verification: count of messages present in source but absent in destination.
+    pub missing_messages: u64,
+    /// Message-level verification: count of messages present in destination but absent in source.
+    pub extra_messages: u64,
+    /// Message-level verification: count of messages with same UID but different content/metadata.
+    pub modified_messages: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

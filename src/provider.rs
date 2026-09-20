@@ -64,7 +64,7 @@ impl ProviderPreset {
                 port: "993",
                 tls: "imaps",
                 auth: "oauth2",
-                note: "Exchange Online IMAP and tenant OAuth policy must permit the account; MailSwiftSync does not perform consent or refresh.",
+                note: "MailSwiftSync does not perform provider consent. Automatic refresh is available when an operator supplies a registered client and refresh token. Exchange Online IMAP and tenant OAuth policy must permit the account.",
             },
             Self::Fastmail => ProviderDefaults {
                 host: "imap.fastmail.com",

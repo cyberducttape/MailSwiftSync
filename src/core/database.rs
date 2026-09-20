@@ -220,6 +220,9 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER, dest_size_bytes INTEGER, source_date TEXT, dest_date TEXT, subject BLOB, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS message_extraction (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), message_id TEXT, uid TEXT, size_bytes INTEGER, internal_date TEXT, extracted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS message_mismatch_acceptance (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), mismatch_id TEXT NOT NULL REFERENCES message_mismatches(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
                  CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
@@ -379,6 +382,43 @@ impl StateStore {
         {
             tx.execute(
                 "ALTER TABLE evidence_history ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        // Message-level verification columns (schema v7)
+        if !columns.iter().any(|column| column == "missing_messages") {
+            tx.execute(
+                "ALTER TABLE evidence ADD COLUMN missing_messages INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "extra_messages") {
+            tx.execute(
+                "ALTER TABLE evidence ADD COLUMN extra_messages INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "modified_messages") {
+            tx.execute(
+                "ALTER TABLE evidence ADD COLUMN modified_messages INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !history_columns.iter().any(|column| column == "missing_messages") {
+            tx.execute(
+                "ALTER TABLE evidence_history ADD COLUMN missing_messages INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !history_columns.iter().any(|column| column == "extra_messages") {
+            tx.execute(
+                "ALTER TABLE evidence_history ADD COLUMN extra_messages INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !history_columns.iter().any(|column| column == "modified_messages") {
+            tx.execute(
+                "ALTER TABLE evidence_history ADD COLUMN modified_messages INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
