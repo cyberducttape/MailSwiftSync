@@ -106,11 +106,17 @@ fn read_imap_list_response<S: Read>(
 ) -> Result<ListInventorySummary, String> {
     let mut line = Vec::new();
     let started = Instant::now();
+    let mut last_read = Instant::now();
     let mut literal_remaining = 0_usize;
     let mut literal_separator_remaining = 0_u8;
     let mut summary = ListInventorySummary::default();
+    const MAX_INTER_READ_STALL: Duration = Duration::from_secs(15);
     loop {
+        if last_read.elapsed() > MAX_INTER_READ_STALL {
+            return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
+        }
         let count = stream.read(buffer).map_err(|error| error.to_string())?;
+        last_read = Instant::now();
         if count == 0 {
             return Err(format!("IMAP connection closed before {tag} completed"));
         }
@@ -353,6 +359,10 @@ pub(crate) fn connect_tls_stream(
             .conn
             .complete_io(&mut stream.sock)
             .map_err(|error| format!("{host}: TLS handshake failed: {error}"))?;
+        stream
+            .sock
+            .set_read_timeout(Some(Duration::from_secs(8)))
+            .map_err(|e| format!("{host}: could not set TLS read timeout: {e}"))?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
         return Ok((stream, greeting));
     }
@@ -360,6 +370,10 @@ pub(crate) fn connect_tls_stream(
     let connection = ClientConnection::new(Arc::new(config), name)
         .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
     let mut stream = StreamOwned::new(connection, tcp);
+    stream
+        .sock
+        .set_read_timeout(Some(Duration::from_secs(8)))
+        .map_err(|e| format!("{host}: could not set TLS read timeout: {e}"))?;
     let greeting = read_imap_greeting(&mut stream, host)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
     Ok((stream, greeting))
