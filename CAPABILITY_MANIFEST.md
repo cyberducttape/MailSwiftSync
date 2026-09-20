@@ -60,10 +60,11 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
-| **Provider error classification** (7 types) | yes | no | unit | no | Classifier exists, NOT integrated into retry logic |
-| **Automatic retry with backoff** | yes | yes | integration | generic-lab | Imapsync's built-in retry, not MailSwiftSync-specific |
-| **Rate limit detection** | yes | no | unit | no | Pattern matching implemented, NOT applied |
-| **Connection exhaustion handling** | yes | no | unit | no | Configured per provider, NOT applied |
+| **Generic error classification** | yes | yes | integration | generic-lab | src/controller/failure.rs: classifies auth/quota/capacity/transport/config/message/verification failures |
+| **Provider-specific classification** | yes | no | unit | no | Provider-intelligence subsystem exists, NOT wired to controller |
+| **Automatic retry with backoff** | yes | yes | integration | generic-lab | Transient failures auto-retry with bounded backoff (src/controller/batch_work_item.rs); also uses imapsync's native retry |
+| **Rate limit detection** | yes | partial | unit | no | Pattern matching implemented for generic rate limits; provider-specific patterns NOT applied |
+| **Connection exhaustion handling** | yes | partial | unit | no | Configured per provider; generic connection failures retried; provider-specific limits NOT applied |
 
 ---
 
