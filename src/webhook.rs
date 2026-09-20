@@ -25,138 +25,66 @@
 //! status is not secret, but a plaintext endpoint would still let anyone on
 //! the network path observe and tamper with it in flight.
 use crate::credentials::{SecretString, read_secret_file};
-use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use std::{
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use reqwest::blocking::Response;
+use reqwest::header::{HeaderName, HeaderValue};
+use std::{io::Read, time::Duration};
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const WEBHOOK_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const WEBHOOK_READ_TIMEOUT: Duration = Duration::from_secs(20);
 const WEBHOOK_TOTAL_BUDGET: Duration = Duration::from_secs(30);
 
-/// POST `body` (already-serialized JSON) to `url` over a fresh
-/// certificate-validated TLS connection. Authentication credentials are read
+/// POST `body` (already-serialized JSON) to `url` using the shared reqwest
+/// Rustls transport used by OAuth refresh. Authentication credentials are read
 /// from environment variables, not from the URL itself. Returns the response
-/// status code on any response MailSwiftSync could parse; the caller decides
-/// which codes count as success. This does not retry — the CLI command this
-/// backs is meant to be invoked by the operator's own automation (a scheduler,
-/// a `supervise` wrapper script), which already owns its own retry policy.
+/// status code; the caller decides which codes count as success. This does not
+/// retry — the CLI command this backs is meant to be invoked by the operator's
+/// own automation, which already owns its retry policy.
 pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
     let url = load_webhook_url(url)?;
     let bearer_token = load_webhook_bearer_token()?;
     let custom_header = load_webhook_custom_header()?;
-    let (host, port, path) = parse_https_url(&url)?;
+    let parsed_url = parse_https_url(&url)?;
 
-    let address = format!("{host}:{port}");
-    let sockets = address
-        .to_socket_addrs()
-        .map_err(|error| format!("{host}: {error}"))?
-        .collect::<Vec<_>>();
-    if sockets.is_empty() {
-        return Err(format!("{host}: no address found for webhook URL"));
-    }
-    let mut last_error = None;
-    let mut tcp = None;
-    for socket in sockets {
-        match TcpStream::connect_timeout(&socket, WEBHOOK_CONNECT_TIMEOUT) {
-            Ok(stream) => {
-                tcp = Some(stream);
-                break;
-            }
-            Err(error) => last_error = Some(error),
-        }
-    }
-    let tcp = tcp.ok_or_else(|| {
-        format!(
-            "{host}: could not connect to the webhook URL: {}",
-            last_error
-                .map(|error| error.to_string())
-                .unwrap_or_else(|| "unknown connection error".into())
-        )
-    })?;
-    tcp.set_read_timeout(Some(WEBHOOK_READ_TIMEOUT))
-        .map_err(|error| error.to_string())?;
+    let client = reqwest::blocking::Client::builder()
+        .use_rustls_tls()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(WEBHOOK_CONNECT_TIMEOUT)
+        .timeout(WEBHOOK_TOTAL_BUDGET)
+        .build()
+        .map_err(|error| format!("could not build webhook client: {error}"))?;
 
-    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let name = ServerName::try_from(host.clone())
-        .map_err(|error| format!("{host}: invalid TLS server name: {error}"))?;
-    let connection = ClientConnection::new(Arc::new(config), name)
-        .map_err(|error| format!("{host}: TLS configuration failed: {error}"))?;
-    let mut stream = StreamOwned::new(connection, tcp);
-    stream
-        .conn
-        .complete_io(&mut stream.sock)
-        .map_err(|error| format!("{host}: TLS handshake with the webhook URL failed: {error}"))?;
-
-    let host_header = if port == 443 {
-        host.clone()
-    } else {
-        format!("{host}:{port}")
-    };
-    let mut request_text = format!(
-        "POST {path} HTTP/1.1\r\n\
-         Host: {host_header}\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {}\r\n\
-         Accept: application/json\r\n\
-         Connection: close\r\n\
-         User-Agent: mailswiftsync-notify-webhook\r\n",
-        body.len()
-    );
-
+    let mut request = client
+        .post(parsed_url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::USER_AGENT, "mailswiftsync-notify-webhook")
+        .body(body.to_owned());
     if let Some(token) = bearer_token {
-        request_text.push_str(&format!("Authorization: Bearer {}\r\n", token.as_str()));
+        let value = HeaderValue::from_str(&format!("Bearer {}", token.as_str()))
+            .map_err(|error| format!("invalid webhook bearer token: {error}"))?;
+        request = request.header(reqwest::header::AUTHORIZATION, value);
     }
     if let Some((name, value)) = custom_header {
-        request_text.push_str(&format!("{}: {}\r\n", name, value.as_str()));
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| format!("invalid webhook header name: {error}"))?;
+        let value = HeaderValue::from_str(value.as_str())
+            .map_err(|error| format!("invalid webhook header value: {error}"))?;
+        request = request.header(name, value);
     }
-    request_text.push_str("\r\n");
-    request_text.push_str(body);
 
-    stream
-        .write_all(request_text.as_bytes())
-        .map_err(|error| format!("{host}: could not send the webhook request: {error}"))?;
-
-    let raw = read_bounded_response(&mut stream, WEBHOOK_TOTAL_BUDGET)
-        .map_err(|error| format!("{host}: {error}"))?;
-    let status_line = raw
-        .lines()
-        .next()
-        .ok_or_else(|| format!("{host}: webhook endpoint sent an empty response"))?;
-    status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| {
-            format!("{host}: could not parse webhook response status line: {status_line}")
-        })
+    let mut response = request
+        .send()
+        .map_err(|error| format!("webhook request failed: {error}"))?;
+    read_bounded_response(&mut response)?;
+    Ok(response.status().as_u16())
 }
 
-fn read_bounded_response<S: Read>(stream: &mut S, budget: Duration) -> Result<String, String> {
-    let started = Instant::now();
+fn read_bounded_response(response: &mut Response) -> Result<(), String> {
     let mut raw = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
-        if started.elapsed() > budget {
-            return Err("webhook endpoint response exceeded the notification time budget".into());
-        }
-        let count = match stream.read(&mut buffer) {
+        let count = match response.read(&mut buffer) {
             Ok(count) => count,
-            // A peer that closes the raw connection right after its final
-            // TLS record, without a closing `close_notify` alert, is common
-            // for `Connection: close` responses and is not in itself
-            // evidence of truncation: rustls already validates every
-            // record's integrity before handing back plaintext, so bytes
-            // read up to this point are exactly what the peer sent.
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(error) => return Err(error.to_string()),
         };
         if count == 0 {
@@ -169,33 +97,32 @@ fn read_bounded_response<S: Read>(stream: &mut S, budget: Duration) -> Result<St
             ));
         }
     }
-    Ok(String::from_utf8_lossy(&raw).into_owned())
+    Ok(())
 }
 
-/// A minimal `https://host[:port]/path` parser, matching the same
-/// intentionally narrow approach as the OAuth token-refresh path: this is an
-/// operator-configured URL, not a general web request, so pulling in a URL
-/// crate would be a disproportionate dependency addition.
-fn parse_https_url(url: &str) -> Result<(String, u16, String), String> {
-    let rest = url
-        .strip_prefix("https://")
-        .ok_or_else(|| "the webhook URL must use https://".to_owned())?;
-    if rest.is_empty() {
-        return Err("the webhook URL is missing a host".into());
-    }
-    let (authority, path) = match rest.find('/') {
-        Some(index) => (&rest[..index], &rest[index..]),
-        None => (rest, "/"),
-    };
-    if authority.chars().any(char::is_control) || path.chars().any(char::is_control) {
+fn parse_https_url(url: &str) -> Result<reqwest::Url, String> {
+    if url.chars().any(char::is_control) {
         return Err("the webhook URL cannot contain control characters".into());
     }
-    if authority.is_empty() {
+    if let Some(rest) = url.strip_prefix("https://")
+        && (rest.is_empty() || rest.starts_with('/'))
+    {
         return Err("the webhook URL is missing a host".into());
     }
-    let (host, port) = crate::endpoint::parts(authority, 443)
-        .map_err(|error| format!("invalid webhook URL host: {error}"))?;
-    Ok((host, port, path.to_owned()))
+    let parsed =
+        reqwest::Url::parse(url).map_err(|error| format!("invalid webhook URL: {error}"))?;
+    if parsed.scheme() != "https" {
+        return Err("the webhook URL must use https://".into());
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err("the webhook URL is missing a host".into());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(
+            "webhook URL credentials must be supplied through headers or environment files".into(),
+        );
+    }
+    Ok(parsed)
 }
 
 /// Resolve the command-line URL, allowing operators to keep secret-bearing
@@ -298,18 +225,18 @@ mod tests {
 
     #[test]
     fn parses_https_url_with_explicit_port_and_path() {
-        let (host, port, path) = parse_https_url("https://hooks.example.com:8443/in/abc").unwrap();
-        assert_eq!(host, "hooks.example.com");
-        assert_eq!(port, 8443);
-        assert_eq!(path, "/in/abc");
+        let url = parse_https_url("https://hooks.example.com:8443/in/abc").unwrap();
+        assert_eq!(url.host_str(), Some("hooks.example.com"));
+        assert_eq!(url.port(), Some(8443));
+        assert_eq!(url.path(), "/in/abc");
     }
 
     #[test]
     fn parses_https_url_defaulting_port_and_path() {
-        let (host, port, path) = parse_https_url("https://hooks.example.com").unwrap();
-        assert_eq!(host, "hooks.example.com");
-        assert_eq!(port, 443);
-        assert_eq!(path, "/");
+        let url = parse_https_url("https://hooks.example.com").unwrap();
+        assert_eq!(url.host_str(), Some("hooks.example.com"));
+        assert_eq!(url.port(), None);
+        assert_eq!(url.path(), "/");
     }
 
     #[test]

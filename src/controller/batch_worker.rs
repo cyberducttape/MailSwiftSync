@@ -1,5 +1,5 @@
 use super::batch::BatchExecutionMode;
-use super::batch_work_item::process_batch_work_items;
+use super::batch_work_item::{BatchWorkerContext, process_batch_work_items};
 use crate::{Event, StreamOutcome, bulk_import::BulkJob, process::ProcessLaunchLimiter};
 use std::{
     collections::HashSet,
@@ -21,29 +21,40 @@ pub(crate) struct BatchWorkerLaunch {
     pub(crate) receiver: mpsc::Receiver<Event>,
 }
 
+/// Immutable inputs for one batch execution. Keeping queue identity, retry
+/// policy, and work items together prevents positional argument drift between
+/// the controller and worker coordinator.
+pub(crate) struct BatchExecutionContext {
+    pub(crate) concurrency: usize,
+    pub(crate) mode: BatchExecutionMode,
+    pub(crate) retry_count: usize,
+    pub(crate) job_count: usize,
+    pub(crate) queue_job_ids: Vec<String>,
+    pub(crate) child_run_ids: Vec<String>,
+    pub(crate) queue_checkpoints: Vec<Option<String>>,
+    pub(crate) batch_project_id: String,
+    pub(crate) batch_run_id: String,
+    pub(crate) jobs: Vec<BulkJob>,
+}
+
 /// Create the bounded event channel, cancellation token, and batch worker as
 /// one controller-owned operation. Callers only retain the handles needed to
 /// render state and request cancellation; channel sizing and worker startup
 /// policy do not leak into the egui composition root.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn launch_batch_worker(
-    concurrency: usize,
-    mode: BatchExecutionMode,
-    retry_count: usize,
-    job_count: usize,
-    queue_job_ids: Vec<String>,
-    child_run_ids: Vec<String>,
-    queue_checkpoints: Vec<Option<String>>,
-    batch_project_id: String,
-    batch_run_id: String,
-    jobs: Vec<BulkJob>,
-) -> BatchWorkerLaunch {
+pub(crate) fn launch_batch_worker(context: BatchExecutionContext) -> BatchWorkerLaunch {
     let (tx, receiver) = mpsc::sync_channel(MAX_BATCH_PENDING_EVENTS);
     let cancel = Arc::new(AtomicBool::new(false));
-    spawn_batch_worker(
+    spawn_batch_worker(context, tx, Arc::clone(&cancel));
+    BatchWorkerLaunch { cancel, receiver }
+}
+
+pub(crate) fn spawn_batch_worker(
+    context: BatchExecutionContext,
+    tx: mpsc::SyncSender<Event>,
+    cancel: Arc<AtomicBool>,
+) {
+    let BatchExecutionContext {
         concurrency,
-        tx,
-        Arc::clone(&cancel),
         mode,
         retry_count,
         job_count,
@@ -53,25 +64,7 @@ pub(crate) fn launch_batch_worker(
         batch_project_id,
         batch_run_id,
         jobs,
-    );
-    BatchWorkerLaunch { cancel, receiver }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn spawn_batch_worker(
-    concurrency: usize,
-    tx: mpsc::SyncSender<Event>,
-    cancel: Arc<AtomicBool>,
-    mode: BatchExecutionMode,
-    retry_count: usize,
-    job_count: usize,
-    queue_job_ids: Vec<String>,
-    child_run_ids: Vec<String>,
-    queue_checkpoints: Vec<Option<String>>,
-    batch_project_id: String,
-    batch_run_id: String,
-    jobs: Vec<BulkJob>,
-) {
+    } = context;
     let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
     thread::spawn(move || {
         let failed = Arc::new(AtomicBool::new(false));
@@ -97,7 +90,7 @@ pub(crate) fn spawn_batch_worker(
             let batch_project_id = batch_project_id.clone();
             let batch_run_id = batch_run_id.clone();
             workers.push(thread::spawn(move || {
-                process_batch_work_items(
+                process_batch_work_items(BatchWorkerContext {
                     concurrency,
                     mode,
                     retry_count,
@@ -109,7 +102,7 @@ pub(crate) fn spawn_batch_worker(
                     launch_limiter,
                     batch_project_id,
                     batch_run_id,
-                );
+                });
             }));
         }
         drop(job_rx);

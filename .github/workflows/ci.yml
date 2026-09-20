@@ -27,6 +27,28 @@ jobs:
       - run: scripts/verify-compatibility-matrix.sh docs/compatibility-matrix.md
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
+      - name: Publish runnable test inventory
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p dist
+          cargo test --locked --all-targets --all-features -- --list 2>&1 | tee test-list.log
+          total=$(awk '/^[[:space:]]*[0-9]+ tests,/{sum += $1} END{print sum + 0}' test-list.log)
+          {
+            echo "# MailSwiftSync test inventory"
+            echo
+            echo "Commit: \\`${GITHUB_SHA}\`"
+            echo "Platform: Linux (Ubuntu)"
+            echo "Runnable tests discovered: ${total}"
+            echo "Execution result: governed by the CI job status"
+          } | tee dist/test-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload test summary
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: linux-test-summary
+          path: dist/test-summary.md
+          if-no-files-found: error
       - run: cargo build --locked --release --all-features
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked

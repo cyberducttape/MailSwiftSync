@@ -27,22 +27,37 @@ use std::{
     time::Duration,
 };
 
+pub(crate) struct BatchWorkerContext {
+    pub(crate) concurrency: usize,
+    pub(crate) mode: BatchExecutionMode,
+    pub(crate) retry_count: usize,
+    pub(crate) job_rx:
+        crossbeam_channel::Receiver<(usize, String, String, Option<String>, BulkJob)>,
+    pub(crate) tx: mpsc::SyncSender<Event>,
+    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) failed: Arc<AtomicBool>,
+    pub(crate) terminal_jobs: Arc<Mutex<HashSet<usize>>>,
+    pub(crate) launch_limiter: Arc<ProcessLaunchLimiter>,
+    pub(crate) batch_project_id: String,
+    pub(crate) batch_run_id: String,
+}
+
 /// Execute mailbox work items for one batch worker. All output is emitted as
 /// typed controller events; durable state remains owned by the poll reducer.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn process_batch_work_items(
-    concurrency: usize,
-    mode: BatchExecutionMode,
-    retry_count: usize,
-    job_rx: crossbeam_channel::Receiver<(usize, String, String, Option<String>, BulkJob)>,
-    tx: mpsc::SyncSender<Event>,
-    cancel: Arc<AtomicBool>,
-    failed: Arc<AtomicBool>,
-    terminal_jobs: Arc<Mutex<HashSet<usize>>>,
-    launch_limiter: Arc<ProcessLaunchLimiter>,
-    batch_project_id: String,
-    batch_run_id: String,
-) {
+pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
+    let BatchWorkerContext {
+        concurrency,
+        mode,
+        retry_count,
+        job_rx,
+        tx,
+        cancel,
+        failed,
+        terminal_jobs,
+        launch_limiter,
+        batch_project_id,
+        batch_run_id,
+    } = context;
     let live = mode.is_live();
     while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
         if cancel.load(Ordering::Relaxed) {

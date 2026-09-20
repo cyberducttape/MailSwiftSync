@@ -71,31 +71,18 @@ impl MismatchCounts {
             + self.folder_mismatch
             + self.changed
     }
-
-    pub fn confidence_level(&self) -> String {
-        if self.exact_match + self.content_match == 0 {
-            return "low".to_string();
-        }
-        let exact_pct =
-            (self.exact_match as f64 * 100.0) / (self.exact_match + self.content_match) as f64;
-        if exact_pct >= 95.0 {
-            "high".to_string()
-        } else if exact_pct >= 80.0 {
-            "medium".to_string()
-        } else {
-            "low".to_string()
-        }
-    }
 }
 
 /// Display-friendly description of each mismatch type.
 pub fn mismatch_type_description(mismatch_type: &str) -> &'static str {
     match mismatch_type {
-        "exact_match" => "Message-ID, content hash, and date all match (100% confidence)",
-        "content_match" => "Content hash and date match, but Message-ID differs (99% confidence)",
-        "date_size_match" => "Date and size match; detects renames (95% confidence)",
+        "exact_match" => "Message-ID and available metadata match (verified)",
+        "content_match" => {
+            "Content evidence and date match, but Message-ID differs (strongly matched)"
+        }
+        "date_size_match" => "Date and size match; candidate only (probable match)",
         "message_id_only" => {
-            "Message-ID matches but size/date differs; may indicate corruption (80% confidence)"
+            "Message-ID matches but size/date differs; changed evidence requires review"
         }
         "missing" => "Present in source, absent in destination",
         "extra" => "Present in destination, absent in source (may be post-migration addition)",
@@ -168,38 +155,6 @@ mod tests {
             changed: 0,
         };
         assert_eq!(counts.total(), 118);
-    }
-
-    #[test]
-    fn high_confidence_with_mostly_exact_matches() {
-        let counts = MismatchCounts {
-            exact_match: 950,
-            content_match: 50,
-            date_size_match: 0,
-            message_id_only: 0,
-            missing: 0,
-            extra: 0,
-            duplicated: 0,
-            folder_mismatch: 0,
-            changed: 0,
-        };
-        assert_eq!(counts.confidence_level(), "high");
-    }
-
-    #[test]
-    fn medium_confidence_with_mixed_matches() {
-        let counts = MismatchCounts {
-            exact_match: 800,
-            content_match: 200,
-            date_size_match: 0,
-            message_id_only: 0,
-            missing: 0,
-            extra: 0,
-            duplicated: 0,
-            folder_mismatch: 0,
-            changed: 0,
-        };
-        assert_eq!(counts.confidence_level(), "medium");
     }
 
     #[test]

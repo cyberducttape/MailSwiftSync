@@ -2,6 +2,29 @@
 
 MailSwiftSync uses IMAP for all migrations. This guide walks through the setup required for each major provider.
 
+## Folder-mapping boundary
+
+For imapsync migrations, MailSwiftSync currently relies on imapsync's standard
+folder behavior and the optional `--automap` setting. It displays the proposed
+mapping during preflight, but it does not provide a separately validated
+Gmail/Microsoft 365/Fastmail namespace-translation engine. Differences such as
+`Sent Items`/`Sent Mail`, `[Gmail]/Sent Mail`, `All Mail`/Archive, and
+`Deleted Items`/Trash/Junk remain provider- and mailbox-specific. Provider
+mapping is subject to live validation; review the preflight result before a
+pilot and do not infer that matching names or labels imply identical semantics.
+
+## Transport and TLS boundary
+
+MailSwiftSync's native IMAP readiness probes use Rustls with certificate and
+hostname verification, optional enterprise CA material, and optional
+application-level leaf-certificate pinning. The actual imapsync transfer is an
+external process and performs TLS validation through its own Perl/SSL runtime.
+MailSwiftSync passes the selected encrypted transport, certificate-verification
+settings, and any configured CA file to imapsync, but the two stacks are not the
+same implementation. A successful native probe is therefore readiness evidence,
+not a guarantee that the external engine's runtime will accept every
+certificate or negotiate the same protocol details.
+
 ## Gmail / Google Workspace
 
 ### Prerequisites
@@ -100,8 +123,10 @@ For very large migrations (100k+ messages), consider:
 See **OAUTH_SETUP.md** — Microsoft 365 OAuth Setup section. You must:
 1. Register an app in Azure Portal
 2. Grant `IMAP.AccessAsUser.All` permission
-3. Create a client secret
-4. Obtain initial refresh token using MSAL or OAuth flow
+3. Use a delegated authorization-code or device flow; create a client secret
+   only for a confidential client
+4. Request `offline_access` and obtain the initial refresh token using the
+   delegated flow
 
 ### Step 2: Enable IMAP for Source Mailbox
 
@@ -154,13 +179,17 @@ Set-Mailbox -Identity destination@tenant.onmicrosoft.com -ProhibitSendQuota 100G
 
 **Issue: "Soft throttling" — migration slows significantly**
 - O365 enforces soft throttling when load is high
-- Expected behavior: MailSwiftSync will automatically back off
-- Workaround: Run migration during off-peak hours
+- Treat slower responses, connection limits, server-busy responses, and
+  timeouts as operational signals; MailSwiftSync does not currently apply a
+  provider-specific adaptive throttle
+- Workaround: use conservative profile limits and run migration during
+  off-peak hours
 
 **Issue: Special folders have different names than source**
 - O365 uses different names (e.g., "Deleted Items" vs "Trash")
-- MailSwiftSync handles mapping automatically
-- Verify folder mapping in preflight step
+- MailSwiftSync relies on imapsync's standard mapping and optional `--automap`;
+  it does not independently translate every provider namespace
+- Verify the proposed folder mapping in preflight and validate it with a pilot
 
 **Issue: Shared mailbox not accessible**
 - Verify the account has "Full Access" permission
@@ -216,7 +245,8 @@ Run a preflight check in MailSwiftSync:
 **Issue: JMAP vs IMAP folder differences**
 - Fastmail primarily uses JMAP internally
 - IMAP interface is fully functional but namespace may differ
-- MailSwiftSync handles this transparently
+- MailSwiftSync relies on imapsync's standard folder handling; review the
+  preflight mapping and validate Fastmail-specific behavior with a pilot
 
 ### Fastmail-Specific Throttling
 

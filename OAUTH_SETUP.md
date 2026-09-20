@@ -2,14 +2,28 @@
 
 MailSwiftSync supports OAuth2 token refresh for unattended migrations. This enables long-running migrations to automatically refresh access tokens without operator intervention.
 
-## When to Use OAuth vs App Passwords
+## Authentication model
 
-| Scenario | OAuth Tokens | App Passwords |
-|----------|--------------|---------------|
-| Interactive migration | ❌ Not needed | ✅ Recommended |
-| Unattended/scheduled | ✅ Recommended | ❌ Not practical |
-| Token expiry < 1 hour | ✅ Automatic refresh | ❌ Will fail mid-migration |
-| Multi-hour migrations | ✅ Safe | ❌ High failure risk |
+MailSwiftSync consumes a provider-issued access token and can refresh it when
+the operator supplies a refresh-token configuration. It does not perform
+provider consent or choose an OAuth flow on the operator's behalf.
+
+There are two distinct OAuth models:
+
+- **Delegated mailbox OAuth:** a user signs in through authorization code or
+  device flow. Request the provider's IMAP delegated permission and
+  `offline_access` when unattended refresh is required. This produces a
+  user-context access token and, when approved, a refresh token.
+- **Application/app-only OAuth:** a service principal uses client credentials.
+  No user signs in and no refresh token is issued; the application requests
+  new access tokens with its credentials. MailSwiftSync's current unattended
+  refresh settings are designed for delegated refresh tokens, so app-only
+  Exchange configuration is documented separately and is not implied to be a
+  supported MailSwiftSync credential workflow.
+
+App passwords are provider- and account-specific password authentication. They
+are not a general OAuth substitute and do not work as an Exchange Online IMAP
+workaround after Basic Authentication removal.
 
 ## OAuth Limitations in MailSwiftSync
 
@@ -134,90 +148,88 @@ Use the `gmail.imap_admin` OAuth scope instead. See Google's domain-wide delegat
 6. Find and add: `IMAP.AccessAsUser.All`
 7. Click "Grant admin consent"
 
-**Important:** Do NOT use Microsoft Graph scope `Mail.Read` — that's for Graph API. IMAP authentication requires the Exchange Online `IMAP.AccessAsUser.All` scope.
+**Important:** Do NOT use Microsoft Graph scope `Mail.Read` — that's for Graph API. IMAP authentication requires the Exchange Online delegated scope `https://outlook.office.com/IMAP.AccessAsUser.All` in the authorization request.
 
-### Step 3: Create Client Secret
+### Step 3: Choose the delegated client type
+
+For device authorization or another public-client flow, enable public client
+flows in the app registration and do not create a client secret. A secret is
+needed only when using a confidential authorization-code client. If using that
+model:
 
 1. Go to "Certificates & secrets"
 2. Click "New client secret"
 3. Description: "MailSwiftSync"
-4. Expiry: 24 months (or your preferred duration)
+4. Set the shortest practical expiry
 5. Click "Add"
 6. **Copy the secret value immediately** — you won't see it again
-7. This is your `client_secret` for MailSwiftSync
 
-### Step 4: Obtain Initial Refresh Token
+Do not mix a public-client device flow with the client-credentials flow. The
+latter is the separate app-only model described below and does not issue a
+refresh token.
 
-Use the Authorization Code Flow to obtain a refresh token. The token cache approach in MSAL doesn't expose refresh tokens directly for external use.
+### Delegated mailbox OAuth
 
-**Option A: Using MSAL for Python (Recommended)**
+Use authorization code or device authorization flow when a specific mailbox
+user is signing in. Microsoft documents the IMAP delegated scope as:
 
-```bash
-pip install msal
+```
+https://outlook.office.com/IMAP.AccessAsUser.All
+```
 
-python3 << 'EOF'
+Request `offline_access` as well when MailSwiftSync must refresh access tokens
+for unattended work. Do not substitute Microsoft Graph `Mail.Read`, and do not
+use `https://outlook.office365.com/.default` for this delegated IMAP request.
+See [Microsoft's IMAP OAuth documentation](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth)
+for the provider's current flow and scope details.
+
+**Option A: MSAL device flow (public client)**
+
+```python
 import msal
-import json
 
-CLIENT_ID = "YOUR_CLIENT_ID"
-CLIENT_SECRET = "YOUR_CLIENT_SECRET"
-AUTHORITY = "https://login.microsoftonline.com/common"
-SCOPES = ["https://outlook.office365.com/.default"]
+CLIENT_ID = "YOUR_PUBLIC_CLIENT_ID"
+AUTHORITY = "https://login.microsoftonline.com/YOUR_TENANT_ID"
+SCOPES = [
+    "https://outlook.office.com/IMAP.AccessAsUser.All",
+    "offline_access",
+]
 
-# Create public client for interactive auth
-app = msal.PublicClientApplication(
-    client_id=CLIENT_ID,
-    authority=AUTHORITY
-)
-
-# Get authorization code via browser
-result = app.acquire_token_interactive(scopes=SCOPES)
-
-if "access_token" in result:
-    print("Access token obtained")
-    
-    # Exchange for refresh token using confidential client
-    # (refresh tokens are obtained via confidential client flow)
-    conf_app = msal.ConfidentialClientApplication(
-        client_id=CLIENT_ID,
-        client_credential=CLIENT_SECRET,
-        authority=AUTHORITY
-    )
-    
-    # Re-authenticate with credentials to get refresh token
-    refresh_result = conf_app.acquire_token_for_client(scopes=SCOPES)
-    
-    if "access_token" in refresh_result:
-        print("Authorization successful")
-        print("\nStore these in MailSwiftSync:")
-        print("Client ID:", CLIENT_ID)
-        print("Client Secret:", CLIENT_SECRET)
-        print("Token Endpoint: https://login.microsoftonline.com/common/oauth2/v2.0/token")
-        print("\nTo get initial refresh token, use the Device Code Flow")
-else:
-    print("Authorization failed:", result.get("error_description"))
-EOF
+app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
+flow = app.initiate_device_flow(scopes=SCOPES)
+if "user_code" not in flow:
+    raise RuntimeError(flow)
+print(flow["message"])
+result = app.acquire_token_by_device_flow(flow)
+print(result.keys())
+print("Refresh token:", result.get("refresh_token"))
 ```
 
-**Option B: Using curl (Manual OAuth Code Flow)**
+For an authorization-code flow, register the exact redirect URI and exchange
+the returned code at the tenant's `/oauth2/v2.0/token` endpoint. The token
+request uses `grant_type=authorization_code`, the code, the same redirect URI,
+and the delegated IMAP scope plus `offline_access`. Confidential clients also
+send `client_secret`; public clients do not. Store the resulting refresh token,
+client ID, optional client secret, and token endpoint in MailSwiftSync.
 
-```bash
-# Step 1: Get authorization code (opens browser)
-curl "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=YOUR_CLIENT_ID&response_type=code&scope=https://outlook.office365.com/.default&redirect_uri=http://localhost"
+### Application access (app-only; separate workflow)
 
-# Step 2: Exchange code for tokens
-curl -X POST "https://login.microsoftonline.com/common/oauth2/v2.0/token" \
-  -d "client_id=YOUR_CLIENT_ID" \
-  -d "client_secret=YOUR_CLIENT_SECRET" \
-  -d "code=AUTHORIZATION_CODE_FROM_STEP_1" \
-  -d "redirect_uri=http://localhost" \
-  -d "grant_type=authorization_code" \
-  -d "scope=https://outlook.office365.com/.default"
+Client credentials are not delegated mailbox OAuth. They act as the
+application, issue no refresh token, and require Exchange Online application
+permissions and service-principal mailbox authorization. Microsoft's IMAP
+app-only flow requires the `IMAP.AccessAsApp` application permission, tenant
+admin consent, Exchange service-principal registration, and mailbox permission
+assignment. Token requests use the Exchange app-only resource scope:
 
-# Response includes refresh_token
+```
+https://outlook.office365.com/.default
 ```
 
-**Store the refresh token from the response for MailSwiftSync.**
+This is intentionally separate from the delegated scope above. MailSwiftSync
+does not currently configure Exchange service principals or app-only mailbox
+permissions; do not enter an app-only access token into the delegated refresh
+configuration. See [Microsoft's app-only IMAP guidance](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth#use-client-credentials-grant-flow-to-authenticate-smtp-imap-and-pop-connections)
+if evaluating that deployment model.
 
 ### Step 5: Store in MailSwiftSync
 

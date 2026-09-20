@@ -1,6 +1,6 @@
 # MailSwiftSync Capability Manifest
 
-**Generated from code analysis and test inventory**  
+**Manually maintained from source call-site review and test inventory**
 **Last verified:** 2026-09-20
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
@@ -22,9 +22,9 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 |------------|------|-------|--------|---------------|-------|
 | IMAP message transfer (imapsync) | yes | yes | integration | pending | Engine: imapsync 2.314 |
 | IMAP message transfer (Dovecot) | yes | yes | integration | pending | Engine: Dovecot 2.3+ |
-| Folder/label mapping | yes | yes | integration | pending | Provider-specific namespace handling |
-| Message extraction (imapsync) | yes | yes | integration | no | Parses debug output for message UIDs/sizes |
-| Message extraction (Dovecot) | yes | yes | integration | no | Uses doveadm fetch output |
+| Folder/label mapping | yes | yes | integration | pending | Generic imapsync mapping/automap; no provider-specific namespace translation engine |
+| Message extraction (imapsync) | yes | no | unit | no | Parser exists and is tested locally; no production runner/controller call site |
+| Message extraction (Dovecot) | yes | no | unit | no | Parser exists and is tested locally; no production runner/controller call site |
 
 ---
 
@@ -33,8 +33,8 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
 | **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Works on local Dovecot fixture |
-| **Message-level mismatch detection** | yes | no | unit+integration | no | Code complete, NOT wired to migration pipeline |
-| **Multi-factor confidence scoring** (100%-80%) | yes | no | unit | no | Implements matching algorithm, not used operationally |
+| **Message-level mismatch detection** | yes | no | unit+scenario | no | Code complete, NOT wired to migration pipeline |
+| **Named message evidence levels** | yes | no | unit | no | Single fail-closed classification in the verifier; not used operationally |
 | **Checkpoint persistence** per message | no | no | none | no | NOT implemented; evidence persists per run, not per message |
 | **Crash recovery** | partial | partial | unit | no | Run-level recovery works; message-level recovery not wired |
 | **Exception acceptance workflow** | yes | yes | unit | no | UI accepts exceptions, stored durably |
@@ -47,11 +47,11 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 |------------|------|-------|--------|---------------|-------|
 | **Gmail authentication (app password)** | yes | yes | unit | no | Standard IMAP auth |
 | **Gmail authentication (OAuth)** | yes | partial | unit | no | Token refresh implemented, scope documentation corrected to https://mail.google.com/ |
-| **Gmail throttling (100 msgs/sec)** | yes | no | unit | no | Throttle config defined, NOT applied to actual migration |
+| **Gmail-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |
 | **Microsoft 365 authentication (OAuth)** | yes | partial | unit | no | Token refresh implemented, scope documentation corrected to IMAP.AccessAsUser.All |
-| **Microsoft 365 throttling (150 msgs/sec)** | yes | no | unit | no | Throttle config defined, NOT applied to actual migration |
+| **Microsoft 365-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |
 | **Fastmail authentication (app password)** | yes | yes | unit | no | Standard IMAP auth |
-| **Fastmail throttling (50 msgs/sec)** | yes | no | unit | no | Throttle config defined, NOT applied to actual migration |
+| **Fastmail-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |
 | **Generic IMAP provider** | yes | yes | integration | generic-lab | Conservative IMAP implementation |
 
 ---
@@ -86,18 +86,23 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 | **Provider setup guides** | yes | n/a | n/a | n/a | Gmail, O365, Fastmail, generic IMAP |
 | **OAuth configuration guide** | yes | n/a | n/a | n/a | Corrected scopes (Gmail, O365) |
 | **Architecture documentation** | yes | n/a | n/a | n/a | Message-level verification design doc |
-| **Documentation consistency tests** | yes | yes | 9 tests | n/a | Validates docs stay aligned with code |
+| **Documentation smoke tests** | yes | yes | integration | n/a | Checks required files and selected safety-critical wording; does not prove live evidence or wiring |
 
 ---
 
 ## Test Inventory
 
-| Category | Count | Status |
-|----------|-------|--------|
-| Core unit/integration tests | 376 | ✅ Passing |
-| Documentation validation tests | 9 | ✅ Passing |
-| Message verification scenarios | 14 | ✅ Passing |
-| **Total** | **399** | ✅ 100% pass rate |
+| Category | Source of truth | Status |
+|----------|-----------------|--------|
+| Core unit/integration tests | CI test summary artifact | CI-enforced |
+| Documentation validation tests | CI test summary artifact | CI-enforced |
+| Message verification scenarios | CI test summary artifact | CI-enforced |
+| **Total** | **CI test summary artifact** | CI-enforced |
+
+Test counts and pass/fail status are intentionally not duplicated here. CI
+publishes the runnable test inventory and execution summary for each supported
+job; source `#[test]` attributes are not equivalent to tests compiled for a
+particular target.
 
 ---
 
@@ -118,7 +123,7 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 ⚠️ **Code exists but not wired to pipeline:**
 - Message-level mismatch detection (algorithms work, not used operationally)
 - Provider error classification (patterns defined, not applied)
-- Provider throttling (configs exist, not enforced)
+- Provider-specific throttling (not implemented; generic profile throttles are enforced)
 - Pre/post-migration reports (data structures exist, not generated)
 - Recovery guidance (text exists, not surfaced)
 

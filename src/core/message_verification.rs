@@ -82,9 +82,9 @@ impl MessageVerification {
         let mut message_ids = source_by_message_id
             .keys()
             .filter(|id| dest_by_message_id.contains_key(*id))
-            .cloned()
+            .copied()
             .collect::<Vec<_>>();
-        message_ids.sort();
+        message_ids.sort_unstable();
         for message_id in message_ids {
             let source_uids = &source_by_message_id[&message_id];
             let dest_uids = &dest_by_message_id[&message_id];
@@ -238,7 +238,7 @@ impl MessageVerification {
     }
 }
 
-fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<String, Vec<&MailboxMessageKey>> {
+fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&MailboxMessageKey>> {
     let mut index = HashMap::new();
     for (uid, message) in messages {
         if let Some(message_id) = message
@@ -247,10 +247,7 @@ fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<String, Vec<&Mai
             .map(str::trim)
             .filter(|message_id| !message_id.is_empty())
         {
-            index
-                .entry(message_id.to_owned())
-                .or_insert_with(Vec::new)
-                .push(uid);
+            index.entry(message_id).or_insert_with(Vec::new).push(uid);
         }
     }
     index.values_mut().for_each(|uids| uids.sort());
@@ -260,7 +257,7 @@ fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<String, Vec<&Mai
 fn index_by_fingerprint<'a>(
     messages: &'a ExtractedMessages,
     eligible: &HashSet<&'a MailboxMessageKey>,
-) -> HashMap<String, Vec<&'a MailboxMessageKey>> {
+) -> HashMap<MetadataFingerprint<'a>, Vec<&'a MailboxMessageKey>> {
     let mut index = HashMap::new();
     for uid in eligible {
         let message = &messages[*uid];
@@ -268,12 +265,26 @@ fn index_by_fingerprint<'a>(
             continue;
         };
         index
-            .entry(format!("{date}\0{size}"))
+            .entry(MetadataFingerprint {
+                internal_date: date,
+                size_bytes: size,
+            })
             .or_insert_with(Vec::new)
             .push(*uid);
     }
     index.values_mut().for_each(|uids| uids.sort());
     index
+}
+
+/// Borrowed metadata key used only while reconciling one in-memory batch.
+/// Keeping the date as a borrowed normalized string avoids constructing a
+/// delimiter-based fingerprint for every message. A future SQLite-backed
+/// verifier can store the normalized date and size as separate indexed
+/// columns instead of materializing this map at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct MetadataFingerprint<'a> {
+    internal_date: &'a str,
+    size_bytes: u64,
 }
 
 fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxMessageKey> {
@@ -346,6 +357,36 @@ pub struct VerificationSummary {
     pub changed_count: u64,
 }
 
+/// Evidence classification for message-level reconciliation.
+///
+/// This is deliberately categorical rather than a synthetic percentage. The
+/// most serious observed condition wins, so a large population of successful
+/// matches cannot hide missing, changed, or unexpected destination messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvidenceLevel {
+    Verified,
+    StronglyMatched,
+    ProbableMatch,
+    Ambiguous,
+    Missing,
+    Changed,
+    Unexpected,
+}
+
+impl EvidenceLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::StronglyMatched => "strongly_matched",
+            Self::ProbableMatch => "probable_match",
+            Self::Ambiguous => "ambiguous",
+            Self::Missing => "missing",
+            Self::Changed => "changed",
+            Self::Unexpected => "unexpected",
+        }
+    }
+}
+
 impl VerificationSummary {
     pub fn is_perfect_match(&self) -> bool {
         self.missing_count == 0
@@ -355,6 +396,31 @@ impl VerificationSummary {
             && self.probable_matches == 0
             && self.exact_matches == self.total_source
             && self.exact_matches == self.total_destination
+    }
+
+    /// Return the single authoritative message-evidence classification.
+    ///
+    /// This method intentionally evaluates every negative category before
+    /// successful match counts. A migration with 950 exact matches and 10,000
+    /// missing messages is therefore not high-confidence or verified.
+    pub fn evidence_level(&self) -> EvidenceLevel {
+        if self.missing_count > 0 {
+            EvidenceLevel::Missing
+        } else if self.changed_count > 0 {
+            EvidenceLevel::Changed
+        } else if self.duplicated_count > 0 || self.extra_count > 0 {
+            EvidenceLevel::Unexpected
+        } else if self.probable_matches > 0 {
+            EvidenceLevel::ProbableMatch
+        } else if self.exact_matches == self.total_source
+            && self.exact_matches == self.total_destination
+        {
+            EvidenceLevel::Verified
+        } else if self.exact_matches > 0 {
+            EvidenceLevel::StronglyMatched
+        } else {
+            EvidenceLevel::Ambiguous
+        }
     }
 }
 
@@ -736,6 +802,50 @@ mod tests {
                 .filter(|m| m.mismatch_type == MismatchType::Duplicated)
                 .count(),
             0
+        );
+    }
+
+    #[test]
+    fn evidence_level_is_fail_closed_and_named() {
+        let summary = |exact_matches,
+                       probable_matches,
+                       missing_count,
+                       extra_count,
+                       duplicated_count,
+                       changed_count| VerificationSummary {
+            total_source: 1_000,
+            total_destination: 1_000,
+            exact_matches,
+            probable_matches,
+            missing_count,
+            extra_count,
+            duplicated_count,
+            changed_count,
+        };
+
+        assert_eq!(
+            summary(1_000, 0, 0, 0, 0, 0).evidence_level(),
+            EvidenceLevel::Verified
+        );
+        assert_eq!(
+            summary(950, 0, 0, 0, 0, 0).evidence_level(),
+            EvidenceLevel::StronglyMatched
+        );
+        assert_eq!(
+            summary(0, 1, 0, 0, 0, 0).evidence_level(),
+            EvidenceLevel::ProbableMatch
+        );
+        assert_eq!(
+            summary(950, 0, 10_000, 0, 0, 0).evidence_level(),
+            EvidenceLevel::Missing
+        );
+        assert_eq!(
+            summary(950, 0, 0, 0, 0, 1).evidence_level(),
+            EvidenceLevel::Changed
+        );
+        assert_eq!(
+            summary(950, 0, 0, 1, 0, 0).evidence_level(),
+            EvidenceLevel::Unexpected
         );
     }
 }

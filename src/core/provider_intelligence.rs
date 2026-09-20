@@ -8,24 +8,22 @@ use std::time::Duration;
 /// prototype until the controller consumes its classifications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderErrorType {
-    /// Rate limit hit; retry with exponential backoff
+    /// Provider rate limit hit; retry with exponential backoff.
     RateLimited,
-    /// Temporary outage; safe to retry immediately
-    TemporarilyUnavailable,
-    /// Connection failed; check network and endpoint
-    ConnectivityError,
-    /// Provider rejected a connection or operation because of capacity.
-    ConnectionLimited,
-    /// Invalid credentials or expired token
-    AuthenticationFailed,
-    /// Account doesn't have required permissions
-    PermissionDenied,
-    /// Mailbox or folder doesn't exist
-    NotFound,
-    /// Requested action is not supported by provider
-    Unsupported,
-    /// Unclassified error
-    Unknown,
+    /// Provider rejected a connection because of concurrent capacity.
+    ConnectionCapacity,
+    /// The mailbox or its storage quota is exhausted.
+    MailboxQuotaExceeded,
+    /// A host or service storage quota is exhausted.
+    StorageQuotaExceeded,
+    /// Credentials are invalid or expired.
+    Authentication,
+    /// Provider is temporarily unavailable and may recover.
+    TemporaryProviderFailure,
+    /// Provider rejected the operation for a non-transient reason.
+    PermanentProviderFailure,
+    /// Network connectivity failed before a provider response was received.
+    Network,
 }
 
 impl ProviderErrorType {
@@ -34,9 +32,9 @@ impl ProviderErrorType {
         matches!(
             self,
             Self::RateLimited
-                | Self::TemporarilyUnavailable
-                | Self::ConnectivityError
-                | Self::ConnectionLimited
+                | Self::ConnectionCapacity
+                | Self::TemporaryProviderFailure
+                | Self::Network
         )
     }
 
@@ -44,9 +42,9 @@ impl ProviderErrorType {
     pub fn suggested_retry_delay(&self) -> Option<Duration> {
         match self {
             Self::RateLimited => Some(Duration::from_secs(60)),
-            Self::TemporarilyUnavailable => Some(Duration::from_secs(5)),
-            Self::ConnectivityError => Some(Duration::from_secs(10)),
-            Self::ConnectionLimited => Some(Duration::from_secs(30)),
+            Self::ConnectionCapacity => Some(Duration::from_secs(30)),
+            Self::TemporaryProviderFailure => Some(Duration::from_secs(5)),
+            Self::Network => Some(Duration::from_secs(10)),
             _ => None,
         }
     }
@@ -60,11 +58,27 @@ impl ProviderErrorClassifier {
     pub fn classify(provider: &str, error_msg: &str) -> ProviderErrorType {
         let lower = error_msg.to_lowercase();
 
+        // Quota failures are not rate limits. They require capacity/action,
+        // not exponential backoff, so classify them before generic signals.
+        if lower.contains("storage quota")
+            || lower.contains("disk quota")
+            || lower.contains("storage full")
+            || lower.contains("disk full")
+        {
+            return ProviderErrorType::StorageQuotaExceeded;
+        }
+        if lower.contains("mailbox quota")
+            || lower.contains("mailbox full")
+            || lower.contains("over quota")
+            || lower.contains("quota exceeded")
+        {
+            return ProviderErrorType::MailboxQuotaExceeded;
+        }
+
         // Observed server/protocol signals only. These are not provider API
         // quota estimates and must be paired with the engine's configured
         // message/byte limits by an active controller.
         if lower.contains("rate limit")
-            || lower.contains("quota exceeded")
             || lower.contains("too many requests")
             || lower.contains("throttled")
             || lower.contains("slow down")
@@ -79,7 +93,7 @@ impl ProviderErrorClassifier {
             || lower.contains("invalid credentials")
             || lower.contains("authentication failed")
         {
-            return ProviderErrorType::AuthenticationFailed;
+            return ProviderErrorType::Authentication;
         }
 
         // Permission patterns
@@ -88,7 +102,7 @@ impl ProviderErrorClassifier {
             || lower.contains("permission denied")
             || lower.contains("insufficient privileges")
         {
-            return ProviderErrorType::PermissionDenied;
+            return ProviderErrorType::PermanentProviderFailure;
         }
 
         // Not found patterns
@@ -97,7 +111,7 @@ impl ProviderErrorClassifier {
             || lower.contains("no such")
             || lower.contains("does not exist")
         {
-            return ProviderErrorType::NotFound;
+            return ProviderErrorType::PermanentProviderFailure;
         }
 
         // Temporary unavailability
@@ -109,7 +123,7 @@ impl ProviderErrorClassifier {
             || lower.contains("server busy")
             || lower.contains("try again later")
         {
-            return ProviderErrorType::TemporarilyUnavailable;
+            return ProviderErrorType::TemporaryProviderFailure;
         }
 
         // Connectivity patterns
@@ -121,32 +135,32 @@ impl ProviderErrorClassifier {
             || lower.contains("server bye")
             || lower == "bye"
         {
-            return ProviderErrorType::ConnectivityError;
+            return ProviderErrorType::Network;
         }
 
         if lower.contains("too many connections")
             || lower.contains("connection limit")
             || lower.contains("maximum connections")
         {
-            return ProviderErrorType::ConnectionLimited;
+            return ProviderErrorType::ConnectionCapacity;
         }
 
         // Provider-specific unsupported patterns
         match provider.to_lowercase().as_str() {
             "gmail" => {
                 if lower.contains("x-gm-raw") || lower.contains("gmail doesn't support") {
-                    return ProviderErrorType::Unsupported;
+                    return ProviderErrorType::PermanentProviderFailure;
                 }
             }
             "microsoft" | "o365" | "office365" => {
                 if lower.contains("not supported") || lower.contains("operation not allowed") {
-                    return ProviderErrorType::Unsupported;
+                    return ProviderErrorType::PermanentProviderFailure;
                 }
             }
             _ => {}
         }
 
-        ProviderErrorType::Unknown
+        ProviderErrorType::PermanentProviderFailure
     }
 }
 
@@ -159,17 +173,31 @@ mod tests {
         let error = ProviderErrorClassifier::classify("gmail", "rate limit exceeded");
         assert_eq!(error, ProviderErrorType::RateLimited);
 
-        let error = ProviderErrorClassifier::classify("o365", "quota exceeded");
+        let error = ProviderErrorClassifier::classify("o365", "too many requests");
         assert_eq!(error, ProviderErrorType::RateLimited);
+    }
+
+    #[test]
+    fn quota_failures_are_not_rate_limits() {
+        assert_eq!(
+            ProviderErrorClassifier::classify("o365", "destination mailbox quota exceeded"),
+            ProviderErrorType::MailboxQuotaExceeded
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "storage quota exceeded"),
+            ProviderErrorType::StorageQuotaExceeded
+        );
+        assert!(!ProviderErrorType::MailboxQuotaExceeded.is_retryable());
+        assert!(!ProviderErrorType::StorageQuotaExceeded.is_retryable());
     }
 
     #[test]
     fn classifies_auth_errors() {
         let error = ProviderErrorClassifier::classify("gmail", "401 Unauthorized");
-        assert_eq!(error, ProviderErrorType::AuthenticationFailed);
+        assert_eq!(error, ProviderErrorType::Authentication);
 
         let error = ProviderErrorClassifier::classify("fastmail", "invalid credentials");
-        assert_eq!(error, ProviderErrorType::AuthenticationFailed);
+        assert_eq!(error, ProviderErrorType::Authentication);
     }
 
     #[test]
@@ -185,15 +213,15 @@ mod tests {
     fn classifies_observed_imap_capacity_signals() {
         assert_eq!(
             ProviderErrorClassifier::classify("generic", "too many connections"),
-            ProviderErrorType::ConnectionLimited
+            ProviderErrorType::ConnectionCapacity
         );
         assert_eq!(
             ProviderErrorClassifier::classify("generic", "* BYE server busy"),
-            ProviderErrorType::TemporarilyUnavailable
+            ProviderErrorType::TemporaryProviderFailure
         );
         assert_eq!(
             ProviderErrorClassifier::classify("generic", "connection closed by server"),
-            ProviderErrorType::ConnectivityError
+            ProviderErrorType::Network
         );
     }
 }
