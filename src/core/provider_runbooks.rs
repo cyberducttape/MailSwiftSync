@@ -213,7 +213,7 @@ impl RunbookGenerator {
             during_migration_monitoring: vec![RunbookStep {
                 step_number: 1,
                 action: "Monitor O365 throttling; reduce batch size if errors occur".to_string(),
-                why: "O365 enforces strict rate limiting".to_string(),
+                why: "The IMAP server may signal capacity or temporary throttling".to_string(),
                 success_indicator: "No persistent throttling errors".to_string(),
             }],
             post_migration_verification: vec![RunbookStep {
@@ -240,7 +240,7 @@ impl RunbookGenerator {
             during_migration_monitoring: vec![RunbookStep {
                 step_number: 1,
                 action: "Monitor O365 throttling".to_string(),
-                why: "O365 has strict rate limits".to_string(),
+                why: "The IMAP server may signal capacity or temporary throttling".to_string(),
                 success_indicator: "No throttling errors".to_string(),
             }],
             post_migration_verification: vec![RunbookStep {

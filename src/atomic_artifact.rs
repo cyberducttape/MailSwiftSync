@@ -18,6 +18,10 @@ pub(crate) fn write_private_atomic(path: &Path, content: &str) -> std::io::Resul
         file.sync_all()?;
         restrict_file_permissions(&temporary)?;
         atomic_replace(&temporary, path)?;
+        // ReplaceFileW preserves security attributes from the old destination.
+        // Re-apply the private ACL/mode to the final path so an old permissive
+        // destination cannot weaken the newly written artifact.
+        restrict_file_permissions(path)?;
         sync_directory(path.parent())
     })();
     if result.is_err() {
@@ -26,12 +30,14 @@ pub(crate) fn write_private_atomic(path: &Path, content: &str) -> std::io::Resul
     result
 }
 
-/// Atomically replace the destination file with the source file.
-/// On Windows, uses ReplaceFileW semantics; on Unix, uses rename which has overwrite semantics.
+/// Atomically install the source file at the destination.
+/// On Windows, creation and replacement use distinct same-volume APIs.
 #[cfg(windows)]
 fn atomic_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_WRITE_THROUGH, MoveFileExW, ReplaceFileW,
+    };
 
     let src_wide: Vec<u16> = std::ffi::OsStr::new(src.as_os_str())
         .encode_wide()
@@ -42,18 +48,26 @@ fn atomic_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
         .chain(std::iter::once(0))
         .collect();
 
-    unsafe {
-        if ReplaceFileW(
-            dst_wide.as_ptr(),
-            src_wide.as_ptr(),
-            std::ptr::null(),
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        ) == 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
+    match std::fs::metadata(dst) {
+        Ok(_) => unsafe {
+            if ReplaceFileW(
+                dst_wide.as_ptr(),
+                src_wide.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => unsafe {
+            if MoveFileExW(src_wide.as_ptr(), dst_wide.as_ptr(), MOVEFILE_WRITE_THROUGH) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        },
+        Err(error) => return Err(error),
     }
     Ok(())
 }
@@ -89,6 +103,11 @@ mod tests {
             write_private_atomic(&path, "hello")?;
             let content = fs::read_to_string(&path)?;
             assert_eq!(content, "hello");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+            }
             Ok(())
         })();
         let _ = fs::remove_file(&path);

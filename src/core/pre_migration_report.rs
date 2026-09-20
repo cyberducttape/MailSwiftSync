@@ -34,14 +34,18 @@ pub enum MigrationReadiness {
 }
 
 impl PreMigrationRisk {
-    /// Generate a pre-migration risk report.
-    /// Detects: oversized messages, ambiguous folder mappings, duplication risks,
-    /// quota headroom, non-ASCII folder names, and other operator concerns.
+    /// Generate a scale-only pre-migration risk report.
+    ///
+    /// This API currently receives no message-size distribution, folder map,
+    /// quota, provider, or destination-capability facts. It therefore must
+    /// not claim to detect oversized messages, ambiguous mappings, quota
+    /// headroom, Unicode issues, or provider-specific behavior. Those checks
+    /// require a future fact-bearing input type and live preflight integration.
     pub fn assess(
         total_messages: u64,
         total_folders: u64,
         total_size_bytes: u64,
-        _config: &str, // Would parse provider-specific config
+        _config: &str, // Retained for API compatibility; not interpreted.
     ) -> Self {
         let mut warnings = Vec::new();
         let total_size_gb = total_size_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
@@ -80,13 +84,6 @@ impl PreMigrationRisk {
             });
         }
 
-        // Gmail-specific warnings (placeholder for provider detection)
-        warnings.push(RiskWarning {
-            severity: WarningSeverity::Info,
-            category: "gmail".to_string(),
-            message: "Gmail All Mail duplication: verify label mappings are correct".to_string(),
-        });
-
         // Determine readiness
         let error_count = warnings
             .iter()
@@ -124,9 +121,9 @@ mod tests {
 
     #[test]
     fn small_migration_requires_review() {
-        // Even small migrations get warnings (Gmail duplication notice, etc)
         let risk = PreMigrationRisk::assess(1000, 5, 1_000_000_000, "");
-        assert_eq!(risk.estimated_readiness, MigrationReadiness::ReviewRequired);
+        assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
+        assert!(risk.warnings.is_empty());
     }
 
     #[test]
@@ -134,5 +131,12 @@ mod tests {
         let risk = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "");
         assert_eq!(risk.estimated_readiness, MigrationReadiness::ReviewRequired);
         assert!(!risk.warnings.is_empty());
+    }
+
+    #[test]
+    fn provider_text_does_not_trigger_unsubstantiated_provider_warning() {
+        let risk = PreMigrationRisk::assess(1000, 5, 1_000_000_000, "provider=gmail");
+        assert!(risk.warnings.is_empty());
+        assert_eq!(risk.estimated_readiness, MigrationReadiness::Ready);
     }
 }

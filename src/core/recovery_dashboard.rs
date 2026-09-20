@@ -80,17 +80,16 @@ impl RecoveryPlanner {
             ],
             InterruptionReason::NetworkTimeout => vec![
                 "Network connection to provider was lost".to_string(),
-                "Verify network connectivity and provider status".to_string(),
+                "Retry delay may reduce a transient failure, but does not prove recovery".to_string(),
+                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming".to_string(),
                 "Check firewall rules and VPN if applicable".to_string(),
-                "Provider may be experiencing intermittent issues; wait a few minutes and retry".to_string(),
-                "Resume will retry from the last successful message".to_string(),
+                "Resume uses the engine's checkpoint semantics; reconcile aggregate evidence afterward".to_string(),
             ],
             InterruptionReason::ProviderThrottled => vec![
-                "Provider rate limit was exceeded".to_string(),
-                "Migration has been automatically backed off per provider limits".to_string(),
-                "This is normal for large migrations; the system will retry automatically".to_string(),
-                "Recommended action: wait 5-10 minutes before resuming to allow provider quota to reset".to_string(),
-                "Resume will continue at a reduced pace to respect provider limits".to_string(),
+                "The provider or IMAP server returned a throttling signal".to_string(),
+                "Wait for the configured retry delay; elapsed time does not prove that the limit has reset".to_string(),
+                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming".to_string(),
+                "Resume with conservative profile message/byte limits and monitor for another server response".to_string(),
             ],
             InterruptionReason::EndpointUnavailable => vec![
                 "Source or destination mailbox became unavailable".to_string(),
@@ -101,18 +100,18 @@ impl RecoveryPlanner {
             ],
             InterruptionReason::ProcessTerminated => vec![
                 "Migration process was terminated (killed, system reboot, etc.)".to_string(),
-                "No data was lost; all progress is durably stored in the migration log".to_string(),
+                "Controller state and completed engine evidence are durably stored; in-flight work requires reconciliation".to_string(),
                 "Review system logs to understand why termination occurred".to_string(),
                 "If termination was due to resource constraints, increase available memory or CPU".to_string(),
-                "Resume will pick up from the last verified message".to_string(),
+                "Revalidate endpoints and review aggregate evidence before resuming from the engine checkpoint".to_string(),
             ],
             InterruptionReason::CrashOrShutdown => vec![
                 "Application or system crashed unexpectedly".to_string(),
-                "All progress is durably stored in the migration database".to_string(),
+                "The durable ledger preserves recorded controller state; it does not prove the outcome of in-flight engine work".to_string(),
                 "Review application logs (support bundle) to diagnose the crash".to_string(),
                 "Ensure system has adequate disk space and memory available".to_string(),
-                "Verify provider endpoints are still accessible".to_string(),
-                "Resume will resume from the last checkpoint automatically".to_string(),
+                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming".to_string(),
+                "Review the engine checkpoint and aggregate evidence before attempting resume".to_string(),
             ],
             InterruptionReason::Unknown => vec![
                 "Interruption cause is unknown".to_string(),
@@ -124,12 +123,24 @@ impl RecoveryPlanner {
     }
 
     /// Estimate time to resume based on messages remaining and provider throughput.
-    pub fn estimate_resume_duration(messages_remaining: u64, messages_per_second: f64) -> Duration {
-        let seconds = (messages_remaining as f64 / messages_per_second).ceil() as u64;
-        Duration::from_secs(seconds)
+    pub fn estimate_resume_duration(
+        messages_remaining: u64,
+        messages_per_second: f64,
+    ) -> Option<Duration> {
+        if !messages_per_second.is_finite() || messages_per_second <= 0.0 {
+            return None;
+        }
+        let seconds = (messages_remaining as f64 / messages_per_second).ceil();
+        if !seconds.is_finite() || seconds > u64::MAX as f64 {
+            return None;
+        }
+        Some(Duration::from_secs(seconds as u64))
     }
 
-    /// Determine if resume is safe or if operator should wait.
+    /// Determine whether the retry delay has elapsed.
+    ///
+    /// This function cannot prove that an endpoint or provider has recovered;
+    /// callers must run the endpoint preflight before declaring resume safe.
     pub fn is_safe_to_resume(
         reason: InterruptionReason,
         time_since_interruption: Duration,
@@ -143,8 +154,8 @@ impl RecoveryPlanner {
                     )
                 } else {
                     (
-                        true,
-                        "Rate limit should have reset; safe to resume".to_string(),
+                        false,
+                        "Retry delay elapsed. Endpoint has not yet been revalidated.".to_string(),
                     )
                 }
             }
@@ -153,13 +164,50 @@ impl RecoveryPlanner {
                     (false, "Wait a moment for network to stabilize".to_string())
                 } else {
                     (
-                        true,
-                        "Network appears to be recovered; safe to resume".to_string(),
+                        false,
+                        "Retry delay elapsed. Endpoint has not yet been revalidated.".to_string(),
                     )
                 }
             }
-            _ => (true, "Safe to resume".to_string()),
+            _ => (
+                false,
+                "Resume requires current endpoint revalidation and checkpoint review.".to_string(),
+            ),
         }
+    }
+
+    /// Return a positive resume decision only when the caller supplies a
+    /// successful current endpoint revalidation result. The actual DNS/TCP/
+    /// TLS/auth/IMAP probe belongs to the controller's endpoint probe path.
+    pub fn is_safe_to_resume_after_revalidation(
+        reason: InterruptionReason,
+        time_since_interruption: Duration,
+        endpoint_revalidated: bool,
+    ) -> (bool, String) {
+        if !endpoint_revalidated {
+            return (
+                false,
+                "Endpoint has not been revalidated; do not declare resume safe.".to_string(),
+            );
+        }
+        let required_delay = match reason {
+            InterruptionReason::ProviderThrottled => Duration::from_secs(300),
+            InterruptionReason::NetworkTimeout => Duration::from_secs(30),
+            _ => Duration::ZERO,
+        };
+        if time_since_interruption < required_delay {
+            return (
+                false,
+                format!(
+                    "Endpoint revalidated, but the retry delay has not elapsed ({:?} required).",
+                    required_delay
+                ),
+            );
+        }
+        (
+            true,
+            "Endpoint revalidated and retry delay elapsed; resume may be attempted.".to_string(),
+        )
     }
 }
 
@@ -177,15 +225,27 @@ mod tests {
     #[test]
     fn network_timeout_suggests_waiting() {
         let guidance = RecoveryPlanner::generate_guidance(InterruptionReason::NetworkTimeout);
-        assert!(guidance.iter().any(|g| g.contains("network")));
-        assert!(guidance.iter().any(|g| g.contains("connectivity")));
+        assert!(
+            guidance
+                .iter()
+                .any(|g| g.to_lowercase().contains("network"))
+        );
+        assert!(
+            guidance
+                .iter()
+                .any(|g| g.to_lowercase().contains("revalidate"))
+        );
     }
 
     #[test]
     fn throttle_guidance_recommends_wait_period() {
         let guidance = RecoveryPlanner::generate_guidance(InterruptionReason::ProviderThrottled);
-        assert!(guidance.iter().any(|g| g.contains("wait")));
-        assert!(guidance.iter().any(|g| g.contains("quota")));
+        assert!(guidance.iter().any(|g| g.to_lowercase().contains("wait")));
+        assert!(
+            guidance
+                .iter()
+                .any(|g| g.to_lowercase().contains("revalidate"))
+        );
     }
 
     #[test]
@@ -204,22 +264,58 @@ mod tests {
             InterruptionReason::ProviderThrottled,
             Duration::from_secs(600),
         );
+        assert!(!safe);
+        let (safe, message) = RecoveryPlanner::is_safe_to_resume_after_revalidation(
+            InterruptionReason::ProviderThrottled,
+            Duration::from_secs(600),
+            true,
+        );
         assert!(safe);
+        assert!(message.contains("revalidated"));
     }
 
     #[test]
     fn estimates_resume_duration() {
         let duration = RecoveryPlanner::estimate_resume_duration(1000, 100.0);
-        assert_eq!(duration, Duration::from_secs(10));
+        assert_eq!(duration, Some(Duration::from_secs(10)));
 
         let duration = RecoveryPlanner::estimate_resume_duration(5000, 50.0);
-        assert_eq!(duration, Duration::from_secs(100));
+        assert_eq!(duration, Some(Duration::from_secs(100)));
+    }
+
+    #[test]
+    fn invalid_throughput_has_no_duration_estimate() {
+        for throughput in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                RecoveryPlanner::estimate_resume_duration(1000, throughput),
+                None
+            );
+        }
     }
 
     #[test]
     fn crash_guidance_mentions_durability() {
         let guidance = RecoveryPlanner::generate_guidance(InterruptionReason::CrashOrShutdown);
-        assert!(guidance.iter().any(|g| g.contains("durably")));
-        assert!(guidance.iter().any(|g| g.contains("stored")));
+        assert!(
+            guidance
+                .iter()
+                .any(|g| g.to_lowercase().contains("durable"))
+        );
+        assert!(
+            guidance
+                .iter()
+                .any(|g| g.to_lowercase().contains("preserves"))
+        );
+        assert!(guidance.iter().any(|g| g.contains("in-flight")));
+    }
+
+    #[test]
+    fn elapsed_delay_does_not_claim_endpoint_recovery() {
+        let (safe, message) = RecoveryPlanner::is_safe_to_resume(
+            InterruptionReason::NetworkTimeout,
+            Duration::from_secs(60),
+        );
+        assert!(!safe);
+        assert!(message.contains("not yet been revalidated"));
     }
 }
