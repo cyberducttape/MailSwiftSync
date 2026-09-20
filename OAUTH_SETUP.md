@@ -123,7 +123,7 @@ Use the `gmail.imap_admin` OAuth scope instead. See Google's domain-wide delegat
 
 ## Microsoft 365 OAuth
 
-**Note:** Microsoft removed Basic Authentication from Exchange Online in September 2023. OAuth (Modern Authentication) is the only supported method for IMAP access.
+**Note:** Microsoft permanently disabled Basic Authentication from Exchange Online beginning October 1, 2022. All tenants now have Basic Authentication disabled; no further extension periods are granted. OAuth (Modern Authentication) is the only supported method for IMAP access.
 
 ### Step 1: Register Azure Application
 
@@ -331,7 +331,7 @@ When you configure OAuth in MailSwiftSync:
 ## Security Best Practices for OAuth
 
 1. **Keep client secrets secure** — store in environment variables, not in version control
-2. **Use minimal scopes** — MailSwiftSync uses read-only scopes
+2. **Use appropriate scopes** — MailSwiftSync requires `https://mail.google.com/` (full mail access for IMAP) for Gmail and equivalent full-access scopes for other providers
 3. **Monitor token usage** — check provider audit logs periodically
 4. **Rotate tokens** — regenerate client secrets annually
 5. **Review permissions** — audit OAuth app permissions in provider account
@@ -348,18 +348,6 @@ When you configure OAuth in MailSwiftSync:
 | Multi-hour migrations | ✅ Safe | ❌ Risky |
 | Revocation | Per-app in provider settings | All app passwords revoked at once |
 | Audit trail | Better (scoped per app) | Mixed with account activity |
-
----
-
-## When OAuth Fails Over to IMAP Password
-
-If OAuth token refresh fails during a migration:
-
-1. MailSwiftSync will attempt retry with exponential backoff
-2. If retries exhaust, migration stops with an error
-3. Check the support bundle to diagnose the issue
-4. You can configure a fallback IMAP password in MailSwiftSync
-5. If fallback exists, migration will retry using password-based auth
 
 ---
 
