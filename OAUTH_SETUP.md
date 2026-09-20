@@ -56,7 +56,7 @@ import json
 # Load the client_secret.json from Step 1
 flow = InstalledAppFlow.from_client_secrets_file(
     'client_secret.json',
-    scopes=['https://www.googleapis.com/auth/gmail.readonly']
+    scopes=['https://mail.google.com/']
 )
 
 # This opens a browser for consent
@@ -94,13 +94,18 @@ Run a preflight check in MailSwiftSync:
 
 ### Gmail OAuth Scopes
 
-MailSwiftSync uses the minimal required OAuth scope:
-- `https://www.googleapis.com/auth/gmail.readonly` — Read-only access
+MailSwiftSync requires the IMAP-specific OAuth scope:
+- `https://mail.google.com/` — IMAP/POP/SMTP access (required for all email protocols)
 
-This allows IMAP access but prevents MailSwiftSync from:
-- Modifying messages
-- Deleting folders
-- Changing account settings
+**Important:** Do NOT use Gmail Graph API scopes like `gmail.readonly` — those work for Gmail API but NOT for IMAP protocol access. The correct scope for IMAP is `https://mail.google.com/`.
+
+This scope grants IMAP access and allows MailSwiftSync to:
+- Read messages via IMAP
+- List folders via IMAP
+- Access mailbox metadata via IMAP
+
+**For Google Workspace domain-wide delegation (admin migrations):**
+Use the `gmail.imap_admin` OAuth scope instead. See Google's domain-wide delegation documentation for setup.
 
 ---
 
