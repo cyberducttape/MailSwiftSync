@@ -56,15 +56,7 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
     match std::fs::metadata(parent) {
         Ok(_) => {
             // Parent exists. Verify we can write to it, but do NOT chmod it.
-            std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(parent.join(".mailswiftsync_test_write"))
-                .map(|f| {
-                    let _ = std::fs::remove_file(parent.join(".mailswiftsync_test_write"));
-                    drop(f);
-                })
+            crate::credentials::verify_directory_writable(parent)
                 .map_err(|e| format!("Restore directory exists but is not writable: {e}"))?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

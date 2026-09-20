@@ -166,9 +166,14 @@ pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<Refre
         format!("{host}: TLS handshake with the token endpoint failed: {error}")
     })?;
 
+    let host_header = if port == 443 {
+        host.clone()
+    } else {
+        format!("{host}:{port}")
+    };
     let request_text = format!(
         "POST {path} HTTP/1.1\r\n\
-         Host: {host}\r\n\
+         Host: {host_header}\r\n\
          Content-Type: application/x-www-form-urlencoded\r\n\
          Content-Length: {}\r\n\
          Accept: application/json\r\n\
@@ -221,10 +226,17 @@ fn read_bounded_response<S: Read>(stream: &mut S, budget: Duration) -> Result<St
     Ok(String::from_utf8_lossy(&raw).into_owned())
 }
 
-/// Split a raw HTTP/1.1 response into its status line and body. Chunked
-/// transfer encoding is not supported: OAuth token endpoints return a single
-/// small JSON object, and this refresh path always sends `Connection: close`
-/// so a compliant server response is safe to read to EOF.
+/// Split a raw HTTP/1.1 response into its status line and body.
+///
+/// LIMITATION: Chunked transfer encoding is not supported. While this refresh path
+/// sends `Connection: close`, RFC 7230 permits servers to respond with
+/// `Transfer-Encoding: chunked` regardless. OAuth providers, reverse proxies,
+/// enterprise gateways, CDN layers, and webhook services can change response
+/// framing independently. This custom HTTP/1.1 implementation lacks proper handling
+/// of redirects, URI parsing, connection timeouts, header parsing, and response
+/// framing. For production deployments with strict interoperability requirements,
+/// consider using a mature HTTP client like `reqwest` with Rustls instead of this
+/// homemade network protocol implementation.
 fn split_http_response(raw: &str) -> Result<(String, String), String> {
     let mut parts = raw.splitn(2, "\r\n\r\n");
     let head = parts

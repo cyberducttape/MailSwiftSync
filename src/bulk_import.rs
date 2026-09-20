@@ -81,7 +81,10 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .collect::<Vec<_>>();
-    validate_headers(&headers)?;
+    let allow_plaintext_secrets = std::env::var("MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    validate_headers(&headers, allow_plaintext_secrets)?;
     if headers.len() > crate::MAX_BULK_IMPORT_COLUMNS {
         return Err(format!(
             "The file has too many columns; the limit is {}.",
@@ -99,7 +102,7 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
         let record = record.map_err(|error| error.to_string())?;
         let row_number = index + 2;
         let values = record_values(&headers, record.iter(), row_number)?;
-        jobs.push(job_from_values(values, base, row_number)?);
+        jobs.push(job_from_values(values, base, row_number, allow_plaintext_secrets)?);
     }
     if jobs.is_empty() {
         return Err("The file has no migration rows.".into());
@@ -142,7 +145,10 @@ pub(crate) fn read_sheet(
             crate::MAX_BULK_IMPORT_COLUMNS
         ));
     }
-    validate_headers(&headers)?;
+    let allow_plaintext_secrets = std::env::var("MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    validate_headers(&headers, allow_plaintext_secrets)?;
     let mut jobs = Vec::new();
     for (index, row) in rows.enumerate() {
         if index >= crate::MAX_BULK_IMPORT_ROWS {
@@ -160,7 +166,7 @@ pub(crate) fn read_sheet(
             row.iter().map(|value| value.to_string()),
             row_number,
         )?;
-        jobs.push(job_from_values(values, base, row_number)?);
+        jobs.push(job_from_values(values, base, row_number, allow_plaintext_secrets)?);
     }
     if jobs.is_empty() {
         return Err("The worksheet has no migration rows.".into());
@@ -204,7 +210,17 @@ pub(crate) fn job_from_values(
     mut values: HashMap<String, String>,
     base: &Form,
     row: usize,
+    allow_plaintext_secrets: bool,
 ) -> Result<BulkJob, String> {
+    let source_password_present = values.contains_key("source_password");
+    let destination_password_present = values.contains_key("destination_password");
+
+    if (source_password_present || destination_password_present) && !allow_plaintext_secrets {
+        return Err(
+            "Plaintext credential columns were detected. Use credential IDs instead (source_credential_id, destination_credential_id), or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
+        );
+    }
+
     let source_password = values.remove("source_password").unwrap_or_default();
     let destination_password = values.remove("destination_password").unwrap_or_default();
     let get = |key: &str| {
@@ -253,7 +269,7 @@ pub(crate) fn job_from_values(
     })
 }
 
-pub(crate) fn validate_headers(headers: &[String]) -> Result<(), String> {
+pub(crate) fn validate_headers(headers: &[String], allow_plaintext_secrets: bool) -> Result<(), String> {
     let mut seen = HashSet::new();
     for header in headers {
         if header.is_empty() || !seen.insert(header.clone()) {
@@ -263,6 +279,14 @@ pub(crate) fn validate_headers(headers: &[String]) -> Result<(), String> {
     if seen.contains("extra_options") {
         return Err("The migration file cannot contain extra_options; configure trusted engine options in the application instead of importing executable command settings.".into());
     }
+
+    let has_plaintext_passwords = seen.contains("source_password") || seen.contains("destination_password");
+    if has_plaintext_passwords && !allow_plaintext_secrets {
+        return Err(
+            "Plaintext credential columns detected. Use credential IDs instead (source_credential_id, destination_credential_id), or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
+        );
+    }
+
     let missing = [
         "source_host",
         "source_user",
@@ -403,7 +427,7 @@ mod tests {
             ("destination_user".into(), "finance@new.example.test".into()),
         ]);
 
-        let job = job_from_values(values, &Form::default(), 2).unwrap();
+        let job = job_from_values(values, &Form::default(), 2, false).unwrap();
         assert_eq!(job.form.profile.name, "Acme Corp cutover");
         assert_eq!(job.label, "finance mailbox");
     }
@@ -422,7 +446,7 @@ mod tests {
             ("destination_user".into(), "alice@new.example.test".into()),
         ]);
 
-        let job = job_from_values(values, &base, 2).unwrap();
+        let job = job_from_values(values, &base, 2, false).unwrap();
 
         assert!(job.form.source_password.is_empty());
         assert!(job.form.destination_password.is_empty());

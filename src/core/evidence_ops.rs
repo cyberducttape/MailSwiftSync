@@ -38,7 +38,7 @@ impl StateStore {
     }
     #[cfg(test)]
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
-        self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)?, authoritative:r.get::<_, i64>(8)? != 0 })).optional()
+        self.connection.query_row("SELECT source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { source_messages:r.get(0)?, destination_messages:r.get(1)?, source_bytes:r.get(2)?, destination_bytes:r.get(3)?, unmatched_messages:r.get(4)?, failed_messages:r.get(5)?, source_folders:r.get(6)?, destination_folders:r.get(7)?, authoritative:r.get::<_, i64>(8)? != 0, missing_messages: 0, extra_messages: 0, modified_messages: 0 })).optional()
     }
     #[cfg(test)]
     pub fn latest_evidence_for_run(
@@ -62,6 +62,9 @@ impl StateStore {
                             source_folders: row.get(7)?,
                             destination_folders: row.get(8)?,
                             authoritative: row.get::<_, i64>(9)? != 0,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
                         },
                     ))
                 },

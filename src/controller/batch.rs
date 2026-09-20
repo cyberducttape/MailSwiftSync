@@ -323,6 +323,9 @@ mod tests {
             source_folders: 1,
             destination_folders: 1,
             authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
         };
         assert_eq!(
             batch_mailbox_state("failed", Some(&exact_evidence)),

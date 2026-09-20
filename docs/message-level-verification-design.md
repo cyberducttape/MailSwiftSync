@@ -1,5 +1,26 @@
 # Message-Level Verification Design
 
+## Implementation Status & Priority
+
+**STATUS:** 🔴 **DESIGN COMPLETE; IMPLEMENTATION PENDING**  
+**Priority:** 🚨 **CRITICAL — Largest Product-Level Trust Gap**  
+**Last verified:** 2026-09-20
+
+This is the single largest blocker to production trust. Without message-level verification, operators cannot definitively prove that specific messages were successfully migrated. Aggregate counts can match while individual mailbox contents are corrupted, lost, or duplicated.
+
+**Current Limitation:** MailSwiftSync verifies "you have 1,000 messages" but NOT "these are the same 1,000 messages."
+
+**Impact When Implemented:** Enables operators to report:
+- ✅ 19,998 exact matches
+- ⚠️ 2 missing (list them)
+- ⚠️ 0 changed
+- ⚠️ 0 unexplained extras
+- With drill-down evidence per mailbox
+
+This feature would **differentiate MailSwiftSync** from competitors and justify enterprise adoption.
+
+---
+
 ## Problem Statement
 
 Current verification is **aggregate-only**: MailSwiftSync compares folder counts, message counts, and byte counts between source and destination. This can miss:
@@ -98,6 +119,52 @@ doveadm -u user@example.com fetch -A "uid messageids" MAILBOX "INBOX"
 - For mismatches, run `doveadm fetch` on both to extract UIDs and Message-IDs
 - Compare sets to identify missing/extra
 - Store in `message_mismatches`
+
+### Verification Approach: Multi-Factor Matching
+
+To achieve high-confidence verification, match messages on **combinations** rather than single identifiers:
+
+**Primary Signals (highest confidence):**
+- ✅ Message-ID header (RFC 2822) — globally unique
+- ✅ Content hash (SHA-256 of message body) — detects corruption
+- ✅ Internal date + size — near-unique combination
+
+**Secondary Signals (confidence booster):**
+- ✅ Folder path — identifies routing errors
+- ✅ IMAP UID — engine-specific, may not cross-host
+- ✅ Subject + From + Date — heuristic recovery
+
+**Mismatch Classifications:**
+- `EXACT_MATCH` — Message-ID + hash + date all match (100% confidence)
+- `CONTENT_MATCH` — Hash + date match, Message-ID missing/differs (99%)
+- `DATE_SIZE_MATCH` — Internal date + size match (95%, detects renames)
+- `MESSAGE_ID_ONLY` — Message-ID matches but date/size differ (80%, detects corruption)
+- `MISSING` — Present in source, absent in destination (0% confidence)
+- `EXTRA` — Present in destination, absent in source (unclear origin)
+- `DUPLICATED` — Multiple instances of same message-ID in destination
+- `FOLDER_MISMATCH` — Same message in different folder on destination
+- `CHANGED` — Same UID but different hash (content corruption)
+
+**Example Output (The Killer Feature):**
+```
+Migration Summary: user@example.com
+───────────────────────────────────────
+INBOX:
+  19,998 exact matches (Message-ID + hash + date)
+  2 missing (Message-ID <a@x>, Message-ID <b@x>)
+  0 changed
+  0 unexplained extras
+  ✅ VERIFIED
+
+Sent:
+  500 exact matches
+  0 missing
+  0 changed
+  1 extra (Message-ID <c@x>, 2024-02-15)
+  ⚠️ REVIEW (unexplained extra)
+
+Overall: 20,498 exact, 2 missing, 1 extra → ACCEPT or REMEDIATE
+```
 
 ### Verification Workflow
 

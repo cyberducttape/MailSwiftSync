@@ -6,17 +6,28 @@
 //! building a vendor-specific integration for each of those, this sends the
 //! same secret-free JSON `status --summary` already produces as an HTTPS
 //! POST to one operator-configured URL; almost every PSA and automation
-//! platform can ingest a generic webhook and route it from there. If the
-//! receiving endpoint needs authentication, embed a token in the URL itself
-//! (the standard pattern for inbound webhooks — Slack, Zapier, and PagerDuty
-//! all work this way); MailSwiftSync does not otherwise attach credentials.
+//! platform can ingest a generic webhook and route it from there.
+//!
+//! ## Authentication
+//!
+//! If the receiving endpoint requires authentication, pass credentials via:
+//! - `MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN` environment variable (for Bearer tokens)
+//! - `MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE` environment variable (path to file containing Bearer token)
+//! - `MAILSWIFTSYNC_WEBHOOK_HEADER_NAME` and `MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE` environment variables (for custom headers)
+//! - `MAILSWIFTSYNC_WEBHOOK_HEADER_FILE` environment variable (path to file containing custom header as "Header-Name: value")
+//!
+//! Do NOT embed secrets in the webhook URL itself: secrets in command-line arguments
+//! leak to process listings (ps aux), shell history, /proc/<pid>/cmdline, systemd units,
+//! cron logs, audit logs, and monitoring telemetry.
 //!
 //! Only `https://` targets are accepted: an operator-supplied migration
 //! status is not secret, but a plaintext endpoint would still let anyone on
 //! the network path observe and tamper with it in flight.
+use crate::credentials::SecretString;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::{
+    fs,
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
@@ -29,12 +40,15 @@ const WEBHOOK_READ_TIMEOUT: Duration = Duration::from_secs(20);
 const WEBHOOK_TOTAL_BUDGET: Duration = Duration::from_secs(30);
 
 /// POST `body` (already-serialized JSON) to `url` over a fresh
-/// certificate-validated TLS connection. Returns the response status code on
-/// any response MailSwiftSync could parse; the caller decides which codes
-/// count as success. This does not retry — the CLI command this backs is
-/// meant to be invoked by the operator's own automation (a scheduler, a
-/// `supervise` wrapper script), which already owns its own retry policy.
+/// certificate-validated TLS connection. Authentication credentials are read
+/// from environment variables, not from the URL itself. Returns the response
+/// status code on any response MailSwiftSync could parse; the caller decides
+/// which codes count as success. This does not retry — the CLI command this
+/// backs is meant to be invoked by the operator's own automation (a scheduler,
+/// a `supervise` wrapper script), which already owns its own retry policy.
 pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
+    let bearer_token = load_webhook_bearer_token()?;
+    let custom_header = load_webhook_custom_header()?;
     let (host, port, path) = parse_https_url(url)?;
 
     let address = format!("{host}:{port}");
@@ -81,18 +95,31 @@ pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
         .complete_io(&mut stream.sock)
         .map_err(|error| format!("{host}: TLS handshake with the webhook URL failed: {error}"))?;
 
-    let request_text = format!(
+    let host_header = if port == 443 {
+        host.clone()
+    } else {
+        format!("{host}:{port}")
+    };
+    let mut request_text = format!(
         "POST {path} HTTP/1.1\r\n\
-         Host: {host}\r\n\
+         Host: {host_header}\r\n\
          Content-Type: application/json\r\n\
          Content-Length: {}\r\n\
          Accept: application/json\r\n\
          Connection: close\r\n\
-         User-Agent: mailswiftsync-notify-webhook\r\n\
-         \r\n\
-         {body}",
+         User-Agent: mailswiftsync-notify-webhook\r\n",
         body.len()
     );
+
+    if let Some(token) = bearer_token {
+        request_text.push_str(&format!("Authorization: Bearer {}\r\n", token.as_str()));
+    }
+    if let Some((name, value)) = custom_header {
+        request_text.push_str(&format!("{}: {}\r\n", name, value.as_str()));
+    }
+    request_text.push_str("\r\n");
+    request_text.push_str(body);
+
     stream
         .write_all(request_text.as_bytes())
         .map_err(|error| format!("{host}: could not send the webhook request: {error}"))?;
@@ -165,6 +192,53 @@ fn parse_https_url(url: &str) -> Result<(String, u16, String), String> {
     let (host, port) = crate::endpoint::parts(authority, 443)
         .map_err(|error| format!("invalid webhook URL host: {error}"))?;
     Ok((host, port, path.to_owned()))
+}
+
+/// Load webhook Bearer token from environment variable or file.
+/// Supports MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN (direct) or
+/// MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE (path to file).
+/// File contents are trimmed of trailing whitespace.
+fn load_webhook_bearer_token() -> Result<Option<SecretString>, String> {
+    if let Ok(token) = std::env::var("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN") {
+        if !token.is_empty() {
+            return Ok(Some(SecretString::from(token)));
+        }
+    }
+    if let Ok(path) = std::env::var("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE") {
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read webhook bearer token file: {e}"))?;
+        let token = content.trim_end().to_string();
+        if !token.is_empty() {
+            return Ok(Some(SecretString::from(token)));
+        }
+    }
+    Ok(None)
+}
+
+/// Load custom header from environment variables.
+/// Supports MAILSWIFTSYNC_WEBHOOK_HEADER_NAME + MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE or
+/// MAILSWIFTSYNC_WEBHOOK_HEADER_FILE (path to file containing "Header-Name: value").
+fn load_webhook_custom_header() -> Result<Option<(String, SecretString)>, String> {
+    if let (Ok(name), Ok(value)) = (
+        std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_NAME"),
+        std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE"),
+    ) {
+        if !name.is_empty() && !value.is_empty() {
+            return Ok(Some((name, SecretString::from(value))));
+        }
+    }
+    if let Ok(path) = std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_FILE") {
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read webhook header file: {e}"))?;
+        if let Some((name, value)) = content.trim_end().split_once(':') {
+            let name = name.trim().to_string();
+            let value = value.trim().to_string();
+            if !name.is_empty() && !value.is_empty() {
+                return Ok(Some((name, SecretString::from(value))));
+            }
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

@@ -1,12 +1,32 @@
 # MailSwiftSync Scheduler Design
 
+## Implementation Status
+
+**STATUS:** ✅ **PARTIALLY IMPLEMENTED**  
+**Last verified:** 2026-09-20  
+**Commit:** See `src/maintenance_window.rs` and `supervise` command implementation
+
+### What's Implemented
+- ✅ Maintenance window CLI support (`supervise <state> [poll] [n] [window]`)
+- ✅ Time-window validation and enforcement
+- ✅ Durable state persistence across window boundaries
+- ✅ Exit codes for "work complete" vs "window closed"
+- ✅ Integration with batch queue processing
+
+### What Remains
+- ⏳ Config file parsing (`scheduler.toml`)
+- ⏳ Systemd timer templates and documentation
+- ⏳ `supervise-dry` command (preview mode)
+
+---
+
 ## Problem Statement
 
 Current `supervise` is foreground-only:
 - Runs continuously in a terminal or under a service manager
 - No scheduling (must be started manually or via systemd service)
-- No maintenance-window config (time constraints, blackout periods, concurrency limits)
-- Limited to "process work until idle" — cannot express "run between 2am and 4am, retry if not complete"
+- ~~No maintenance-window config~~ ✅ **NOW IMPLEMENTED**
+- Limited to "process work until idle" — can now express "run between 2am and 4am, retry if not complete"
 
 **Production need:** Operators want to run migrations during approved maintenance windows without operator attendance, with automatic retry/resume across multiple windows if needed.
 
