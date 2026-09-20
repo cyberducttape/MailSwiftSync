@@ -106,6 +106,8 @@ This allows IMAP access but prevents MailSwiftSync from:
 
 ## Microsoft 365 OAuth
 
+**Note:** Microsoft removed Basic Authentication from Exchange Online in September 2023. OAuth (Modern Authentication) is the only supported method for IMAP access.
+
 ### Step 1: Register Azure Application
 
 1. Go to [Azure Portal](https://portal.azure.com)
@@ -113,17 +115,21 @@ This allows IMAP access but prevents MailSwiftSync from:
 3. Click "New registration"
 4. Name: "MailSwiftSync Migration"
 5. Supported account types: "Accounts in this organizational directory only"
-6. Redirect URI: (leave empty for now; not used by MailSwiftSync)
+6. Redirect URI: `http://localhost` (required for desktop auth flow)
 7. Click "Register"
+8. Save the **Application (client) ID** from the overview page
 
 ### Step 2: Grant API Permissions
 
 1. In your app registration, go to "API permissions"
 2. Click "Add a permission"
-3. Select "Microsoft Graph"
-4. Select "Delegated permissions"
-5. Search for and add: `IMAP.AccessAsUser.All`
-6. Click "Grant admin consent"
+3. Select "APIs my organization uses"
+4. Search for "Office 365 Exchange Online"
+5. Select "Delegated permissions"
+6. Find and add: `IMAP.AccessAsUser.All`
+7. Click "Grant admin consent"
+
+**Important:** Do NOT use Microsoft Graph scope `Mail.Read` — that's for Graph API. IMAP authentication requires the Exchange Online `IMAP.AccessAsUser.All` scope.
 
 ### Step 3: Create Client Secret
 
@@ -133,44 +139,80 @@ This allows IMAP access but prevents MailSwiftSync from:
 4. Expiry: 24 months (or your preferred duration)
 5. Click "Add"
 6. **Copy the secret value immediately** — you won't see it again
-7. Note the Application (client) ID from the overview page
+7. This is your `client_secret` for MailSwiftSync
 
 ### Step 4: Obtain Initial Refresh Token
 
-You must use Microsoft's OAuth flow to get the initial refresh token:
+Use the Authorization Code Flow to obtain a refresh token. The token cache approach in MSAL doesn't expose refresh tokens directly for external use.
+
+**Option A: Using MSAL for Python (Recommended)**
 
 ```bash
-# Using Python
 pip install msal
 
 python3 << 'EOF'
 import msal
 import json
 
-client_id = "YOUR_CLIENT_ID"
-client_secret = "YOUR_CLIENT_SECRET"
-authority = "https://login.microsoftonline.com/common"
-scope = ["Mail.Read"]
+CLIENT_ID = "YOUR_CLIENT_ID"
+CLIENT_SECRET = "YOUR_CLIENT_SECRET"
+AUTHORITY = "https://login.microsoftonline.com/common"
+SCOPES = ["https://outlook.office365.com/.default"]
 
+# Create public client for interactive auth
 app = msal.PublicClientApplication(
-    client_id=client_id,
-    authority=authority
+    client_id=CLIENT_ID,
+    authority=AUTHORITY
 )
 
-# Get device code flow (for headless systems)
-flow = app.initiate_device_flow(scopes=scope)
-print(flow['message'])
-input('Press Enter after authorizing...')
+# Get authorization code via browser
+result = app.acquire_token_interactive(scopes=SCOPES)
 
-# Or use browser flow (simpler)
-# result = app.acquire_token_interactive(scopes=scope)
-
-# Get refresh token
-result = app.acquire_token_by_device_flow(flow)
-print("Refresh token:", result.get('refresh_token'))
-print("Access token expires:", result.get('expires_in'), "seconds")
+if "access_token" in result:
+    print("Access token obtained")
+    
+    # Exchange for refresh token using confidential client
+    # (refresh tokens are obtained via confidential client flow)
+    conf_app = msal.ConfidentialClientApplication(
+        client_id=CLIENT_ID,
+        client_credential=CLIENT_SECRET,
+        authority=AUTHORITY
+    )
+    
+    # Re-authenticate with credentials to get refresh token
+    refresh_result = conf_app.acquire_token_for_client(scopes=SCOPES)
+    
+    if "access_token" in refresh_result:
+        print("Authorization successful")
+        print("\nStore these in MailSwiftSync:")
+        print("Client ID:", CLIENT_ID)
+        print("Client Secret:", CLIENT_SECRET)
+        print("Token Endpoint: https://login.microsoftonline.com/common/oauth2/v2.0/token")
+        print("\nTo get initial refresh token, use the Device Code Flow")
+else:
+    print("Authorization failed:", result.get("error_description"))
 EOF
 ```
+
+**Option B: Using curl (Manual OAuth Code Flow)**
+
+```bash
+# Step 1: Get authorization code (opens browser)
+curl "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=YOUR_CLIENT_ID&response_type=code&scope=https://outlook.office365.com/.default&redirect_uri=http://localhost"
+
+# Step 2: Exchange code for tokens
+curl -X POST "https://login.microsoftonline.com/common/oauth2/v2.0/token" \
+  -d "client_id=YOUR_CLIENT_ID" \
+  -d "client_secret=YOUR_CLIENT_SECRET" \
+  -d "code=AUTHORIZATION_CODE_FROM_STEP_1" \
+  -d "redirect_uri=http://localhost" \
+  -d "grant_type=authorization_code" \
+  -d "scope=https://outlook.office365.com/.default"
+
+# Response includes refresh_token
+```
+
+**Store the refresh token from the response for MailSwiftSync.**
 
 ### Step 5: Store in MailSwiftSync
 
@@ -179,12 +221,15 @@ In MailSwiftSync account settings, configure OAuth:
 ```
 Provider: Microsoft 365 (OAuth)
 Token Endpoint: https://login.microsoftonline.com/common/oauth2/v2.0/token
-Client ID: [from Step 3, Application ID]
-Client Secret: [from Step 3, secret value]
-Refresh Token: [from Step 4]
+Client ID: [from Step 1]
+Client Secret: [from Step 3]
+Refresh Token: [from Step 4 - the refresh_token value from the OAuth response]
 ```
 
-MailSwiftSync will automatically refresh tokens for unattended migrations.
+MailSwiftSync will automatically:
+- Refresh the access token before each migration run
+- Handle token rotation if Microsoft issues new refresh tokens
+- Fail with a clear error if the refresh token expires
 
 ### Step 6: Verify Configuration
 

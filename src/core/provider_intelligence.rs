@@ -136,7 +136,8 @@ impl ProviderErrorClassifier {
         }
 
         // Authentication patterns
-        if lower.contains("401") || lower.contains("unauthorized")
+        if lower.contains("401")
+            || lower.contains("unauthorized")
             || lower.contains("invalid credentials")
             || lower.contains("authentication failed")
         {
@@ -144,7 +145,8 @@ impl ProviderErrorClassifier {
         }
 
         // Permission patterns
-        if lower.contains("403") || lower.contains("forbidden")
+        if lower.contains("403")
+            || lower.contains("forbidden")
             || lower.contains("permission denied")
             || lower.contains("insufficient privileges")
         {
@@ -152,7 +154,8 @@ impl ProviderErrorClassifier {
         }
 
         // Not found patterns
-        if lower.contains("404") || lower.contains("not found")
+        if lower.contains("404")
+            || lower.contains("not found")
             || lower.contains("no such")
             || lower.contains("does not exist")
         {
@@ -160,7 +163,8 @@ impl ProviderErrorClassifier {
         }
 
         // Temporary unavailability
-        if lower.contains("502") || lower.contains("503")
+        if lower.contains("502")
+            || lower.contains("503")
             || lower.contains("temporarily unavailable")
             || lower.contains("service unavailable")
             || lower.contains("bad gateway")
@@ -185,9 +189,7 @@ impl ProviderErrorClassifier {
                 }
             }
             "microsoft" | "o365" | "office365" => {
-                if lower.contains("not supported")
-                    || lower.contains("operation not allowed")
-                {
+                if lower.contains("not supported") || lower.contains("operation not allowed") {
                     return ProviderErrorType::Unsupported;
                 }
             }

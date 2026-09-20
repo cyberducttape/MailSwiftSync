@@ -51,7 +51,10 @@ impl PreMigrationRisk {
             warnings.push(RiskWarning {
                 severity: WarningSeverity::Warning,
                 category: "scale".to_string(),
-                message: format!("Large migration: {} messages may take extended time", total_messages),
+                message: format!(
+                    "Large migration: {} messages may take extended time",
+                    total_messages
+                ),
             });
         }
 
@@ -59,7 +62,10 @@ impl PreMigrationRisk {
             warnings.push(RiskWarning {
                 severity: WarningSeverity::Warning,
                 category: "size".to_string(),
-                message: format!("Large total size: {:.1} GB migration requires adequate time window", total_size_gb),
+                message: format!(
+                    "Large total size: {:.1} GB migration requires adequate time window",
+                    total_size_gb
+                ),
             });
         }
 
@@ -67,7 +73,10 @@ impl PreMigrationRisk {
             warnings.push(RiskWarning {
                 severity: WarningSeverity::Info,
                 category: "folders".to_string(),
-                message: format!("Many folders: {} folders may have mapping complexity", total_folders),
+                message: format!(
+                    "Many folders: {} folders may have mapping complexity",
+                    total_folders
+                ),
             });
         }
 
@@ -79,7 +88,10 @@ impl PreMigrationRisk {
         });
 
         // Determine readiness
-        let error_count = warnings.iter().filter(|w| w.severity == WarningSeverity::Error).count();
+        let error_count = warnings
+            .iter()
+            .filter(|w| w.severity == WarningSeverity::Error)
+            .count();
         let estimated_readiness = if error_count > 0 {
             MigrationReadiness::BlockedByErrors
         } else if !warnings.is_empty() {
@@ -121,6 +133,6 @@ mod tests {
     fn large_migration_requires_review() {
         let risk = PreMigrationRisk::assess(1_000_000, 50, 200_000_000_000, "");
         assert_eq!(risk.estimated_readiness, MigrationReadiness::ReviewRequired);
-        assert!(risk.warnings.len() > 0);
+        assert!(!risk.warnings.is_empty());
     }
 }

@@ -85,12 +85,24 @@ For very large migrations (100k+ messages), consider:
 
 ## Microsoft 365 / Outlook
 
+**IMPORTANT: Microsoft removed Basic Authentication from Exchange Online IMAP in September 2023. App passwords no longer work for IMAP access. OAuth (Modern Authentication) is required.**
+
 ### Prerequisites
 - Microsoft 365 account
-- Admin access to Exchange Online (for mailbox IMAP setup)
+- Admin access to Azure/Exchange Online
+- OAuth application registered (see OAUTH_SETUP.md)
+- Initial refresh token obtained (see OAUTH_SETUP.md)
 - Destination mailbox ready to receive migration
 
-### Step 1: Enable IMAP for Source Mailbox
+### Step 1: Register OAuth Application
+
+See **OAUTH_SETUP.md** — Microsoft 365 OAuth Setup section. You must:
+1. Register an app in Azure Portal
+2. Grant `IMAP.AccessAsUser.All` permission
+3. Create a client secret
+4. Obtain initial refresh token using MSAL or OAuth flow
+
+### Step 2: Enable IMAP for Source Mailbox
 
 As an admin in Exchange Online:
 
@@ -101,31 +113,19 @@ As an admin in Exchange Online:
 5. Ensure IMAP is **enabled**
 6. Click "Save"
 
-### Step 2: Create App Password (if MFA enabled)
-
-If Multi-Factor Authentication is enabled:
-
-1. Go to [Microsoft Account Security](https://account.microsoft.com/security)
-2. Click "Advanced security options"
-3. Under "App passwords", create a new password for "Mail" and "Other (custom)"
-4. **Copy the password immediately**
-
-If MFA is not enabled:
-- You can use your Microsoft 365 password
-- **Not recommended** — enable MFA for security
-
-### Step 3: Configure MailSwiftSync
+### Step 3: Configure MailSwiftSync with OAuth
 
 In MailSwiftSync account settings:
 
 ```
-Provider: Microsoft 365 (IMAP)
-IMAP Host: imap.outlook.com
-IMAP Port: 993
-Security: TLS/SSL
-Username: your.email@microsoft.com
-Password: [App password from Step 2, or your password if no MFA]
+Provider: Microsoft 365 (OAuth)
+Token Endpoint: https://login.microsoftonline.com/common/oauth2/v2.0/token
+Client ID: [from Azure app registration]
+Client Secret: [from Azure app registration]
+Refresh Token: [from OAUTH_SETUP.md Step 4]
 ```
+
+MailSwiftSync will automatically refresh OAuth tokens before each migration run.
 
 ### Step 4: Verify Connection
 

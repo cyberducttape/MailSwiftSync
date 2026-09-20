@@ -404,19 +404,28 @@ impl StateStore {
                 [],
             )?;
         }
-        if !history_columns.iter().any(|column| column == "missing_messages") {
+        if !history_columns
+            .iter()
+            .any(|column| column == "missing_messages")
+        {
             tx.execute(
                 "ALTER TABLE evidence_history ADD COLUMN missing_messages INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
-        if !history_columns.iter().any(|column| column == "extra_messages") {
+        if !history_columns
+            .iter()
+            .any(|column| column == "extra_messages")
+        {
             tx.execute(
                 "ALTER TABLE evidence_history ADD COLUMN extra_messages INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
-        if !history_columns.iter().any(|column| column == "modified_messages") {
+        if !history_columns
+            .iter()
+            .any(|column| column == "modified_messages")
+        {
             tx.execute(
                 "ALTER TABLE evidence_history ADD COLUMN modified_messages INTEGER NOT NULL DEFAULT 0",
                 [],

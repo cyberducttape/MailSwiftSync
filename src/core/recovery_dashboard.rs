@@ -124,16 +124,16 @@ impl RecoveryPlanner {
     }
 
     /// Estimate time to resume based on messages remaining and provider throughput.
-    pub fn estimate_resume_duration(
-        messages_remaining: u64,
-        messages_per_second: f64,
-    ) -> Duration {
+    pub fn estimate_resume_duration(messages_remaining: u64, messages_per_second: f64) -> Duration {
         let seconds = (messages_remaining as f64 / messages_per_second).ceil() as u64;
         Duration::from_secs(seconds)
     }
 
     /// Determine if resume is safe or if operator should wait.
-    pub fn is_safe_to_resume(reason: InterruptionReason, time_since_interruption: Duration) -> (bool, String) {
+    pub fn is_safe_to_resume(
+        reason: InterruptionReason,
+        time_since_interruption: Duration,
+    ) -> (bool, String) {
         match reason {
             InterruptionReason::ProviderThrottled => {
                 if time_since_interruption < Duration::from_secs(300) {
@@ -142,7 +142,10 @@ impl RecoveryPlanner {
                         "Wait at least 5 minutes after rate limit before resuming".to_string(),
                     )
                 } else {
-                    (true, "Rate limit should have reset; safe to resume".to_string())
+                    (
+                        true,
+                        "Rate limit should have reset; safe to resume".to_string(),
+                    )
                 }
             }
             InterruptionReason::NetworkTimeout => {

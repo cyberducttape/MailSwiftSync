@@ -23,11 +23,10 @@
 //! Only `https://` targets are accepted: an operator-supplied migration
 //! status is not secret, but a plaintext endpoint would still let anyone on
 //! the network path observe and tamper with it in flight.
-use crate::credentials::SecretString;
+use crate::credentials::{SecretString, read_secret_file};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::{
-    fs,
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
@@ -186,6 +185,9 @@ fn parse_https_url(url: &str) -> Result<(String, u16, String), String> {
         Some(index) => (&rest[..index], &rest[index..]),
         None => (rest, "/"),
     };
+    if authority.chars().any(char::is_control) || path.chars().any(char::is_control) {
+        return Err("the webhook URL cannot contain control characters".into());
+    }
     if authority.is_empty() {
         return Err("the webhook URL is missing a host".into());
     }
@@ -199,17 +201,18 @@ fn parse_https_url(url: &str) -> Result<(String, u16, String), String> {
 /// MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE (path to file).
 /// File contents are trimmed of trailing whitespace.
 fn load_webhook_bearer_token() -> Result<Option<SecretString>, String> {
-    if let Ok(token) = std::env::var("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN") {
-        if !token.is_empty() {
-            return Ok(Some(SecretString::from(token)));
-        }
+    if let Ok(token) = std::env::var("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN")
+        && !token.is_empty()
+    {
+        validate_header_value(&token)?;
+        return Ok(Some(SecretString::from(token)));
     }
     if let Ok(path) = std::env::var("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE") {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read webhook bearer token file: {e}"))?;
-        let token = content.trim_end().to_string();
+        let token = read_secret_file(std::path::Path::new(&path))
+            .map_err(|error| format!("Failed to read webhook bearer token file: {error}"))?;
         if !token.is_empty() {
-            return Ok(Some(SecretString::from(token)));
+            validate_header_value(token.as_str())?;
+            return Ok(Some(token));
         }
     }
     Ok(None)
@@ -222,23 +225,53 @@ fn load_webhook_custom_header() -> Result<Option<(String, SecretString)>, String
     if let (Ok(name), Ok(value)) = (
         std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_NAME"),
         std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE"),
-    ) {
-        if !name.is_empty() && !value.is_empty() {
-            return Ok(Some((name, SecretString::from(value))));
-        }
+    ) && !name.is_empty()
+        && !value.is_empty()
+    {
+        validate_header_name(&name)?;
+        validate_header_value(&value)?;
+        return Ok(Some((name, SecretString::from(value))));
     }
     if let Ok(path) = std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_FILE") {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read webhook header file: {e}"))?;
-        if let Some((name, value)) = content.trim_end().split_once(':') {
+        let content = read_secret_file(std::path::Path::new(&path))
+            .map_err(|error| format!("Failed to read webhook header file: {error}"))?;
+        if let Some((name, value)) = content.as_str().split_once(':') {
             let name = name.trim().to_string();
             let value = value.trim().to_string();
             if !name.is_empty() && !value.is_empty() {
+                validate_header_name(&name)?;
+                validate_header_value(&value)?;
                 return Ok(Some((name, SecretString::from(value))));
             }
         }
     }
     Ok(None)
+}
+
+fn validate_header_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || !name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        ..=b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+                )
+        })
+    {
+        return Err("webhook header name is not a valid HTTP token".into());
+    }
+    Ok(())
+}
+
+fn validate_header_value(value: &str) -> Result<(), String> {
+    if value
+        .chars()
+        .any(|character| character == '\r' || character == '\n')
+    {
+        return Err("webhook header values cannot contain CR or LF".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -271,5 +304,18 @@ mod tests {
     fn rejects_webhook_url_missing_a_host() {
         assert!(parse_https_url("https://").is_err());
         assert!(parse_https_url("https:///path").is_err());
+    }
+
+    #[test]
+    fn rejects_control_characters_in_webhook_url() {
+        assert!(parse_https_url("https://hooks.example.com/path\r\nX-Injected: yes").is_err());
+    }
+
+    #[test]
+    fn rejects_header_injection() {
+        assert!(validate_header_name("X-Test\r\nInjected: yes").is_err());
+        assert!(validate_header_value("safe\nInjected: yes").is_err());
+        assert!(validate_header_name("X-Test").is_ok());
+        assert!(validate_header_value("safe value").is_ok());
     }
 }
