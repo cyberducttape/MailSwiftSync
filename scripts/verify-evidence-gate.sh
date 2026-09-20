@@ -96,14 +96,30 @@ PY
     continue
   fi
 
-  policy_result=$(python3 - "$provider" "$expected_engine" "$expected_version" "$required_phases" "${provider_files[@]}" <<'PY'
+  policy_result=$(python3 - "$SCHEMA_FILE" "$provider" "$expected_engine" "$expected_version" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
 import sys
 
-provider, expected_engine, expected_version, phases_csv, *files = sys.argv[1:]
+try:
+    import jsonschema
+    has_jsonschema = True
+except ImportError:
+    has_jsonschema = False
+
+schema_file, provider, expected_engine, expected_version, phases_csv, *files = sys.argv[1:]
 required_phases = set(phases_csv.split(","))
 seen_phases = set()
 errors = []
+
+# Load schema for validation
+schema = None
+if has_jsonschema:
+    try:
+        with open(schema_file, encoding="utf-8") as handle:
+            schema = json.load(handle)
+    except (OSError, json.JSONDecodeError) as error:
+        errors.append(f"Warning: Could not load schema for validation: {error}")
+
 for filename in files:
     try:
         with open(filename, encoding="utf-8") as handle:
@@ -111,9 +127,18 @@ for filename in files:
     except (OSError, json.JSONDecodeError) as error:
         errors.append(f"{filename}: invalid JSON ({error})")
         continue
+
+    # Validate against schema if available
+    if schema and has_jsonschema:
+        try:
+            jsonschema.validate(evidence, schema)
+        except jsonschema.ValidationError as error:
+            errors.append(f"{filename}: schema validation failed: {error.message}")
+            continue
+
     required_root = {
         "provider", "tested_at", "testing_phase", "source_version",
-        "destination_version", "engine_version", "test_summary", "results",
+        "destination_version", "engine", "engine_version", "test_summary", "results",
     }
     missing_root = sorted(required_root - evidence.keys())
     if missing_root:
@@ -123,10 +148,10 @@ for filename in files:
         errors.append(f"{filename}: provider does not match policy")
     if evidence.get("testing_phase") not in {"dry_pilot", "live_pilot", "recovery_test", "edge_case"}:
         errors.append(f"{filename}: testing_phase is not a supported evidence phase")
+    if evidence.get("engine") != expected_engine:
+        errors.append(f"{filename}: engine must be {expected_engine}")
     if evidence.get("engine_version") != expected_version:
         errors.append(f"{filename}: engine_version must be {expected_version}")
-    if not evidence.get("engine_version", "").startswith(expected_engine + " "):
-        errors.append(f"{filename}: engine_version must identify {expected_engine}")
     summary = evidence.get("test_summary")
     if not isinstance(summary, dict) or not all(
         isinstance(summary.get(field), int) and summary.get(field) >= minimum
