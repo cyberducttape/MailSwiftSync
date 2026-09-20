@@ -1,6 +1,5 @@
 /// Documentation validation test suite.
 /// Ensures docs remain consistent with code and don't contain outdated claims.
-
 use std::fs;
 use std::path::Path;
 
@@ -62,8 +61,8 @@ fn production_readiness_status_updated() {
 
 #[test]
 fn no_outdated_oauth_warnings() {
-    let oauth_docs = fs::read_to_string("docs/wiki/PSA-notifications.md")
-        .unwrap_or_else(|_| String::new());
+    let oauth_docs =
+        fs::read_to_string("docs/wiki/PSA-notifications.md").unwrap_or_else(|_| String::new());
 
     // If webhook docs exist, they should warn against embedding secrets
     if !oauth_docs.is_empty() {
@@ -76,8 +75,8 @@ fn no_outdated_oauth_warnings() {
 
 #[test]
 fn compatibility_matrix_references_tested_providers() {
-    let matrix = fs::read_to_string("docs/compatibility-matrix.md")
-        .unwrap_or_else(|_| String::new());
+    let matrix =
+        fs::read_to_string("docs/compatibility-matrix.md").unwrap_or_else(|_| String::new());
 
     if !matrix.is_empty() {
         // Should mention major providers
@@ -106,8 +105,7 @@ fn provider_testing_guide_exists() {
 
 #[test]
 fn architecture_documents_message_verification() {
-    let arch = fs::read_to_string("docs/architecture.md")
-        .unwrap_or_else(|_| String::new());
+    let arch = fs::read_to_string("docs/architecture.md").unwrap_or_else(|_| String::new());
 
     if !arch.is_empty() {
         assert!(

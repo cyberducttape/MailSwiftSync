@@ -102,7 +102,12 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
         let record = record.map_err(|error| error.to_string())?;
         let row_number = index + 2;
         let values = record_values(&headers, record.iter(), row_number)?;
-        jobs.push(job_from_values(values, base, row_number, allow_plaintext_secrets)?);
+        jobs.push(job_from_values(
+            values,
+            base,
+            row_number,
+            allow_plaintext_secrets,
+        )?);
     }
     if jobs.is_empty() {
         return Err("The file has no migration rows.".into());
@@ -166,7 +171,12 @@ pub(crate) fn read_sheet(
             row.iter().map(|value| value.to_string()),
             row_number,
         )?;
-        jobs.push(job_from_values(values, base, row_number, allow_plaintext_secrets)?);
+        jobs.push(job_from_values(
+            values,
+            base,
+            row_number,
+            allow_plaintext_secrets,
+        )?);
     }
     if jobs.is_empty() {
         return Err("The worksheet has no migration rows.".into());
@@ -269,7 +279,10 @@ pub(crate) fn job_from_values(
     })
 }
 
-pub(crate) fn validate_headers(headers: &[String], allow_plaintext_secrets: bool) -> Result<(), String> {
+pub(crate) fn validate_headers(
+    headers: &[String],
+    allow_plaintext_secrets: bool,
+) -> Result<(), String> {
     let mut seen = HashSet::new();
     for header in headers {
         if header.is_empty() || !seen.insert(header.clone()) {
@@ -280,7 +293,8 @@ pub(crate) fn validate_headers(headers: &[String], allow_plaintext_secrets: bool
         return Err("The migration file cannot contain extra_options; configure trusted engine options in the application instead of importing executable command settings.".into());
     }
 
-    let has_plaintext_passwords = seen.contains("source_password") || seen.contains("destination_password");
+    let has_plaintext_passwords =
+        seen.contains("source_password") || seen.contains("destination_password");
     if has_plaintext_passwords && !allow_plaintext_secrets {
         return Err(
             "Plaintext credential columns detected. Use credential IDs instead (source_credential_id, destination_credential_id), or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()

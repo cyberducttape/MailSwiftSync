@@ -508,7 +508,10 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
 /// Uses a UUID-based temporary file with create_new semantics and Unix-specific
 /// safety flags (O_NOFOLLOW) to prevent symlink and race-condition attacks.
 pub fn verify_directory_writable(dir: &Path) -> std::io::Result<()> {
-    let test_file = dir.join(format!(".mailswiftsync-write-test-{}", uuid::Uuid::new_v4()));
+    let test_file = dir.join(format!(
+        ".mailswiftsync-write-test-{}",
+        uuid::Uuid::new_v4()
+    ));
     let result = (|| {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -632,12 +635,17 @@ mod tests {
     fn verify_directory_writable_succeeds_for_temp_dir() {
         let temp_dir = std::env::temp_dir();
         let result = super::verify_directory_writable(&temp_dir);
-        assert!(result.is_ok(), "Failed to verify temp directory is writable: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Failed to verify temp directory is writable: {:?}",
+            result
+        );
     }
 
     #[test]
     fn verify_directory_writable_fails_for_nonexistent_dir() {
-        let nonexistent = std::env::temp_dir().join(format!("nonexistent-{}", uuid::Uuid::new_v4()));
+        let nonexistent =
+            std::env::temp_dir().join(format!("nonexistent-{}", uuid::Uuid::new_v4()));
         let result = super::verify_directory_writable(&nonexistent);
         assert!(result.is_err(), "Should fail for nonexistent directory");
     }

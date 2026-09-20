@@ -1,16 +1,16 @@
-use super::*;
 use std::collections::{HashMap, HashSet};
 
-/// Mismatch classification based on multi-factor matching.
+use super::message_extraction::ExtractedMessage;
+
+/// Mismatch classifications currently supported by the executable verifier.
+///
+/// Exact and date/size matches are successful match outcomes represented in
+/// `VerificationSummary`, not mismatch records. Content-hash and folder-aware
+/// classifications are intentionally not represented here until extraction
+/// supplies those fields and the live path persists them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MismatchType {
-    /// Message-ID + hash + internal date all match (100% confidence)
-    ExactMatch,
-    /// Content hash + internal date match, Message-ID differs or missing (99%)
-    ContentMatch,
-    /// Internal date + size match (95%, detects renames)
-    DateSizeMatch,
-    /// Message-ID matches but date/size differ (80%, detects corruption)
+    /// Message-ID matches but available metadata differs.
     MessageIdOnly,
     /// Present in source, absent in destination
     Missing,
@@ -18,24 +18,15 @@ pub enum MismatchType {
     Extra,
     /// Multiple instances of same message-ID in destination
     Duplicated,
-    /// Same message in different folder on destination
-    FolderMismatch,
-    /// Same UID but different hash (content corruption)
-    Changed,
 }
 
 impl MismatchType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::ExactMatch => "exact_match",
-            Self::ContentMatch => "content_match",
-            Self::DateSizeMatch => "date_size_match",
             Self::MessageIdOnly => "message_id_only",
             Self::Missing => "missing",
             Self::Extra => "extra",
             Self::Duplicated => "duplicated",
-            Self::FolderMismatch => "folder_mismatch",
-            Self::Changed => "changed",
         }
     }
 }
@@ -63,7 +54,11 @@ pub struct MessageVerification;
 
 impl MessageVerification {
     /// Detect mismatches between source and destination message sets.
-    /// Uses multi-factor matching for high-confidence classification.
+    ///
+    /// IMAP UIDs are mailbox-local and are deliberately never used as the
+    /// identity across the two inputs. Messages are matched first by a unique
+    /// RFC Message-ID, then by a unique internal-date/size fingerprint. A
+    /// UID is retained only as diagnostic context in the result.
     pub fn detect_mismatches(
         job_id: &str,
         run_id: &str,
@@ -71,98 +66,220 @@ impl MessageVerification {
         dest_messages: &HashMap<String, ExtractedMessage>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
         let mut mismatches = Vec::new();
-        let source_uids: HashSet<_> = source_messages.keys().cloned().collect();
-        let dest_uids: HashSet<_> = dest_messages.keys().cloned().collect();
+        let mut unmatched_source: HashSet<String> = source_messages.keys().cloned().collect();
+        let mut unmatched_dest: HashSet<String> = dest_messages.keys().cloned().collect();
 
-        // Find missing messages (in source but not destination)
-        for uid in source_uids.iter() {
-            if !dest_uids.contains(uid) {
-                if let Some(source_msg) = source_messages.get(uid) {
-                    let mismatch = MessageMismatch {
-                        id: format!("{}-missing-{}", run_id, uuid::Uuid::new_v4()),
-                        job_id: job_id.to_string(),
-                        run_id: run_id.to_string(),
-                        mismatch_type: MismatchType::Missing,
-                        source_uid: Some(uid.clone()),
-                        dest_uid: None,
-                        source_message_id: source_msg.message_id.clone(),
-                        dest_message_id: None,
-                        source_size_bytes: source_msg.size_bytes,
-                        dest_size_bytes: None,
-                        source_date: source_msg.internal_date.clone(),
-                        dest_date: None,
-                        subject: None,
-                    };
-                    mismatches.push(mismatch);
+        let source_by_message_id = index_by_message_id(source_messages);
+        let dest_by_message_id = index_by_message_id(dest_messages);
+
+        // Message-ID remains the strongest portable identity. Match unique
+        // IDs even when date/size differ so a legitimate metadata rewrite is
+        // reported as changed rather than as missing + extra.
+        let mut message_ids = source_by_message_id
+            .keys()
+            .filter(|id| dest_by_message_id.contains_key(*id))
+            .cloned()
+            .collect::<Vec<_>>();
+        message_ids.sort();
+        for message_id in message_ids {
+            let source_uids = &source_by_message_id[&message_id];
+            let dest_uids = &dest_by_message_id[&message_id];
+            if source_uids.len() == 1 && !dest_uids.is_empty() {
+                let source_uid = &source_uids[0];
+                let dest_uid = &dest_uids[0];
+                let source_msg = &source_messages[source_uid];
+                let dest_msg = &dest_messages[dest_uid];
+                unmatched_source.remove(source_uid);
+                unmatched_dest.remove(dest_uid);
+                if !same_metadata(source_msg, dest_msg) {
+                    mismatches.push(make_mismatch(
+                        job_id,
+                        run_id,
+                        MismatchType::MessageIdOnly,
+                        Some(source_uid),
+                        Some(dest_uid),
+                        Some(source_msg),
+                        Some(dest_msg),
+                    ));
                 }
             }
         }
 
-        // Find extra messages (in destination but not source)
-        for uid in dest_uids.iter() {
-            if !source_uids.contains(uid) {
-                if let Some(dest_msg) = dest_messages.get(uid) {
-                    let mismatch = MessageMismatch {
-                        id: format!("{}-extra-{}", run_id, uuid::Uuid::new_v4()),
-                        job_id: job_id.to_string(),
-                        run_id: run_id.to_string(),
-                        mismatch_type: MismatchType::Extra,
-                        source_uid: None,
-                        dest_uid: Some(uid.clone()),
-                        source_message_id: None,
-                        dest_message_id: dest_msg.message_id.clone(),
-                        source_size_bytes: None,
-                        dest_size_bytes: dest_msg.size_bytes,
-                        source_date: None,
-                        dest_date: dest_msg.internal_date.clone(),
-                        subject: None,
-                    };
-                    mismatches.push(mismatch);
-                }
+        // Internal date + size is a useful fallback only when unique on both
+        // sides. Ambiguous fingerprints are left unresolved rather than
+        // silently pairing unrelated messages.
+        let source_by_fingerprint = index_by_fingerprint(source_messages, &unmatched_source);
+        let dest_by_fingerprint = index_by_fingerprint(dest_messages, &unmatched_dest);
+        let mut fingerprints = source_by_fingerprint
+            .keys()
+            .filter(|fingerprint| dest_by_fingerprint.contains_key(*fingerprint))
+            .cloned()
+            .collect::<Vec<_>>();
+        fingerprints.sort();
+        for fingerprint in fingerprints {
+            let source_uids = &source_by_fingerprint[&fingerprint];
+            let dest_uids = &dest_by_fingerprint[&fingerprint];
+            if source_uids.len() == 1 && dest_uids.len() == 1 {
+                unmatched_source.remove(&source_uids[0]);
+                unmatched_dest.remove(&dest_uids[0]);
             }
         }
 
-        // Find changed messages (same UID, different content)
-        for uid in source_uids.intersection(&dest_uids) {
-            if let (Some(source_msg), Some(dest_msg)) =
-                (source_messages.get(uid), dest_messages.get(uid))
-            {
-                // If size differs, mark as changed
-                if source_msg.size_bytes != dest_msg.size_bytes
-                    && source_msg.size_bytes.is_some()
-                    && dest_msg.size_bytes.is_some()
-                {
-                    let mismatch = MessageMismatch {
-                        id: format!("{}-changed-{}", run_id, uuid::Uuid::new_v4()),
-                        job_id: job_id.to_string(),
-                        run_id: run_id.to_string(),
-                        mismatch_type: MismatchType::Changed,
-                        source_uid: Some(uid.clone()),
-                        dest_uid: Some(uid.clone()),
-                        source_message_id: source_msg.message_id.clone(),
-                        dest_message_id: dest_msg.message_id.clone(),
-                        source_size_bytes: source_msg.size_bytes,
-                        dest_size_bytes: dest_msg.size_bytes,
-                        source_date: source_msg.internal_date.clone(),
-                        dest_date: dest_msg.internal_date.clone(),
-                        subject: None,
-                    };
-                    mismatches.push(mismatch);
-                }
-            }
+        // Duplicate Message-IDs are observable even with rewritten UIDs. Do
+        // not report the additional copies as generic extras.
+        let mut duplicate_dest_uids = dest_by_message_id
+            .values()
+            .filter(|uids| uids.len() > 1)
+            .flat_map(|uids| uids.iter())
+            .filter(|uid| unmatched_dest.contains(*uid))
+            .cloned()
+            .collect::<Vec<_>>();
+        duplicate_dest_uids.sort();
+        for dest_uid in duplicate_dest_uids {
+            let dest_msg = &dest_messages[&dest_uid];
+            unmatched_dest.remove(&dest_uid);
+            mismatches.push(make_mismatch(
+                job_id,
+                run_id,
+                MismatchType::Duplicated,
+                None,
+                Some(&dest_uid),
+                None,
+                Some(dest_msg),
+            ));
+        }
+
+        for source_uid in sorted_keys(&unmatched_source) {
+            let source_msg = &source_messages[&source_uid];
+            mismatches.push(make_mismatch(
+                job_id,
+                run_id,
+                MismatchType::Missing,
+                Some(&source_uid),
+                None,
+                Some(source_msg),
+                None,
+            ));
+        }
+        for dest_uid in sorted_keys(&unmatched_dest) {
+            let dest_msg = &dest_messages[&dest_uid];
+            mismatches.push(make_mismatch(
+                job_id,
+                run_id,
+                MismatchType::Extra,
+                None,
+                Some(&dest_uid),
+                None,
+                Some(dest_msg),
+            ));
         }
 
         // Generate summary
         let summary = VerificationSummary {
             total_source: source_messages.len() as u64,
             total_destination: dest_messages.len() as u64,
-            exact_matches: (source_uids.len() - mismatches.iter().filter(|m| m.source_uid.is_some()).count()) as u64,
-            missing_count: mismatches.iter().filter(|m| m.mismatch_type == MismatchType::Missing).count() as u64,
-            extra_count: mismatches.iter().filter(|m| m.mismatch_type == MismatchType::Extra).count() as u64,
-            changed_count: mismatches.iter().filter(|m| m.mismatch_type == MismatchType::Changed).count() as u64,
+            exact_matches: source_messages.len() as u64
+                - mismatches.iter().filter(|m| m.source_uid.is_some()).count() as u64,
+            missing_count: mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::Missing)
+                .count() as u64,
+            extra_count: mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::Extra)
+                .count() as u64,
+            duplicated_count: mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::Duplicated)
+                .count() as u64,
+            changed_count: mismatches
+                .iter()
+                .filter(|m| matches!(m.mismatch_type, MismatchType::MessageIdOnly))
+                .count() as u64,
         };
 
         Ok((mismatches, summary))
+    }
+}
+
+fn index_by_message_id(
+    messages: &HashMap<String, ExtractedMessage>,
+) -> HashMap<String, Vec<String>> {
+    let mut index = HashMap::new();
+    for (uid, message) in messages {
+        if let Some(message_id) = message
+            .message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|message_id| !message_id.is_empty())
+        {
+            index
+                .entry(message_id.to_owned())
+                .or_insert_with(Vec::new)
+                .push(uid.clone());
+        }
+    }
+    index.values_mut().for_each(|uids| uids.sort());
+    index
+}
+
+fn index_by_fingerprint(
+    messages: &HashMap<String, ExtractedMessage>,
+    eligible: &HashSet<String>,
+) -> HashMap<String, Vec<String>> {
+    let mut index = HashMap::new();
+    for uid in eligible {
+        let message = &messages[uid];
+        let (Some(date), Some(size)) = (&message.internal_date, message.size_bytes) else {
+            continue;
+        };
+        index
+            .entry(format!("{date}\0{size}"))
+            .or_insert_with(Vec::new)
+            .push(uid.clone());
+    }
+    index.values_mut().for_each(|uids| uids.sort());
+    index
+}
+
+fn sorted_keys(keys: &HashSet<String>) -> Vec<String> {
+    let mut sorted = keys.iter().cloned().collect::<Vec<_>>();
+    sorted.sort();
+    sorted
+}
+
+fn same_metadata(source: &ExtractedMessage, destination: &ExtractedMessage) -> bool {
+    source.size_bytes == destination.size_bytes && source.internal_date == destination.internal_date
+}
+
+fn make_mismatch(
+    job_id: &str,
+    run_id: &str,
+    mismatch_type: MismatchType,
+    source_uid: Option<&String>,
+    dest_uid: Option<&String>,
+    source: Option<&ExtractedMessage>,
+    destination: Option<&ExtractedMessage>,
+) -> MessageMismatch {
+    MessageMismatch {
+        id: format!(
+            "{}-{}-{}",
+            run_id,
+            mismatch_type.as_str(),
+            uuid::Uuid::new_v4()
+        ),
+        job_id: job_id.to_owned(),
+        run_id: run_id.to_owned(),
+        mismatch_type,
+        source_uid: source_uid.cloned(),
+        dest_uid: dest_uid.cloned(),
+        source_message_id: source.and_then(|message| message.message_id.clone()),
+        dest_message_id: destination.and_then(|message| message.message_id.clone()),
+        source_size_bytes: source.and_then(|message| message.size_bytes),
+        dest_size_bytes: destination.and_then(|message| message.size_bytes),
+        source_date: source.and_then(|message| message.internal_date.clone()),
+        dest_date: destination.and_then(|message| message.internal_date.clone()),
+        subject: None,
     }
 }
 
@@ -174,12 +291,16 @@ pub struct VerificationSummary {
     pub exact_matches: u64,
     pub missing_count: u64,
     pub extra_count: u64,
+    pub duplicated_count: u64,
     pub changed_count: u64,
 }
 
 impl VerificationSummary {
     pub fn is_perfect_match(&self) -> bool {
-        self.missing_count == 0 && self.extra_count == 0 && self.changed_count == 0
+        self.missing_count == 0
+            && self.extra_count == 0
+            && self.duplicated_count == 0
+            && self.changed_count == 0
             && self.total_source == self.total_destination
     }
 }
@@ -221,8 +342,8 @@ mod tests {
             },
         );
 
-        let (mismatches, summary) = MessageVerification::detect_mismatches("job1", "run1", &source, &dest)
-            .unwrap();
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run1", &source, &dest).unwrap();
 
         assert_eq!(summary.missing_count, 1);
         assert_eq!(summary.extra_count, 0);
@@ -268,8 +389,8 @@ mod tests {
             },
         );
 
-        let (mismatches, summary) = MessageVerification::detect_mismatches("job1", "run1", &source, &dest)
-            .unwrap();
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run1", &source, &dest).unwrap();
 
         assert_eq!(summary.extra_count, 1);
         assert_eq!(summary.missing_count, 0);
@@ -305,8 +426,8 @@ mod tests {
             },
         );
 
-        let (mismatches, summary) = MessageVerification::detect_mismatches("job1", "run1", &source, &dest)
-            .unwrap();
+        let (_mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run1", &source, &dest).unwrap();
 
         assert_eq!(summary.changed_count, 1);
         assert!(!summary.is_perfect_match());
@@ -325,12 +446,133 @@ mod tests {
             },
         );
 
-        let mut dest = source.clone();
+        let dest = source.clone();
 
-        let (_mismatches, summary) = MessageVerification::detect_mismatches("job1", "run1", &source, &dest)
-            .unwrap();
+        let (_mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run1", &source, &dest).unwrap();
 
         assert!(summary.is_perfect_match());
         assert_eq!(summary.exact_matches, 1);
+    }
+
+    #[test]
+    fn destination_uid_rewrite_is_not_reported_as_missing_and_extra() {
+        let source = HashMap::from([(
+            "17".to_string(),
+            ExtractedMessage {
+                message_id: Some("<stable@example.com>".to_string()),
+                uid: Some("17".to_string()),
+                size_bytes: Some(4096),
+                internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        )]);
+        let destination = HashMap::from([(
+            "904".to_string(),
+            ExtractedMessage {
+                message_id: Some("<stable@example.com>".to_string()),
+                uid: Some("904".to_string()),
+                size_bytes: Some(4096),
+                internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        )]);
+
+        let (mismatches, summary) = MessageVerification::detect_mismatches(
+            "job1",
+            "run-uid-rewrite",
+            &source,
+            &destination,
+        )
+        .unwrap();
+
+        assert!(mismatches.is_empty());
+        assert!(summary.is_perfect_match());
+        assert_eq!(summary.exact_matches, 1);
+    }
+
+    #[test]
+    fn date_and_size_fallback_is_also_uid_independent() {
+        let source = HashMap::from([(
+            "1".to_string(),
+            ExtractedMessage {
+                message_id: None,
+                uid: Some("1".to_string()),
+                size_bytes: Some(512),
+                internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        )]);
+        let destination = HashMap::from([(
+            "88".to_string(),
+            ExtractedMessage {
+                message_id: None,
+                uid: Some("88".to_string()),
+                size_bytes: Some(512),
+                internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+            },
+        )]);
+
+        let (mismatches, summary) = MessageVerification::detect_mismatches(
+            "job1",
+            "run-fingerprint",
+            &source,
+            &destination,
+        )
+        .unwrap();
+
+        assert!(mismatches.is_empty());
+        assert!(summary.is_perfect_match());
+    }
+
+    #[test]
+    fn ambiguous_fingerprint_fails_closed_instead_of_pairing_by_uid() {
+        let message = |uid: &str| ExtractedMessage {
+            message_id: None,
+            uid: Some(uid.to_string()),
+            size_bytes: Some(512),
+            internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        };
+        let source = HashMap::from([
+            ("1".to_string(), message("1")),
+            ("2".to_string(), message("2")),
+        ]);
+        let destination = HashMap::from([
+            ("88".to_string(), message("88")),
+            ("89".to_string(), message("89")),
+        ]);
+
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run-ambiguous", &source, &destination)
+                .unwrap();
+
+        assert_eq!(summary.missing_count, 2);
+        assert_eq!(summary.extra_count, 2);
+        assert!(!summary.is_perfect_match());
+        assert_eq!(mismatches.len(), 4);
+    }
+
+    #[test]
+    fn duplicate_message_id_is_reported_without_using_uid_as_identity() {
+        let message = |uid: &str| ExtractedMessage {
+            message_id: Some("<duplicate@example.com>".to_string()),
+            uid: Some(uid.to_string()),
+            size_bytes: Some(512),
+            internal_date: Some("2024-01-01T00:00:00Z".to_string()),
+        };
+        let source = HashMap::from([("1".to_string(), message("1"))]);
+        let destination = HashMap::from([
+            ("88".to_string(), message("88")),
+            ("89".to_string(), message("89")),
+        ]);
+
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run-duplicate", &source, &destination)
+                .unwrap();
+
+        assert_eq!(summary.exact_matches, 1);
+        assert_eq!(summary.extra_count, 0);
+        assert!(
+            mismatches
+                .iter()
+                .any(|m| m.mismatch_type == MismatchType::Duplicated)
+        );
     }
 }

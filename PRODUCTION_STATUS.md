@@ -1,67 +1,80 @@
 # MailSwiftSync Production Readiness Status
 
 **Last Updated:** September 20, 2026  
-**Test Coverage:** 387 tests (364 core + 9 doc validation + 14 integration)  
-**Code Maturity:** Technical Preview → Early Adoption Ready
+**Test Coverage:** 394 tests (371 core + 9 doc validation + 14 integration)
+**Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
+
+> **Adoption-critical clarification:** A passing unit or integration test for a
+> library module does not mean that module participates in a live migration.
+> The matrix below distinguishes executable-path integration from prototype
+> coverage. Aggregate verification remains the only verification path used by
+> live runs today.
 
 ## Executive Summary
 
-MailSwiftSync is ready for technical preview deployments and early adoption. The system provides:
+MailSwiftSync is suitable for controlled technical-preview deployments. The
+live system provides:
 
-1. **Message-level verification** with multi-factor confidence (100%-80%)
-2. **Provider-specific guidance** for Gmail, O365, and Fastmail
+1. **Aggregate verification** from engine summaries and mailbox status
+2. **Provider endpoint presets** for Gmail, Microsoft 365, Fastmail, and others
 3. **Safe recovery** from interrupted migrations with durable checkpoints
-4. **Production-grade error handling** with provider-specific classification
-5. **Comprehensive operator documentation** for setup and troubleshooting
+4. **Typed controller failure handling** and bounded retries
+5. **Operator documentation** for setup and troubleshooting
 
-The primary blocker for GA (1.0) is live validation with real provider mailboxes, which requires operator-provided test accounts.
+The primary blockers for GA are live provider validation and wiring the
+prototype verification/guidance subsystems into the migration path.
+
+> **Integration status:** The modules listed as prototypes below are
+> **ENGINE IMPLEMENTED — INTEGRATION PENDING**. Their unit tests demonstrate
+> library behavior only; they are not product capabilities until a controller,
+> CLI, or UI call site consumes their outputs and end-to-end tests exercise it.
 
 ---
 
 ## Feature Completeness Matrix
 
-### Core Verification ✅ COMPLETE
+### Core Verification ⚠️ AGGREGATE ONLY; MESSAGE-LEVEL PROTOTYPE
 | Feature | Status | Evidence |
 |---------|--------|----------|
-| Message-level mismatch detection | ✅ | 4 integration tests, 9 mismatch types |
-| Multi-factor matching (9 confidence levels) | ✅ | Confidence scoring in verification_details.rs |
-| Source/destination message extraction | ✅ | imapsync + Dovecot extractors implemented |
-| Missing/extra/changed detection | ✅ | 14 integration test scenarios |
-| Durable evidence storage | ✅ | SQLite schema v7 with message tables |
+| Message-level mismatch detection | ⚠️ Prototype only | `MessageVerification` is called only by unit tests |
+| Multi-factor matching | ⚠️ Prototype only | Classification helpers are not called by live runs |
+| Source/destination message extraction | ⚠️ Prototype only | Extractors have no runner/controller call sites |
+| Missing/extra/changed detection | ⚠️ Prototype only | Live evidence counters remain zero-initialized |
+| Durable aggregate evidence storage | ✅ Wired | SQLite schema v7 and live evidence adapters |
 
-### Provider Support ✅ COMPLETE
+### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
 | Provider | Status | Coverage |
 |----------|--------|----------|
-| Gmail/Workspace | ✅ | App password + OAuth, throttling 100 msgs/sec |
-| Microsoft 365 | ✅ | App password + OAuth, throttling 150 msgs/sec |
-| Fastmail | ✅ | App password, throttling 50 msgs/sec |
-| Generic IMAP | ✅ | Conservative 20 msgs/sec for unknown providers |
+| Gmail/Workspace | ⚠️ Endpoint preset | No provider-specific intelligence is wired into execution |
+| Microsoft 365 | ⚠️ Endpoint preset | No provider-specific intelligence is wired into execution |
+| Fastmail | ⚠️ Endpoint preset | No provider-specific intelligence is wired into execution |
+| Generic IMAP | ✅ Generic path | Uses typed plan controls and controller retry behavior |
 
 ### Operator Guidance ✅ COMPLETE
 | Document | Status | Content |
 |----------|--------|---------|
 | PROVIDER_SETUP.md | ✅ | Step-by-step setup for all providers |
 | OAUTH_SETUP.md | ✅ | OAuth token lifecycle and configuration |
-| provider_runbooks.rs | ✅ | Pre/during/post-migration checklists |
+| provider_runbooks.rs | ⚠️ Prototype only | No CLI/UI call site; tests only |
 | provider_testing_guide.md | ✅ | How to validate providers with live accounts |
 
-### Error Handling ✅ COMPLETE
+### Error Handling ⚠️ PARTIAL
 | Scenario | Status | Handling |
 |----------|--------|----------|
-| Rate limiting | ✅ | Automatic backoff, 60 sec wait before retry |
-| Network timeouts | ✅ | 10 sec connect, 20 sec read timeout |
+| Rate limiting | ⚠️ Generic controller handling | Provider classifier is not wired; configured engine/controller limits apply |
+| Network timeouts | ✅ | Process and webhook timeout paths are wired |
 | Authentication failures | ✅ | Clear error with remediation steps |
 | Connection exhaustion | ✅ | Provider-specific connection pool limits |
-| Provider unavailability | ✅ | 503 detection with 5 sec retry |
+| Provider unavailability | ⚠️ Partial | Generic failure classification exists; provider intelligence module is dormant |
 
-### Recovery & Durability ✅ COMPLETE
+### Recovery & Durability ✅ DURABLE CORE; DASHBOARD PROTOTYPE
 | Feature | Status | Implementation |
 |---------|--------|-----------------|
-| Checkpoint persistence | ✅ | SQLite durable state after each message |
-| Resume from interruption | ✅ | RecoveryPlanner with 7 interruption types |
-| Crash recovery | ✅ | Automatic restart from last checkpoint |
-| Time-to-completion estimates | ✅ | Based on remaining messages and throughput |
-| Recovery guidance | ✅ | Context-specific operator instructions |
+| Checkpoint persistence | ✅ | Durable run/checkpoint state is wired |
+| Resume from interruption | ✅ | Controller recovery and retry paths are wired |
+| Crash recovery | ✅ | Startup process identity/recovery paths are wired |
+| Time-to-completion estimates | ⚠️ Prototype only | `RecoveryPlanner` has no production call site |
+| Recovery guidance | ⚠️ Prototype only | Dashboard/planner types are not rendered by UI/CLI |
 
 ---
 
@@ -98,7 +111,10 @@ The primary blocker for GA (1.0) is live validation with real provider mailboxes
 - Empty mailbox handling
 - Folder structure preservation
 
-**Total: 387 tests — 100% pass rate**
+**Total: 394 tests — 100% pass rate**
+
+These tests establish library behavior and controller invariants; they do not
+establish that every tested library module is reachable from a live migration.
 
 ---
 
@@ -163,8 +179,7 @@ The primary blocker for GA (1.0) is live validation with real provider mailboxes
 ## Deployment Readiness
 
 ### For Technical Preview (Now)
-- ✅ Code is stable and tested
-- ✅ All critical features implemented
+- ⚠️ Core migration path is tested; dormant prototype modules are not operational features
 - ✅ Operator guides complete
 - ✅ Error messages clear and actionable
 - ✅ Recovery procedures documented
@@ -188,15 +203,15 @@ The primary blocker for GA (1.0) is live validation with real provider mailboxes
 ## Feature Roadmap
 
 ### Completed (This Release)
-- ✅ Message-level verification with 9 mismatch types
-- ✅ Provider-specific error classification
-- ✅ Adaptive throttling per provider
-- ✅ Resume/recovery dashboard
-- ✅ Provider runbook generation
-- ✅ Pre/post-migration reporting
+- ⚠️ Message-level verification prototype and design (not live-wired)
+- ⚠️ Provider classification/throttling prototype (not live-wired)
+- ✅ Durable controller recovery and maintenance-window supervision
+- ⚠️ Recovery dashboard/planner prototype (not UI/CLI-wired)
+- ⚠️ Provider runbook generation prototype (not UI/CLI-wired)
+- ⚠️ Pre/post-migration reporting helpers (not live-wired)
 - ✅ Comprehensive setup documentation
 - ✅ OAuth token lifecycle management
-- ✅ 387 automated tests
+- ✅ 394 automated tests
 
 ### Recommended (Next Release)
 - 🔲 Live provider validation (Gmail, O365, Fastmail)
@@ -227,7 +242,7 @@ The primary blocker for GA (1.0) is live validation with real provider mailboxes
 8. Export customer proof for audit trail
 
 ### For Developers
-1. Run test suite: `cargo test` (387 tests)
+1. Run test suite: `cargo test` (394 tests)
 2. Review PROVIDER_SETUP.md and OAUTH_SETUP.md
 3. Check provider_runbooks.rs for setup requirements
 4. Review verification_details.rs for mismatch types
@@ -280,9 +295,12 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 
 1. **Use with test/disposable mailboxes initially** — Validate configuration and recovery procedures
 2. **Have provider test accounts available** — Setup and preflight validation require real credentials
-3. **Review verification reports carefully** — Understand mismatch types and confidence levels
+3. **Review aggregate verification evidence carefully** — Message-level mismatch classes are not yet available in live runs
 4. **Follow provider-specific runbooks** — Each provider has unique requirements
 
-The system provides everything needed to prove migration correctness and safely recover from interruptions. All code paths are tested, error scenarios are handled, and operator guidance is comprehensive.
+The system provides a durable, safety-gated migration controller suitable for
+technical-preview use. It does not yet provide independent message-level proof,
+provider-specific execution intelligence, or UI/CLI access to every helper
+module described in the repository.
 
 **Next milestone:** Live validation with real provider mailboxes to reach GA 1.0 status.

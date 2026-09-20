@@ -8,6 +8,13 @@
 
 This is the single largest blocker to production trust. Without message-level verification, operators cannot definitively prove that specific messages were successfully migrated. Aggregate counts can match while individual mailbox contents are corrupted, lost, or duplicated.
 
+> **Implementation boundary:** This document describes the target design, not
+> the current live product. The current verifier prototype must not compare
+> source and destination UIDs as identities. It supports Message-ID matching,
+> unique internal-date/size fallback matching, duplicate-ID detection, and
+> missing/extra reporting in isolated tests. Content hashes, folder-aware
+> matching, and live extraction/persistence are not implemented yet.
+
 **Current Limitation:** MailSwiftSync verifies "you have 1,000 messages" but NOT "these are the same 1,000 messages."
 
 **Impact When Implemented:** Enables operators to report:
@@ -93,16 +100,23 @@ CREATE TABLE message_mismatches (
 
 #### From imapsync
 
-imapsync `--debug` output includes per-message details:
+The parser must consume the transfer progress grammar emitted by the pinned
+engine, for example:
 
 ```
-Msg # 1 {size=1234 date="2024-01-01 12:00:00"} ...
-Msg # 1 -> 2 (new UID on host2)
+msg INBOX/5 {279010} copied to backup/INBOX/49 0.57 msgs/s 154.916 KiB/s 272.471 KiB copied
 ```
+
+This provides local source/destination UID mapping and message size only. It
+does not provide Message-ID, INTERNALDATE, or a content hash; those require
+explicit IMAP FETCH extraction. The repository currently has parser contract
+tests for this grammar, but does not claim that a captured 2.314 integration
+log fixture has been validated until the packaged integration container is
+available.
 
 **Implementation:**
 - Add optional imapsync flag in plan: `--debug 2` (message-level output)
-- Parse output for `Msg #` records
+- Parse output for `msg <folder>/<uid> {<size>} copied to <folder>/<uid>` records
 - Extract source UID, destination UID, size, date
 - Cross-reference with final aggregate counts to identify missing/extra
 
@@ -120,7 +134,12 @@ doveadm -u user@example.com fetch -A "uid messageids" MAILBOX "INBOX"
 - Compare sets to identify missing/extra
 - Store in `message_mismatches`
 
-### Verification Approach: Multi-Factor Matching
+### Target Verification Approach: Multi-Factor Matching
+
+The following nine-level reconciliation model is a target design, not a
+currently shipped production capability. Until the extractor supplies the
+required evidence and the live migration path persists the results, these
+labels must not be used as provider compatibility claims or customer proof.
 
 To achieve high-confidence verification, match messages on **combinations** rather than single identifiers:
 
@@ -216,7 +235,7 @@ Overall: 20,498 exact, 2 missing, 1 extra → ACCEPT or REMEDIATE
 
 Update `ImapsyncEvidenceAccumulator`:
 - Add message-UID extraction from imapsync output
-- Parse `Msg #` records and UID mappings
+- Parse `msg <folder>/<uid> {<size>} copied to <folder>/<uid>` records and UID mappings
 - Detect missing/extra/modified messages
 
 Update `DovecotStatusAccumulator`:

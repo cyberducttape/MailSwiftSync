@@ -158,34 +158,30 @@ impl RunbookGenerator {
                 RunbookStep {
                     step_number: 3,
                     action: "Verify Fastmail mailbox is active and IMAP-enabled".to_string(),
-                    why: "Fastmail supports IMAP natively without special configuration".to_string(),
+                    why: "Fastmail supports IMAP natively without special configuration"
+                        .to_string(),
                     success_indicator: "IMAP access confirmed via manual test".to_string(),
                 },
             ],
-            during_migration_monitoring: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Monitor Gmail connection limits".to_string(),
-                    why: "Gmail enforces per-account connection limits".to_string(),
-                    success_indicator: "No persistent connection errors".to_string(),
-                },
-            ],
-            post_migration_verification: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Verify message counts match in MailSwiftSync report".to_string(),
-                    why: "Ensure all messages transferred correctly".to_string(),
-                    success_indicator: "Verification report shows success".to_string(),
-                },
-            ],
-            known_issues: vec![
-                KnownIssue {
-                    issue: "Gmail IMAP connection limits".to_string(),
-                    workaround: "Reduce batch size and increase delay".to_string(),
-                    affected_versions: "All".to_string(),
-                },
-            ],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues".to_string(),
+            during_migration_monitoring: vec![RunbookStep {
+                step_number: 1,
+                action: "Monitor Gmail connection limits".to_string(),
+                why: "Gmail enforces per-account connection limits".to_string(),
+                success_indicator: "No persistent connection errors".to_string(),
+            }],
+            post_migration_verification: vec![RunbookStep {
+                step_number: 1,
+                action: "Verify message counts match in MailSwiftSync report".to_string(),
+                why: "Ensure all messages transferred correctly".to_string(),
+                success_indicator: "Verification report shows success".to_string(),
+            }],
+            known_issues: vec![KnownIssue {
+                issue: "Gmail IMAP connection limits".to_string(),
+                workaround: "Reduce batch size and increase delay".to_string(),
+                affected_versions: "All".to_string(),
+            }],
+            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+                .to_string(),
         }
     }
 
@@ -195,13 +191,15 @@ impl RunbookGenerator {
             pre_migration_checklist: vec![
                 RunbookStep {
                     step_number: 1,
-                    action: "Enable IMAP for source O365 mailbox via Exchange admin center".to_string(),
+                    action: "Enable IMAP for source O365 mailbox via Exchange admin center"
+                        .to_string(),
                     why: "O365 IMAP is disabled by default for security".to_string(),
                     success_indicator: "IMAP shows enabled in mailbox settings".to_string(),
                 },
                 RunbookStep {
                     step_number: 2,
-                    action: "Enable Gmail to accept IMAP connections (IMAP settings in Gmail)".to_string(),
+                    action: "Enable Gmail to accept IMAP connections (IMAP settings in Gmail)"
+                        .to_string(),
                     why: "Gmail requires explicit IMAP enablement".to_string(),
                     success_indicator: "IMAP enabled in Gmail account settings".to_string(),
                 },
@@ -212,113 +210,97 @@ impl RunbookGenerator {
                     success_indicator: "App password created and working".to_string(),
                 },
             ],
-            during_migration_monitoring: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Monitor O365 throttling; reduce batch size if errors occur".to_string(),
-                    why: "O365 enforces strict rate limiting".to_string(),
-                    success_indicator: "No persistent throttling errors".to_string(),
-                },
-            ],
-            post_migration_verification: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Verify MailSwiftSync report shows all messages transferred".to_string(),
-                    why: "Confirm migration completeness".to_string(),
-                    success_indicator: "Verification report passes".to_string(),
-                },
-            ],
+            during_migration_monitoring: vec![RunbookStep {
+                step_number: 1,
+                action: "Monitor O365 throttling; reduce batch size if errors occur".to_string(),
+                why: "O365 enforces strict rate limiting".to_string(),
+                success_indicator: "No persistent throttling errors".to_string(),
+            }],
+            post_migration_verification: vec![RunbookStep {
+                step_number: 1,
+                action: "Verify MailSwiftSync report shows all messages transferred".to_string(),
+                why: "Confirm migration completeness".to_string(),
+                success_indicator: "Verification report passes".to_string(),
+            }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues".to_string(),
+            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+                .to_string(),
         }
     }
 
     fn o365_to_fastmail() -> ProviderRunbook {
         ProviderRunbook {
             provider: "Microsoft 365 → Fastmail".to_string(),
-            pre_migration_checklist: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Enable IMAP for O365 mailbox in Exchange admin center".to_string(),
-                    why: "O365 IMAP is disabled by default".to_string(),
-                    success_indicator: "IMAP enabled".to_string(),
-                },
-            ],
-            during_migration_monitoring: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Monitor O365 throttling".to_string(),
-                    why: "O365 has strict rate limits".to_string(),
-                    success_indicator: "No throttling errors".to_string(),
-                },
-            ],
-            post_migration_verification: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Verify message counts via MailSwiftSync".to_string(),
-                    why: "Confirm all messages transferred".to_string(),
-                    success_indicator: "Verification passes".to_string(),
-                },
-            ],
+            pre_migration_checklist: vec![RunbookStep {
+                step_number: 1,
+                action: "Enable IMAP for O365 mailbox in Exchange admin center".to_string(),
+                why: "O365 IMAP is disabled by default".to_string(),
+                success_indicator: "IMAP enabled".to_string(),
+            }],
+            during_migration_monitoring: vec![RunbookStep {
+                step_number: 1,
+                action: "Monitor O365 throttling".to_string(),
+                why: "O365 has strict rate limits".to_string(),
+                success_indicator: "No throttling errors".to_string(),
+            }],
+            post_migration_verification: vec![RunbookStep {
+                step_number: 1,
+                action: "Verify message counts via MailSwiftSync".to_string(),
+                why: "Confirm all messages transferred".to_string(),
+                success_indicator: "Verification passes".to_string(),
+            }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues".to_string(),
+            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+                .to_string(),
         }
     }
 
     fn fastmail_to_gmail() -> ProviderRunbook {
         ProviderRunbook {
             provider: "Fastmail → Gmail".to_string(),
-            pre_migration_checklist: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Enable Gmail IMAP access".to_string(),
-                    why: "Required for migration".to_string(),
-                    success_indicator: "IMAP enabled".to_string(),
-                },
-            ],
+            pre_migration_checklist: vec![RunbookStep {
+                step_number: 1,
+                action: "Enable Gmail IMAP access".to_string(),
+                why: "Required for migration".to_string(),
+                success_indicator: "IMAP enabled".to_string(),
+            }],
             during_migration_monitoring: vec![],
-            post_migration_verification: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Verify message counts".to_string(),
-                    why: "Ensure completeness".to_string(),
-                    success_indicator: "Verification passes".to_string(),
-                },
-            ],
+            post_migration_verification: vec![RunbookStep {
+                step_number: 1,
+                action: "Verify message counts".to_string(),
+                why: "Ensure completeness".to_string(),
+                success_indicator: "Verification passes".to_string(),
+            }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues".to_string(),
+            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+                .to_string(),
         }
     }
 
     fn fastmail_to_o365() -> ProviderRunbook {
         ProviderRunbook {
             provider: "Fastmail → Microsoft 365".to_string(),
-            pre_migration_checklist: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Verify O365 mailbox has sufficient quota".to_string(),
-                    why: "Prevent quota-full errors".to_string(),
-                    success_indicator: "Quota check passed".to_string(),
-                },
-            ],
-            during_migration_monitoring: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Monitor O365 throttling".to_string(),
-                    why: "O365 enforces rate limits".to_string(),
-                    success_indicator: "No throttling errors".to_string(),
-                },
-            ],
-            post_migration_verification: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Verify MailSwiftSync report".to_string(),
-                    why: "Confirm migration success".to_string(),
-                    success_indicator: "Report shows success".to_string(),
-                },
-            ],
+            pre_migration_checklist: vec![RunbookStep {
+                step_number: 1,
+                action: "Verify O365 mailbox has sufficient quota".to_string(),
+                why: "Prevent quota-full errors".to_string(),
+                success_indicator: "Quota check passed".to_string(),
+            }],
+            during_migration_monitoring: vec![RunbookStep {
+                step_number: 1,
+                action: "Monitor O365 throttling".to_string(),
+                why: "O365 enforces rate limits".to_string(),
+                success_indicator: "No throttling errors".to_string(),
+            }],
+            post_migration_verification: vec![RunbookStep {
+                step_number: 1,
+                action: "Verify MailSwiftSync report".to_string(),
+                why: "Confirm migration success".to_string(),
+                success_indicator: "Report shows success".to_string(),
+            }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues".to_string(),
+            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+                .to_string(),
         }
     }
 
@@ -339,24 +321,21 @@ impl RunbookGenerator {
                     success_indicator: "Test connection successful".to_string(),
                 },
             ],
-            during_migration_monitoring: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Monitor for connection timeouts or errors".to_string(),
-                    why: "Generic IMAP providers vary in stability".to_string(),
-                    success_indicator: "No persistent connection errors".to_string(),
-                },
-            ],
-            post_migration_verification: vec![
-                RunbookStep {
-                    step_number: 1,
-                    action: "Verify message counts via MailSwiftSync report".to_string(),
-                    why: "Confirm migration completeness".to_string(),
-                    success_indicator: "Verification report passes".to_string(),
-                },
-            ],
+            during_migration_monitoring: vec![RunbookStep {
+                step_number: 1,
+                action: "Monitor for connection timeouts or errors".to_string(),
+                why: "Generic IMAP providers vary in stability".to_string(),
+                success_indicator: "No persistent connection errors".to_string(),
+            }],
+            post_migration_verification: vec![RunbookStep {
+                step_number: 1,
+                action: "Verify message counts via MailSwiftSync report".to_string(),
+                why: "Confirm migration completeness".to_string(),
+                success_indicator: "Verification report passes".to_string(),
+            }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues".to_string(),
+            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+                .to_string(),
         }
     }
 }
@@ -377,7 +356,7 @@ mod tests {
     fn generates_o365_to_gmail_runbook() {
         let runbook = RunbookGenerator::generate("O365", "gmail");
         assert_eq!(runbook.provider, "Microsoft 365 → Gmail");
-        assert!(runbook.pre_migration_checklist.len() > 0);
+        assert!(!runbook.pre_migration_checklist.is_empty());
     }
 
     #[test]

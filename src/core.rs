@@ -24,39 +24,39 @@ mod engine;
 mod events;
 mod evidence;
 mod evidence_ops;
-mod message_extraction;
-mod message_verification;
-mod pre_migration_report;
-mod post_migration_report;
-mod provider_intelligence;
-mod recovery_dashboard;
-mod provider_runbooks;
-mod verification_details;
 mod mailboxes;
+#[allow(dead_code)]
+mod message_extraction;
+#[allow(dead_code)]
+mod message_verification;
 mod models;
 mod phases;
 mod policy;
+#[allow(dead_code)]
+mod post_migration_report;
+#[allow(dead_code)]
+mod pre_migration_report;
 mod projects;
+#[allow(dead_code)]
+mod provider_intelligence;
+#[allow(dead_code)]
+mod provider_runbooks;
 mod queries;
 mod recovery;
+#[allow(dead_code)]
+mod recovery_dashboard;
 mod reports;
 mod run_queries;
 mod runs;
 mod state;
+#[allow(dead_code)]
+mod verification_details;
 pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
 pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
     ReportRunSnapshot, VerificationAcceptance,
 };
-pub use message_extraction::{DovecotMessageExtractor, ExtractedMessage, ImapsyncMessageExtractor};
-pub use message_verification::{MessageMismatch, MessageVerification, MismatchType, VerificationSummary};
-pub use pre_migration_report::{MigrationReadiness, PreMigrationRisk, RiskWarning, WarningSeverity};
-pub use post_migration_report::{ExceptionSeverity, MigrationException, PostMigrationReport};
-pub use provider_intelligence::{ProviderErrorClassifier, ProviderErrorType, ProviderThrottleConfig};
-pub use recovery_dashboard::{InterruptionReason, RecoveryDashboard, RecoveryJobSummary, RecoveryPlanner, RecoveryState};
-pub use provider_runbooks::{KnownIssue, ProviderRunbook, RunbookGenerator, RunbookStep};
-pub use verification_details::{MismatchCounts, MismatchDetail, MismatchSummary, VerificationDetail, mismatch_remediation, mismatch_severity, mismatch_type_description};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,
     ProjectListItem, RunListItem, RunSummary,

@@ -27,13 +27,14 @@ This document tracks progress toward MailSwiftSync 1.0 production-ready release.
 
 ---
 
-### 2. ✅ Message-Level Verification Framework
+### 2. 🔄 Message-Level Verification Framework
 
-**Status:** Design complete; implementation roadmap established
+**Status:** Prototype logic and schema exist; production execution is not yet integrated
 
 **Completed:**
 - [x] Created `docs/message-level-verification-design.md` (293 lines)
 - [x] Defined data model (MailboxEvidence extensions + message_mismatches table)
+- [x] Added isolated extractor and mismatch-classification prototypes with tests
 - [x] Documented data extraction from imapsync and Dovecot
 - [x] Outlined mismatch classification (missing/extra/modified)
 - [x] Specified operator verification workflow
@@ -41,15 +42,14 @@ This document tracks progress toward MailSwiftSync 1.0 production-ready release.
 - [x] Provided example scenario showing real-world value
 
 **Next Steps (Phase 2 Implementation):**
-- [ ] Add SQLite schema changes (missing_messages, extra_messages fields)
-- [ ] Create message_mismatches table
+- [ ] Connect live engine output to source/destination message extraction
+- [ ] Persist extracted mismatches and counters from real runs
 - [ ] Extend ImapsyncEvidenceAccumulator to parse message-level output
 - [ ] Implement Dovecot message extraction (doveadm fetch UIDs)
-- [ ] Add comparison logic and mismatch persistence
 - [ ] Integrate into verification UI (read-only mismatch display)
 - [ ] Add integration test with intentional message loss
 
-**Impact:** Unblocks "is the migration complete?" gate. Current aggregate-only verification can miss selective message loss in specific mailboxes. Message-level verification detects these problems before operator accepts results.
+**Impact:** This remains a production gate. Current aggregate-only verification can miss selective message loss in specific mailboxes. The prototype can inform future implementation, but it does not detect these problems in live runs yet.
 
 ---
 
@@ -193,7 +193,7 @@ This document tracks progress toward MailSwiftSync 1.0 production-ready release.
    - Publish matrix with ≥2 real provider rows
 
 2. **Start Phase 2 implementation work** (Tasks #2, #5)
-   - Begin message-level verification schema/extractors (can work in parallel)
+- Wire message-level verification schema/extractors into the migration controller (can work in parallel)
    - Begin scheduler CLI enhancement (orthogonal to message-level)
 
 ### Blocking 1.0 (Must Have)

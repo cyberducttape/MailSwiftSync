@@ -1,8 +1,5 @@
 /// Comprehensive message verification integration tests.
 /// Validates the complete message-level verification pipeline.
-
-use std::collections::HashMap;
-
 // Note: This would import from mailswiftsync crate in real implementation
 // For now, we test the verification logic patterns
 
@@ -11,13 +8,13 @@ fn verify_exact_match_detection() {
     // Scenario: Source and destination have identical messages
     // Expected: All messages marked as exact_match
 
-    let source_messages = vec![
+    let source_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-def", "2024-01-02", 2000),
         ("msg3", "hash-ghi", "2024-01-03", 3000),
     ];
 
-    let dest_messages = vec![
+    let dest_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-def", "2024-01-02", 2000),
         ("msg3", "hash-ghi", "2024-01-03", 3000),
@@ -33,13 +30,13 @@ fn verify_missing_message_detection() {
     // Scenario: Message exists in source but not destination
     // Expected: Marked as missing with source details preserved
 
-    let source_messages = vec![
+    let source_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-def", "2024-01-02", 2000),
         ("msg3", "hash-ghi", "2024-01-03", 3000), // Missing on destination
     ];
 
-    let dest_messages = vec![
+    let dest_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-def", "2024-01-02", 2000),
     ];
@@ -62,12 +59,12 @@ fn verify_extra_message_detection() {
     // Scenario: Message exists in destination but not source
     // Expected: Marked as extra (may be post-migration addition)
 
-    let source_messages = vec![
+    let source_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-def", "2024-01-02", 2000),
     ];
 
-    let dest_messages = vec![
+    let dest_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-def", "2024-01-02", 2000),
         ("msg3", "hash-new", "2024-01-05", 5000), // Extra on destination
@@ -91,12 +88,12 @@ fn verify_content_mismatch_detection() {
     // Scenario: Message with same UID but different content
     // Expected: Marked as changed, size/hash differ
 
-    let source_messages = vec![
+    let source_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-def", "2024-01-02", 2000),
     ];
 
-    let dest_messages = vec![
+    let dest_messages = [
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg2", "hash-modified", "2024-01-02", 2500), // Size changed
     ];
@@ -104,10 +101,10 @@ fn verify_content_mismatch_detection() {
     // Detect same UID with different hash/size
     let mut changed_count = 0;
     for src_msg in &source_messages {
-        if let Some(dst_msg) = dest_messages.iter().find(|m| m.0 == src_msg.0) {
-            if src_msg.1 != dst_msg.1 || src_msg.3 != dst_msg.3 {
-                changed_count += 1;
-            }
+        if let Some(dst_msg) = dest_messages.iter().find(|m| m.0 == src_msg.0)
+            && (src_msg.1 != dst_msg.1 || src_msg.3 != dst_msg.3)
+        {
+            changed_count += 1;
         }
     }
 
@@ -177,11 +174,6 @@ fn verify_duplication_detection() {
     // Scenario: Message duplicated on destination
     // Expected: Clearly identify duplicates
 
-    let source_messages = vec![
-        ("msg1", "hash-abc", "2024-01-01", 1000),
-        ("msg2", "hash-def", "2024-01-02", 2000),
-    ];
-
     let dest_messages = vec![
         ("msg1", "hash-abc", "2024-01-01", 1000),
         ("msg1-dup", "hash-abc", "2024-01-01", 1000), // Duplicate
@@ -207,17 +199,17 @@ fn verify_mixed_scenario() {
     // Expected: Accurate categorization of all message types
 
     let source_messages = vec![
-        ("msg1", "hash-abc", "2024-01-01", 1000),   // Exact match
-        ("msg2", "hash-def", "2024-01-02", 2000),   // Exact match
-        ("msg3", "hash-ghi", "2024-01-03", 3000),   // Missing on destination
-        ("msg4", "hash-jkl", "2024-01-04", 4000),   // Size changed
+        ("msg1", "hash-abc", "2024-01-01", 1000), // Exact match
+        ("msg2", "hash-def", "2024-01-02", 2000), // Exact match
+        ("msg3", "hash-ghi", "2024-01-03", 3000), // Missing on destination
+        ("msg4", "hash-jkl", "2024-01-04", 4000), // Size changed
     ];
 
-    let dest_messages = vec![
-        ("msg1", "hash-abc", "2024-01-01", 1000),   // Exact match
-        ("msg2", "hash-def", "2024-01-02", 2000),   // Exact match
-        ("msg4", "hash-jkl", "2024-01-04", 4500),   // Size changed
-        ("msg5", "hash-mno", "2024-01-05", 5000),   // Extra on destination
+    let dest_messages = [
+        ("msg1", "hash-abc", "2024-01-01", 1000), // Exact match
+        ("msg2", "hash-def", "2024-01-02", 2000), // Exact match
+        ("msg4", "hash-jkl", "2024-01-04", 4500), // Size changed
+        ("msg5", "hash-mno", "2024-01-05", 5000), // Extra on destination
     ];
 
     // Count each type
@@ -260,8 +252,10 @@ fn verify_confidence_levels_calculation() {
 
     impl MatchResult {
         fn confidence_level(&self) -> f64 {
-            let total = self.exact_match_count + self.content_match_count
-                + self.date_size_match_count + self.message_id_only_count;
+            let total = self.exact_match_count
+                + self.content_match_count
+                + self.date_size_match_count
+                + self.message_id_only_count;
             if total == 0 {
                 return 0.0;
             }
@@ -351,9 +345,9 @@ fn verify_message_with_large_attachments() {
     // Expected: Correctly identified by size, not truncated
 
     let large_message_size = 10_000_000; // 10MB
-    let small_message_size = 50_000;     // 50KB
+    let small_message_size = 50_000; // 50KB
 
-    let messages = vec![
+    let messages = [
         ("msg1", "hash-abc", "2024-01-01", small_message_size),
         ("msg2", "hash-def", "2024-01-02", large_message_size),
         ("msg3", "hash-ghi", "2024-01-03", small_message_size),

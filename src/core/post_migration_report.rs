@@ -49,17 +49,19 @@ impl PostMigrationReport {
                 id: format!("missing-{}", uuid::Uuid::new_v4()),
                 severity: ExceptionSeverity::Warning,
                 category: "missing_messages".to_string(),
-                message: format!("{} message(s) present in source but missing from destination", missing_count),
+                message: format!(
+                    "{} message(s) present in source but missing from destination",
+                    missing_count
+                ),
                 affected_folder: None,
                 affected_message_id: None,
             });
 
             remediation_steps.push(
-                "Review missing messages report: identify if exclusions were applied".to_string()
+                "Review missing messages report: identify if exclusions were applied".to_string(),
             );
-            remediation_steps.push(
-                "Run selective re-sync for missing messages if required".to_string()
-            );
+            remediation_steps
+                .push("Run selective re-sync for missing messages if required".to_string());
         }
 
         // Extra messages
@@ -68,13 +70,17 @@ impl PostMigrationReport {
                 id: format!("extra-{}", uuid::Uuid::new_v4()),
                 severity: ExceptionSeverity::Info,
                 category: "extra_messages".to_string(),
-                message: format!("{} extra message(s) in destination (may be post-migration additions)", extra_count),
+                message: format!(
+                    "{} extra message(s) in destination (may be post-migration additions)",
+                    extra_count
+                ),
                 affected_folder: None,
                 affected_message_id: None,
             });
 
             remediation_steps.push(
-                "Verify extra messages are post-migration additions (expected behavior)".to_string()
+                "Verify extra messages are post-migration additions (expected behavior)"
+                    .to_string(),
             );
         }
 
@@ -89,11 +95,11 @@ impl PostMigrationReport {
                 affected_message_id: None,
             });
 
+            remediation_steps
+                .push("Review message mismatches: verify no data corruption occurred".to_string());
             remediation_steps.push(
-                "Review message mismatches: verify no data corruption occurred".to_string()
-            );
-            remediation_steps.push(
-                "Check provider-specific content modifications (e.g., Gmail header rewrites)".to_string()
+                "Check provider-specific content modifications (e.g., Gmail header rewrites)"
+                    .to_string(),
             );
         }
 
@@ -103,7 +109,10 @@ impl PostMigrationReport {
                 id: format!("skipped-{}", uuid::Uuid::new_v4()),
                 severity: ExceptionSeverity::Info,
                 category: "skipped".to_string(),
-                message: format!("{} message(s) skipped (excluded by rules or already present)", total_skipped),
+                message: format!(
+                    "{} message(s) skipped (excluded by rules or already present)",
+                    total_skipped
+                ),
                 affected_folder: None,
                 affected_message_id: None,
             });
@@ -144,8 +153,11 @@ mod tests {
     fn missing_messages_create_warning() {
         let report = PostMigrationReport::generate(1000, 0, 0, 5, 0, 0);
         assert!(!report.is_successful());
-        let has_missing = report.exceptions.iter().any(|e| e.category == "missing_messages");
+        let has_missing = report
+            .exceptions
+            .iter()
+            .any(|e| e.category == "missing_messages");
         assert!(has_missing);
-        assert!(report.remediation_steps.len() > 0);
+        assert!(!report.remediation_steps.is_empty());
     }
 }
