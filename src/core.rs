@@ -30,6 +30,7 @@ mod pre_migration_report;
 mod post_migration_report;
 mod provider_intelligence;
 mod recovery_dashboard;
+mod provider_runbooks;
 mod mailboxes;
 mod models;
 mod phases;
@@ -53,6 +54,7 @@ pub use pre_migration_report::{MigrationReadiness, PreMigrationRisk, RiskWarning
 pub use post_migration_report::{ExceptionSeverity, MigrationException, PostMigrationReport};
 pub use provider_intelligence::{ProviderErrorClassifier, ProviderErrorType, ProviderThrottleConfig};
 pub use recovery_dashboard::{InterruptionReason, RecoveryDashboard, RecoveryJobSummary, RecoveryPlanner, RecoveryState};
+pub use provider_runbooks::{KnownIssue, ProviderRunbook, RunbookGenerator, RunbookStep};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,
     ProjectListItem, RunListItem, RunSummary,
