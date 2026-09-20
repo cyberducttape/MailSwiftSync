@@ -24,6 +24,8 @@ mod engine;
 mod events;
 mod evidence;
 mod evidence_ops;
+mod message_extraction;
+mod message_verification;
 mod mailboxes;
 mod models;
 mod phases;
@@ -41,6 +43,8 @@ pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
     ReportRunSnapshot, VerificationAcceptance,
 };
+pub use message_extraction::{DovecotMessageExtractor, ExtractedMessage, ImapsyncMessageExtractor};
+pub use message_verification::{MessageMismatch, MessageVerification, MismatchType, VerificationSummary};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,
     ProjectListItem, RunListItem, RunSummary,
