@@ -114,7 +114,24 @@ fn migration_backup_path(path: &Path, schema_version: i64) -> PathBuf {
 /// The later chmod calls still repair existing databases and sidecars, but
 /// this removes the initial permissive-umask window for a new ledger.
 fn prepare_database_file(path: &Path) -> std::io::Result<()> {
+    match path.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "state database path is a symbolic link",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     if path.exists() {
+        if !path.metadata()?.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "state database path is not a regular file",
+            ));
+        }
         return Ok(());
     }
     let result = {

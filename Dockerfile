@@ -1,10 +1,11 @@
 # Version-controlled Linux headless image. The desktop controller remains available
 # in the binary, but this image deliberately defaults to the CLI help instead
 # of attempting to open a display server. Note: base images use mutable tags
-# (debian:bookworm-slim, rust:1.92-bookworm) and apt repositories are live,
-# so rebuilds may not be byte-for-byte reproducible. imapsync .deb is SHA-256 pinned.
+# The Debian and Rust bases are pinned by OCI manifest digest; apt repositories
+# remain live, so rebuilds still require an explicit package/release record.
+# The imapsync .deb is SHA-256 pinned.
 
-FROM debian:bookworm-slim AS imapsync-package
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS imapsync-package
 
 # Debian Bookworm does not ship imapsync in its configured repositories. Pin
 # the upstream Debian artifact and verify it before it enters the runtime
@@ -19,14 +20,14 @@ RUN apt-get update \
         --output /tmp/imapsync.deb \
     && echo "${IMAPSYNC_SHA256}  /tmp/imapsync.deb" | sha256sum --check
 
-FROM rust:1.92-bookworm AS builder
+FROM rust:1.92-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
 RUN cargo build --locked --release
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 
 ARG DOVECOT_VERSION=1:2.3.19.1+dfsg1-2.1+deb12u6
 

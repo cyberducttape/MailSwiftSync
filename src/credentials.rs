@@ -392,6 +392,15 @@ pub fn restrict_file_permissions(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, permissions)
 }
 
+/// Apply owner-only permissions to an already-open file descriptor. This is
+/// the safe primitive for lock/state files: a pathname chmod can be redirected
+/// by a symlink swap after the file has been opened.
+#[cfg(unix)]
+pub fn restrict_open_file_permissions(file: &fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+}
+
 #[cfg(windows)]
 pub fn restrict_file_permissions(path: &Path) -> std::io::Result<()> {
     restrict_windows_acl(path, false)

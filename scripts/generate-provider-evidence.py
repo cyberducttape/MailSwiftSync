@@ -3,7 +3,7 @@
 Convert customer-proof JSON into provider evidence records for release gate validation.
 
 Usage:
-  generate-provider-evidence.py <customer-proof.json> <provider> <testing-phase> \
+  generate-provider-evidence.py <customer-proof.json> <source-provider> <destination-provider> <testing-phase> \
     [--engine <name>] [--engine-version <version>] [--output <evidence.json>]
 
 The generated evidence records link back to the customer-proof via digest reference
@@ -46,7 +46,8 @@ def compute_file_digest(file_path: str) -> str:
         return "unknown"
 
 
-def generate_evidence(proof_path: str, provider: str, phase: str, engine: str = "imapsync", engine_version: str = "2.314") -> dict:
+def generate_evidence(proof_path: str, source_provider: str, destination_provider: str,
+                      phase: str, engine: str = "imapsync", engine_version: str = "2.314") -> dict:
     """Convert customer-proof into provider evidence record."""
 
     try:
@@ -115,7 +116,7 @@ def generate_evidence(proof_path: str, provider: str, phase: str, engine: str = 
     project = proof.get("project", {})
 
     evidence = {
-        "provider": provider,
+        "provider": f"{source_provider}->{destination_provider}",
         "tested_at": now,
         "testing_phase": phase,
         "source_version": project.get("source_version", "unknown"),
@@ -138,8 +139,8 @@ def generate_evidence(proof_path: str, provider: str, phase: str, engine: str = 
             "organization": "Test Harness",
         },
         "notes": f"Generated from customer-proof: {Path(proof_path).name}",
-        "source_provider": provider,
-        "destination_provider": project.get("destination_provider", "unknown"),
+        "source_provider": source_provider,
+        "destination_provider": destination_provider,
         "source_auth_method": project.get("source_auth_method", "password"),
         "destination_auth_method": project.get("destination_auth_method", "password"),
         "mailswiftsync_commit": git_commit,
@@ -153,23 +154,24 @@ def generate_evidence(proof_path: str, provider: str, phase: str, engine: str = 
 
 
 def main():
-    if len(sys.argv) < 4:
+    if len(sys.argv) < 5:
         print(
-            "Usage: generate-provider-evidence.py <customer-proof.json> <provider> <testing-phase> "
+            "Usage: generate-provider-evidence.py <customer-proof.json> <source-provider> <destination-provider> <testing-phase> "
             "[--engine <name>] [--engine-version <version>] [--output <evidence.json>]",
             file=sys.stderr,
         )
         sys.exit(2)
 
     proof_path = sys.argv[1]
-    provider = sys.argv[2]
-    phase = sys.argv[3]
+    source_provider = sys.argv[2]
+    destination_provider = sys.argv[3]
+    phase = sys.argv[4]
     output_path = None
     engine = "imapsync"
     engine_version = "2.314"
 
     # Parse optional arguments
-    i = 4
+    i = 5
     while i < len(sys.argv):
         if sys.argv[i] == "--output" and i + 1 < len(sys.argv):
             output_path = sys.argv[i + 1]
@@ -184,7 +186,9 @@ def main():
             i += 1
 
     try:
-        evidence = generate_evidence(proof_path, provider, phase, engine, engine_version)
+        evidence = generate_evidence(
+            proof_path, source_provider, destination_provider, phase, engine, engine_version
+        )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

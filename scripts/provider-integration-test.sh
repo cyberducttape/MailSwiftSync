@@ -32,6 +32,10 @@ if [[ -z "$provider" ]]; then
   echo "Usage: $0 <provider> (gmail|m365|fastmail)" >&2
   exit 1
 fi
+source_provider="${MAILSWIFTSYNC_SOURCE_PROVIDER:-$provider}"
+destination_provider="${MAILSWIFTSYNC_DESTINATION_PROVIDER:-$provider}"
+[[ "$source_provider" == "m365" ]] && source_provider="microsoft365"
+[[ "$destination_provider" == "m365" ]] && destination_provider="microsoft365"
 
 # Check required environment
 for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT \
@@ -213,7 +217,7 @@ export_phase_evidence() {
   # Generate provider evidence record
   local evidence="$evidence_dir/${run_name}.json"
   python3 "$(dirname "$0")/generate-provider-evidence.py" \
-    "$proof" "$provider" "$phase" --output "$evidence" || {
+    "$proof" "$source_provider" "$destination_provider" "$phase" --output "$evidence" || {
     echo "Warning: Could not generate evidence record for $phase" >&2
     return 1
   }

@@ -2,6 +2,26 @@
 
 MailSwiftSync should earn a stable 1.0 label through evidence, not feature count.
 
+## Enterprise artifact-signing gate
+
+Tagged releases are blocked unless the release environment supplies platform
+signing material. The workflow signs Linux checksums with the configured GPG
+key, signs Windows binaries with timestamped Authenticode, signs macOS
+binaries with Developer ID, and submits macOS archives to Apple notarization.
+Required CI inputs are `RELEASE_GPG_PRIVATE_KEY_BASE64`,
+`RELEASE_GPG_KEY_ID`, `WINDOWS_SIGNING_CERT_BASE64`,
+`WINDOWS_SIGNING_CERT_PASSWORD`, `WINDOWS_TIMESTAMP_URL`,
+`MACOS_SIGNING_CERT_BASE64`, `MACOS_SIGNING_CERT_PASSWORD`,
+`MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and
+`APPLE_TEAM_ID`. They are deployment secrets, not repository defaults; missing
+inputs intentionally fail the tag workflow instead of publishing unsigned
+artifacts.
+
+The container build uses immutable OCI digests for its Debian and Rust base
+images. The imapsync package is independently SHA-256 verified before
+installation. Base-image digest updates are deliberate supply-chain changes
+and require the corresponding integration run.
+
 ## Completed in the current hardening pass
 
 - Remote Dovecot password-in-argv execution is rejected rather than exposed by

@@ -40,16 +40,18 @@ if not isinstance(providers, list) or not providers:
 seen = set()
 for entry in providers:
     required = entry.get("required_phases")
-    values = [entry.get("provider"), entry.get("engine"), entry.get("engine_version")]
+    values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version")]
     if not all(isinstance(value, str) and value for value in values):
-        raise SystemExit("each provider policy entry needs provider, engine, and engine_version")
+        raise SystemExit("each provider policy entry needs pair, source_provider, destination_provider, engine, and engine_version")
     if not isinstance(required, list) or not required or not all(isinstance(value, str) and value for value in required):
-        raise SystemExit(f"{entry.get('provider', '<unknown>')}: required_phases must be non-empty strings")
-    if entry["provider"] in seen:
-        raise SystemExit(f"duplicate provider policy entry: {entry['provider']}")
-    seen.add(entry["provider"])
+        raise SystemExit(f"{entry.get('pair', '<unknown>')}: required_phases must be non-empty strings")
+    if entry["pair"] in seen:
+        raise SystemExit(f"duplicate provider-pair policy entry: {entry['pair']}")
+    seen.add(entry["pair"])
     print("\t".join([
-        entry["provider"],
+        entry["pair"],
+        entry["source_provider"],
+        entry["destination_provider"],
         "true" if entry.get("release_required") is True else "false",
         entry["engine"],
         entry["engine_version"],
@@ -67,9 +69,9 @@ mapfile -t EVIDENCE_FILES < <(find "$EVIDENCE_DIR" -maxdepth 1 -type f -name '*.
 declare -a FAILURES=()
 
 for row in "${POLICY_ROWS[@]}"; do
-  IFS=$'\t' read -r provider release_required expected_engine expected_version required_phases <<< "$row"
+  IFS=$'\t' read -r pair source_provider destination_provider release_required expected_engine expected_version required_phases <<< "$row"
   if [[ "$MODE" == "release" && "$release_required" != "true" ]]; then
-    echo "Skipped non-release provider: $provider"
+    echo "Skipped non-release provider pair: $pair"
     continue
   fi
   provider_files=()
@@ -80,23 +82,24 @@ import json
 import sys
 try:
     with open(sys.argv[1], encoding="utf-8") as handle:
-        value = json.load(handle).get("provider", "")
+        evidence = json.load(handle)
+        value = f"{evidence.get('source_provider', '')}->{evidence.get('destination_provider', '')}"
 except (OSError, json.JSONDecodeError):
-    value = ""
+        value = ""
 print(value)
 PY
 )
-    if [[ "$file_provider" == "$provider" ]]; then
+    if [[ "$file_provider" == "$pair" || "$file_provider" == "$source_provider->$destination_provider" ]]; then
       provider_files+=("$evidence_file")
     fi
   done
 
   if [[ ${#provider_files[@]} -eq 0 ]]; then
-    FAILURES+=("$provider: no evidence files")
+    FAILURES+=("$pair: no evidence files")
     continue
   fi
 
-  policy_result=$(python3 - "$SCHEMA_FILE" "$provider" "$expected_engine" "$expected_version" "$required_phases" "${provider_files[@]}" <<'PY'
+policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
 import sys
 
@@ -106,7 +109,7 @@ try:
 except ImportError:
     has_jsonschema = False
 
-schema_file, provider, expected_engine, expected_version, phases_csv, *files = sys.argv[1:]
+schema_file, pair, source_provider, destination_provider, expected_engine, expected_version, phases_csv, *files = sys.argv[1:]
 required_phases = set(phases_csv.split(","))
 seen_phases = set()
 errors = []
@@ -137,15 +140,15 @@ for filename in files:
             continue
 
     required_root = {
-        "provider", "tested_at", "testing_phase", "source_version",
+        "provider", "source_provider", "destination_provider", "tested_at", "testing_phase", "source_version",
         "destination_version", "engine", "engine_version", "test_summary", "results",
     }
     missing_root = sorted(required_root - evidence.keys())
     if missing_root:
         errors.append(f"{filename}: missing required fields: {', '.join(missing_root)}")
         continue
-    if evidence.get("provider") != provider:
-        errors.append(f"{filename}: provider does not match policy")
+    if evidence.get("source_provider") != source_provider or evidence.get("destination_provider") != destination_provider:
+        errors.append(f"{filename}: source/destination provider pair does not match policy pair {pair}")
     if evidence.get("testing_phase") not in {"dry_pilot", "live_pilot", "recovery_test", "edge_case"}:
         errors.append(f"{filename}: testing_phase is not a supported evidence phase")
     if evidence.get("engine") != expected_engine:
@@ -182,13 +185,13 @@ for error in errors:
 PY
   )
   while IFS= read -r error; do
-    [[ -n "$error" ]] && FAILURES+=("$provider: $error")
+    [[ -n "$error" ]] && FAILURES+=("$pair: $error")
   done <<< "$policy_result"
 
   if [[ "$release_required" == "true" ]]; then
-    echo "Checked release-required provider: $provider"
+    echo "Checked release-required provider pair: $pair"
   else
-    echo "Checked non-release provider: $provider"
+    echo "Checked non-release provider pair: $pair"
   fi
 done
 
