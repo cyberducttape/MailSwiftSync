@@ -1,7 +1,7 @@
 # MailSwiftSync Production Readiness Status
 
 **Last Updated:** September 20, 2026  
-**Test Coverage:** 395 tests (372 core + 9 doc validation + 14 integration)
+**Test Coverage:** 393 tests (370 core + 9 doc validation + 14 integration)
 **Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
 
 > **Adoption-critical clarification:** A passing unit or integration test for a
@@ -61,7 +61,7 @@ prototype verification/guidance subsystems into the migration path.
 ### Error Handling ⚠️ PARTIAL
 | Scenario | Status | Handling |
 |----------|--------|----------|
-| Rate limiting | ⚠️ Generic controller handling | Provider classifier is not wired; configured engine/controller limits apply |
+| Rate limiting | ⚠️ Configured limits + generic retry | Profile-supplied imapsync limits apply; no provider-specific rate constants or adaptive controller are claimed |
 | Network timeouts | ✅ | Process and webhook timeout paths are wired |
 | Authentication failures | ✅ | Clear error with remediation steps |
 | Connection exhaustion | ✅ | Provider-specific connection pool limits |
@@ -82,7 +82,7 @@ prototype verification/guidance subsystems into the migration path.
 
 ### Unit Tests: 364
 - Core verification logic
-- Provider intelligence (error classification, throttling)
+- Provider intelligence (observed-signal classification prototype)
 - Pre/post-migration reports
 - Recovery state management
 - Runbook generation
@@ -111,7 +111,7 @@ prototype verification/guidance subsystems into the migration path.
 - Empty mailbox handling
 - Folder structure preservation
 
-**Total: 395 tests — 100% pass rate**
+**Total: 393 tests — 100% pass rate**
 
 These tests establish library behavior and controller invariants; they do not
 establish that every tested library module is reachable from a live migration.
@@ -204,14 +204,14 @@ establish that every tested library module is reachable from a live migration.
 
 ### Completed (This Release)
 - ⚠️ Message-level verification prototype and design (not live-wired)
-- ⚠️ Provider classification/throttling prototype (not live-wired)
+- ⚠️ Observed provider-signal classification prototype (adaptive control not live-wired)
 - ✅ Durable controller recovery and maintenance-window supervision
 - ⚠️ Recovery dashboard/planner prototype (not UI/CLI-wired)
 - ⚠️ Provider runbook generation prototype (not UI/CLI-wired)
 - ⚠️ Pre/post-migration reporting helpers (not live-wired)
 - ✅ Comprehensive setup documentation
 - ✅ OAuth token lifecycle management
-- ✅ 395 automated tests
+- ✅ 393 automated tests
 
 ### Recommended (Next Release)
 - 🔲 Live provider validation (Gmail, O365, Fastmail)
@@ -242,7 +242,7 @@ establish that every tested library module is reachable from a live migration.
 8. Export customer proof for audit trail
 
 ### For Developers
-1. Run test suite: `cargo test` (395 tests)
+1. Run test suite: `cargo test` (393 tests)
 2. Review PROVIDER_SETUP.md and OAUTH_SETUP.md
 3. Check provider_runbooks.rs for setup requirements
 4. Review verification_details.rs for mismatch types

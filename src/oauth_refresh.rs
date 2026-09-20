@@ -11,20 +11,12 @@
 //! hand. Refresh-token rotation (a provider issuing a new refresh token with
 //! every exchange) is honored and persisted by the caller.
 use crate::credentials::SecretString;
-use rustls::pki_types::ServerName;
-use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use std::{
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{io::Read, time::Duration};
 
 /// Bound on the token endpoint response so a hostile or misbehaving endpoint
 /// cannot exhaust memory during an unattended refresh.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const REFRESH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const REFRESH_READ_TIMEOUT: Duration = Duration::from_secs(20);
 const REFRESH_TOTAL_BUDGET: Duration = Duration::from_secs(30);
 
 pub(crate) struct RefreshRequest<'a> {
@@ -116,101 +108,55 @@ pub(crate) struct RefreshedToken {
     pub(crate) expires_in: Option<u64>,
 }
 
-/// Exchange a refresh token for a fresh access token over a fresh TLS
-/// connection. Only `https://` endpoints are accepted; a plaintext token
-/// endpoint would hand a long-lived credential to anyone on the network path.
+/// Exchange a refresh token for a fresh access token over a bounded HTTPS
+/// client. Redirects are disabled so a token cannot be forwarded to another
+/// origin, and Rustls provides certificate and hostname validation.
 pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<RefreshedToken, String> {
-    let (host, port, path) = parse_https_url(request.token_endpoint)?;
+    let endpoint = reqwest::Url::parse(request.token_endpoint)
+        .map_err(|error| format!("invalid OAuth token endpoint: {error}"))?;
+    if endpoint.scheme() != "https" {
+        return Err("the OAuth token endpoint must use https://".to_owned());
+    }
+    if endpoint.username() != "" || endpoint.password().is_some() {
+        return Err("the OAuth token endpoint must not contain user information".to_owned());
+    }
+    let host = endpoint
+        .host_str()
+        .ok_or_else(|| "the OAuth token endpoint is missing a host".to_owned())?
+        .to_owned();
     let body = build_refresh_body(request);
-
-    let address = format!("{host}:{port}");
-    let sockets = address
-        .to_socket_addrs()
-        .map_err(|error| format!("{host}: {error}"))?
-        .collect::<Vec<_>>();
-    if sockets.is_empty() {
-        return Err(format!("{host}: no address found for token endpoint"));
-    }
-    let mut last_error = None;
-    let mut tcp = None;
-    for socket in sockets {
-        match TcpStream::connect_timeout(&socket, REFRESH_CONNECT_TIMEOUT) {
-            Ok(stream) => {
-                tcp = Some(stream);
-                break;
-            }
-            Err(error) => last_error = Some(error),
-        }
-    }
-    let tcp = tcp.ok_or_else(|| {
-        format!(
-            "{host}: could not connect to the token endpoint: {}",
-            last_error
-                .map(|error| error.to_string())
-                .unwrap_or_else(|| "unknown connection error".into())
+    let client = reqwest::blocking::Client::builder()
+        .use_rustls_tls()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(REFRESH_CONNECT_TIMEOUT)
+        .timeout(REFRESH_TOTAL_BUDGET)
+        .build()
+        .map_err(|error| format!("{host}: could not build HTTPS client: {error}"))?;
+    let mut response = client
+        .post(endpoint)
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
         )
-    })?;
-    tcp.set_read_timeout(Some(REFRESH_READ_TIMEOUT))
-        .map_err(|error| error.to_string())?;
-
-    let roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let name = ServerName::try_from(host.clone())
-        .map_err(|error| format!("{host}: invalid TLS server name: {error}"))?;
-    let connection = ClientConnection::new(Arc::new(config), name)
-        .map_err(|error| format!("{host}: TLS configuration failed: {error}"))?;
-    let mut stream = StreamOwned::new(connection, tcp);
-    stream.conn.complete_io(&mut stream.sock).map_err(|error| {
-        format!("{host}: TLS handshake with the token endpoint failed: {error}")
-    })?;
-
-    let host_header = if port == 443 {
-        host.clone()
-    } else {
-        format!("{host}:{port}")
-    };
-    let request_text = format!(
-        "POST {path} HTTP/1.1\r\n\
-         Host: {host_header}\r\n\
-         Content-Type: application/x-www-form-urlencoded\r\n\
-         Content-Length: {}\r\n\
-         Accept: application/json\r\n\
-         Connection: close\r\n\
-         User-Agent: mailswiftsync-oauth-refresh\r\n\
-         \r\n\
-         {body}",
-        body.len()
-    );
-    stream
-        .write_all(request_text.as_bytes())
-        .map_err(|error| format!("{host}: could not send the token refresh request: {error}"))?;
-
-    let raw = read_bounded_response(&mut stream, REFRESH_TOTAL_BUDGET)
-        .map_err(|error| format!("{host}: {error}"))?;
-    let (status_line, response_body) = split_http_response(&raw)?;
-    parse_token_response(&status_line, &response_body)
-}
-
-fn read_bounded_response<S: Read>(stream: &mut S, budget: Duration) -> Result<String, String> {
-    let started = Instant::now();
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::USER_AGENT, "mailswiftsync-oauth-refresh")
+        .body(body)
+        .send()
+        .map_err(|error| format!("{host}: token endpoint request failed: {error}"))?;
+    let status = response.status().as_u16();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(format!(
+            "{host}: token endpoint response exceeded {MAX_RESPONSE_BYTES} bytes"
+        ));
+    }
     let mut raw = Vec::new();
     let mut buffer = [0_u8; 4096];
     loop {
-        if started.elapsed() > budget {
-            return Err("token endpoint response exceeded the refresh time budget".into());
-        }
-        let count = match stream.read(&mut buffer) {
+        let count = match response.read(&mut buffer) {
             Ok(count) => count,
-            // A peer that closes the raw connection immediately after its
-            // final TLS record, without a closing `close_notify` alert, is
-            // common for `Connection: close` responses (seen in practice
-            // against at least one real HTTPS endpoint) and is not in
-            // itself evidence of truncation: rustls already validates every
-            // record's integrity before handing back plaintext, so bytes
-            // read up to this point are exactly what the peer sent.
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(error) => return Err(error.to_string()),
         };
         if count == 0 {
@@ -223,31 +169,8 @@ fn read_bounded_response<S: Read>(stream: &mut S, budget: Duration) -> Result<St
             ));
         }
     }
-    Ok(String::from_utf8_lossy(&raw).into_owned())
-}
-
-/// Split a raw HTTP/1.1 response into its status line and body.
-///
-/// LIMITATION: Chunked transfer encoding is not supported. While this refresh path
-/// sends `Connection: close`, RFC 7230 permits servers to respond with
-/// `Transfer-Encoding: chunked` regardless. OAuth providers, reverse proxies,
-/// enterprise gateways, CDN layers, and webhook services can change response
-/// framing independently. This custom HTTP/1.1 implementation lacks proper handling
-/// of redirects, URI parsing, connection timeouts, header parsing, and response
-/// framing. For production deployments with strict interoperability requirements,
-/// consider using a mature HTTP client like `reqwest` with Rustls instead of this
-/// homemade network protocol implementation.
-fn split_http_response(raw: &str) -> Result<(String, String), String> {
-    let mut parts = raw.splitn(2, "\r\n\r\n");
-    let head = parts
-        .next()
-        .ok_or_else(|| "token endpoint sent an empty response".to_owned())?;
-    let body = parts.next().unwrap_or("");
-    let status_line = head
-        .lines()
-        .next()
-        .ok_or_else(|| "token endpoint response had no status line".to_owned())?;
-    Ok((status_line.to_owned(), body.to_owned()))
+    let response_body = String::from_utf8_lossy(&raw);
+    parse_token_response(&format!("HTTP/1.1 {status}"), &response_body)
 }
 
 fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken, String> {
@@ -334,28 +257,6 @@ fn percent_encode_form(value: &str) -> String {
     encoded
 }
 
-/// A minimal `https://host[:port]/path` parser. Token endpoints are simple,
-/// operator-configured URLs; pulling in a general-purpose URL crate for this
-/// one call site would be a disproportionate dependency addition.
-fn parse_https_url(url: &str) -> Result<(String, u16, String), String> {
-    let rest = url
-        .strip_prefix("https://")
-        .ok_or_else(|| "the OAuth token endpoint must use https://".to_owned())?;
-    if rest.is_empty() {
-        return Err("the OAuth token endpoint is missing a host".into());
-    }
-    let (authority, path) = match rest.find('/') {
-        Some(index) => (&rest[..index], &rest[index..]),
-        None => (rest, "/"),
-    };
-    if authority.is_empty() {
-        return Err("the OAuth token endpoint is missing a host".into());
-    }
-    let (host, port) = crate::endpoint::parts(authority, 443)
-        .map_err(|error| format!("invalid OAuth token endpoint host: {error}"))?;
-    Ok((host, port, path.to_owned()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,28 +286,6 @@ mod tests {
         };
         let body = build_refresh_body(&request);
         assert!(!body.contains("client_secret"));
-    }
-
-    #[test]
-    fn parses_https_url_with_explicit_port_and_path() {
-        let (host, port, path) = parse_https_url("https://example.com:8443/oauth/token").unwrap();
-        assert_eq!(host, "example.com");
-        assert_eq!(port, 8443);
-        assert_eq!(path, "/oauth/token");
-    }
-
-    #[test]
-    fn parses_https_url_defaulting_port_and_path() {
-        let (host, port, path) = parse_https_url("https://oauth2.googleapis.com/token").unwrap();
-        assert_eq!(host, "oauth2.googleapis.com");
-        assert_eq!(port, 443);
-        assert_eq!(path, "/token");
-    }
-
-    #[test]
-    fn rejects_non_https_token_endpoint() {
-        let error = parse_https_url("http://example.com/token").unwrap_err();
-        assert!(error.contains("https://"));
     }
 
     #[test]
@@ -483,14 +362,5 @@ mod tests {
             refresh_token: SecretString::from("r"),
         };
         assert!(config.as_request().client_secret.is_none());
-    }
-
-    #[test]
-    fn splits_status_line_and_body_from_raw_response() {
-        let raw =
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"access_token\":\"a\"}";
-        let (status, body) = split_http_response(raw).unwrap();
-        assert_eq!(status, "HTTP/1.1 200 OK");
-        assert_eq!(body, "{\"access_token\":\"a\"}");
     }
 }

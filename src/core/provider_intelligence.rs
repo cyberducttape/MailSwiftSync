@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-/// Provider-specific error classification and recommended actions.
+/// Observed IMAP/transport error classification and recommended actions.
+///
+/// This module does not encode provider API quotas or pretend that an IMAP
+/// message-per-second value can be inferred from them. It remains a library
+/// prototype until the controller consumes its classifications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderErrorType {
     /// Rate limit hit; retry with exponential backoff
@@ -10,6 +14,8 @@ pub enum ProviderErrorType {
     TemporarilyUnavailable,
     /// Connection failed; check network and endpoint
     ConnectivityError,
+    /// Provider rejected a connection or operation because of capacity.
+    ConnectionLimited,
     /// Invalid credentials or expired token
     AuthenticationFailed,
     /// Account doesn't have required permissions
@@ -27,7 +33,10 @@ impl ProviderErrorType {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::RateLimited | Self::TemporarilyUnavailable | Self::ConnectivityError
+            Self::RateLimited
+                | Self::TemporarilyUnavailable
+                | Self::ConnectivityError
+                | Self::ConnectionLimited
         )
     }
 
@@ -37,84 +46,9 @@ impl ProviderErrorType {
             Self::RateLimited => Some(Duration::from_secs(60)),
             Self::TemporarilyUnavailable => Some(Duration::from_secs(5)),
             Self::ConnectivityError => Some(Duration::from_secs(10)),
+            Self::ConnectionLimited => Some(Duration::from_secs(30)),
             _ => None,
         }
-    }
-}
-
-/// Provider-specific throttling configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderThrottleConfig {
-    /// Provider name (Gmail, O365, Fastmail, etc)
-    pub provider: String,
-    /// Messages per second limit
-    pub messages_per_second: f64,
-    /// Connection pool size
-    pub connection_pool_size: usize,
-    /// Recommended batch size
-    pub batch_size: usize,
-    /// Backoff multiplier for rate limits
-    pub backoff_multiplier: f64,
-    /// Maximum concurrent operations
-    pub max_concurrent_ops: usize,
-}
-
-impl ProviderThrottleConfig {
-    /// Gmail API rate limits: ~500 requests/user/second.
-    /// Conservative estimate: 100 messages/sec for migration.
-    pub fn gmail() -> Self {
-        Self {
-            provider: "Gmail".to_string(),
-            messages_per_second: 100.0,
-            connection_pool_size: 4,
-            batch_size: 100,
-            backoff_multiplier: 2.0,
-            max_concurrent_ops: 4,
-        }
-    }
-
-    /// Microsoft 365/Exchange Online: ~2000 requests/sec per tenant.
-    /// Conservative: 150 messages/sec for migration.
-    pub fn microsoft_365() -> Self {
-        Self {
-            provider: "Microsoft 365".to_string(),
-            messages_per_second: 150.0,
-            connection_pool_size: 6,
-            batch_size: 200,
-            backoff_multiplier: 2.0,
-            max_concurrent_ops: 6,
-        }
-    }
-
-    /// Fastmail: Standard IMAP with no aggressive rate limiting documented.
-    /// Conservative: 50 messages/sec for safety.
-    pub fn fastmail() -> Self {
-        Self {
-            provider: "Fastmail".to_string(),
-            messages_per_second: 50.0,
-            connection_pool_size: 2,
-            batch_size: 50,
-            backoff_multiplier: 1.5,
-            max_concurrent_ops: 2,
-        }
-    }
-
-    /// Generic IMAP provider: very conservative limits.
-    pub fn generic_imap() -> Self {
-        Self {
-            provider: "Generic IMAP".to_string(),
-            messages_per_second: 20.0,
-            connection_pool_size: 1,
-            batch_size: 25,
-            backoff_multiplier: 1.5,
-            max_concurrent_ops: 1,
-        }
-    }
-
-    /// Get delay between messages to respect rate limit.
-    pub fn delay_per_message(&self) -> Duration {
-        let millis = (1000.0 / self.messages_per_second) as u64;
-        Duration::from_millis(millis)
     }
 }
 
@@ -126,11 +60,15 @@ impl ProviderErrorClassifier {
     pub fn classify(provider: &str, error_msg: &str) -> ProviderErrorType {
         let lower = error_msg.to_lowercase();
 
-        // Rate limit patterns
+        // Observed server/protocol signals only. These are not provider API
+        // quota estimates and must be paired with the engine's configured
+        // message/byte limits by an active controller.
         if lower.contains("rate limit")
             || lower.contains("quota exceeded")
             || lower.contains("too many requests")
             || lower.contains("throttled")
+            || lower.contains("slow down")
+            || lower.contains(" 429")
         {
             return ProviderErrorType::RateLimited;
         }
@@ -168,6 +106,8 @@ impl ProviderErrorClassifier {
             || lower.contains("temporarily unavailable")
             || lower.contains("service unavailable")
             || lower.contains("bad gateway")
+            || lower.contains("server busy")
+            || lower.contains("try again later")
         {
             return ProviderErrorType::TemporarilyUnavailable;
         }
@@ -177,8 +117,18 @@ impl ProviderErrorClassifier {
             || lower.contains("connection timeout")
             || lower.contains("connection reset")
             || lower.contains("network unreachable")
+            || lower.contains("connection closed")
+            || lower.contains("server bye")
+            || lower == "bye"
         {
             return ProviderErrorType::ConnectivityError;
+        }
+
+        if lower.contains("too many connections")
+            || lower.contains("connection limit")
+            || lower.contains("maximum connections")
+        {
+            return ProviderErrorType::ConnectionLimited;
         }
 
         // Provider-specific unsupported patterns
@@ -232,22 +182,18 @@ mod tests {
     }
 
     #[test]
-    fn gmail_throttle_config() {
-        let config = ProviderThrottleConfig::gmail();
-        assert_eq!(config.provider, "Gmail");
-        assert!(config.messages_per_second > 50.0);
-        assert_eq!(config.delay_per_message().as_millis(), 10);
-    }
-
-    #[test]
-    fn o365_is_less_throttled_than_gmail() {
-        let gmail = ProviderThrottleConfig::gmail();
-        let o365 = ProviderThrottleConfig::microsoft_365();
-
-        assert!(o365.messages_per_second > gmail.messages_per_second);
-        assert!(
-            o365.delay_per_message() < gmail.delay_per_message(),
-            "O365 should have lower delay than Gmail"
+    fn classifies_observed_imap_capacity_signals() {
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "too many connections"),
+            ProviderErrorType::ConnectionLimited
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "* BYE server busy"),
+            ProviderErrorType::TemporarilyUnavailable
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "connection closed by server"),
+            ProviderErrorType::ConnectivityError
         );
     }
 }

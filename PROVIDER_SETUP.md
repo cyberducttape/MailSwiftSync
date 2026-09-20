@@ -70,11 +70,12 @@ Run a preflight check in MailSwiftSync:
 
 ### Gmail-Specific Throttling
 
-MailSwiftSync automatically limits Gmail migrations to **100 messages/second** to respect Gmail's API limits.
+MailSwiftSync does not claim a Gmail-specific IMAP throughput limit. Configure
+the profile's imapsync message/byte limits conservatively and adjust them from
+observed IMAP responses; Gmail API quota figures do not define this IMAP path.
 
-- Connection pool size: 4
-- Batch size: 100 messages
-- Recommended wait on rate limit: 60 seconds
+- Provider-specific connection pools and message rates are not automatically applied.
+- A rate-limit or connection-capacity response should be retried after backoff.
 
 For very large migrations (100k+ messages), consider:
 - Running during off-peak hours
@@ -167,11 +168,12 @@ Set-Mailbox -Identity destination@tenant.onmicrosoft.com -ProhibitSendQuota 100G
 
 ### O365-Specific Throttling
 
-MailSwiftSync automatically limits O365 migrations to **150 messages/second**.
+MailSwiftSync does not claim an Exchange Online-specific IMAP throughput limit.
+Use the profile's imapsync message/byte limits and tune them from observed
+server responses. Provider API quota documentation is not an IMAP rate limit.
 
-- Connection pool size: 6
-- Batch size: 200 messages
-- Recommended wait on soft throttling: 10+ seconds before retry
+- Provider-specific connection pools and message rates are not automatically applied.
+- Treat connection limits, server-busy responses, and timeouts as signals to back off.
 
 ---
 
@@ -218,11 +220,9 @@ Run a preflight check in MailSwiftSync:
 
 ### Fastmail-Specific Throttling
 
-MailSwiftSync automatically limits Fastmail migrations to **50 messages/second** (conservative default).
-
-- Connection pool size: 2
-- Batch size: 50 messages
-- No known rate limiting issues; this is a safety default
+MailSwiftSync does not claim a Fastmail-specific IMAP throughput limit. Use the
+profile's imapsync message/byte limits and tune them from observed server
+responses rather than relying on an invented provider constant.
 
 ---
 
@@ -262,12 +262,10 @@ If your provider is not listed above:
 
 ### Conservative Throttling for Unknown Providers
 
-For providers without documented rate limits, MailSwiftSync uses:
-- **20 messages/second** (very conservative)
-- Connection pool size: 1
-- Batch size: 25 messages
-
-You can increase these in the provider settings if migration is too slow, but test cautiously with small migrations first.
+MailSwiftSync does not silently select a provider rate for unknown IMAP
+servers. Set the profile's imapsync message/byte limits explicitly and begin
+conservatively, then adjust them from observed server responses. Test changes
+with small migrations first.
 
 ---
 
