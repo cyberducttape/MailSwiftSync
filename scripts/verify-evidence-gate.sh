@@ -176,6 +176,12 @@ for filename in files:
         errors.append(f"{filename}: source/destination provider pair does not match policy pair {pair}")
     if not isinstance(evidence.get("scenario_ids"), list) or not required_scenarios.issubset(set(evidence.get("scenario_ids", []))):
         errors.append(f"{filename}: required qualification scenarios are missing")
+    summary = evidence.get("test_summary")
+    if not isinstance(summary, dict) or not all(
+        isinstance(summary.get(field), int) and summary.get(field) >= minimum
+        for field, minimum in (("mailboxes_tested", 1), ("messages_total", 0), ("bytes_total", 0), ("destination_messages_total", 0), ("destination_bytes_total", 0), ("folders_total", 0), ("destination_folders_total", 0))
+    ):
+        errors.append(f"{filename}: test_summary has invalid required counters")
     observations = evidence.get("scenario_observations")
     if not isinstance(observations, dict):
         errors.append(f"{filename}: scenario_observations are missing")
@@ -213,12 +219,6 @@ for filename in files:
         value = evidence.get(field, "")
         if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdefABCDEF" for character in value):
             errors.append(f"{filename}: {field} is not a SHA-256 digest")
-    summary = evidence.get("test_summary")
-    if not isinstance(summary, dict) or not all(
-        isinstance(summary.get(field), int) and summary.get(field) >= minimum
-        for field, minimum in (("mailboxes_tested", 1), ("messages_total", 0), ("bytes_total", 0), ("destination_messages_total", 0), ("destination_bytes_total", 0), ("folders_total", 0), ("destination_folders_total", 0))
-    ):
-        errors.append(f"{filename}: test_summary has invalid required counters")
     results = evidence.get("results")
     if not isinstance(results, dict):
         errors.append(f"{filename}: results must be an object")
