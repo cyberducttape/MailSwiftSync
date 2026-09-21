@@ -10,7 +10,10 @@
       "engine": "imapsync",
       "engine_version": "2.314",
       "minimum_mailboxes": 1,
-      "minimum_messages": 2,
+      "minimum_messages": 100,
+      "minimum_folders": 3,
+      "minimum_bytes": 1024,
+      "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
     {
@@ -21,7 +24,10 @@
       "engine": "imapsync",
       "engine_version": "2.314",
       "minimum_mailboxes": 1,
-      "minimum_messages": 2,
+      "minimum_messages": 100,
+      "minimum_folders": 3,
+      "minimum_bytes": 1024,
+      "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
     {
@@ -32,7 +38,10 @@
       "engine": "imapsync",
       "engine_version": "2.314",
       "minimum_mailboxes": 1,
-      "minimum_messages": 2,
+      "minimum_messages": 100,
+      "minimum_folders": 3,
+      "minimum_bytes": 1024,
+      "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     }
   ]

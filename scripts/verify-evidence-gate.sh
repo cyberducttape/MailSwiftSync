@@ -28,7 +28,10 @@ echo "=================================================="
 # installed on CI runners.
 mapfile -t POLICY_ROWS < <(python3 - "$POLICY_FILE" <<'PY'
 import json
+import hashlib
+import re
 import sys
+from pathlib import Path
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     policy = json.load(handle)
@@ -40,7 +43,7 @@ if not isinstance(providers, list) or not providers:
 seen = set()
 for entry in providers:
     required = entry.get("required_phases")
-    values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version"), entry.get("minimum_mailboxes"), entry.get("minimum_messages")]
+    values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version"), entry.get("minimum_mailboxes"), entry.get("minimum_messages"), entry.get("minimum_folders"), entry.get("minimum_bytes")]
     if not all(isinstance(value, str) and value for value in values[:5]) or not all(
         isinstance(value, int) and value > 0 for value in values[5:]
     ):
@@ -59,6 +62,9 @@ for entry in providers:
         entry["engine_version"],
         str(entry["minimum_mailboxes"]),
         str(entry["minimum_messages"]),
+        str(entry["minimum_folders"]),
+        str(entry["minimum_bytes"]),
+        ",".join(entry["required_scenarios"]),
         ",".join(required),
     ]))
 PY
@@ -73,7 +79,7 @@ mapfile -t EVIDENCE_FILES < <(find "$EVIDENCE_DIR" -maxdepth 1 -type f -name '*.
 declare -a FAILURES=()
 
 for row in "${POLICY_ROWS[@]}"; do
-  IFS=$'\t' read -r pair source_provider destination_provider release_required expected_engine expected_version minimum_mailboxes minimum_messages required_phases <<< "$row"
+  IFS=$'\t' read -r pair source_provider destination_provider release_required expected_engine expected_version minimum_mailboxes minimum_messages minimum_folders minimum_bytes required_scenarios required_phases <<< "$row"
   if [[ "$MODE" == "release" && "$release_required" != "true" ]]; then
     echo "Skipped non-release provider pair: $pair"
     continue
@@ -103,7 +109,7 @@ PY
     continue
   fi
 
-policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$minimum_mailboxes" "$minimum_messages" "$required_phases" "${provider_files[@]}" <<'PY'
+policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
 import sys
 
@@ -113,7 +119,8 @@ try:
 except ImportError:
     raise SystemExit("jsonschema is required; install requirements-provider-evidence.txt")
 
-schema_file, pair, source_provider, destination_provider, expected_engine, expected_version, minimum_mailboxes, minimum_messages, phases_csv, *files = sys.argv[1:]
+schema_file, pair, source_provider, destination_provider, expected_engine, expected_version, minimum_mailboxes, minimum_messages, minimum_folders, minimum_bytes, scenarios_csv, phases_csv, *files = sys.argv[1:]
+required_scenarios = set(scenarios_csv.split(","))
 required_phases = set(phases_csv.split(","))
 seen_phases = set()
 errors = []
@@ -146,10 +153,11 @@ for filename in files:
     required_root = {
         "provider", "source_provider", "destination_provider", "tested_at", "testing_phase", "source_version",
         "destination_version", "engine", "engine_version", "test_summary", "results",
-        "proof_digest", "proof_verification", "run_id", "selected_run_id", "run_type",
+        "proof_digest", "proof_verification", "proof_file", "run_id", "selected_run_id", "run_type",
         "run_started_at", "run_finished_at", "fixture_id",
         "mailswiftsync_version", "mailswiftsync_commit", "mailswiftsync_binary_sha256",
         "imapsync_binary_sha256",
+        "scenario_ids",
     }
     missing_root = sorted(required_root - evidence.keys())
     if missing_root:
@@ -157,6 +165,8 @@ for filename in files:
         continue
     if evidence.get("source_provider") != source_provider or evidence.get("destination_provider") != destination_provider:
         errors.append(f"{filename}: source/destination provider pair does not match policy pair {pair}")
+    if not isinstance(evidence.get("scenario_ids"), list) or not required_scenarios.issubset(set(evidence.get("scenario_ids", []))):
+        errors.append(f"{filename}: required qualification scenarios are missing")
     if evidence.get("testing_phase") not in {"dry_pilot", "live_pilot", "recovery_test", "edge_case"}:
         errors.append(f"{filename}: testing_phase is not a supported evidence phase")
     if evidence.get("engine") != expected_engine:
@@ -175,7 +185,7 @@ for filename in files:
     summary = evidence.get("test_summary")
     if not isinstance(summary, dict) or not all(
         isinstance(summary.get(field), int) and summary.get(field) >= minimum
-        for field, minimum in (("mailboxes_tested", 1), ("messages_total", 0), ("bytes_total", 0), ("destination_messages_total", 0), ("destination_bytes_total", 0))
+        for field, minimum in (("mailboxes_tested", 1), ("messages_total", 0), ("bytes_total", 0), ("destination_messages_total", 0), ("destination_bytes_total", 0), ("folders_total", 0), ("destination_folders_total", 0))
     ):
         errors.append(f"{filename}: test_summary has invalid required counters")
     results = evidence.get("results")
@@ -184,12 +194,63 @@ for filename in files:
         continue
     if results.get("overall_result") not in {"pass", "pass_with_exceptions", "fail"}:
         errors.append(f"{filename}: results.overall_result is invalid")
-    if not isinstance(results.get("messages_verified"), int) or results.get("messages_verified") < 0:
+    if not isinstance(results.get("messages_covered_by_aggregate_evidence"), int) or results.get("messages_covered_by_aggregate_evidence") < 0:
+        errors.append(f"{filename}: results.messages_covered_by_aggregate_evidence is invalid")
+    if "messages_verified" in results and (not isinstance(results.get("messages_verified"), int) or results.get("messages_verified") < 0):
         errors.append(f"{filename}: results.messages_verified is invalid")
     if results.get("verification_confidence") not in {"high", "medium", "low", "aggregate_only", "not_applicable"}:
         errors.append(f"{filename}: results.verification_confidence is invalid")
     if evidence.get("proof_verification") != "canonical_digest_verified":
         errors.append(f"{filename}: customer-proof canonical digest was not verified")
+    proof_digest = evidence.get("proof_digest", "")
+    if not isinstance(proof_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", proof_digest):
+        errors.append(f"{filename}: proof_digest is not a canonical SHA-256 digest")
+    proof_file = evidence.get("proof_file")
+    proof_path = Path(filename).parent / proof_file if isinstance(proof_file, str) else None
+    proof = None
+    if proof_path is None or proof_path.name != proof_file:
+        errors.append(f"{filename}: proof_file must be a basename in the evidence directory")
+    elif not proof_path.is_file():
+        errors.append(f"{filename}: referenced customer proof is missing: {proof_file}")
+    else:
+        try:
+            with proof_path.open(encoding="utf-8") as handle:
+                proof = json.load(handle)
+            unsigned = dict(proof)
+            expected_proof_digest = unsigned.pop("proof_digest", None)
+            unsigned.pop("proof_signature", None)
+            canonical = json.dumps(unsigned, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+            calculated = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if expected_proof_digest != calculated or expected_proof_digest != proof_digest:
+                errors.append(f"{filename}: referenced customer proof digest does not match evidence")
+        except (OSError, json.JSONDecodeError, TypeError) as error:
+            errors.append(f"{filename}: referenced customer proof is invalid ({error})")
+    if isinstance(proof, dict):
+        identity = proof.get("provider_identity")
+        if not isinstance(identity, dict):
+            errors.append(f"{filename}: customer proof lacks provider identity")
+        else:
+            for field in ("source_provider", "destination_provider", "source_auth_method", "destination_auth_method", "fixture_id"):
+                if evidence.get(field) != identity.get(field):
+                    errors.append(f"{filename}: {field} does not match customer proof")
+        project_id = proof.get("project", {}).get("project_id") if isinstance(proof.get("project"), dict) else None
+        runs = proof.get("runs")
+        selected = [run for run in runs or [] if isinstance(run, dict) and run.get("run_id") == evidence.get("selected_run_id")]
+        if not isinstance(runs, list) or len(selected) != 1:
+            errors.append(f"{filename}: selected run is not uniquely present in customer proof")
+        else:
+            run = selected[0]
+            if run.get("project_id") != project_id or run.get("status") != "completed":
+                errors.append(f"{filename}: selected proof run is not a completed run for its project")
+            if run.get("started_at") != evidence.get("run_started_at") or run.get("finished_at") != evidence.get("run_finished_at"):
+                errors.append(f"{filename}: selected run timestamps do not match customer proof")
+            expected_type = {"dry_pilot": "preflight", "live_pilot": "live", "recovery_test": "recovery"}.get(evidence.get("testing_phase"))
+            if evidence.get("run_type") != expected_type:
+                errors.append(f"{filename}: evidence run_type does not match testing phase")
+            if evidence.get("testing_phase") == "recovery_test":
+                predecessors = [ancestor for ancestor in runs if isinstance(ancestor, dict) and ancestor.get("status") == "abandoned" and ancestor.get("project_id") == run.get("project_id") and ancestor.get("job_id") == run.get("job_id") and ancestor.get("started_at", "") < run.get("started_at", "")]
+                if not predecessors:
+                    errors.append(f"{filename}: recovery proof lacks an abandoned predecessor for the selected job")
     if summary.get("mailboxes_tested", 0) < int(minimum_mailboxes):
         errors.append(f"{filename}: too few mailboxes for qualification")
     phase = evidence.get("testing_phase")
@@ -210,10 +271,16 @@ for filename in files:
     else:
         if summary.get("messages_total", 0) < int(minimum_messages):
             errors.append(f"{filename}: test dataset is too small for qualification")
+        if summary.get("folders_total", 0) < int(minimum_folders):
+            errors.append(f"{filename}: too few source folders for qualification")
+        if summary.get("bytes_total", 0) < int(minimum_bytes):
+            errors.append(f"{filename}: test dataset has too few bytes for qualification")
         if summary.get("messages_total") != summary.get("destination_messages_total"):
             errors.append(f"{filename}: source/destination message totals differ")
         if summary.get("bytes_total") != summary.get("destination_bytes_total"):
             errors.append(f"{filename}: source/destination byte totals differ")
+        if summary.get("folders_total") != summary.get("destination_folders_total"):
+            errors.append(f"{filename}: source/destination folder totals differ")
         if results.get("messages_verified", 0) < int(minimum_messages):
             errors.append(f"{filename}: too few verified messages for qualification")
         if results.get("verification_confidence") != "high":

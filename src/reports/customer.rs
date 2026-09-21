@@ -6,6 +6,16 @@ use crate::{
 };
 use std::path::Path;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderIdentity {
+    pub(crate) source_provider: String,
+    pub(crate) destination_provider: String,
+    pub(crate) source_auth_method: String,
+    pub(crate) destination_auth_method: String,
+    pub(crate) fixture_id: String,
+    pub(crate) scenario_ids: Vec<String>,
+}
+
 /// Write customer-safe evidence for one durable project. This function has no
 /// application/controller state and performs only the read needed to build
 /// the artifact plus the atomic output write.
@@ -15,15 +25,34 @@ pub(crate) fn export_from_store(
     path: &Path,
     branding: &OperatorBranding,
 ) -> Result<(), String> {
-    export_from_store_with_options(store, project_id, path, false, branding)
+    export_from_store_with_options_and_identity(store, project_id, path, false, branding, None)
 }
 
+#[cfg(test)]
 pub(crate) fn export_from_store_with_options(
     store: &core::StateStore,
     project_id: &str,
     path: &Path,
     allow_incomplete: bool,
     branding: &OperatorBranding,
+) -> Result<(), String> {
+    export_from_store_with_options_and_identity(
+        store,
+        project_id,
+        path,
+        allow_incomplete,
+        branding,
+        None,
+    )
+}
+
+pub(crate) fn export_from_store_with_options_and_identity(
+    store: &core::StateStore,
+    project_id: &str,
+    path: &Path,
+    allow_incomplete: bool,
+    branding: &OperatorBranding,
+    provider_identity: Option<&ProviderIdentity>,
 ) -> Result<(), String> {
     let snapshot = store
         .project_report_snapshot(project_id)
@@ -115,6 +144,14 @@ pub(crate) fn export_from_store_with_options(
             "name": project.name,
             "phase": format!("{:?}", project.phase),
         },
+        "provider_identity": provider_identity.map(|identity| serde_json::json!({
+            "source_provider": identity.source_provider.clone(),
+            "destination_provider": identity.destination_provider.clone(),
+            "source_auth_method": identity.source_auth_method.clone(),
+            "destination_auth_method": identity.destination_auth_method.clone(),
+            "fixture_id": identity.fixture_id.clone(),
+            "scenario_ids": identity.scenario_ids.clone(),
+        })),
         "issued_by": if branding.is_empty() {
             serde_json::Value::Null
         } else {

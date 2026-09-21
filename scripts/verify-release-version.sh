@@ -11,12 +11,12 @@ if [[ -z "$cargo_version" ]]; then
   echo "could not read package version from Cargo.toml" >&2
   exit 1
 fi
-if [[ "$tag" != "v${cargo_version}" && "$tag" != "v${cargo_version}-"* ]]; then
-  echo "release tag $tag does not match Cargo package version $cargo_version" >&2
+if [[ ! "$cargo_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Cargo package version is not a release SemVer: $cargo_version" >&2
   exit 1
 fi
-if [[ "$tag" == v*-[.-] || "$tag" == *..* || "$tag" == *--* ]]; then
-  echo "release tag $tag has an invalid prerelease suffix" >&2
+if [[ ! "$tag" =~ ^v${cargo_version}(-alpha|-beta\.[1-9][0-9]*|-rc\.[1-9][0-9]*)?$ ]]; then
+  echo "release tag $tag does not match Cargo package version $cargo_version" >&2
   exit 1
 fi
 echo "release version accepted: $tag (Cargo $cargo_version)"

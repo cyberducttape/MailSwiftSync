@@ -373,6 +373,7 @@ impl App {
             preflight_credential_fingerprint: None,
             run_id: None,
             active_run: None,
+            diagnostic_logger: None,
             locked_profile: None,
             cancel_requested: None,
             bulk_project_id: restored_bulk_project_id,

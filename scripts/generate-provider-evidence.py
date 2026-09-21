@@ -82,12 +82,24 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
     project_id = proof.get("project", {}).get("project_id")
     if not isinstance(project_id, str) or not project_id:
         raise ValueError("customer-proof is missing project.project_id")
-    proof_source = proof.get("project", {}).get("source_provider")
-    proof_destination = proof.get("project", {}).get("destination_provider")
-    if proof_source is not None and proof_source != source_provider:
-        raise ValueError("source provider does not match the customer-proof project")
-    if proof_destination is not None and proof_destination != destination_provider:
-        raise ValueError("destination provider does not match the customer-proof project")
+    provider_identity = proof.get("provider_identity")
+    required_identity = (
+        "source_provider", "destination_provider", "source_auth_method",
+        "destination_auth_method", "fixture_id",
+    )
+    if not isinstance(provider_identity, dict) or any(
+        not isinstance(provider_identity.get(field), str) or not provider_identity[field]
+        for field in required_identity
+    ):
+        raise ValueError("customer-proof is missing signed provider identity")
+    if provider_identity["source_provider"] != source_provider:
+        raise ValueError("source provider does not match the customer-proof identity")
+    if provider_identity["destination_provider"] != destination_provider:
+        raise ValueError("destination provider does not match the customer-proof identity")
+    if not isinstance(provider_identity.get("scenario_ids"), list) or not all(
+        isinstance(value, str) and value for value in provider_identity["scenario_ids"]
+    ):
+        raise ValueError("customer-proof provider identity has invalid scenario IDs")
     if selected_run.get("project_id") != project_id:
         raise ValueError("selected run does not belong to the proof project")
     mailbox_ids = {
@@ -111,8 +123,10 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
     total_bytes = 0
     destination_messages = 0
     destination_bytes = 0
+    total_folders = 0
+    destination_folders = 0
     mailboxes_count = len(proof.get("mailboxes", []))
-    messages_verified = 0
+    messages_covered_by_aggregate_evidence = 0
     if mailboxes_count == 0:
         raise ValueError("customer-proof contains no mailboxes")
     for mailbox in proof["mailboxes"]:
@@ -122,7 +136,8 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
             raise ValueError("customer-proof contains a mailbox that is not strictly verified")
         evidence = mailbox.get("evidence")
         required = ("scope", "evidence_level", "source_messages", "destination_messages",
-                    "source_bytes", "destination_bytes", "unmatched_messages", "failed_messages")
+                    "source_bytes", "destination_bytes", "source_folders", "destination_folders",
+                    "unmatched_messages", "failed_messages")
         if not isinstance(evidence, dict) or any(field not in evidence for field in required):
             raise ValueError("customer-proof mailbox evidence is incomplete")
         if evidence["scope"] != "engine-confirmed" or evidence["evidence_level"] != "Engine-confirmed exact match":
@@ -137,16 +152,38 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         destination_messages += evidence["destination_messages"]
         total_bytes += evidence["source_bytes"]
         destination_bytes += evidence["destination_bytes"]
-        messages_verified += evidence["source_messages"]
+        total_folders += evidence["source_folders"]
+        destination_folders += evidence["destination_folders"]
+        messages_covered_by_aggregate_evidence += evidence["source_messages"]
 
-    if phase != "dry_pilot" and any(
-        not isinstance(run, dict) or run.get("status") != "completed" for run in runs
-    ):
-        raise ValueError("live/recovery customer-proof must contain only completed runs")
+    run_statuses = {
+        run.get("status") for run in runs if isinstance(run, dict)
+    }
+    if phase == "recovery_test":
+        abandoned_predecessors = [
+            run for run in runs
+            if isinstance(run, dict)
+            and run.get("status") == "abandoned"
+            and run.get("project_id") == selected_run.get("project_id")
+            and run.get("job_id") == selected_run.get("job_id")
+            and run.get("started_at", "") < selected_run.get("started_at", "")
+        ]
+        if not selected_run.get("job_id") or not abandoned_predecessors:
+            raise ValueError("recovery evidence requires an abandoned predecessor for the same project and job")
+        if not run_statuses.issubset({"completed", "abandoned"}):
+            raise ValueError("recovery evidence requires a completed run and a resolved abandoned ancestor")
+    elif phase != "dry_pilot":
+        terminal_statuses = {"completed", "failed", "abandoned", "cancelled", "verification_failed"}
+        if any(
+            not isinstance(run, dict) or run.get("status") not in terminal_statuses
+            for run in runs
+        ):
+            raise ValueError("live customer-proof contains unresolved queued or running history")
     if phase == "dry_pilot":
         total_messages = destination_messages = 0
         total_bytes = destination_bytes = 0
-        messages_verified = 0
+        total_folders = destination_folders = 0
+        messages_covered_by_aggregate_evidence = 0
 
     # Generate evidence record
     now = datetime.now(timezone.utc).isoformat()
@@ -166,10 +203,12 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
             "bytes_total": total_bytes,
             "destination_messages_total": destination_messages,
             "destination_bytes_total": destination_bytes,
+            "folders_total": total_folders,
+            "destination_folders_total": destination_folders,
         },
         "results": {
             "overall_result": "pass" if phase == "dry_pilot" else "pass_with_exceptions",
-            "messages_verified": messages_verified,
+            "messages_covered_by_aggregate_evidence": messages_covered_by_aggregate_evidence,
             "verification_confidence": "not_applicable" if phase == "dry_pilot" else "aggregate_only",
         },
         "tester": {
@@ -184,8 +223,8 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         ),
         "source_provider": source_provider,
         "destination_provider": destination_provider,
-        "source_auth_method": project.get("source_auth_method", "password"),
-        "destination_auth_method": project.get("destination_auth_method", "password"),
+        "source_auth_method": provider_identity["source_auth_method"],
+        "destination_auth_method": provider_identity["destination_auth_method"],
         "mailswiftsync_version": mailswiftsync_version,
         "mailswiftsync_commit": mailswiftsync_commit,
         "mailswiftsync_binary_sha256": mailswiftsync_binary_sha256,
@@ -197,7 +236,9 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         "run_finished_at": selected_run["finished_at"],
         "proof_digest": expected_digest,
         "proof_verification": "canonical_digest_verified",
-        "fixture_id": project.get("fixture_id", "provider-test"),
+        "proof_file": Path(proof_path).name,
+        "fixture_id": provider_identity["fixture_id"],
+        "scenario_ids": provider_identity["scenario_ids"],
         "test_dataset_digest": project.get("dataset_digest", "unknown"),
     }
 

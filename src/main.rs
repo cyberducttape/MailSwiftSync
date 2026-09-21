@@ -7,6 +7,7 @@ mod command;
 mod controller;
 mod core;
 mod credentials;
+mod diagnostic_log;
 mod endpoint;
 mod engine;
 mod headless;
@@ -67,6 +68,7 @@ use credentials::{
     SecretString, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
     restrict_directory_permissions, secret_runtime_base, write_secret_file,
 };
+pub(crate) use diagnostic_log::DiagnosticLogger;
 use headless::export_support_bundle;
 #[cfg(test)]
 use headless::headless_status;
@@ -1664,12 +1666,14 @@ mod tests {
             tx: &tx,
             run_id: "test-run",
             job_id: "test-job",
+            project_id: "test-project",
             prefix: "",
             cancel: &cancel,
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: true,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
         })
         .unwrap();
         drop(tx);
@@ -1700,12 +1704,14 @@ mod tests {
             tx: &tx,
             run_id: "test-run",
             job_id: "test-job",
+            project_id: "test-project",
             prefix: "",
             cancel: &cancel,
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Packaged2314,
+            diagnostic_logger: None,
         })
         .unwrap();
         drop(tx);
@@ -1740,12 +1746,14 @@ mod tests {
             tx: &tx,
             run_id: "test-run",
             job_id: "test-job",
+            project_id: "test-project",
             prefix: "",
             cancel: &cancel,
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
         })
         .unwrap();
         drop(tx);
@@ -1774,12 +1782,14 @@ mod tests {
             tx: &tx,
             run_id: "test-run",
             job_id: "test-job",
+            project_id: "test-project",
             prefix: "",
             cancel: &cancel,
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
         });
         drop(tx);
         acknowledger.join().unwrap();
@@ -1800,12 +1810,14 @@ mod tests {
             tx: &tx,
             run_id: "test-run",
             job_id: "test-job",
+            project_id: "test-project",
             prefix: "",
             cancel: &cancel,
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
         });
 
         let error = outcome.unwrap_err();
@@ -1831,12 +1843,14 @@ mod tests {
             tx: &tx,
             run_id: "test-run",
             job_id: "test-job",
+            project_id: "test-project",
             prefix: "",
             cancel: &cancel,
             secrets: &[],
             timeout: Duration::from_secs(5),
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
         });
         drop(tx);
         acknowledger.join().unwrap();

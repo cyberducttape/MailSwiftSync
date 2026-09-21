@@ -119,16 +119,19 @@ Mark each evidence column with one of:
 
 **Dry pilot:**
 ```bash
-mailswiftsync --headless /tmp/gmail-test.db preflight \
-  --source user1@workspace.example.com \
-  --destination user2@workspace.example.com
+# Configure the source/destination profile and owner-only secret files first.
+mailswiftsync headless /tmp/gmail-test.db preflight \
+  --source-secret-file /run/secrets/gmail-source \
+  --destination-secret-file /run/secrets/gmail-dest
 ```
 
 **Expected:** Connection succeeds, Gmail's SPECIAL-USE folders are discovered (All Mail, Sent Mail, etc.).
 
 **Live pilot:**
 ```bash
-mailswiftsync --headless /tmp/gmail-test.db live
+mailswiftsync headless /tmp/gmail-test.db live \
+  --source-secret-file /run/secrets/gmail-source \
+  --destination-secret-file /run/secrets/gmail-dest
 ```
 
 **Expected:** All messages transfer, labels become IMAP folders, evidence shows matching message/byte counts.
@@ -170,6 +173,13 @@ export MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH=oauth2
 export MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2
 bash scripts/provider-integration-test.sh gmail
 ```
+
+Every provider qualification run also requires a separate, empty recovery
+destination account. Set `MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT`,
+`MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER`, and
+`MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET`; the harness rejects reuse of
+the normal live destination so recovery evidence cannot become an idempotent
+rerun against an already-populated mailbox.
 
 ### Fastmail
 

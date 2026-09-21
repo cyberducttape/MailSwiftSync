@@ -35,6 +35,8 @@ pub(crate) struct SingleRunWorkerSpec {
     pub(crate) verification_secret: SecretString,
     pub(crate) output_secrets: Vec<SecretString>,
     pub(crate) timeout: Duration,
+    pub(crate) project_id: String,
+    pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
 }
 
 pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
@@ -56,6 +58,8 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             verification_secret,
             output_secrets,
             timeout,
+            project_id,
+            diagnostic_logger,
         } = spec;
         let _cleanup_guard = CleanupGuard::new(cleanup);
         // Resolve the executable before launch. Imapsync's result selects the
@@ -89,12 +93,14 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 tx: &tx,
                 run_id: &run_id,
                 job_id: &job_id,
+                project_id: &project_id,
                 prefix: "",
                 cancel: &cancel,
                 secrets: &output_secrets,
                 timeout,
                 dovecot_exit_two_is_delta: engine == core::Engine::Dovecot && !dry_run,
                 imapsync_output_profile,
+                diagnostic_logger: diagnostic_logger.clone(),
             });
             if result.is_ok() && !destination_preflight.is_empty() {
                 result = result.and_then(|outcome| {
