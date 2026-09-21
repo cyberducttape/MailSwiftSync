@@ -179,6 +179,19 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use uuid::Uuid;
 
+    // GitHub Actions Windows runners restrict certain security operations (ACLs, nested jobs).
+    // This macro skips tests that require unrestricted filesystem or process permissions.
+    #[allow(unused_macros)]
+    macro_rules! skip_on_windows_hosted_runner {
+        () => {
+            #[cfg(windows)]
+            if std::env::var("GITHUB_ACTIONS").is_ok() {
+                eprintln!("⊘ Skipping: GitHub Actions Windows runner does not permit this operation");
+                return;
+            }
+        };
+    }
+
     fn dovecot_form() -> Form {
         let mut form = Form::default();
         form.profile.engine = core::Engine::Dovecot;
@@ -415,15 +428,7 @@ mod tests {
             std::fs::set_permissions(&key_path, permissions).unwrap();
         }
         if let Err(error) = reports::signing::sign_file(&path, &key_path, "test-key") {
-            #[cfg(windows)]
-            {
-                eprintln!(
-                    "Skipping Windows proof-signing test because the hosted runner rejected the temporary key ACL: {error}"
-                );
-                let _ = std::fs::remove_dir_all(directory);
-                return;
-            }
-            #[cfg(not(windows))]
+            skip_on_windows_hosted_runner!();
             panic!("proof signing test failed: {error}");
         }
         // Re-signing is a supported repair/rotation workflow. The previous

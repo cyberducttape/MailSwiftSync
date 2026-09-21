@@ -247,6 +247,19 @@ mod tests {
     use super::*;
     use std::io;
 
+    // GitHub Actions Windows runners restrict certain security operations (ACLs, nested jobs).
+    // This macro skips tests that require unrestricted filesystem or process permissions.
+    #[allow(unused_macros)]
+    macro_rules! skip_on_windows_hosted_runner {
+        () => {
+            #[cfg(windows)]
+            if std::env::var("GITHUB_ACTIONS").is_ok() {
+                eprintln!("⊘ Skipping: GitHub Actions Windows runner does not permit this operation");
+                return;
+            }
+        };
+    }
+
     struct FailingReader {
         emitted: bool,
     }
@@ -374,12 +387,10 @@ mod tests {
             Ok(supervisor) => supervisor,
             Err(error) => {
                 eprintln!("Windows Job Object attachment failed: {error:?}");
-                eprintln!(
-                    "Skipping Windows Job Object test because the hosted runner does not permit nested job assignment: {error}"
-                );
+                skip_on_windows_hosted_runner!();
                 let _ = child.kill();
                 let _ = child.wait();
-                return;
+                panic!("Job Object attachment failed: {error}");
             }
         };
 
