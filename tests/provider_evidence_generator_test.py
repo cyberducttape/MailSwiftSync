@@ -20,14 +20,26 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
         "job_id": "job",
         "status": "completed",
         "phase_at_start": "live",
+        "engine": "imapsync",
+        "engine_version": "2.314",
         "started_at": "2026-09-20T00:00:00Z",
         "finished_at": "2026-09-20T00:01:00Z",
     }
+    run.setdefault("engine", "imapsync")
+    run.setdefault("engine_version", "2.314")
     project = {
         "project_id": "project",
         "name": "fixture",
         "phase": "Complete",
         "fixture_id": "fixture-1",
+        "dataset_digest": "d" * 64,
+        "scenario_observations": {
+            "large_mailbox_10k": {"messages": 10000},
+            "large_messages": {"maximum_message_bytes": 10 * 1024 * 1024},
+            "unicode_folders": {"observed": True},
+            "special_use_folders": {"observed": True},
+            "mismatch_detection": {"planted": True, "detected": True},
+        },
     }
     if source_provider is not None:
         project["source_provider"] = source_provider
@@ -81,6 +93,7 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
         "mailswiftsync_commit": "abc123",
         "mailswiftsync_binary_sha256": "a" * 64,
         "imapsync_binary_sha256": "b" * 64,
+        "qualification_bundle_id": "bundle-1",
     }
 
     def generate(self, value, source="gmail", destination="microsoft365", phase="live_pilot",
@@ -90,7 +103,8 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
             path = Path(directory) / "proof.json"
             path.write_text(json.dumps(value), encoding="utf-8")
             return MODULE.generate_evidence(
-                str(path), source, destination, phase, run_id=run_id, **arguments
+                str(path), source, destination, phase, run_id=run_id,
+                qualification_bundle_id=arguments.pop("qualification_bundle_id"), **arguments
             )
 
     def test_actual_customer_proof_schema_generates_strict_evidence(self):
@@ -178,6 +192,12 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
             self.generate(proof(source_provider="gmail", destination_provider="gmail"))
         with self.assertRaises(ValueError):
             self.generate(proof(), engine_version="2.315")
+        mismatched_run = proof()
+        mismatched_run["runs"][0]["engine"] = "doveadm"
+        mismatched_run["runs"][0]["engine_version"] = "9.9.9"
+        mismatched_run["proof_digest"] = MODULE.canonical_proof_digest(mismatched_run)
+        with self.assertRaises(ValueError):
+            self.generate(mismatched_run)
         low_confidence = proof()
         low_confidence["mailboxes"][0]["evidence"]["evidence_level"] = "Probable metadata match"
         low_confidence["proof_digest"] = MODULE.canonical_proof_digest(low_confidence)

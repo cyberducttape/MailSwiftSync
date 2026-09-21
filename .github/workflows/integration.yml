@@ -39,6 +39,7 @@ jobs:
           mailswiftsync_sha=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'sha256sum /usr/local/bin/mailswiftsync' | awk '{print $1}')
           imapsync_version=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'imapsync --version 2>&1' | sed -n -e 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' -e 's/^[[:space:]]*v\?\([0-9][0-9.]*\)[[:space:]]*$/\1/p' | head -1)
           imapsync_sha=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'sha256sum "$(command -v imapsync)"' | awk '{print $1}')
+          qualification_bundle_id="generic-imap-$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA}"
           python3 scripts/generate-provider-evidence.py \
             provider-evidence/customer-proof.json generic_imap generic_imap live_pilot \
             --run-id "$run_id" --engine-version "$imapsync_version" \
@@ -46,6 +47,7 @@ jobs:
             --mailswiftsync-commit "$mailswiftsync_commit" \
             --mailswiftsync-binary-sha256 "$mailswiftsync_sha" \
             --imapsync-binary-sha256 "$imapsync_sha" \
+            --qualification-bundle-id "$qualification_bundle_id" \
             --output provider-evidence/generic_imap-to-generic_imap-live_pilot.json
       - name: Run controller crash and recovery lab
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh

@@ -39,6 +39,7 @@ destination_provider="${MAILSWIFTSYNC_DESTINATION_PROVIDER:-$provider}"
 source_auth="${MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH:-password}"
 destination_auth="${MAILSWIFTSYNC_PROVIDER_DEST_AUTH:-password}"
 fixture_id="${MAILSWIFTSYNC_PROVIDER_FIXTURE_ID:-provider-${source_provider}-to-${destination_provider}}"
+qualification_bundle_id="${MAILSWIFTSYNC_PROVIDER_QUALIFICATION_BUNDLE_ID:-${source_provider}-to-${destination_provider}-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}}"
 recovery_dest_endpoint="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT:-}"
 recovery_dest_user="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER:-}"
 recovery_dest_secret="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET:-}"
@@ -60,7 +61,12 @@ if [[ "$source_provider" == "microsoft365" && "$source_auth" != "oauth2" ]]; the
   echo "Set MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH=oauth2 and provide an access token file." >&2
   exit 1
 fi
-scenario_ids="${MAILSWIFTSYNC_PROVIDER_SCENARIO_IDS:-basic-small,forced-interruption}"
+# Scenario IDs are deliberately limited to scenarios this harness actually
+# executes. Do not accept an environment override that can turn labels for
+# unimplemented scenarios into qualification claims. Hosted-provider release
+# qualification remains blocked until each required fixture has an executable
+# test and structured observations.
+scenario_ids="basic-small,forced-interruption"
 if [[ -z "$recovery_dest_endpoint" || -z "$recovery_dest_user" || -z "$recovery_dest_secret" ]]; then
   echo "ERROR: recovery qualification requires a separate destination endpoint, user, and secret" >&2
   echo "Set MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT, _USER, and _SECRET." >&2
@@ -277,7 +283,7 @@ set +e
 setsid "$binary" headless "$recovery_state" live \
   --source-secret-file "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" \
   --destination-secret-file "$recovery_dest_secret" \
-  >"$workspace/recovery-interrupted.log" 2>&1
+  >"$workspace/recovery-interrupted.log" 2>&1 &
 recovery_pid=$!
 recovery_started=0
 recovery_deadline=$((SECONDS + recovery_timeout))
@@ -432,6 +438,7 @@ PY
     --mailswiftsync-commit "$mailswiftsync_commit" \
     --mailswiftsync-binary-sha256 "$mailswiftsync_binary_sha256" \
     --imapsync-binary-sha256 "$imapsync_binary_sha256" \
+    --qualification-bundle-id "$qualification_bundle_id" \
     --output "$evidence" || {
     echo "FAIL: Could not generate phase-specific evidence record for $phase" >&2
     return 1

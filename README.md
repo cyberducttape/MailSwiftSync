@@ -21,7 +21,7 @@ The product value is the control plane around the transfer engine: endpoint chec
 
 ## Project status
 
-MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, and aggregate verification evidence are available today. Treat credential delivery, packaged installers, high-volume scheduling, message-level reconciliation, and unattended production operation as experimental or planned until the relevant release criteria are published.
+MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, and aggregate verification evidence are available today. Treat credential delivery, packaged installers, message-level reconciliation, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured, but native installers are not currently shipped.
 
 Stable today:
 
@@ -45,7 +45,7 @@ Experimental or planned:
   from an operator-supplied refresh token; it still does not implement an
   authorization flow, so the operator obtains that refresh token through the
   provider's own tooling).
-- Native installers, signed releases, and cross-platform binary distribution.
+- Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
 - A scheduler/API that can survive the desktop closing, and message-level verification for live batches. (`supervise` provides a foreground, maintenance-window-aware batch controller; see below.)
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
 - Published large-scale migration case studies and compatibility matrix.
@@ -201,7 +201,10 @@ For opt-in headless incident troubleshooting, single-mailbox preflight/live
 commands may also receive `--diagnostic-log /secure/directory`. This writes
 redacted engine output to owner-only files named with the project and run IDs,
 retains the newest 20 transcripts, and warns that mailbox/folder metadata may
-be present. It is disabled by default and is not accepted for batch commands.
+be present. Newly created log directories are restricted; permissions on an
+existing directory are not changed, so operators must choose an appropriately
+protected directory. It is disabled by default and is not accepted for batch
+commands.
 
 Use `mailswiftsync --help` for the complete command contract and
 `mailswiftsync --version` when collecting support or audit metadata. Headless

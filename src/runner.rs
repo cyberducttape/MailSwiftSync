@@ -116,6 +116,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         verification::ImapsyncEvidenceAccumulator::default(),
     ));
     let dropped_diagnostics = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let failed_diagnostic_writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let out_tail = Arc::clone(&tail);
     let out_evidence = Arc::clone(&evidence);
     let dovecot_checkpoint = Arc::new(Mutex::new(None::<String>));
@@ -125,6 +126,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let out_job_id = job_id.to_owned();
     let out_project_id = project_id.to_owned();
     let out_logger = diagnostic_logger.clone();
+    let out_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
             let mut safe = line;
@@ -134,9 +136,12 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 }
             }
             record_process_tail(&out_tail, &safe);
-            if let Some(logger) = &out_logger {
-                let _ =
-                    logger.write_line(&out_project_id, &out_run_id, &out_job_id, "stdout", &safe);
+            if let Some(logger) = &out_logger
+                && logger
+                    .write_line(&out_project_id, &out_run_id, &out_job_id, "stdout", &safe)
+                    .is_err()
+            {
+                out_failed_diagnostic_writes.fetch_add(1, Ordering::Relaxed);
             }
             if let Ok(mut evidence) = out_evidence.lock() {
                 evidence.observe(&safe);
@@ -169,6 +174,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let err_job_id = job_id.to_owned();
     let err_project_id = project_id.to_owned();
     let err_logger = diagnostic_logger;
+    let err_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let err_thread = thread::spawn(move || {
         for_each_lossy_line(stderr, |line| {
             let mut safe = line;
@@ -178,9 +184,12 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 }
             }
             record_process_tail(&err_tail, &safe);
-            if let Some(logger) = &err_logger {
-                let _ =
-                    logger.write_line(&err_project_id, &err_run_id, &err_job_id, "stderr", &safe);
+            if let Some(logger) = &err_logger
+                && logger
+                    .write_line(&err_project_id, &err_run_id, &err_job_id, "stderr", &safe)
+                    .is_err()
+            {
+                err_failed_diagnostic_writes.fetch_add(1, Ordering::Relaxed);
             }
             if let Ok(mut evidence) = err_evidence.lock() {
                 evidence.observe(&safe);
@@ -320,6 +329,16 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             job_id: job_id.to_owned(),
             text: format!(
                 "{prefix}[diagnostics] {dropped} output line(s) omitted because the operator event queue was full"
+            ),
+        });
+    }
+    let failed_diagnostic_writes = failed_diagnostic_writes.load(Ordering::Relaxed);
+    if failed_diagnostic_writes > 0 {
+        let _ = tx.send(Event::RunLine {
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+            text: format!(
+                "{prefix}[diagnostics] Diagnostic log unavailable; {failed_diagnostic_writes} line(s) were not persisted"
             ),
         });
     }

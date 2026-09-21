@@ -4,13 +4,14 @@
 # wording in the Markdown compatibility matrix.
 set -euo pipefail
 
-EVIDENCE_DIR="tests/provider-evidence"
+EVIDENCE_DIR="${MAILSWIFTSYNC_EVIDENCE_DIR:-tests/provider-evidence}"
 POLICY_FILE="$EVIDENCE_DIR/policy.json"
 SCHEMA_FILE="$EVIDENCE_DIR/schema.json"
 MODE="preview"
 if [[ "${1:-}" == "--release" ]]; then
   MODE="release"
 fi
+export MAILSWIFTSYNC_GATE_MODE="$MODE"
 
 if [[ ! -f "$POLICY_FILE" ]]; then
   echo "FAIL: provider evidence policy not found: $POLICY_FILE" >&2
@@ -28,10 +29,7 @@ echo "=================================================="
 # installed on CI runners.
 mapfile -t POLICY_ROWS < <(python3 - "$POLICY_FILE" <<'PY'
 import json
-import hashlib
-import re
 import sys
-from pathlib import Path
 
 with open(sys.argv[1], encoding="utf-8") as handle:
     policy = json.load(handle)
@@ -43,6 +41,7 @@ if not isinstance(providers, list) or not providers:
 seen = set()
 for entry in providers:
     required = entry.get("required_phases")
+    scenario_requirements = entry.get("scenario_requirements")
     values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version"), entry.get("minimum_mailboxes"), entry.get("minimum_messages"), entry.get("minimum_folders"), entry.get("minimum_bytes")]
     if not all(isinstance(value, str) and value for value in values[:5]) or not all(
         isinstance(value, int) and value > 0 for value in values[5:]
@@ -50,6 +49,8 @@ for entry in providers:
         raise SystemExit("each provider policy entry needs pair, source_provider, destination_provider, engine, and engine_version")
     if not isinstance(required, list) or not required or not all(isinstance(value, str) and value for value in required):
         raise SystemExit(f"{entry.get('pair', '<unknown>')}: required_phases must be non-empty strings")
+    if not isinstance(scenario_requirements, dict):
+        raise SystemExit(f"{entry.get('pair', '<unknown>')}: scenario_requirements must be an object")
     if entry["pair"] in seen:
         raise SystemExit(f"duplicate provider-pair policy entry: {entry['pair']}")
     seen.add(entry["pair"])
@@ -65,6 +66,7 @@ for entry in providers:
         str(entry["minimum_folders"]),
         str(entry["minimum_bytes"]),
         ",".join(entry["required_scenarios"]),
+        json.dumps(scenario_requirements, separators=(",", ":")),
         ",".join(required),
     ]))
 PY
@@ -79,7 +81,7 @@ mapfile -t EVIDENCE_FILES < <(find "$EVIDENCE_DIR" -maxdepth 1 -type f -name '*.
 declare -a FAILURES=()
 
 for row in "${POLICY_ROWS[@]}"; do
-  IFS=$'\t' read -r pair source_provider destination_provider release_required expected_engine expected_version minimum_mailboxes minimum_messages minimum_folders minimum_bytes required_scenarios required_phases <<< "$row"
+  IFS=$'\t' read -r pair source_provider destination_provider release_required expected_engine expected_version minimum_mailboxes minimum_messages minimum_folders minimum_bytes required_scenarios scenario_requirements_json required_phases <<< "$row"
   if [[ "$MODE" == "release" && "$release_required" != "true" ]]; then
     echo "Skipped non-release provider pair: $pair"
     continue
@@ -87,7 +89,7 @@ for row in "${POLICY_ROWS[@]}"; do
   provider_files=()
   for evidence_file in "${EVIDENCE_FILES[@]}"; do
     [[ -n "$evidence_file" ]] || continue
-    file_provider=$(python3 - "$evidence_file" <<'PY'
+file_provider=$(python3 - "$evidence_file" <<'PY'
 import json
 import sys
 try:
@@ -109,9 +111,13 @@ PY
     continue
   fi
 
-policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios" "$required_phases" "${provider_files[@]}" <<'PY'
+policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios" "$scenario_requirements_json" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
+import hashlib
+import os
+import re
 import sys
+from pathlib import Path
 
 try:
     import jsonschema
@@ -119,8 +125,9 @@ try:
 except ImportError:
     raise SystemExit("jsonschema is required; install requirements-provider-evidence.txt")
 
-schema_file, pair, source_provider, destination_provider, expected_engine, expected_version, minimum_mailboxes, minimum_messages, minimum_folders, minimum_bytes, scenarios_csv, phases_csv, *files = sys.argv[1:]
+schema_file, pair, source_provider, destination_provider, expected_engine, expected_version, minimum_mailboxes, minimum_messages, minimum_folders, minimum_bytes, scenarios_csv, scenario_requirements_json, phases_csv, *files = sys.argv[1:]
 required_scenarios = set(scenarios_csv.split(","))
+scenario_requirements = json.loads(scenario_requirements_json)
 required_phases = set(phases_csv.split(","))
 seen_phases = set()
 errors = []
@@ -153,11 +160,13 @@ for filename in files:
     required_root = {
         "provider", "source_provider", "destination_provider", "tested_at", "testing_phase", "source_version",
         "destination_version", "engine", "engine_version", "test_summary", "results",
+        "source_auth_method", "destination_auth_method",
         "proof_digest", "proof_verification", "proof_file", "run_id", "selected_run_id", "run_type",
         "run_started_at", "run_finished_at", "fixture_id",
         "mailswiftsync_version", "mailswiftsync_commit", "mailswiftsync_binary_sha256",
         "imapsync_binary_sha256",
         "scenario_ids",
+        "scenario_observations", "test_dataset_digest", "qualification_bundle_id",
     }
     missing_root = sorted(required_root - evidence.keys())
     if missing_root:
@@ -167,12 +176,34 @@ for filename in files:
         errors.append(f"{filename}: source/destination provider pair does not match policy pair {pair}")
     if not isinstance(evidence.get("scenario_ids"), list) or not required_scenarios.issubset(set(evidence.get("scenario_ids", []))):
         errors.append(f"{filename}: required qualification scenarios are missing")
+    observations = evidence.get("scenario_observations")
+    if not isinstance(observations, dict):
+        errors.append(f"{filename}: scenario_observations are missing")
+    else:
+        for scenario, requirement in scenario_requirements.items():
+            if scenario not in evidence.get("scenario_ids", []):
+                continue
+            if scenario == "large-mailbox-10k" and (observations.get("large_mailbox_10k", {}).get("messages", 0) < requirement.get("minimum_messages", 0) or summary.get("messages_total", 0) < requirement.get("minimum_messages", 0)):
+                errors.append(f"{filename}: large-mailbox-10k does not contain 10,000 messages")
+            if scenario == "large-messages" and (observations.get("large_messages", {}).get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0) or summary.get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0)):
+                errors.append(f"{filename}: large-messages does not contain a message at least 10 MiB")
+            if scenario == "unicode-folders" and (observations.get("unicode_folders", {}).get("observed") is not True or summary.get("unicode_folders_observed") is not True):
+                errors.append(f"{filename}: Unicode folder scenario was not observed")
+            if scenario == "special-use-folders" and (observations.get("special_use_folders", {}).get("observed") is not True or summary.get("special_use_folders_observed") is not True):
+                errors.append(f"{filename}: SPECIAL-USE folder scenario was not observed")
+            if scenario == "mismatch-detection":
+                mismatch = observations.get("mismatch_detection", {})
+                if mismatch.get("planted") is not True or mismatch.get("detected") is not True or summary.get("mismatch_planted") is not True or summary.get("mismatch_detected") is not True:
+                    errors.append(f"{filename}: planted mismatch was not demonstrably detected")
     if evidence.get("testing_phase") not in {"dry_pilot", "live_pilot", "recovery_test", "edge_case"}:
         errors.append(f"{filename}: testing_phase is not a supported evidence phase")
     if evidence.get("engine") != expected_engine:
         errors.append(f"{filename}: engine must be {expected_engine}")
     if evidence.get("engine_version") != expected_version:
         errors.append(f"{filename}: engine_version must be {expected_version}")
+    release_commit = os.environ.get("MAILSWIFTSYNC_RELEASE_COMMIT")
+    if os.environ.get("MAILSWIFTSYNC_GATE_MODE") == "release" and release_commit and evidence.get("mailswiftsync_commit") != release_commit:
+        errors.append(f"{filename}: evidence commit does not match the release commit")
     for field in ("mailswiftsync_version", "mailswiftsync_commit", "mailswiftsync_binary_sha256", "imapsync_binary_sha256"):
         if not isinstance(evidence.get(field), str) or not evidence.get(field):
             errors.append(f"{filename}: {field} is missing")
@@ -234,6 +265,9 @@ for filename in files:
                 if evidence.get(field) != identity.get(field):
                     errors.append(f"{filename}: {field} does not match customer proof")
         project_id = proof.get("project", {}).get("project_id") if isinstance(proof.get("project"), dict) else None
+        project_dataset_digest = proof.get("project", {}).get("dataset_digest") if isinstance(proof.get("project"), dict) else None
+        if project_dataset_digest != evidence.get("test_dataset_digest"):
+            errors.append(f"{filename}: dataset digest does not match the referenced customer proof")
         runs = proof.get("runs")
         selected = [run for run in runs or [] if isinstance(run, dict) and run.get("run_id") == evidence.get("selected_run_id")]
         if not isinstance(runs, list) or len(selected) != 1:
@@ -242,6 +276,10 @@ for filename in files:
             run = selected[0]
             if run.get("project_id") != project_id or run.get("status") != "completed":
                 errors.append(f"{filename}: selected proof run is not a completed run for its project")
+            if run.get("engine") != evidence.get("engine"):
+                errors.append(f"{filename}: evidence engine does not match the selected proof run")
+            if run.get("engine_version") != evidence.get("engine_version"):
+                errors.append(f"{filename}: evidence engine version does not match the selected proof run")
             if run.get("started_at") != evidence.get("run_started_at") or run.get("finished_at") != evidence.get("run_finished_at"):
                 errors.append(f"{filename}: selected run timestamps do not match customer proof")
             expected_type = {"dry_pilot": "preflight", "live_pilot": "live", "recovery_test": "recovery"}.get(evidence.get("testing_phase"))
@@ -294,7 +332,31 @@ for filename in files:
             errors.append(f"{filename}: {phase} overall_result must be pass, got {result!r}")
 missing = sorted(required_phases - seen_phases)
 if missing:
-    errors.append("missing required phases: " + ", ".join(missing))
+        errors.append("missing required phases: " + ", ".join(missing))
+
+# A phase collection is one qualification bundle, not three independent
+# assertions. Every required phase must identify the same build, engine,
+# fixture, dataset, provider pair, authentication modes, and bundle.
+phase_metadata = {}
+for filename in files:
+    try:
+        with open(filename, encoding="utf-8") as handle:
+            evidence = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        continue
+    phase = evidence.get("testing_phase")
+    if phase not in required_phases:
+        continue
+    metadata = tuple(evidence.get(field) for field in (
+        "mailswiftsync_version", "mailswiftsync_commit", "mailswiftsync_binary_sha256",
+        "engine", "engine_version", "fixture_id", "test_dataset_digest",
+        "source_provider", "destination_provider", "source_auth_method",
+        "destination_auth_method", "qualification_bundle_id",
+    ))
+    previous = next(iter(phase_metadata.values()), None)
+    if previous is not None and metadata != previous:
+        errors.append(f"{filename}: qualification phase metadata does not match the bundle")
+    phase_metadata[phase] = metadata
 for error in errors:
     print(error)
 PY
