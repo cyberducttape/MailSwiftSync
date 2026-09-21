@@ -59,7 +59,7 @@ jobs:
           {
             echo "# MailSwiftSync test inventory"
             echo
-            echo "Commit: \\`${GITHUB_SHA}\`"
+            printf 'Commit: `%s`\n' "${GITHUB_SHA}"
             echo "Platform: Linux (Ubuntu)"
             echo "Runnable tests discovered: ${total}"
             echo "Execution result: governed by the CI job status"
