@@ -374,7 +374,7 @@ mod tests {
             Ok(supervisor) => supervisor,
             Err(error) => {
                 eprintln!("Windows Job Object attachment failed: {error:?}");
-                panic!("engine child must be assignable to a kill-on-close job");
+                panic!("engine child must be assignable to a kill-on-close job: {error}");
             }
         };
 

@@ -37,7 +37,14 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cargo test --locked --all-targets --all-features -- --list 2>&1 | tee test-list.log
+          set +e
+          cargo test --locked --all-targets --all-features -- --list > test-list.log 2>&1
+          list_status=$?
+          set -e
+          if [ "$list_status" -ne 0 ]; then
+            echo "::warning title=Test inventory unavailable::cargo test --list exited with status $list_status; the main test step already reported the authoritative result"
+          fi
+          cat test-list.log
           total=$(awk '/^[[:space:]]*[0-9]+ tests,/{sum += $1} END{print sum + 0}' test-list.log)
           {
             echo "# MailSwiftSync test inventory"
