@@ -3,6 +3,7 @@
   "title": "Provider Compatibility Evidence",
   "description": "Structured evidence for provider compatibility testing",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "provider",
     "source_provider",
@@ -14,7 +15,19 @@
     "engine",
     "engine_version",
     "test_summary",
-    "results"
+    "results",
+    "proof_digest",
+    "proof_verification",
+    "run_id",
+    "selected_run_id",
+    "run_type",
+    "run_started_at",
+    "run_finished_at",
+    "fixture_id",
+    "mailswiftsync_version",
+    "mailswiftsync_commit",
+    "mailswiftsync_binary_sha256",
+    "imapsync_binary_sha256"
   ],
   "properties": {
     "provider": {
@@ -59,7 +72,8 @@
     },
     "test_summary": {
       "type": "object",
-      "required": ["mailboxes_tested", "messages_total", "bytes_total"],
+      "additionalProperties": false,
+      "required": ["mailboxes_tested", "messages_total", "bytes_total", "destination_messages_total", "destination_bytes_total"],
       "properties": {
         "mailboxes_tested": {
           "type": "integer",
@@ -76,6 +90,8 @@
           "minimum": 0,
           "description": "Total bytes migrated"
         },
+        "destination_messages_total": {"type": "integer", "minimum": 0},
+        "destination_bytes_total": {"type": "integer", "minimum": 0},
         "special_folders_tested": {
           "type": "boolean",
           "description": "Whether special-use folders were included"
@@ -92,6 +108,7 @@
     },
     "results": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["overall_result", "messages_verified", "verification_confidence"],
       "properties": {
         "overall_result": {
@@ -105,11 +122,12 @@
         },
         "verification_confidence": {
           "type": "string",
-          "enum": ["high", "medium", "low"],
+          "enum": ["high", "medium", "low", "aggregate_only", "not_applicable"],
           "description": "Confidence level of verification (based on match types)"
         },
         "mismatches": {
           "type": "object",
+          "additionalProperties": false,
           "description": "Types of mismatches found",
           "properties": {
             "exact_match": {"type": "integer"},
@@ -127,6 +145,7 @@
           "type": "array",
           "items": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "issue": {"type": "string"},
               "severity": {"enum": ["info", "warning", "critical"]},
@@ -138,6 +157,7 @@
     },
     "tester": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["name", "email", "organization"],
       "properties": {
         "name": {"type": "string"},
@@ -149,14 +169,6 @@
     "notes": {
       "type": "string",
       "description": "Additional context or observations"
-    },
-    "source_provider": {
-      "type": "string",
-      "description": "Source email provider (e.g., gmail, microsoft365)"
-    },
-    "destination_provider": {
-      "type": "string",
-      "description": "Destination email provider"
     },
     "source_auth_method": {
       "type": "string",
@@ -170,23 +182,43 @@
     },
     "mailswiftsync_commit": {
       "type": "string",
+      "minLength": 1,
       "description": "Git commit hash of MailSwiftSync version used"
     },
+    "mailswiftsync_version": {"type": "string", "minLength": 1},
+    "mailswiftsync_binary_sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+    "imapsync_binary_sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
     "run_id": {
       "type": "string",
       "description": "Unique identifier for the migration run"
     },
+    "selected_run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Run whose proof record produced this phase evidence"
+    },
+    "run_type": {
+      "type": "string",
+      "enum": ["preflight", "live", "recovery"]
+    },
+    "run_started_at": {"type": "string", "format": "date-time"},
+    "run_finished_at": {"type": "string", "format": "date-time"},
     "proof_digest": {
       "type": "string",
       "description": "SHA256 digest of the customer-proof JSON that generated this evidence"
     },
     "fixture_id": {
       "type": "string",
+      "minLength": 1,
       "description": "Identifier for the test fixture/dataset used"
     },
     "test_dataset_digest": {
       "type": "string",
       "description": "Digest of the test dataset/mailboxes used"
+    },
+    "proof_verification": {
+      "type": "string",
+      "const": "canonical_digest_verified"
     }
   }
 }

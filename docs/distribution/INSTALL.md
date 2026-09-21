@@ -15,12 +15,17 @@ On Linux:
 
 ```bash
 sha256sum -c mailswiftsync-x86_64-unknown-linux-gnu.tar.gz.sha256
+
+# After obtaining the organization's GPG public key and checking its
+# fingerprint through a separate trusted channel:
+gpg --verify mailswiftsync-x86_64-unknown-linux-gnu.tar.gz.sha256.asc \
+  mailswiftsync-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 On macOS:
 
 ```bash
-shasum -a 256 -c mailswiftsync-aarch64-apple-darwin.tar.gz.sha256
+shasum -a 256 -c mailswiftsync-aarch64-apple-darwin.zip.sha256
 ```
 
 On Windows PowerShell, compare the displayed digest with the value in the
@@ -76,9 +81,11 @@ checks.
 The current release is intended for attended technical-operator pilots on
 known endpoints. Keep the dry preflight, live confirmation, and evidence
 review gates in place; a service-manager deployment is not equivalent to
-unattended production approval. Provider OAuth consent/refresh, secret-safe
-remote Dovecot execution, independent message-level reconciliation, and
-signed native installers are not included yet.
+unattended production approval. Provider OAuth consent, secret-safe remote
+Dovecot execution, and independent message-level reconciliation are not
+included yet. Portable release archives are signed when the release signing
+environment is configured; native OS-specific installer packages are not
+currently published.
 
 On macOS, process identity checks are deliberately conservative. If the
 native process query cannot prove that a recorded child is the expected
@@ -87,11 +94,13 @@ review. Use a Linux/Unix administration host for high-stakes migration
 windows when stronger process supervision is required.
 
 Release artifacts also carry GitHub build provenance and are published with a
-release manifest. Native installers and platform code-signing/notarization are
-not published yet; the checksum, manifest, SBOM, and provenance checks above
-are the release verification path for portable archives. If `gh attestation`
-is unavailable, retain the manifest and checksum files with the installed
-archive for later independent review.
+release manifest. Windows archives contain Authenticode-signed binaries and
+macOS archives contain Developer ID-signed binaries submitted to Apple
+notarization; Linux archives have detached GPG signatures for their checksums.
+The release signing key fingerprint must be obtained from the organization's
+separate trusted channel before `gpg --verify` is meaningful. If `gh
+attestation` is unavailable, retain the manifest, signatures, and checksum
+files with the installed archive for later independent review.
 
 For Linux headless deployments, see the [container deployment guide](../container.md)
 and the [service-manager deployment guide](SERVICE.md).

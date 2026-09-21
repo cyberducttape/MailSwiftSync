@@ -4,7 +4,9 @@ Convert customer-proof JSON into provider evidence records for release gate vali
 
 Usage:
   generate-provider-evidence.py <customer-proof.json> <source-provider> <destination-provider> <testing-phase> \
-    [--engine <name>] [--engine-version <version>] [--output <evidence.json>]
+    --run-id <id> --engine-version <version> --mailswiftsync-version <version> \
+    --mailswiftsync-commit <sha> --mailswiftsync-binary-sha256 <sha256> \
+    --imapsync-binary-sha256 <sha256> [--engine <name>] [--output <evidence.json>]
 
 The generated evidence records link back to the customer-proof via digest reference
 and aggregate test results into the format expected by verify-evidence-gate.sh.
@@ -12,42 +14,30 @@ and aggregate test results into the format expected by verify-evidence-gate.sh.
 
 import json
 import sys
-import subprocess
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+SUPPORTED_ENGINE_VERSIONS = {"imapsync": {"2.314"}}
 
-def get_git_commit() -> str:
-    """Get current git commit hash if available."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=2
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-    return "unknown"
-
-
-def compute_file_digest(file_path: str) -> str:
-    """Compute SHA256 digest of a file."""
-    try:
-        sha256 = hashlib.sha256()
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(4096), b''):
-                sha256.update(chunk)
-        return sha256.hexdigest()
-    except (OSError, IOError):
-        return "unknown"
+def canonical_proof_digest(proof: dict) -> str:
+    """Reproduce reports::integrity::with_proof_digest canonicalization."""
+    unsigned = dict(proof)
+    unsigned.pop("proof_digest", None)
+    unsigned.pop("proof_signature", None)
+    # serde_json's default Map representation is ordered, so mirror its
+    # canonical object-key ordering rather than relying on input insertion
+    # order from the proof file.
+    canonical = json.dumps(unsigned, separators=(",", ":"), ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def generate_evidence(proof_path: str, source_provider: str, destination_provider: str,
-                      phase: str, engine: str = "imapsync", engine_version: str = "2.314") -> dict:
+                      phase: str, engine: str = "imapsync", engine_version: str | None = None,
+                      run_id: str | None = None, mailswiftsync_version: str | None = None,
+                      mailswiftsync_commit: str | None = None,
+                      mailswiftsync_binary_sha256: str | None = None,
+                      imapsync_binary_sha256: str | None = None) -> dict:
     """Convert customer-proof into provider evidence record."""
 
     try:
@@ -58,61 +48,108 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
 
     if not isinstance(proof, dict):
         raise ValueError("Customer-proof must be a JSON object")
+    identity = {
+        "engine_version": engine_version,
+        "mailswiftsync_version": mailswiftsync_version,
+        "mailswiftsync_commit": mailswiftsync_commit,
+        "mailswiftsync_binary_sha256": mailswiftsync_binary_sha256,
+        "imapsync_binary_sha256": imapsync_binary_sha256,
+    }
+    if any(not isinstance(value, str) or not value for value in identity.values()):
+        raise ValueError("evidence requires identity captured from the executed binaries")
+    if engine in SUPPORTED_ENGINE_VERSIONS and engine_version not in SUPPORTED_ENGINE_VERSIONS[engine]:
+        raise ValueError(f"unsupported {engine} version for provider evidence: {engine_version}")
 
     # Verify proof structure
     if proof.get("format") != "mailswiftsync-customer-proof":
         raise ValueError("Invalid customer-proof format")
 
-    # Extract version information
-    app_version = proof.get("application_version", "unknown")
+    expected_digest = proof.get("proof_digest")
+    actual_digest = canonical_proof_digest(proof)
+    if not isinstance(expected_digest, str) or expected_digest != actual_digest:
+        raise ValueError("customer-proof canonical proof_digest is missing or invalid")
+    claim = proof.get("completion_claim")
+    if not isinstance(claim, dict):
+        raise ValueError("customer-proof is missing completion_claim")
 
-    # Aggregate results from mailboxes/runs
+    runs = proof.get("runs", [])
+    if not isinstance(runs, list) or not runs:
+        raise ValueError("customer-proof must contain run records")
+    selected_runs = [run for run in runs if isinstance(run, dict) and run.get("run_id") == run_id]
+    if run_id is None or len(selected_runs) != 1:
+        raise ValueError("evidence generation requires exactly one selected run_id")
+    selected_run = selected_runs[0]
+    project_id = proof.get("project", {}).get("project_id")
+    if not isinstance(project_id, str) or not project_id:
+        raise ValueError("customer-proof is missing project.project_id")
+    proof_source = proof.get("project", {}).get("source_provider")
+    proof_destination = proof.get("project", {}).get("destination_provider")
+    if proof_source is not None and proof_source != source_provider:
+        raise ValueError("source provider does not match the customer-proof project")
+    if proof_destination is not None and proof_destination != destination_provider:
+        raise ValueError("destination provider does not match the customer-proof project")
+    if selected_run.get("project_id") != project_id:
+        raise ValueError("selected run does not belong to the proof project")
+    mailbox_ids = {
+        mailbox.get("job_id") for mailbox in proof.get("mailboxes", [])
+        if isinstance(mailbox, dict) and isinstance(mailbox.get("job_id"), str)
+    }
+    if selected_run.get("job_id") is not None and selected_run.get("job_id") not in mailbox_ids:
+        raise ValueError("selected run does not belong to the proof mailbox set")
+    if selected_run.get("status") != "completed" or not selected_run.get("started_at") or not selected_run.get("finished_at"):
+        raise ValueError("selected evidence run is not a completed, timestamped run")
+    if phase == "dry_pilot":
+        if selected_run.get("phase_at_start") != "preflight" or claim.get("status") != "incomplete":
+            raise ValueError("dry_pilot evidence must reference a completed preflight run")
+    elif claim.get("status") != "durably_complete":
+        raise ValueError("live/recovery evidence requires a durable completion certificate")
+
+    # Aggregate the actual customer-proof schema. A qualification record may
+    # only be generated from strict verified mailbox evidence and completed
+    # runs; missing fields are errors, never defaults.
     total_messages = 0
     total_bytes = 0
-    mailboxes_count = 0
+    destination_messages = 0
+    destination_bytes = 0
+    mailboxes_count = len(proof.get("mailboxes", []))
     messages_verified = 0
-    overall_result = "pass"
+    if mailboxes_count == 0:
+        raise ValueError("customer-proof contains no mailboxes")
+    for mailbox in proof["mailboxes"]:
+        if phase == "dry_pilot":
+            continue
+        if not isinstance(mailbox, dict) or mailbox.get("state") != "verified":
+            raise ValueError("customer-proof contains a mailbox that is not strictly verified")
+        evidence = mailbox.get("evidence")
+        required = ("scope", "evidence_level", "source_messages", "destination_messages",
+                    "source_bytes", "destination_bytes", "unmatched_messages", "failed_messages")
+        if not isinstance(evidence, dict) or any(field not in evidence for field in required):
+            raise ValueError("customer-proof mailbox evidence is incomplete")
+        if evidence["scope"] != "engine-confirmed" or evidence["evidence_level"] != "Engine-confirmed exact match":
+            raise ValueError("customer-proof mailbox evidence is not engine-confirmed exact")
+        if any(evidence[field] != 0 for field in ("unmatched_messages", "failed_messages")):
+            raise ValueError("customer-proof contains unresolved mailbox evidence")
+        if evidence["source_messages"] <= 0 or evidence["source_bytes"] <= 0:
+            raise ValueError("customer-proof qualification requires non-empty mailbox evidence")
+        if evidence["source_messages"] != evidence["destination_messages"] or evidence["source_bytes"] != evidence["destination_bytes"]:
+            raise ValueError("customer-proof aggregate evidence is not balanced")
+        total_messages += evidence["source_messages"]
+        destination_messages += evidence["destination_messages"]
+        total_bytes += evidence["source_bytes"]
+        destination_bytes += evidence["destination_bytes"]
+        messages_verified += evidence["source_messages"]
 
-    mailboxes = proof.get("mailboxes", [])
-    if mailboxes:
-        mailboxes_count = len(mailboxes)
-
-        for mailbox in mailboxes:
-            if not isinstance(mailbox, dict):
-                continue
-
-            # Count total messages and bytes from mailbox metadata
-            metadata = mailbox.get("metadata", {})
-            if isinstance(metadata, dict):
-                total_messages += metadata.get("total_messages_source", 0)
-                total_bytes += metadata.get("total_bytes_source", 0)
-
-            # Extract results if present
-            evidence = mailbox.get("evidence")
-            if evidence and isinstance(evidence, dict):
-                messages_verified += evidence.get("messages_verified", 0)
-
-    # Check runs for overall result
-    runs = proof.get("runs", [])
-    if runs:
-        for run in runs:
-            if not isinstance(run, dict):
-                continue
-
-            # Check if any run failed
-            result = run.get("result")
-            if result == "fail":
-                overall_result = "fail"
-                break
-            elif result == "pass_with_exceptions":
-                if overall_result == "pass":
-                    overall_result = "pass_with_exceptions"
+    if phase != "dry_pilot" and any(
+        not isinstance(run, dict) or run.get("status") != "completed" for run in runs
+    ):
+        raise ValueError("live/recovery customer-proof must contain only completed runs")
+    if phase == "dry_pilot":
+        total_messages = destination_messages = 0
+        total_bytes = destination_bytes = 0
+        messages_verified = 0
 
     # Generate evidence record
     now = datetime.now(timezone.utc).isoformat()
-    proof_digest = compute_file_digest(proof_path)
-    git_commit = get_git_commit()
-
     project = proof.get("project", {})
 
     evidence = {
@@ -127,25 +164,39 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
             "mailboxes_tested": mailboxes_count,
             "messages_total": total_messages,
             "bytes_total": total_bytes,
+            "destination_messages_total": destination_messages,
+            "destination_bytes_total": destination_bytes,
         },
         "results": {
-            "overall_result": overall_result,
+            "overall_result": "pass" if phase == "dry_pilot" else "pass_with_exceptions",
             "messages_verified": messages_verified,
-            "verification_confidence": "high" if messages_verified > 0 else "medium" if total_messages > 0 else "low",
+            "verification_confidence": "not_applicable" if phase == "dry_pilot" else "aggregate_only",
         },
         "tester": {
             "name": "MailSwiftSync Provider Test",
             "email": "tests@mailswiftsync.local",
             "organization": "Test Harness",
         },
-        "notes": f"Generated from customer-proof: {Path(proof_path).name}",
+        "notes": (
+            f"Generated from customer-proof: {Path(proof_path).name}; "
+            "live/recovery records contain aggregate engine evidence only until "
+            "independent message-level reconciliation is wired into the run."
+        ),
         "source_provider": source_provider,
         "destination_provider": destination_provider,
         "source_auth_method": project.get("source_auth_method", "password"),
         "destination_auth_method": project.get("destination_auth_method", "password"),
-        "mailswiftsync_commit": git_commit,
-        "run_id": proof.get("runs", [{}])[0].get("run_id", "unknown") if proof.get("runs") else "unknown",
-        "proof_digest": proof_digest,
+        "mailswiftsync_version": mailswiftsync_version,
+        "mailswiftsync_commit": mailswiftsync_commit,
+        "mailswiftsync_binary_sha256": mailswiftsync_binary_sha256,
+        "imapsync_binary_sha256": imapsync_binary_sha256,
+        "run_id": selected_run["run_id"],
+        "selected_run_id": selected_run["run_id"],
+        "run_type": "preflight" if phase == "dry_pilot" else "recovery" if phase == "recovery_test" else "live",
+        "run_started_at": selected_run["started_at"],
+        "run_finished_at": selected_run["finished_at"],
+        "proof_digest": expected_digest,
+        "proof_verification": "canonical_digest_verified",
         "fixture_id": project.get("fixture_id", "provider-test"),
         "test_dataset_digest": project.get("dataset_digest", "unknown"),
     }
@@ -157,7 +208,9 @@ def main():
     if len(sys.argv) < 5:
         print(
             "Usage: generate-provider-evidence.py <customer-proof.json> <source-provider> <destination-provider> <testing-phase> "
-            "[--engine <name>] [--engine-version <version>] [--output <evidence.json>]",
+            "--run-id <id> --engine-version <version> --mailswiftsync-version <version> "
+            "--mailswiftsync-commit <sha> --mailswiftsync-binary-sha256 <sha256> "
+            "--imapsync-binary-sha256 <sha256> [--engine <name>] [--output <evidence.json>]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -168,7 +221,12 @@ def main():
     phase = sys.argv[4]
     output_path = None
     engine = "imapsync"
-    engine_version = "2.314"
+    engine_version = None
+    run_id = None
+    mailswiftsync_version = None
+    mailswiftsync_commit = None
+    mailswiftsync_binary_sha256 = None
+    imapsync_binary_sha256 = None
 
     # Parse optional arguments
     i = 5
@@ -182,12 +240,29 @@ def main():
         elif sys.argv[i] == "--engine-version" and i + 1 < len(sys.argv):
             engine_version = sys.argv[i + 1]
             i += 2
+        elif sys.argv[i] == "--run-id" and i + 1 < len(sys.argv):
+            run_id = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == "--mailswiftsync-version" and i + 1 < len(sys.argv):
+            mailswiftsync_version = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == "--mailswiftsync-commit" and i + 1 < len(sys.argv):
+            mailswiftsync_commit = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == "--mailswiftsync-binary-sha256" and i + 1 < len(sys.argv):
+            mailswiftsync_binary_sha256 = sys.argv[i + 1]
+            i += 2
+        elif sys.argv[i] == "--imapsync-binary-sha256" and i + 1 < len(sys.argv):
+            imapsync_binary_sha256 = sys.argv[i + 1]
+            i += 2
         else:
             i += 1
 
     try:
         evidence = generate_evidence(
-            proof_path, source_provider, destination_provider, phase, engine, engine_version
+            proof_path, source_provider, destination_provider, phase, engine, engine_version,
+            run_id, mailswiftsync_version, mailswiftsync_commit,
+            mailswiftsync_binary_sha256, imapsync_binary_sha256
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)

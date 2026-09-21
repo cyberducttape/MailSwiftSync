@@ -329,7 +329,7 @@ with small migrations first.
 2. **Enable 2-Step Verification** on source and destination accounts
 3. **Use TLS/SSL** (port 993) instead of plain STARTTLS when possible
 4. **Don't share credentials** — create dedicated app passwords for MailSwiftSync
-5. **Secure your MailSwiftSync state directory** — it contains OAuth tokens
+5. **Secure your MailSwiftSync state directory** — it contains migration state and evidence. OAuth refresh configuration and active access tokens are handled through the OS keyring and short-lived private runtime files, not the SQLite state database.
 6. **Review audit logs** on provider accounts after migration completes
 
 ---

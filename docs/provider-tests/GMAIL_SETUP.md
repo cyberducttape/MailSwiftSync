@@ -58,6 +58,8 @@ Before migration, add test mailboxes to the source account:
 #!/usr/bin/env bash
 source_user="mailswiftsync-source-test@gmail.com"
 source_password="$(cat /run/secrets/gmail-source)"
+dest_user="mailswiftsync-dest-test@gmail.com"
+dest_password="$(cat /run/secrets/gmail-dest)"
 
 # Create a few test mailboxes using imapsync's list/create logic
 # or use Gmail's web UI to create labels:
@@ -68,7 +70,7 @@ source_password="$(cat /run/secrets/gmail-source)"
 
 # Verify IMAP can see them:
 imapsync --host1 imap.gmail.com --user1 "$source_user" --password1 "$source_password" \
-  --host2 imap.gmail.com --user2 "$source_user" --password2 "$source_password" \
+  --host2 imap.gmail.com --user2 "$dest_user" --password2 "$dest_password" \
   --listfolders --nosyncinternaldates --nosyncacls
 ```
 
@@ -108,7 +110,7 @@ export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET="/run/secrets/gmail-source"
 export MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT="imap.gmail.com:993"
 export MAILSWIFTSYNC_PROVIDER_DEST_USER="mailswiftsync-dest-test@gmail.com"
 export MAILSWIFTSYNC_PROVIDER_DEST_SECRET="/run/secrets/gmail-dest"
-export MAILSWIFTSYNC_EVIDENCE_OUTPUT="/tmp/gmail-proof.json"
+export MAILSWIFTSYNC_EVIDENCE_OUTPUT="/tmp/gmail-provider-evidence"
 ```
 
 ### Step 2: Run the test
@@ -131,7 +133,7 @@ bash scripts/provider-integration-test.sh gmail
 === Test Summary for gmail ===
 [durable state summary]
 ✓ All tests passed for gmail
-Evidence: /tmp/mailswiftsync-provider-test.XXXXXX/gmail-proof.json
+Evidence: /tmp/gmail-provider-evidence/gmail-live_pilot.json
 ```
 
 ## Recording Evidence
@@ -169,8 +171,10 @@ After a successful test run, document the results:
 
 2. **Customer proof** — save anonymized copy (no credentials or endpoints):
    ```bash
-   cat /tmp/gmail-proof.json | jq '.source_endpoint = "[redacted]" | .dest_endpoint = "[redacted]"' \
-     > docs/provider-tests/gmail-proof-2025-09-17.json
+   cat /tmp/gmail-provider-evidence/customer-proof.json | jq '.' \
+     > docs/provider-tests/gmail-proof-YYYY-MM-DD.json
+   # Evidence records are in the same directory, one per required phase.
+   ls -1 /tmp/gmail-provider-evidence/*-to-*-*.json
    ```
 
 3. **Update compatibility matrix row:**

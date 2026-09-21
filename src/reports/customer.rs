@@ -63,6 +63,7 @@ pub(crate) fn export_from_store_with_options(
                 None => None,
             };
             Ok(serde_json::json!({
+                "job_id": job.id,
                 "source_mailbox": job.source_mailbox,
                 "destination_mailbox": job.destination_mailbox,
                 "state": job.state,
@@ -83,6 +84,8 @@ pub(crate) fn export_from_store_with_options(
             let value = run.run;
             Ok(serde_json::json!({
                 "run_id": value.id,
+                "project_id": project.id.clone(),
+                "job_id": value.job_id,
                 "engine": value.engine,
                 "engine_version": run.engine_version,
                 "phase_at_start": value.phase_at_start,
@@ -108,6 +111,7 @@ pub(crate) fn export_from_store_with_options(
             }
         },
         "project": {
+            "project_id": project.id.clone(),
             "name": project.name,
             "phase": format!("{:?}", project.phase),
         },

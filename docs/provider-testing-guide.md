@@ -28,7 +28,8 @@ phases.
 2. **IMAP access details**
    - Endpoint (host:port)
    - Transport (IMAPS/STARTTLS)
-   - Authentication method (password/OAuth2/app password)
+   - Authentication method independently for source and destination
+     (`password` or `oauth2`; Microsoft 365 IMAP requires `oauth2`)
    - Provider-specific IMAP features (SPECIAL-USE, namespace, etc.)
 
 3. **Mailbox test data**
@@ -155,6 +156,20 @@ mailswiftsync --headless /tmp/gmail-test.db live
   Online IMAP. App passwords do not restore the removed Basic Authentication
   path.
 - **Rate limits:** Connection throttling possible under load
+
+For a Gmail → Microsoft 365 qualification run, the harness must be invoked
+with `MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2`. The destination secret file
+must contain a current OAuth access token with the delegated IMAP scope; a
+password or app password is rejected before the test starts. The source side
+may independently use `password` or `oauth2`:
+
+```bash
+export MAILSWIFTSYNC_SOURCE_PROVIDER=gmail
+export MAILSWIFTSYNC_DESTINATION_PROVIDER=microsoft365
+export MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH=oauth2
+export MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2
+bash scripts/provider-integration-test.sh gmail
+```
 
 ### Fastmail
 

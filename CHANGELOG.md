@@ -4,6 +4,15 @@ All notable changes to MailSwiftSync are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed provider qualification evidence generation to consume the actual
+  customer-proof schema, validate the embedded canonical proof digest, reject
+  failed/incomplete mailbox runs, and require nontrivial high-confidence
+  source/destination totals before release-gate acceptance.
+- Added release-version validation so tags must match the Cargo package version
+  and use the prefixed `v0.1.0-alpha`/`v0.1.0-beta.1`/`v0.1.0` scheme.
+
 ### Added
 
 - A new wiki page, "Provider runbooks", with concrete endpoint/auth/folder
