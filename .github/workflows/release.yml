@@ -24,7 +24,10 @@ jobs:
       - run: scripts/verify-compatibility-matrix.sh --release docs/compatibility-matrix.md
       - name: Install provider evidence validator
         run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
-      - run: scripts/verify-evidence-gate.sh --release
+      - name: Verify provider evidence
+        env:
+          MAILSWIFTSYNC_RELEASE_COMMIT: ${{ github.sha }}
+        run: scripts/verify-evidence-gate.sh --release
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
       - name: Install cargo-audit

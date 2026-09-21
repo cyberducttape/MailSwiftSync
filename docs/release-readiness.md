@@ -94,7 +94,9 @@ and require the corresponding integration run.
   `--diagnostic-log <directory>` transcript. It is disabled by default; when
   enabled, engine output is secret-redacted, bounded to 20 owner-only files,
   names files with project/run identifiers, and warns that mailbox metadata may
-  be present. Batch commands reject this option until their per-child log
+  be present. Newly created directories are restricted, while existing
+  directory permissions are preserved and must be selected appropriately by
+  the operator. Batch commands reject this option until their per-child log
   lifecycle is explicitly defined.
 - A headless `customer-proof <state.db> <output.json>` export uses the same
   redacted customer artifact as the GUI, so automation can produce a proof

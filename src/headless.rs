@@ -48,6 +48,7 @@ pub(crate) struct HeadlessStatusSummary {
     pub(crate) returned_projects: usize,
     pub(crate) total_projects: usize,
     pub(crate) projects_truncated: bool,
+    pub(crate) aggregate_mailbox_state_counts: core::MailboxStateCounts,
     pub(crate) projects: Vec<HeadlessProjectSummary>,
 }
 
@@ -283,6 +284,12 @@ pub(crate) fn headless_status_summary(
     } else {
         store.project_count().map_err(|error| error.to_string())?
     };
+    let aggregate_mailbox_state_counts = if let Some(project_id) = selected_project_id {
+        store.mailbox_state_counts(project_id)
+    } else {
+        store.all_mailbox_state_counts()
+    }
+    .map_err(|error| error.to_string())?;
     let projects = if let Some(project_id) = selected_project_id {
         store
             .project(project_id)
@@ -329,6 +336,7 @@ pub(crate) fn headless_status_summary(
         returned_projects: summaries.len(),
         total_projects,
         projects_truncated: summaries.len() < total_projects,
+        aggregate_mailbox_state_counts,
         projects: summaries,
     })
 }
@@ -418,13 +426,12 @@ pub(crate) fn fleet_status(root: &std::path::Path) -> Result<FleetStatus, String
     for path in candidates {
         match headless_status_summary(&path, None) {
             Ok(summary) => {
-                for project in &summary.projects {
-                    totals.total += project.mailbox_state_counts.total;
-                    totals.ready += project.mailbox_state_counts.ready;
-                    totals.running += project.mailbox_state_counts.running;
-                    totals.verified += project.mailbox_state_counts.verified;
-                    totals.needs_review += project.mailbox_state_counts.needs_review;
-                }
+                let aggregate = summary.aggregate_mailbox_state_counts;
+                totals.total += aggregate.total;
+                totals.ready += aggregate.ready;
+                totals.running += aggregate.running;
+                totals.verified += aggregate.verified;
+                totals.needs_review += aggregate.needs_review;
                 ledgers.push(FleetLedgerSummary {
                     path: path.display().to_string(),
                     summary,

@@ -13,6 +13,13 @@
       "minimum_messages": 100,
       "minimum_folders": 3,
       "minimum_bytes": 1024,
+      "scenario_requirements": {
+        "large-mailbox-10k": {"minimum_messages": 10000},
+        "large-messages": {"minimum_message_bytes": 10485760},
+        "unicode-folders": {"unicode_folders_observed": true},
+        "special-use-folders": {"special_use_folders_observed": true},
+        "mismatch-detection": {"mismatch_planted_and_detected": true}
+      },
       "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
@@ -27,6 +34,13 @@
       "minimum_messages": 100,
       "minimum_folders": 3,
       "minimum_bytes": 1024,
+      "scenario_requirements": {
+        "large-mailbox-10k": {"minimum_messages": 10000},
+        "large-messages": {"minimum_message_bytes": 10485760},
+        "unicode-folders": {"unicode_folders_observed": true},
+        "special-use-folders": {"special_use_folders_observed": true},
+        "mismatch-detection": {"mismatch_planted_and_detected": true}
+      },
       "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
@@ -41,6 +55,13 @@
       "minimum_messages": 100,
       "minimum_folders": 3,
       "minimum_bytes": 1024,
+      "scenario_requirements": {
+        "large-mailbox-10k": {"minimum_messages": 10000},
+        "large-messages": {"minimum_message_bytes": 10485760},
+        "unicode-folders": {"unicode_folders_observed": true},
+        "special-use-folders": {"special_use_folders_observed": true},
+        "mismatch-detection": {"mismatch_planted_and_detected": true}
+      },
       "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     }

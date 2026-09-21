@@ -6,7 +6,7 @@ Usage:
   generate-provider-evidence.py <customer-proof.json> <source-provider> <destination-provider> <testing-phase> \
     --run-id <id> --engine-version <version> --mailswiftsync-version <version> \
     --mailswiftsync-commit <sha> --mailswiftsync-binary-sha256 <sha256> \
-    --imapsync-binary-sha256 <sha256> [--engine <name>] [--output <evidence.json>]
+    --imapsync-binary-sha256 <sha256> --qualification-bundle-id <id> [--engine <name>] [--output <evidence.json>]
 
 The generated evidence records link back to the customer-proof via digest reference
 and aggregate test results into the format expected by verify-evidence-gate.sh.
@@ -15,10 +15,12 @@ and aggregate test results into the format expected by verify-evidence-gate.sh.
 import json
 import sys
 import hashlib
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 SUPPORTED_ENGINE_VERSIONS = {"imapsync": {"2.314"}}
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 def canonical_proof_digest(proof: dict) -> str:
     """Reproduce reports::integrity::with_proof_digest canonicalization."""
@@ -37,7 +39,8 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
                       run_id: str | None = None, mailswiftsync_version: str | None = None,
                       mailswiftsync_commit: str | None = None,
                       mailswiftsync_binary_sha256: str | None = None,
-                      imapsync_binary_sha256: str | None = None) -> dict:
+                      imapsync_binary_sha256: str | None = None,
+                      qualification_bundle_id: str | None = None) -> dict:
     """Convert customer-proof into provider evidence record."""
 
     try:
@@ -54,6 +57,7 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         "mailswiftsync_commit": mailswiftsync_commit,
         "mailswiftsync_binary_sha256": mailswiftsync_binary_sha256,
         "imapsync_binary_sha256": imapsync_binary_sha256,
+        "qualification_bundle_id": qualification_bundle_id,
     }
     if any(not isinstance(value, str) or not value for value in identity.values()):
         raise ValueError("evidence requires identity captured from the executed binaries")
@@ -79,9 +83,31 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
     if run_id is None or len(selected_runs) != 1:
         raise ValueError("evidence generation requires exactly one selected run_id")
     selected_run = selected_runs[0]
+    recorded_engine = selected_run.get("engine")
+    recorded_engine_version = selected_run.get("engine_version")
+    if not isinstance(recorded_engine, str) or not recorded_engine:
+        raise ValueError("selected evidence run is missing its recorded engine")
+    if not isinstance(recorded_engine_version, str) or not recorded_engine_version:
+        raise ValueError("selected evidence run is missing its recorded engine version")
+    if engine != recorded_engine:
+        raise ValueError(
+            f"engine claim {engine!r} does not match selected run engine {recorded_engine!r}"
+        )
+    if engine_version != recorded_engine_version:
+        raise ValueError(
+            "engine version claim "
+            f"{engine_version!r} does not match selected run engine version "
+            f"{recorded_engine_version!r}"
+        )
     project_id = proof.get("project", {}).get("project_id")
     if not isinstance(project_id, str) or not project_id:
         raise ValueError("customer-proof is missing project.project_id")
+    dataset_digest = proof.get("project", {}).get("dataset_digest")
+    if not isinstance(dataset_digest, str) or not SHA256_RE.fullmatch(dataset_digest):
+        raise ValueError("customer-proof is missing a real project.dataset_digest")
+    scenario_observations = proof.get("project", {}).get("scenario_observations")
+    if not isinstance(scenario_observations, dict):
+        raise ValueError("customer-proof is missing project.scenario_observations")
     provider_identity = proof.get("provider_identity")
     required_identity = (
         "source_provider", "destination_provider", "source_auth_method",
@@ -91,7 +117,7 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         not isinstance(provider_identity.get(field), str) or not provider_identity[field]
         for field in required_identity
     ):
-        raise ValueError("customer-proof is missing signed provider identity")
+        raise ValueError("customer-proof is missing provider qualification identity")
     if provider_identity["source_provider"] != source_provider:
         raise ValueError("source provider does not match the customer-proof identity")
     if provider_identity["destination_provider"] != destination_provider:
@@ -205,7 +231,13 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
             "destination_bytes_total": destination_bytes,
             "folders_total": total_folders,
             "destination_folders_total": destination_folders,
+            "maximum_message_bytes": scenario_observations["large_messages"]["maximum_message_bytes"],
+            "unicode_folders_observed": scenario_observations["unicode_folders"]["observed"],
+            "special_use_folders_observed": scenario_observations["special_use_folders"]["observed"],
+            "mismatch_planted": scenario_observations["mismatch_detection"]["planted"],
+            "mismatch_detected": scenario_observations["mismatch_detection"]["detected"],
         },
+        "scenario_observations": scenario_observations,
         "results": {
             "overall_result": "pass" if phase == "dry_pilot" else "pass_with_exceptions",
             "messages_covered_by_aggregate_evidence": messages_covered_by_aggregate_evidence,
@@ -229,6 +261,7 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         "mailswiftsync_commit": mailswiftsync_commit,
         "mailswiftsync_binary_sha256": mailswiftsync_binary_sha256,
         "imapsync_binary_sha256": imapsync_binary_sha256,
+        "qualification_bundle_id": qualification_bundle_id,
         "run_id": selected_run["run_id"],
         "selected_run_id": selected_run["run_id"],
         "run_type": "preflight" if phase == "dry_pilot" else "recovery" if phase == "recovery_test" else "live",
@@ -239,7 +272,7 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         "proof_file": Path(proof_path).name,
         "fixture_id": provider_identity["fixture_id"],
         "scenario_ids": provider_identity["scenario_ids"],
-        "test_dataset_digest": project.get("dataset_digest", "unknown"),
+        "test_dataset_digest": dataset_digest,
     }
 
     return evidence
@@ -251,7 +284,7 @@ def main():
             "Usage: generate-provider-evidence.py <customer-proof.json> <source-provider> <destination-provider> <testing-phase> "
             "--run-id <id> --engine-version <version> --mailswiftsync-version <version> "
             "--mailswiftsync-commit <sha> --mailswiftsync-binary-sha256 <sha256> "
-            "--imapsync-binary-sha256 <sha256> [--engine <name>] [--output <evidence.json>]",
+            "--imapsync-binary-sha256 <sha256> --qualification-bundle-id <id> [--engine <name>] [--output <evidence.json>]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -268,6 +301,7 @@ def main():
     mailswiftsync_commit = None
     mailswiftsync_binary_sha256 = None
     imapsync_binary_sha256 = None
+    qualification_bundle_id = None
 
     # Parse optional arguments
     i = 5
@@ -296,6 +330,9 @@ def main():
         elif sys.argv[i] == "--imapsync-binary-sha256" and i + 1 < len(sys.argv):
             imapsync_binary_sha256 = sys.argv[i + 1]
             i += 2
+        elif sys.argv[i] == "--qualification-bundle-id" and i + 1 < len(sys.argv):
+            qualification_bundle_id = sys.argv[i + 1]
+            i += 2
         else:
             i += 1
 
@@ -303,7 +340,7 @@ def main():
         evidence = generate_evidence(
             proof_path, source_provider, destination_provider, phase, engine, engine_version,
             run_id, mailswiftsync_version, mailswiftsync_commit,
-            mailswiftsync_binary_sha256, imapsync_binary_sha256
+            mailswiftsync_binary_sha256, imapsync_binary_sha256, qualification_bundle_id
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)

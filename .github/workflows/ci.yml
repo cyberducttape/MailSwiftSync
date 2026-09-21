@@ -28,6 +28,7 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
       - run: python3 tests/provider_evidence_generator_test.py
       - run: python3 tests/provider_evidence_schema_test.py
+      - run: python3 tests/verify_evidence_gate_test.py
       - run: scripts/verify-compatibility-matrix.sh docs/compatibility-matrix.md
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features

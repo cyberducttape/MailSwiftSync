@@ -162,6 +162,12 @@ After a successful test run, document the results:
    - Live pilot: [record actual result]
    - Recovery: [record actual result]
    - Evidence: [record actual result]
+
+Scenario names are not evidence by themselves. Record only scenarios actually
+executed by the fixture and retain the fixture manifest/dataset digest with the
+phase proofs. The current harness does not complete hosted-provider release
+qualification until structured observations and independent message evidence
+are available.
    
    **Discovered Quirks:**
    - Gmail's [Gmail]/All Mail folder contains all messages (including sent); not migrated by default

@@ -186,6 +186,22 @@ impl StateStore {
             },
         )
     }
+
+    pub fn all_mailbox_state_counts(&self) -> rusqlite::Result<MailboxStateCounts> {
+        self.connection.query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN state='ready' THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('running','claimed') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END), SUM(CASE WHEN state IN ('attention','failed','cancelled','verification_difference') THEN 1 ELSE 0 END) FROM mailbox_jobs",
+            [],
+            |row| {
+                Ok(MailboxStateCounts {
+                    total: row.get::<_, i64>(0)? as usize,
+                    ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize,
+                    running: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
+                    verified: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize,
+                    needs_review: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize,
+                })
+            },
+        )
+    }
     pub fn all_mailboxes_verified(&self, project_id: &str) -> rusqlite::Result<bool> {
         let (total, verified): (i64, i64) = self.connection.query_row(
             "SELECT COUNT(*), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
