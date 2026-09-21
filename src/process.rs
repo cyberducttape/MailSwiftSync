@@ -375,6 +375,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn job_supervisor_kills_the_engine_tree_when_dropped() {
+        skip_on_windows_hosted_runner!();
         let shell = std::env::var_os("COMSPEC")
             .map(std::path::PathBuf::from)
             .filter(|path| path.is_file())
