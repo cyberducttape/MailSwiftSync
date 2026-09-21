@@ -33,6 +33,8 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
         project["source_provider"] = source_provider
     if destination_provider is not None:
         project["destination_provider"] = destination_provider
+    identity_source = source_provider or "gmail"
+    identity_destination = destination_provider or "microsoft365"
     value = {
         "format": "mailswiftsync-customer-proof",
         "format_version": 1,
@@ -40,6 +42,14 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
         "artifact_role": "customer_evidence",
         "completion_claim": {"status": claim_status},
         "project": project,
+        "provider_identity": {
+            "source_provider": identity_source,
+            "destination_provider": identity_destination,
+            "source_auth_method": "password",
+            "destination_auth_method": "oauth2",
+            "fixture_id": "fixture-1",
+            "scenario_ids": ["basic-small", "forced-interruption"],
+        },
         "mailboxes": [{
             "job_id": "job",
             "source_mailbox": "source",
@@ -52,6 +62,8 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
                 "destination_messages": messages,
                 "source_bytes": 100,
                 "destination_bytes": 100,
+                "source_folders": 3,
+                "destination_folders": 3,
                 "unmatched_messages": 0,
                 "failed_messages": 0,
             },
@@ -88,7 +100,8 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
             evidence = self.generate(proof())
         self.assertEqual(evidence["results"]["overall_result"], "pass_with_exceptions")
         self.assertEqual(evidence["test_summary"]["messages_total"], 2)
-        self.assertEqual(evidence["results"]["messages_verified"], 2)
+        self.assertEqual(evidence["results"]["messages_covered_by_aggregate_evidence"], 2)
+        self.assertNotIn("messages_verified", evidence["results"])
         self.assertEqual(evidence["results"]["verification_confidence"], "aggregate_only")
         self.assertEqual(evidence["proof_verification"], "canonical_digest_verified")
 
@@ -128,9 +141,37 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
             "status": "completed", "phase_at_start": "attention",
             "started_at": "2026-09-20T00:02:00Z", "finished_at": "2026-09-20T00:03:00Z",
         })
+        recovery["runs"].insert(0, {
+            "run_id": "abandoned-run", "project_id": "project", "job_id": "job",
+            "status": "abandoned", "phase_at_start": "live",
+            "started_at": "2026-09-20T00:00:00Z", "finished_at": "2026-09-20T00:00:10Z",
+        })
+        recovery["proof_digest"] = MODULE.canonical_proof_digest(recovery)
         evidence = self.generate(recovery, phase="recovery_test", run_id="recovery-run")
         self.assertEqual(evidence["run_type"], "recovery")
         self.assertEqual(evidence["selected_run_id"], "recovery-run")
+
+    def test_live_qualification_allows_a_resolved_historical_failure(self):
+        value = proof()
+        value["runs"].insert(0, {
+            "run_id": "failed-attempt", "project_id": "project", "job_id": "job",
+            "status": "failed", "phase_at_start": "live",
+            "started_at": "2026-09-19T23:59:00Z", "finished_at": "2026-09-19T23:59:10Z",
+        })
+        value["proof_digest"] = MODULE.canonical_proof_digest(value)
+        evidence = self.generate(value)
+        self.assertEqual(evidence["selected_run_id"], "run")
+
+    def test_recovery_rejects_an_abandoned_run_from_another_job(self):
+        value = proof()
+        value["runs"].insert(0, {
+            "run_id": "wrong-job", "project_id": "project", "job_id": "other-job",
+            "status": "abandoned", "phase_at_start": "live",
+            "started_at": "2026-09-19T23:59:00Z", "finished_at": "2026-09-19T23:59:10Z",
+        })
+        value["proof_digest"] = MODULE.canonical_proof_digest(value)
+        with self.assertRaises(ValueError):
+            self.generate(value, phase="recovery_test")
 
     def test_pair_engine_and_confidence_failures_are_rejected(self):
         with self.assertRaises(ValueError):

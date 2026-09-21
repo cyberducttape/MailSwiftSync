@@ -15,6 +15,9 @@ const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
 pub(crate) struct HeadlessStatus {
     pub(crate) schema_version: i64,
     pub(crate) active_processes: Vec<core::ActiveProcess>,
+    pub(crate) returned_projects: usize,
+    pub(crate) total_projects: usize,
+    pub(crate) projects_truncated: bool,
     pub(crate) projects: Vec<HeadlessProjectStatus>,
 }
 
@@ -42,6 +45,9 @@ pub(crate) struct HeadlessMailboxStatus {
 pub(crate) struct HeadlessStatusSummary {
     pub(crate) schema_version: i64,
     pub(crate) active_processes: Vec<core::ActiveProcess>,
+    pub(crate) returned_projects: usize,
+    pub(crate) total_projects: usize,
+    pub(crate) projects_truncated: bool,
     pub(crate) projects: Vec<HeadlessProjectSummary>,
 }
 
@@ -183,6 +189,16 @@ pub(crate) fn headless_status(
     selected_project_id: Option<&str>,
 ) -> Result<HeadlessStatus, String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let total_projects = if let Some(project_id) = selected_project_id {
+        usize::from(
+            store
+                .project(project_id)
+                .map_err(|error| error.to_string())?
+                .is_some(),
+        )
+    } else {
+        store.project_count().map_err(|error| error.to_string())?
+    };
     let projects = if let Some(project_id) = selected_project_id {
         store
             .project(project_id)
@@ -242,6 +258,9 @@ pub(crate) fn headless_status(
     Ok(HeadlessStatus {
         schema_version: core::CURRENT_SCHEMA_VERSION,
         active_processes,
+        returned_projects: result.len(),
+        total_projects,
+        projects_truncated: result.len() < total_projects,
         projects: result,
     })
 }
@@ -254,6 +273,16 @@ pub(crate) fn headless_status_summary(
     selected_project_id: Option<&str>,
 ) -> Result<HeadlessStatusSummary, String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let total_projects = if let Some(project_id) = selected_project_id {
+        usize::from(
+            store
+                .project(project_id)
+                .map_err(|error| error.to_string())?
+                .is_some(),
+        )
+    } else {
+        store.project_count().map_err(|error| error.to_string())?
+    };
     let projects = if let Some(project_id) = selected_project_id {
         store
             .project(project_id)
@@ -297,6 +326,9 @@ pub(crate) fn headless_status_summary(
         active_processes: store
             .active_processes()
             .map_err(|error| error.to_string())?,
+        returned_projects: summaries.len(),
+        total_projects,
+        projects_truncated: summaries.len() < total_projects,
         projects: summaries,
     })
 }
@@ -447,10 +479,16 @@ pub(crate) fn headless_execute_with_credentials(
     state_path: &std::path::Path,
     live: bool,
     credentials: Option<HeadlessCredentials>,
+    diagnostic_log: Option<&std::path::Path>,
 ) -> Result<String, String> {
     // Use the same startup recovery as the GUI, but pass the ledger path as
     // data instead of mutating process-global environment state.
     let mut app = App::from_state_path(Some(state_path));
+    if let Some(directory) = diagnostic_log {
+        app.diagnostic_logger = Some(std::sync::Arc::new(crate::DiagnosticLogger::create(
+            directory,
+        )?));
+    }
     if let Some(credentials) = credentials {
         app.form.source_password = credentials.source;
         app.form.destination_password = credentials.destination;

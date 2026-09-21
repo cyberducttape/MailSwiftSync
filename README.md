@@ -197,6 +197,12 @@ mailswiftsync headless /path/to/state.db batch-preflight
 mailswiftsync headless /path/to/state.db batch-live
 ```
 
+For opt-in headless incident troubleshooting, single-mailbox preflight/live
+commands may also receive `--diagnostic-log /secure/directory`. This writes
+redacted engine output to owner-only files named with the project and run IDs,
+retains the newest 20 transcripts, and warns that mailbox/folder metadata may
+be present. It is disabled by default and is not accepted for batch commands.
+
 Use `mailswiftsync --help` for the complete command contract and
 `mailswiftsync --version` when collecting support or audit metadata. Headless
 live commands return nonzero when work remains unresolved; a zero exit status
@@ -229,7 +235,9 @@ is included as `issued_by` when either field is non-blank, for MSPs and
 consultants who want their own name on the artifact they hand to a customer.
 `fleet-status` aggregates secret-free `status --summary` output across every
 MailSwiftSync ledger found under a directory (read-only, no instance lock
-taken), for operators running multiple instances or
+taken). Each ledger summary reports returned and total project counts and an
+explicit truncation flag when its 1,000-project recent view is incomplete.
+This is for operators running multiple instances or
 [sharding a large migration](docs/wiki/Scaling-large-migrations.md) across
 several ledgers. `notify-webhook` POSTs that same secret-free summary as
 JSON to one operator-configured `https://` URL — for updating a PSA/ticketing

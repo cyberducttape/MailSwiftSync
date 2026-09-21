@@ -323,7 +323,10 @@ fi
 echo "PASS: durable ledger records a verified terminal state"
 
 proof="$workspace/customer-proof.json"
-run_product customer-proof "$state" "$proof"
+run_product customer-proof "$state" "$proof" \
+  --source-provider generic_imap --destination-provider generic_imap \
+  --source-auth password --destination-auth password --fixture-id packaged-generic-imap \
+  --scenario-ids basic-small,idempotent-delta
 run_product verify "$proof"
 echo "PASS: packaged customer proof exported and verified"
 if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then

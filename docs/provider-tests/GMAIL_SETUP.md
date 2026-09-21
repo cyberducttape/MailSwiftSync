@@ -110,6 +110,10 @@ export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET="/run/secrets/gmail-source"
 export MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT="imap.gmail.com:993"
 export MAILSWIFTSYNC_PROVIDER_DEST_USER="mailswiftsync-dest-test@gmail.com"
 export MAILSWIFTSYNC_PROVIDER_DEST_SECRET="/run/secrets/gmail-dest"
+# Recovery must use a separate, empty destination account.
+export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT="imap.gmail.com:993"
+export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER="mailswiftsync-recovery-test@gmail.com"
+export MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET="/run/secrets/gmail-recovery"
 export MAILSWIFTSYNC_EVIDENCE_OUTPUT="/tmp/gmail-provider-evidence"
 ```
 
@@ -133,7 +137,7 @@ bash scripts/provider-integration-test.sh gmail
 === Test Summary for gmail ===
 [durable state summary]
 ✓ All tests passed for gmail
-Evidence: /tmp/gmail-provider-evidence/gmail-live_pilot.json
+Evidence: /tmp/gmail-provider-evidence/gmail-to-gmail-live_pilot.json
 ```
 
 ## Recording Evidence

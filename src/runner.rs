@@ -40,12 +40,14 @@ pub(crate) struct RunContext<'a> {
     pub(crate) tx: &'a mpsc::SyncSender<crate::Event>,
     pub(crate) run_id: &'a str,
     pub(crate) job_id: &'a str,
+    pub(crate) project_id: &'a str,
     pub(crate) prefix: &'a str,
     pub(crate) cancel: &'a AtomicBool,
     pub(crate) secrets: &'a [SecretString],
     pub(crate) timeout: Duration,
     pub(crate) dovecot_exit_two_is_delta: bool,
     pub(crate) imapsync_output_profile: verification::ImapsyncOutputProfile,
+    pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
 }
 
 pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, String> {
@@ -56,12 +58,14 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         tx,
         run_id,
         job_id,
+        project_id,
         prefix,
         cancel,
         secrets,
         timeout,
         dovecot_exit_two_is_delta,
         imapsync_output_profile,
+        diagnostic_logger,
     } = context;
     let mut command = Command::new(executable);
     command
@@ -119,6 +123,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let out_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
     let out_run_id = run_id.to_owned();
     let out_job_id = job_id.to_owned();
+    let out_project_id = project_id.to_owned();
+    let out_logger = diagnostic_logger.clone();
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
             let mut safe = line;
@@ -128,6 +134,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 }
             }
             record_process_tail(&out_tail, &safe);
+            if let Some(logger) = &out_logger {
+                let _ =
+                    logger.write_line(&out_project_id, &out_run_id, &out_job_id, "stdout", &safe);
+            }
             if let Ok(mut evidence) = out_evidence.lock() {
                 evidence.observe(&safe);
             }
@@ -157,6 +167,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let err_dropped_diagnostics = Arc::clone(&dropped_diagnostics);
     let err_run_id = run_id.to_owned();
     let err_job_id = job_id.to_owned();
+    let err_project_id = project_id.to_owned();
+    let err_logger = diagnostic_logger;
     let err_thread = thread::spawn(move || {
         for_each_lossy_line(stderr, |line| {
             let mut safe = line;
@@ -166,6 +178,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 }
             }
             record_process_tail(&err_tail, &safe);
+            if let Some(logger) = &err_logger {
+                let _ =
+                    logger.write_line(&err_project_id, &err_run_id, &err_job_id, "stderr", &safe);
+            }
             if let Ok(mut evidence) = err_evidence.lock() {
                 evidence.observe(&safe);
             }

@@ -72,6 +72,9 @@ pub(crate) struct App {
     pub(crate) preflight_credential_fingerprint: Option<String>,
     pub(crate) run_id: Option<String>,
     pub(crate) active_run: Option<ActiveRunContext>,
+    /// Optional operator-selected diagnostic transcript. Disabled by default
+    /// because engine output may contain mailbox and folder metadata.
+    pub(crate) diagnostic_logger: Option<Arc<DiagnosticLogger>>,
     /// Non-secret plan values captured for the active execution. The egui
     /// form remains visible while a run is active, but edits must not mutate
     /// the plan presented to the operator or the next retry.

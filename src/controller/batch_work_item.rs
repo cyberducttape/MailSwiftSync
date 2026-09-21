@@ -272,6 +272,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         tx: &tx,
                         run_id: &child_run_id,
                         job_id: &job_id,
+                        project_id: &batch_project_id,
                         prefix: &prefix,
                         cancel: &cancel,
                         secrets: &secrets,
@@ -281,6 +282,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         dovecot_exit_two_is_delta: job.form.engine() == core::Engine::Dovecot
                             && !job.form.dry_run,
                         imapsync_output_profile,
+                        diagnostic_logger: None,
                     })
                     .map(|stream| {
                         if !job.form.dry_run

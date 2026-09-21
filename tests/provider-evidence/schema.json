@@ -18,12 +18,14 @@
     "results",
     "proof_digest",
     "proof_verification",
+    "proof_file",
     "run_id",
     "selected_run_id",
     "run_type",
     "run_started_at",
     "run_finished_at",
     "fixture_id",
+    "scenario_ids",
     "mailswiftsync_version",
     "mailswiftsync_commit",
     "mailswiftsync_binary_sha256",
@@ -73,7 +75,7 @@
     "test_summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mailboxes_tested", "messages_total", "bytes_total", "destination_messages_total", "destination_bytes_total"],
+      "required": ["mailboxes_tested", "messages_total", "bytes_total", "destination_messages_total", "destination_bytes_total", "folders_total", "destination_folders_total"],
       "properties": {
         "mailboxes_tested": {
           "type": "integer",
@@ -92,6 +94,8 @@
         },
         "destination_messages_total": {"type": "integer", "minimum": 0},
         "destination_bytes_total": {"type": "integer", "minimum": 0},
+        "folders_total": {"type": "integer", "minimum": 0},
+        "destination_folders_total": {"type": "integer", "minimum": 0},
         "special_folders_tested": {
           "type": "boolean",
           "description": "Whether special-use folders were included"
@@ -109,16 +113,22 @@
     "results": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["overall_result", "messages_verified", "verification_confidence"],
+      "required": ["overall_result", "messages_covered_by_aggregate_evidence", "verification_confidence"],
       "properties": {
         "overall_result": {
           "type": "string",
           "enum": ["pass", "pass_with_exceptions", "fail"],
           "description": "Final test result"
         },
+        "messages_covered_by_aggregate_evidence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Messages covered only by balanced aggregate evidence; not individually reconciled"
+        },
         "messages_verified": {
           "type": "integer",
-          "description": "Messages verified via MailSwiftSync verification"
+          "minimum": 0,
+          "description": "Messages individually reconciled by the independent message verifier"
         },
         "verification_confidence": {
           "type": "string",
@@ -205,12 +215,20 @@
     "run_finished_at": {"type": "string", "format": "date-time"},
     "proof_digest": {
       "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
       "description": "SHA256 digest of the customer-proof JSON that generated this evidence"
     },
+    "proof_file": {"type": "string", "pattern": "^[^/\\\\]+\\.json$"},
     "fixture_id": {
       "type": "string",
       "minLength": 1,
       "description": "Identifier for the test fixture/dataset used"
+    },
+    "scenario_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
     },
     "test_dataset_digest": {
       "type": "string",

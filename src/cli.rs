@@ -383,23 +383,69 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("customer-proof") {
         let (Some(state), Some(output)) = (arguments.next(), arguments.next()) else {
             eprintln!(
-                "Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id] [--allow-incomplete]"
+                "Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id] [--allow-incomplete] [--source-provider <name>] [--destination-provider <name>] [--source-auth <method>] [--destination-auth <method>] [--fixture-id <id>] [--scenario-ids <id,id,...>]"
             );
             std::process::exit(2);
         };
         let mut project_id = None;
         let mut allow_incomplete = false;
-        for argument in arguments {
-            if argument == std::ffi::OsStr::new("--allow-incomplete") && !allow_incomplete {
+        let mut source_provider = None;
+        let mut destination_provider = None;
+        let mut source_auth_method = None;
+        let mut destination_auth_method = None;
+        let mut fixture_id = None;
+        let mut scenario_ids = None;
+        let arguments = arguments.collect::<Vec<_>>();
+        let mut index = 0;
+        while index < arguments.len() {
+            let argument = &arguments[index];
+            if argument == std::ffi::OsStr::new("--allow-incomplete") {
+                if allow_incomplete {
+                    eprintln!("Invalid customer-proof arguments: duplicate --allow-incomplete");
+                    std::process::exit(2);
+                }
                 allow_incomplete = true;
-            } else if project_id.is_none() {
-                project_id = Some(argument);
-            } else {
-                eprintln!(
-                    "Usage: mailswiftsync customer-proof <state.db> <output.json> [project-id] [--allow-incomplete]"
-                );
-                std::process::exit(2);
+                index += 1;
+                continue;
             }
+            let option_name = argument.to_str();
+            if matches!(
+                option_name,
+                Some(
+                    "--source-provider"
+                        | "--destination-provider"
+                        | "--source-auth"
+                        | "--destination-auth"
+                        | "--fixture-id"
+                        | "--scenario-ids"
+                )
+            ) {
+                let Some(value) = arguments.get(index + 1).cloned() else {
+                    eprintln!(
+                        "Customer-proof option requires a value: {}",
+                        argument.to_string_lossy()
+                    );
+                    std::process::exit(2);
+                };
+                match option_name.unwrap_or_default() {
+                    "--source-provider" => source_provider = Some(value),
+                    "--destination-provider" => destination_provider = Some(value),
+                    "--source-auth" => source_auth_method = Some(value),
+                    "--destination-auth" => destination_auth_method = Some(value),
+                    "--fixture-id" => fixture_id = Some(value),
+                    "--scenario-ids" => scenario_ids = Some(value),
+                    _ => {}
+                }
+                index += 2;
+                continue;
+            }
+            if project_id.is_none() {
+                project_id = Some(argument.clone());
+                index += 1;
+                continue;
+            }
+            eprintln!("Invalid customer-proof arguments");
+            std::process::exit(2);
         }
         let state = std::path::PathBuf::from(state);
         let output = std::path::PathBuf::from(output);
@@ -435,12 +481,50 @@ pub(crate) fn run() -> eframe::Result<()> {
             std::process::exit(1);
         };
         let branding = crate::branding::OperatorBranding::load();
-        match reports::customer::export_from_store_with_options(
+        let provider_identity = match (
+            source_provider,
+            destination_provider,
+            source_auth_method,
+            destination_auth_method,
+            fixture_id,
+            scenario_ids,
+        ) {
+            (
+                Some(source_provider),
+                Some(destination_provider),
+                Some(source_auth_method),
+                Some(destination_auth_method),
+                Some(fixture_id),
+                Some(scenario_ids),
+            ) => Some(crate::reports::customer::ProviderIdentity {
+                source_provider: source_provider.to_string_lossy().into_owned(),
+                destination_provider: destination_provider.to_string_lossy().into_owned(),
+                source_auth_method: source_auth_method.to_string_lossy().into_owned(),
+                destination_auth_method: destination_auth_method.to_string_lossy().into_owned(),
+                fixture_id: fixture_id.to_string_lossy().into_owned(),
+                scenario_ids: scenario_ids
+                    .to_string_lossy()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            }),
+            (None, None, None, None, None, None) => None,
+            _ => {
+                eprintln!(
+                    "Customer-proof provider identity requires source/destination provider, source/destination auth, and fixture ID"
+                );
+                std::process::exit(2);
+            }
+        };
+        match reports::customer::export_from_store_with_options_and_identity(
             &store,
             &project_id,
             &output,
             allow_incomplete,
             &branding,
+            provider_identity.as_ref(),
         ) {
             Ok(()) => {
                 println!("Created customer migration proof: {}", output.display());
@@ -544,7 +628,7 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
-                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>]"
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
             );
             std::process::exit(2);
         };
@@ -552,21 +636,23 @@ pub(crate) fn run() -> eframe::Result<()> {
             Some(mode) => mode,
             None => {
                 eprintln!(
-                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>]"
+                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
                 );
                 std::process::exit(2);
             }
         };
         let mut source_secret_file = None;
         let mut destination_secret_file = None;
+        let mut diagnostic_log = None;
         while let Some(option) = arguments.next() {
             let Some(option) = option.to_str() else {
                 eprintln!("Headless migration refused: option must be valid UTF-8");
                 std::process::exit(2);
             };
             let target = match option {
-                "--source-secret-file" => &mut source_secret_file,
-                "--destination-secret-file" => &mut destination_secret_file,
+                "--source-secret-file" => Some(&mut source_secret_file),
+                "--destination-secret-file" => Some(&mut destination_secret_file),
+                "--diagnostic-log" => Some(&mut diagnostic_log),
                 _ => {
                     eprintln!("Unknown headless option: {option}");
                     std::process::exit(2);
@@ -576,11 +662,15 @@ pub(crate) fn run() -> eframe::Result<()> {
                 eprintln!("Headless secret-file option requires a path");
                 std::process::exit(2);
             };
-            *target = Some(std::path::PathBuf::from(path));
+            *target.unwrap() = Some(std::path::PathBuf::from(path));
         }
-        if mode.is_batch() && (source_secret_file.is_some() || destination_secret_file.is_some()) {
+        if mode.is_batch()
+            && (source_secret_file.is_some()
+                || destination_secret_file.is_some()
+                || diagnostic_log.is_some())
+        {
             eprintln!(
-                "Secret-file options are supported for single-mailbox headless execution only."
+                "Secret-file and --diagnostic-log options are supported for single-mailbox headless execution only."
             );
             std::process::exit(2);
         }
@@ -611,10 +701,18 @@ pub(crate) fn run() -> eframe::Result<()> {
         };
         let state = std::path::PathBuf::from(state);
         let result = match mode {
-            HeadlessMode::Preflight => {
-                headless_execute_with_credentials(&state, false, credentials)
-            }
-            HeadlessMode::Live => headless_execute_with_credentials(&state, true, credentials),
+            HeadlessMode::Preflight => headless_execute_with_credentials(
+                &state,
+                false,
+                credentials,
+                diagnostic_log.as_deref(),
+            ),
+            HeadlessMode::Live => headless_execute_with_credentials(
+                &state,
+                true,
+                credentials,
+                diagnostic_log.as_deref(),
+            ),
             HeadlessMode::BatchPreflight => headless_batch_execute(&state, false),
             HeadlessMode::BatchLive => headless_batch_execute(&state, true),
         };

@@ -38,6 +38,10 @@ destination_provider="${MAILSWIFTSYNC_DESTINATION_PROVIDER:-$provider}"
 [[ "$destination_provider" == "m365" ]] && destination_provider="microsoft365"
 source_auth="${MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH:-password}"
 destination_auth="${MAILSWIFTSYNC_PROVIDER_DEST_AUTH:-password}"
+fixture_id="${MAILSWIFTSYNC_PROVIDER_FIXTURE_ID:-provider-${source_provider}-to-${destination_provider}}"
+recovery_dest_endpoint="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT:-}"
+recovery_dest_user="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER:-}"
+recovery_dest_secret="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET:-}"
 if [[ "$source_auth" != "password" && "$source_auth" != "oauth2" ]]; then
   echo "ERROR: MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH must be password or oauth2" >&2
   exit 1
@@ -51,6 +55,21 @@ if [[ "$destination_provider" == "microsoft365" && "$destination_auth" != "oauth
   echo "Set MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2 and provide an access token file." >&2
   exit 1
 fi
+if [[ "$source_provider" == "microsoft365" && "$source_auth" != "oauth2" ]]; then
+  echo "ERROR: Microsoft 365 IMAP qualification requires source OAuth/XOAUTH2" >&2
+  echo "Set MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH=oauth2 and provide an access token file." >&2
+  exit 1
+fi
+scenario_ids="${MAILSWIFTSYNC_PROVIDER_SCENARIO_IDS:-basic-small,forced-interruption}"
+if [[ -z "$recovery_dest_endpoint" || -z "$recovery_dest_user" || -z "$recovery_dest_secret" ]]; then
+  echo "ERROR: recovery qualification requires a separate destination endpoint, user, and secret" >&2
+  echo "Set MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT, _USER, and _SECRET." >&2
+  exit 1
+fi
+if [[ "$recovery_dest_endpoint" == "${MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT:-}" && "$recovery_dest_user" == "${MAILSWIFTSYNC_PROVIDER_DEST_USER:-}" ]]; then
+  echo "ERROR: recovery destination must not be the normal live destination account" >&2
+  exit 1
+fi
 
 # Check required environment
 for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT \
@@ -62,6 +81,10 @@ for var in MAILSWIFTSYNC_PROVIDER_BINARY MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT 
     exit 1
   fi
 done
+if [[ ! -f "$recovery_dest_secret" ]]; then
+  echo "ERROR: recovery destination secret file $recovery_dest_secret does not exist" >&2
+  exit 1
+fi
 
 binary="${MAILSWIFTSYNC_PROVIDER_BINARY}"
 if [[ ! -x "$binary" ]]; then
@@ -198,8 +221,12 @@ echo "=== Starting dry pilot for $provider ==="
   exit 1
 }
 echo "✓ Dry pilot preflight succeeded"
-dry_proof="$workspace/${provider}-dry_pilot-proof.json"
-"$binary" customer-proof "$state" "$dry_proof" --allow-incomplete >"$workspace/dry-proof.log" 2>&1 || {
+dry_proof="$workspace/${source_provider}-to-${destination_provider}-dry_pilot-proof.json"
+"$binary" customer-proof "$state" "$dry_proof" --allow-incomplete \
+  --source-provider "$source_provider" --destination-provider "$destination_provider" \
+  --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
+  --scenario-ids "$scenario_ids" \
+  >"$workspace/dry-proof.log" 2>&1 || {
   cat "$workspace/dry-proof.log" >&2
   echo "FAIL: could not export phase-specific dry-pilot proof" >&2
   exit 1
@@ -211,19 +238,71 @@ dry_proof="$workspace/${provider}-dry_pilot-proof.json"
 # migration, not after a completed migration has been copied.
 echo "=== Starting recovery test for $provider ==="
 recovery_state="$workspace/recovery-state.db"
-cp "$state" "$recovery_state"
+# Snapshot through MailSwiftSync's SQLite online-backup path so WAL pages and
+# the durable ledger are copied consistently for the recovery qualification.
+"$binary" backup "$state" "$recovery_state" >"$workspace/recovery-backup.log" 2>&1 || {
+  cat "$workspace/recovery-backup.log" >&2
+  echo "FAIL: could not create a consistent recovery database snapshot" >&2
+  exit 1
+}
+recovery_xdg_config="$workspace/recovery-config"
+cp -a "$XDG_CONFIG_HOME" "$recovery_xdg_config"
+python3 - "$recovery_xdg_config/mailswiftsync/profile.toml" "$recovery_dest_endpoint" "$recovery_dest_user" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path, endpoint, user = sys.argv[1:]
+lines = Path(path).read_text(encoding="utf-8").splitlines()
+replacements = {
+    "destination_host": endpoint.rsplit(":", 1)[0],
+    "destination_port": endpoint.rsplit(":", 1)[1],
+    "destination_user": user,
+}
+for index, line in enumerate(lines):
+    key = line.split(" = ", 1)[0]
+    if key in replacements:
+        lines[index] = f"{key} = {json.dumps(replacements[key])}"
+Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+export XDG_CONFIG_HOME="$recovery_xdg_config"
 
 recovery_timeout="${MAILSWIFTSYNC_PROVIDER_RECOVERY_TIMEOUT_SECONDS:-10}"
 if ! [[ "$recovery_timeout" =~ ^[1-9][0-9]*$ ]]; then
   echo "FAIL: MAILSWIFTSYNC_PROVIDER_RECOVERY_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 1
 fi
-echo "Starting live migration and sending SIGKILL after ${recovery_timeout}s..."
+echo "Starting live migration and waiting for durable running state (deadline ${recovery_timeout}s)..."
 set +e
-timeout --signal=KILL --kill-after=2 "$recovery_timeout" "$binary" headless "$recovery_state" live \
+setsid "$binary" headless "$recovery_state" live \
   --source-secret-file "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" \
-  --destination-secret-file "${MAILSWIFTSYNC_PROVIDER_DEST_SECRET}" \
+  --destination-secret-file "$recovery_dest_secret" \
   >"$workspace/recovery-interrupted.log" 2>&1
+recovery_pid=$!
+recovery_started=0
+recovery_deadline=$((SECONDS + recovery_timeout))
+while kill -0 "$recovery_pid" 2>/dev/null; do
+  recovery_status_probe=$("$binary" status "$recovery_state" 2>/dev/null || true)
+  if [[ "$recovery_status_probe" == *'"state": "running"'* ]]; then
+    recovery_started=1
+    break
+  fi
+  if (( SECONDS >= recovery_deadline )); then
+    break
+  fi
+  sleep 1
+done
+if [[ "$recovery_started" -ne 1 ]]; then
+  kill -KILL -- "-$recovery_pid" 2>/dev/null || true
+  wait "$recovery_pid" 2>/dev/null || true
+  set -e
+  echo "FAIL: recovery run did not reach observable running state before deadline" >&2
+  tail -50 "$workspace/recovery-interrupted.log" >&2 || true
+  exit 1
+fi
+echo "✓ Durable running state observed; interrupting process group"
+kill -KILL -- "-$recovery_pid"
+wait "$recovery_pid"
 recovery_exit=$?
 set -e
 if [[ "$recovery_exit" -ne 137 ]]; then
@@ -267,15 +346,19 @@ echo "✓ Durable recovery state observed"
 echo "Running live migration again to complete recovery..."
 "$binary" headless "$recovery_state" live \
   --source-secret-file "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" \
-  --destination-secret-file "${MAILSWIFTSYNC_PROVIDER_DEST_SECRET}" \
+  --destination-secret-file "$recovery_dest_secret" \
   >"$workspace/recovery-continued.log" 2>&1 || {
   echo "FAIL: Recovery continuation failed" >&2
   tail -50 "$workspace/recovery-continued.log" >&2
   exit 1
 }
 echo "✓ Recovery continuation succeeded"
-recovery_proof="$workspace/${provider}-recovery_test-proof.json"
-"$binary" customer-proof "$recovery_state" "$recovery_proof" >"$workspace/recovery-proof.log" 2>&1 || {
+recovery_proof="$workspace/${source_provider}-to-${destination_provider}-recovery_test-proof.json"
+"$binary" customer-proof "$recovery_state" "$recovery_proof" \
+  --source-provider "$source_provider" --destination-provider "$destination_provider" \
+  --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
+  --scenario-ids "$scenario_ids" \
+  >"$workspace/recovery-proof.log" 2>&1 || {
   cat "$workspace/recovery-proof.log" >&2
   echo "FAIL: could not export phase-specific recovery proof" >&2
   exit 1
@@ -283,6 +366,7 @@ recovery_proof="$workspace/${provider}-recovery_test-proof.json"
 
 # 3. LIVE MIGRATION (for live_pilot phase). This runs the normal state after
 # the independent interruption/recovery qualification has completed.
+export XDG_CONFIG_HOME="$workspace/config"
 echo "=== Starting live migration for $provider (live_pilot) ==="
 "$binary" headless "$state" live \
   --source-secret-file "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" \
@@ -293,8 +377,12 @@ echo "=== Starting live migration for $provider (live_pilot) ==="
   exit 1
 }
 echo "✓ Live migration succeeded"
-live_proof="$workspace/${provider}-live_pilot-proof.json"
-"$binary" customer-proof "$state" "$live_proof" >"$workspace/live-proof.log" 2>&1 || {
+live_proof="$workspace/${source_provider}-to-${destination_provider}-live_pilot-proof.json"
+"$binary" customer-proof "$state" "$live_proof" \
+  --source-provider "$source_provider" --destination-provider "$destination_provider" \
+  --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
+  --scenario-ids "$scenario_ids" \
+  >"$workspace/live-proof.log" 2>&1 || {
   cat "$workspace/live-proof.log" >&2
   echo "FAIL: could not export phase-specific live proof" >&2
   exit 1
@@ -336,6 +424,7 @@ PY
 
   # Generate provider evidence record
   local evidence="$evidence_dir/${run_name}.json"
+  cp -- "$proof" "$evidence_dir/$(basename "$proof")"
   python3 "$(dirname "$0")/generate-provider-evidence.py" \
     "$proof" "$source_provider" "$destination_provider" "$phase" \
     --run-id "$run_id" --engine-version "$imapsync_version" \

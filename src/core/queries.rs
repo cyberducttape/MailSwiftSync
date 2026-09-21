@@ -24,6 +24,14 @@ impl StateStore {
             .collect()
     }
 
+    pub fn project_count(&self) -> rusqlite::Result<usize> {
+        self.connection
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|count| count as usize)
+    }
+
     /// Return the monotonic durable event position used by presentation
     /// caches. A single cheap query lets another controller's committed work
     /// invalidate the workspace read model without rebuilding every

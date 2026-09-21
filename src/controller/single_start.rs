@@ -266,6 +266,7 @@ impl App {
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
         let run_id = uuid::Uuid::new_v4().to_string();
+        let worker_project_id = run_project_id.clone();
         let active_run = match admit_single_run(
             &self.store,
             SingleRunAdmission {
@@ -350,6 +351,7 @@ impl App {
             cancel,
             run_id,
             job_id: run_job_id,
+            project_id: worker_project_id,
             engine: run_engine,
             dry_run: run_dry_run,
             verification,
@@ -358,6 +360,7 @@ impl App {
             verification_secret,
             output_secrets,
             timeout: migration_timeout,
+            diagnostic_logger: self.diagnostic_logger.clone(),
         });
     }
 }

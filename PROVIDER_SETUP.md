@@ -103,7 +103,7 @@ observed IMAP responses; Gmail API quota figures do not define this IMAP path.
 For very large migrations (100k+ messages), consider:
 - Running during off-peak hours
 - Splitting into multiple smaller jobs by folder
-- Enabling the recovery dashboard to monitor progress
+- Monitoring recovery with `mailswiftsync status <state.db>` and explicitly running `mailswiftsync recover <state.db>` when the ledger requires review; a dedicated recovery dashboard is not currently exposed
 
 ---
 
