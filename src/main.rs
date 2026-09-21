@@ -414,7 +414,8 @@ mod tests {
             permissions.set_mode(0o600);
             std::fs::set_permissions(&key_path, permissions).unwrap();
         }
-        reports::signing::sign_file(&path, &key_path, "test-key").unwrap();
+        reports::signing::sign_file(&path, &key_path, "test-key")
+            .expect("Windows signing test must accept its restricted test key");
         // Re-signing is a supported repair/rotation workflow. The previous
         // signature must not become part of the newly calculated digest.
         reports::signing::sign_file(&path, &key_path, "test-key-rotated").unwrap();
