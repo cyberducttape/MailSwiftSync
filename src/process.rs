@@ -254,7 +254,9 @@ mod tests {
         () => {
             #[cfg(windows)]
             if std::env::var("GITHUB_ACTIONS").is_ok() {
-                eprintln!("⊘ Skipping: GitHub Actions Windows runner does not permit this operation");
+                eprintln!(
+                    "⊘ Skipping: GitHub Actions Windows runner does not permit this operation"
+                );
                 return;
             }
         };

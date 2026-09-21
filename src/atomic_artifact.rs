@@ -118,7 +118,9 @@ mod tests {
     fn atomic_write_overwrites_existing_file_multiple_times() -> std::io::Result<()> {
         #[cfg(windows)]
         if std::env::var("GITHUB_ACTIONS").is_ok() {
-            eprintln!("⊘ Skipping: GitHub Actions Windows runner does not permit ACL modifications");
+            eprintln!(
+                "⊘ Skipping: GitHub Actions Windows runner does not permit ACL modifications"
+            );
             return Ok(());
         }
 
