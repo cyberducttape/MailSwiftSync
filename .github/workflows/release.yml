@@ -20,7 +20,10 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: bash -n scripts/*.sh
+      - run: scripts/verify-release-version.sh "${GITHUB_REF_NAME}"
       - run: scripts/verify-compatibility-matrix.sh --release docs/compatibility-matrix.md
+      - name: Install provider evidence validator
+        run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
       - run: scripts/verify-evidence-gate.sh --release
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
@@ -53,6 +56,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Build
+        env:
+          MAILSWIFTSYNC_GIT_SHA: ${{ github.sha }}
         run: cargo build --locked --release --all-features --target ${{ matrix.target }}
       - name: Sign Windows binary with Authenticode
         if: runner.os == 'Windows'
@@ -161,7 +166,7 @@ jobs:
           : "${RELEASE_GPG_PRIVATE_KEY_BASE64:?RELEASE_GPG_PRIVATE_KEY_BASE64 is not configured}"
           : "${RELEASE_GPG_KEY_ID:?RELEASE_GPG_KEY_ID is not configured}"
           archive="dist/mailswiftsync-${{ matrix.target }}.tar.gz"
-          scripts/sign-linux-release.sh "$archive" "$RELEASE_GPG_PRIVATE_KEY_BASE64"
+          scripts/sign-linux-release.sh "$archive"
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -196,7 +201,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build distributed runtime image
-        run: docker build --tag mailswiftsync:release-integration .
+        run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:release-integration .
       - name: Run packaged IMAP transfer fixture
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
       - name: Run packaged native Dovecot engine fixture

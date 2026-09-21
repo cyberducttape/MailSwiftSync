@@ -1,0 +1,163 @@
+import importlib.util
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).parents[1] / "scripts" / "generate-provider-evidence.py"
+SPEC = importlib.util.spec_from_file_location("provider_evidence", SCRIPT)
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC.loader is not None
+SPEC.loader.exec_module(MODULE)
+
+
+def proof(status="verified", messages=2, claim_status="durably_complete", run=None,
+          source_provider=None, destination_provider=None):
+    run = run or {
+        "run_id": "run",
+        "project_id": "project",
+        "job_id": "job",
+        "status": "completed",
+        "phase_at_start": "live",
+        "started_at": "2026-09-20T00:00:00Z",
+        "finished_at": "2026-09-20T00:01:00Z",
+    }
+    project = {
+        "project_id": "project",
+        "name": "fixture",
+        "phase": "Complete",
+        "fixture_id": "fixture-1",
+    }
+    if source_provider is not None:
+        project["source_provider"] = source_provider
+    if destination_provider is not None:
+        project["destination_provider"] = destination_provider
+    value = {
+        "format": "mailswiftsync-customer-proof",
+        "format_version": 1,
+        "application_version": "0.1.0",
+        "artifact_role": "customer_evidence",
+        "completion_claim": {"status": claim_status},
+        "project": project,
+        "mailboxes": [{
+            "job_id": "job",
+            "source_mailbox": "source",
+            "destination_mailbox": "destination",
+            "state": status,
+            "evidence": {
+                "scope": "engine-confirmed",
+                "evidence_level": "Engine-confirmed exact match",
+                "source_messages": messages,
+                "destination_messages": messages,
+                "source_bytes": 100,
+                "destination_bytes": 100,
+                "unmatched_messages": 0,
+                "failed_messages": 0,
+            },
+        }],
+        "runs": [run],
+    }
+    value["proof_digest"] = MODULE.canonical_proof_digest(value)
+    return value
+
+
+class ProviderEvidenceGeneratorTests(unittest.TestCase):
+    IDENTITY = {
+        "engine_version": "2.314",
+        "mailswiftsync_version": "0.1.0",
+        "mailswiftsync_commit": "abc123",
+        "mailswiftsync_binary_sha256": "a" * 64,
+        "imapsync_binary_sha256": "b" * 64,
+    }
+
+    def generate(self, value, source="gmail", destination="microsoft365", phase="live_pilot",
+                 run_id="run", **overrides):
+        arguments = {**self.IDENTITY, **overrides}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "proof.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            return MODULE.generate_evidence(
+                str(path), source, destination, phase, run_id=run_id, **arguments
+            )
+
+    def test_actual_customer_proof_schema_generates_strict_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "proof.json"
+            path.write_text(json.dumps(proof()), encoding="utf-8")
+            evidence = self.generate(proof())
+        self.assertEqual(evidence["results"]["overall_result"], "pass_with_exceptions")
+        self.assertEqual(evidence["test_summary"]["messages_total"], 2)
+        self.assertEqual(evidence["results"]["messages_verified"], 2)
+        self.assertEqual(evidence["results"]["verification_confidence"], "aggregate_only")
+        self.assertEqual(evidence["proof_verification"], "canonical_digest_verified")
+
+    def test_failed_or_tampered_proof_cannot_generate_pass_evidence(self):
+        for value in (proof(status="attention"), proof(messages=0)):
+            with self.subTest(value=value):
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "proof.json"
+                    path.write_text(json.dumps(value), encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        self.generate(value, destination="gmail")
+
+    def test_missing_claim_and_corrupt_digest_are_rejected(self):
+        value = proof()
+        value.pop("completion_claim")
+        with self.assertRaises(ValueError):
+            self.generate(value)
+        value = proof()
+        value["proof_digest"] = "0" * 64
+        with self.assertRaises(ValueError):
+            self.generate(value)
+
+    def test_wrong_run_id_and_unrecovered_interruption_are_rejected(self):
+        with self.assertRaises(ValueError):
+            self.generate(proof(), run_id="wrong")
+        interrupted = proof(run={
+            "run_id": "run", "project_id": "project", "job_id": "job",
+            "status": "running", "phase_at_start": "live",
+            "started_at": "2026-09-20T00:00:00Z", "finished_at": None,
+        })
+        with self.assertRaises(ValueError):
+            self.generate(interrupted)
+
+    def test_recovery_requires_a_completed_run_and_produces_recovery_evidence(self):
+        recovery = proof(run={
+            "run_id": "recovery-run", "project_id": "project", "job_id": "job",
+            "status": "completed", "phase_at_start": "attention",
+            "started_at": "2026-09-20T00:02:00Z", "finished_at": "2026-09-20T00:03:00Z",
+        })
+        evidence = self.generate(recovery, phase="recovery_test", run_id="recovery-run")
+        self.assertEqual(evidence["run_type"], "recovery")
+        self.assertEqual(evidence["selected_run_id"], "recovery-run")
+
+    def test_pair_engine_and_confidence_failures_are_rejected(self):
+        with self.assertRaises(ValueError):
+            self.generate(proof(source_provider="gmail", destination_provider="gmail"))
+        with self.assertRaises(ValueError):
+            self.generate(proof(), engine_version="2.315")
+        low_confidence = proof()
+        low_confidence["mailboxes"][0]["evidence"]["evidence_level"] = "Probable metadata match"
+        low_confidence["proof_digest"] = MODULE.canonical_proof_digest(low_confidence)
+        with self.assertRaises(ValueError):
+            self.generate(low_confidence)
+
+    def test_zero_message_and_attention_fixtures_are_rejected(self):
+        for value in (proof(messages=0), proof(status="attention")):
+            with self.assertRaises(ValueError):
+                self.generate(value)
+
+    def test_dry_pilot_is_phase_specific_and_does_not_claim_transfer(self):
+        dry = proof(claim_status="incomplete", run={
+            "run_id": "preflight-run", "project_id": "project", "job_id": "job",
+            "status": "completed", "phase_at_start": "preflight",
+            "started_at": "2026-09-20T00:00:00Z", "finished_at": "2026-09-20T00:01:00Z",
+        })
+        evidence = self.generate(dry, phase="dry_pilot", run_id="preflight-run")
+        self.assertEqual(evidence["run_type"], "preflight")
+        self.assertEqual(evidence["test_summary"]["messages_total"], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

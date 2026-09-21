@@ -224,7 +224,7 @@ and require the corresponding integration run.
   Remote Dovecot execution is deliberately disabled until the application has
   a delivery mechanism that cannot expose credentials through
   destination-host process inspection.
-- Signed installers for Linux, Windows, and macOS, with checksums and reproducible release instructions. Artifact provenance exists, but native installer signing/notarization is still outstanding.
+- Signed portable release archives for Linux, Windows, and macOS, with checksums, platform signatures/notarization, and reproducible release instructions. Native OS-specific installer packages remain outside the current archive format.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
 - Preflight checks for DNS, TCP/TLS, authentication, folder inventory, and
   observed special-use folders are implemented for the authenticated IMAP

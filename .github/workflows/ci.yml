@@ -24,6 +24,10 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: bash -n scripts/*.sh
+      - name: Install provider evidence validator
+        run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
+      - run: python3 tests/provider_evidence_generator_test.py
+      - run: python3 tests/provider_evidence_schema_test.py
       - run: scripts/verify-compatibility-matrix.sh docs/compatibility-matrix.md
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
@@ -50,6 +54,8 @@ jobs:
           path: dist/test-summary.md
           if-no-files-found: error
       - run: cargo build --locked --release --all-features
+        env:
+          MAILSWIFTSYNC_GIT_SHA: ${{ github.sha }}
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Audit dependencies
@@ -96,6 +102,8 @@ jobs:
           "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Compile release target
         shell: bash
+        env:
+          MAILSWIFTSYNC_GIT_SHA: ${{ github.sha }}
         run: |
           set +e
           cargo build --locked --release --all-features --target "${{ matrix.target }}" 2>&1 | tee cross-build.log
@@ -211,7 +219,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build container image
-        run: docker build --tag mailswiftsync:ci .
+        run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:ci .
       - name: Smoke-test container CLI
         run: docker run --rm mailswiftsync:ci --version
       - name: Smoke-test bundled imapsync

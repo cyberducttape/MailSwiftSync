@@ -127,9 +127,9 @@ fn compatibility_matrix_references_tested_providers() {
         "Compatibility matrix must not be empty"
     );
     for provider in [
-        "Generic IMAP (Gmail/Workspace)",
-        "Generic IMAP (Microsoft 365)",
-        "Generic IMAP (Fastmail)",
+        "| Gmail | Gmail |",
+        "| Microsoft 365 | Microsoft 365 |",
+        "| Fastmail | Fastmail |",
     ] {
         assert!(
             matrix.contains(provider),

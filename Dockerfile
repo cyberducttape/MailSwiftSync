@@ -23,6 +23,8 @@ RUN apt-get update \
 FROM rust:1.92-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS builder
 
 WORKDIR /build
+ARG MAILSWIFTSYNC_GIT_SHA=unknown
+ENV MAILSWIFTSYNC_GIT_SHA=$MAILSWIFTSYNC_GIT_SHA
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY src ./src
 RUN cargo build --locked --release

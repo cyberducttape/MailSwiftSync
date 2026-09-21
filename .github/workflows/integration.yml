@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build the distributed runtime image
-        run: docker build --tag mailswiftsync:integration .
+        run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:integration .
       - name: Run disposable real-server transfer
         run: |
           mkdir -p provider-evidence
@@ -27,8 +27,25 @@ jobs:
             --env MAILSWIFTSYNC_EVIDENCE_OUTPUT=/provider-evidence \
             --entrypoint /bin/bash mailswiftsync:integration \
             /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+          run_id=$(python3 - provider-evidence/customer-proof.json <<'PY'
+          import json, sys
+          proof = json.load(open(sys.argv[1], encoding="utf-8"))
+          runs = [run for run in proof["runs"] if run.get("status") == "completed"]
+          print(max(runs, key=lambda run: (run["started_at"], run["run_id"]))["run_id"])
+          PY
+          )
+          mailswiftsync_version=$(docker run --rm mailswiftsync:integration --version | sed -n 's/^MailSwiftSync \([^ ]*\).*/\1/p')
+          mailswiftsync_commit=$(docker run --rm mailswiftsync:integration --version | sed -n 's/.*(git \([^)]*\)).*/\1/p')
+          mailswiftsync_sha=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'sha256sum /usr/local/bin/mailswiftsync' | awk '{print $1}')
+          imapsync_version=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'imapsync --version 2>&1' | sed -n -e 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' -e 's/^[[:space:]]*v\?\([0-9][0-9.]*\)[[:space:]]*$/\1/p' | head -1)
+          imapsync_sha=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'sha256sum "$(command -v imapsync)"' | awk '{print $1}')
           python3 scripts/generate-provider-evidence.py \
             provider-evidence/customer-proof.json generic_imap generic_imap live_pilot \
+            --run-id "$run_id" --engine-version "$imapsync_version" \
+            --mailswiftsync-version "$mailswiftsync_version" \
+            --mailswiftsync-commit "$mailswiftsync_commit" \
+            --mailswiftsync-binary-sha256 "$mailswiftsync_sha" \
+            --imapsync-binary-sha256 "$imapsync_sha" \
             --output provider-evidence/generic_imap-to-generic_imap-live_pilot.json
       - name: Run controller crash and recovery lab
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
@@ -51,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build the distributed runtime image
-        run: docker build --tag mailswiftsync:dovecot-integration .
+        run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:dovecot-integration .
       - name: Run native doveadm transfer, preflight, and verification
         run: >-
           docker run --rm

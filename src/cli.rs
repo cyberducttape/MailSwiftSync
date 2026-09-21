@@ -112,7 +112,11 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Usage: mailswiftsync --version");
             std::process::exit(2);
         }
-        println!("MailSwiftSync {}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "MailSwiftSync {} (git {})",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("MAILSWIFTSYNC_GIT_SHA").unwrap_or("unknown")
+        );
         return Ok(());
     }
     if command == std::ffi::OsStr::new("verify") {

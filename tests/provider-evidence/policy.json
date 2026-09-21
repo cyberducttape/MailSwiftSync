@@ -9,15 +9,19 @@
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",
+      "minimum_mailboxes": 1,
+      "minimum_messages": 2,
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
     {
-      "pair": "gmail->microsoft365",
-      "source_provider": "gmail",
+      "pair": "microsoft365->microsoft365",
+      "source_provider": "microsoft365",
       "destination_provider": "microsoft365",
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",
+      "minimum_mailboxes": 1,
+      "minimum_messages": 2,
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
     {
@@ -27,6 +31,8 @@
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",
+      "minimum_mailboxes": 1,
+      "minimum_messages": 2,
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     }
   ]
