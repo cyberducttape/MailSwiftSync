@@ -408,9 +408,7 @@ fn verify_certificate_pin(
         .ok_or_else(|| format!("{host}: TLS peer did not provide a certificate"))?;
     let actual = format!("{:x}", Sha256::digest(certificate.as_ref()));
     if actual != expected.trim().to_ascii_lowercase() {
-        return Err(format!(
-            "{host}: TLS certificate SHA-256 pin mismatch (presented {actual})"
-        ));
+        return Err(format!("{host}: TLS certificate SHA-256 pin mismatch"));
     }
     Ok(())
 }
