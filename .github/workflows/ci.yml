@@ -53,7 +53,8 @@ jobs:
             echo "Platform: Linux (Ubuntu)"
             echo "Runnable tests discovered: ${total}"
             echo "Execution result: governed by the CI job status"
-          } | tee dist/test-summary.md >> "$GITHUB_STEP_SUMMARY"
+          } > dist/test-summary.md
+          cat dist/test-summary.md >> "$GITHUB_STEP_SUMMARY" || true
       - name: Upload test summary
         if: always()
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
