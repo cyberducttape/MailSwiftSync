@@ -17,6 +17,11 @@
 //! - `MAILSWIFTSYNC_WEBHOOK_HEADER_FILE` environment variable (path to file containing custom header as "Header-Name: value")
 //! - `MAILSWIFTSYNC_WEBHOOK_URL_FILE` environment variable (path to file containing the HTTPS URL)
 //!
+//! If no authentication variable is configured, the webhook is anonymous. If
+//! any authentication variable is configured, the complete selected
+//! authentication configuration must be valid; invalid or empty credentials
+//! refuse delivery rather than silently falling back to anonymous access.
+//!
 //! Do NOT embed secrets in the webhook URL itself: secrets in command-line arguments
 //! leak to process listings (ps aux), shell history, /proc/<pid>/cmdline, systemd units,
 //! cron logs, audit logs, and monitoring telemetry.
@@ -146,51 +151,107 @@ fn load_webhook_url(cli_url: &str) -> Result<String, String> {
 /// MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE (path to file).
 /// File contents are trimmed of trailing whitespace.
 fn load_webhook_bearer_token() -> Result<Option<SecretString>, String> {
-    if let Ok(token) = std::env::var("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN")
-        && !token.is_empty()
-    {
-        validate_header_value(&token)?;
-        return Ok(Some(SecretString::from(token)));
-    }
-    if let Ok(path) = std::env::var("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE") {
+    let direct = configured_env("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN")?;
+    let file_path = configured_env("MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE")?;
+    let file_token = if let Some(path) = file_path {
         let token = read_secret_file(std::path::Path::new(&path))
             .map_err(|error| format!("Failed to read webhook bearer token file: {error}"))?;
-        if !token.is_empty() {
-            validate_header_value(token.as_str())?;
-            return Ok(Some(token));
-        }
-    }
-    Ok(None)
+        Some(token.as_str().to_owned())
+    } else {
+        None
+    };
+    resolve_bearer_token(direct, file_token)
 }
 
 /// Load custom header from environment variables.
 /// Supports MAILSWIFTSYNC_WEBHOOK_HEADER_NAME + MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE or
 /// MAILSWIFTSYNC_WEBHOOK_HEADER_FILE (path to file containing "Header-Name: value").
 fn load_webhook_custom_header() -> Result<Option<(String, SecretString)>, String> {
-    if let (Ok(name), Ok(value)) = (
-        std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_NAME"),
-        std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE"),
-    ) && !name.is_empty()
-        && !value.is_empty()
-    {
+    let name = configured_env("MAILSWIFTSYNC_WEBHOOK_HEADER_NAME")?;
+    let value = configured_env("MAILSWIFTSYNC_WEBHOOK_HEADER_VALUE")?;
+    let file_path = configured_env("MAILSWIFTSYNC_WEBHOOK_HEADER_FILE")?;
+    let file_header = if let Some(path) = file_path {
+        let content = read_secret_file(std::path::Path::new(&path))
+            .map_err(|error| format!("Failed to read webhook header file: {error}"))?;
+        Some(content.as_str().to_owned())
+    } else {
+        None
+    };
+    resolve_custom_header(name, value, file_header)
+}
+
+fn configured_env(name: &str) -> Result<Option<String>, String> {
+    if std::env::var_os(name).is_none() {
+        return Ok(None);
+    }
+    std::env::var(name)
+        .map(Some)
+        .map_err(|_| format!("webhook environment variable {name} is not valid UTF-8"))
+}
+
+fn resolve_bearer_token(
+    direct: Option<String>,
+    file_token: Option<String>,
+) -> Result<Option<SecretString>, String> {
+    match (direct, file_token) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err(
+            "configure only one of MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN and MAILSWIFTSYNC_WEBHOOK_BEARER_TOKEN_FILE".into(),
+        ),
+        (Some(token), None) => {
+            if token.is_empty() {
+                return Err("webhook bearer token is configured but empty".into());
+            }
+            validate_header_value(&token)?;
+            Ok(Some(SecretString::from(token)))
+        }
+        (None, Some(token)) => {
+            if token.is_empty() {
+                return Err("webhook bearer token file is empty".into());
+            }
+            validate_header_value(&token)?;
+            Ok(Some(SecretString::from(token)))
+        }
+    }
+}
+
+fn resolve_custom_header(
+    name: Option<String>,
+    value: Option<String>,
+    file_header: Option<String>,
+) -> Result<Option<(String, SecretString)>, String> {
+    if file_header.is_some() && (name.is_some() || value.is_some()) {
+        return Err(
+            "configure either MAILSWIFTSYNC_WEBHOOK_HEADER_NAME/VALUE or MAILSWIFTSYNC_WEBHOOK_HEADER_FILE, not both".into(),
+        );
+    }
+    if let Some(content) = file_header {
+        let (name, value) = content
+            .split_once(':')
+            .ok_or_else(|| "webhook header file must contain Header-Name: value".to_string())?;
+        let name = name.trim().to_owned();
+        let value = value.trim().to_owned();
+        if name.is_empty() || value.is_empty() {
+            return Err("webhook header file must contain a non-empty name and value".into());
+        }
         validate_header_name(&name)?;
         validate_header_value(&value)?;
         return Ok(Some((name, SecretString::from(value))));
     }
-    if let Ok(path) = std::env::var("MAILSWIFTSYNC_WEBHOOK_HEADER_FILE") {
-        let content = read_secret_file(std::path::Path::new(&path))
-            .map_err(|error| format!("Failed to read webhook header file: {error}"))?;
-        if let Some((name, value)) = content.as_str().split_once(':') {
-            let name = name.trim().to_string();
-            let value = value.trim().to_string();
-            if !name.is_empty() && !value.is_empty() {
-                validate_header_name(&name)?;
-                validate_header_value(&value)?;
-                return Ok(Some((name, SecretString::from(value))));
+    match (name, value) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => {
+            Err("webhook custom header requires both name and value".into())
+        }
+        (Some(name), Some(value)) => {
+            if name.is_empty() || value.is_empty() {
+                return Err("webhook custom header name and value must be non-empty".into());
             }
+            validate_header_name(&name)?;
+            validate_header_value(&value)?;
+            Ok(Some((name, SecretString::from(value))))
         }
     }
-    Ok(None)
 }
 
 fn validate_header_name(name: &str) -> Result<(), String> {
@@ -262,5 +323,41 @@ mod tests {
         assert!(validate_header_value("safe\nInjected: yes").is_err());
         assert!(validate_header_name("X-Test").is_ok());
         assert!(validate_header_value("safe value").is_ok());
+    }
+
+    #[test]
+    fn anonymous_webhook_is_allowed_only_when_no_auth_is_configured() {
+        assert!(resolve_bearer_token(None, None).unwrap().is_none());
+        assert!(resolve_custom_header(None, None, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn empty_bearer_configuration_fails_closed() {
+        let error = resolve_bearer_token(Some(String::new()), None).unwrap_err();
+        assert!(error.contains("configured but empty"));
+        let error = resolve_bearer_token(None, Some(String::new())).unwrap_err();
+        assert!(error.contains("file is empty"));
+    }
+
+    #[test]
+    fn partial_or_empty_custom_header_configuration_fails_closed() {
+        assert!(resolve_custom_header(Some("X-Auth".into()), None, None).is_err());
+        assert!(resolve_custom_header(None, Some("secret".into()), None).is_err());
+        assert!(resolve_custom_header(Some(String::new()), Some("secret".into()), None).is_err());
+        assert!(resolve_custom_header(None, None, Some("not-a-header".into())).is_err());
+        assert!(resolve_custom_header(None, None, Some("X-Auth: ".into())).is_err());
+    }
+
+    #[test]
+    fn conflicting_auth_sources_fail_closed() {
+        assert!(resolve_bearer_token(Some("direct".into()), Some("file".into())).is_err());
+        assert!(
+            resolve_custom_header(
+                Some("X-Auth".into()),
+                Some("direct".into()),
+                Some("X-Other: file".into())
+            )
+            .is_err()
+        );
     }
 }
