@@ -6,6 +6,14 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Made Migration Assurance reporting explicit about its evidence boundaries:
+  recognized mailbox, message, DNS, file, and database categories now use
+  typed composite identities, unknown categories are labeled as heuristic,
+  each detail reports missing/extra/modified counts, and capped details expose
+  `detail_count`, `details_truncated`, and `details_omitted`. The documentation
+  now records that the current JSON/DOM comparator is in-memory and not yet a
+  scale-ready path for multi-million-message inventories; an indexed,
+  restartable SQLite comparator remains the next architecture milestone.
 - Removed the message-mismatch `subject` column and model field. Durable
   mismatch records now retain identity/reconciliation metadata only; human-
   readable message content is not stored in the ledger.
