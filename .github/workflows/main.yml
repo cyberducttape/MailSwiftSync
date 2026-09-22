@@ -1,0 +1,39 @@
+ name: Sync Launchpad
+
+  on:
+    push:
+      branches: [main]
+      tags: ["v*"]
+
+  permissions:
+    contents: read
+
+  jobs:
+    sync:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+          with:
+            fetch-depth: 0
+
+        - name: Configure SSH
+          env:
+            LAUNCHPAD_SSH_KEY: ${{ secrets.LAUNCHPAD_SSH_KEY }}
+            LAUNCHPAD_KNOWN_HOSTS: ${{ secrets.LAUNCHPAD_KNOWN_HOSTS }}
+          run: |
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$LAUNCHPAD_SSH_KEY" > ~/.ssh/launchpad_key
+            printf '%s\n' "$LAUNCHPAD_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/launchpad_key ~/.ssh/known_hosts
+            eval "$(ssh-agent -s)"
+            ssh-add ~/.ssh/launchpad_key
+
+        - name: Push GitHub main to Launchpad
+          run: |
+            git remote add launchpad \
+              git+ssh://cyberducttape@git.launchpad.net/~cyberducttape/+git/wayexpand
+            git push --force launchpad \
+              refs/heads/main:refs/heads/main
+            git push --force launchpad \
+              'refs/tags/*:refs/tags/*'
+
