@@ -11,6 +11,7 @@
 //! hand. Refresh-token rotation (a provider issuing a new refresh token with
 //! every exchange) is honored and persisted by the caller.
 use crate::credentials::SecretString;
+use serde::{Deserialize, Serialize};
 use std::{io::Read, sync::OnceLock, time::Duration};
 use zeroize::Zeroizing;
 
@@ -60,46 +61,48 @@ impl OAuthRefreshConfig {
 /// hand it to the keyring backend, mirroring how the existing password path
 /// hands `entry.set_password` a borrowed `&str`.
 pub(crate) fn encode_refresh_config(config: &OAuthRefreshConfig) -> Zeroizing<String> {
+    #[derive(Serialize)]
+    struct StoredOAuthRefreshConfig<'a> {
+        token_endpoint: &'a str,
+        client_id: &'a str,
+        client_secret: &'a SecretString,
+        refresh_token: &'a SecretString,
+    }
+
     Zeroizing::new(
-        serde_json::json!({
-            "token_endpoint": config.token_endpoint,
-            "client_id": config.client_id,
-            "client_secret": config.client_secret.as_str(),
-            "refresh_token": config.refresh_token.as_str(),
+        serde_json::to_string(&StoredOAuthRefreshConfig {
+            token_endpoint: &config.token_endpoint,
+            client_id: &config.client_id,
+            client_secret: &config.client_secret,
+            refresh_token: &config.refresh_token,
         })
-        .to_string(),
+        .expect("OAuth refresh configuration fields are serializable"),
     )
 }
 
 pub(crate) fn decode_refresh_config(json: &str) -> Result<OAuthRefreshConfig, String> {
-    let value: serde_json::Value = serde_json::from_str(json)
+    #[derive(Deserialize)]
+    struct StoredOAuthRefreshConfig {
+        token_endpoint: String,
+        client_id: String,
+        #[serde(default)]
+        client_secret: SecretString,
+        refresh_token: SecretString,
+    }
+
+    let stored: StoredOAuthRefreshConfig = serde_json::from_str(json)
         .map_err(|error| format!("stored OAuth refresh configuration is corrupt: {error}"))?;
-    let field = |name: &str| -> Result<String, String> {
-        value
-            .get(name)
-            .and_then(|v| v.as_str())
-            .map(str::to_owned)
-            .ok_or_else(|| format!("stored OAuth refresh configuration is missing `{name}`"))
-    };
-    let token_endpoint = field("token_endpoint")?;
-    let client_id = field("client_id")?;
-    let refresh_token = field("refresh_token")?;
-    let client_secret = value
-        .get("client_secret")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
-    if token_endpoint.trim().is_empty() {
+    if stored.token_endpoint.trim().is_empty() {
         return Err("stored OAuth refresh configuration has an empty token endpoint".into());
     }
-    if refresh_token.trim().is_empty() {
+    if stored.refresh_token.is_empty() || stored.refresh_token.as_str().trim().is_empty() {
         return Err("stored OAuth refresh configuration has an empty refresh token".into());
     }
     Ok(OAuthRefreshConfig {
-        token_endpoint,
-        client_id,
-        client_secret: SecretString::from(client_secret),
-        refresh_token: SecretString::from(refresh_token),
+        token_endpoint: stored.token_endpoint,
+        client_id: stored.client_id,
+        client_secret: stored.client_secret,
+        refresh_token: stored.refresh_token,
     })
 }
 
@@ -111,6 +114,33 @@ pub(crate) struct RefreshedToken {
     /// refresh will fail with an already-consumed token.
     pub(crate) refresh_token: Option<SecretString>,
     pub(crate) expires_in: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: Option<SecretString>,
+    #[serde(default)]
+    refresh_token: Option<SecretString>,
+    #[serde(default)]
+    expires_in: Option<ExpiresIn>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ExpiresIn {
+    Number(u64),
+    Text(String),
+}
+
+impl ExpiresIn {
+    fn into_u64(self) -> Option<u64> {
+        match self {
+            Self::Number(value) => Some(value),
+            Self::Text(value) => value.parse().ok(),
+        }
+    }
 }
 
 /// Exchange a refresh token for a fresh access token over a bounded HTTPS
@@ -187,14 +217,11 @@ fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken,
         .split_whitespace()
         .nth(1)
         .ok_or_else(|| format!("could not parse token endpoint status line: {status_line}"))?;
-    let value: serde_json::Value = serde_json::from_str(body)
+    let response: TokenResponse = serde_json::from_str(body)
         .map_err(|error| format!("token endpoint response was not valid JSON: {error}"))?;
     if status_code != "200" {
-        let error_code = value.get("error").and_then(|v| v.as_str()).unwrap_or("");
-        let description = value
-            .get("error_description")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let error_code = response.error.as_deref().unwrap_or("");
+        let description = response.error_description.as_deref().unwrap_or("");
         return Err(format!(
             "token endpoint rejected the refresh request (HTTP {status_code}{}{})",
             if error_code.is_empty() { "" } else { ": " },
@@ -205,22 +232,14 @@ fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken,
             }
         ));
     }
-    let access_token = value
-        .get("access_token")
-        .and_then(|v| v.as_str())
+    let access_token = response
+        .access_token
         .filter(|token| !token.is_empty())
         .ok_or_else(|| "token endpoint response did not include an access_token".to_owned())?;
-    let refresh_token = value
-        .get("refresh_token")
-        .and_then(|v| v.as_str())
-        .filter(|token| !token.is_empty())
-        .map(SecretString::from);
-    let expires_in = value.get("expires_in").and_then(|v| {
-        v.as_u64()
-            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
-    });
+    let refresh_token = response.refresh_token.filter(|token| !token.is_empty());
+    let expires_in = response.expires_in.and_then(ExpiresIn::into_u64);
     Ok(RefreshedToken {
-        access_token: SecretString::from(access_token),
+        access_token,
         refresh_token,
         expires_in,
     })
