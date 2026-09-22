@@ -117,10 +117,7 @@ impl StateStore {
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let database_identity = database_identity(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        let connection = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         verify_database_identity(path, database_identity)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
@@ -162,10 +159,8 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let result = (|| {
-            let mut backup = Connection::open_with_flags(
-                destination,
-                OpenFlags::SQLITE_OPEN_READ_WRITE,
-            )?;
+            let mut backup =
+                Connection::open_with_flags(destination, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
             {
                 let backup_operation = backup::Backup::new(&self.connection, &mut backup)?;
                 backup_operation.run_to_completion(
@@ -200,10 +195,8 @@ impl StateStore {
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let source_identity = database_identity(source)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        let source_connection = Connection::open_with_flags(
-            source,
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
+        let source_connection =
+            Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         verify_database_identity(source, source_identity)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         source_connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
@@ -218,16 +211,14 @@ impl StateStore {
         if create_private_database_file(destination).is_err() {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let mut destination_connection = match Connection::open_with_flags(
-            destination,
-            OpenFlags::SQLITE_OPEN_READ_WRITE,
-        ) {
-            Ok(connection) => connection,
-            Err(error) => {
-                remove_created_database_file(destination);
-                return Err(error);
-            }
-        };
+        let mut destination_connection =
+            match Connection::open_with_flags(destination, OpenFlags::SQLITE_OPEN_READ_WRITE) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    remove_created_database_file(destination);
+                    return Err(error);
+                }
+            };
         let result = (|| {
             {
                 let backup = backup::Backup::new(&source_connection, &mut destination_connection)?;
