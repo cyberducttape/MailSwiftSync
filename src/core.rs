@@ -179,6 +179,17 @@ fn restrict_database_sidecars(path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    fn create_private_test_directory(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
     #[test]
     fn mailbox_state_wire_values_and_policy_are_centralized() {
         let states = [
@@ -1462,7 +1473,7 @@ mod tests {
 
         let directory = std::env::temp_dir().join(format!("mailswiftsync-db-{}", Uuid::new_v4()));
         let path = directory.join("state.db");
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&directory, permissions).unwrap();
@@ -1522,7 +1533,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-{}", Uuid::new_v4()));
         let path = directory.join("state.db");
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let connection = Connection::open(&path).unwrap();
         connection
             .pragma_update(None, "user_version", 99_i64)
@@ -1560,7 +1571,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-readonly-legacy-{}", Uuid::new_v4()));
         let path = directory.join("state.db");
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let connection = Connection::open(&path).unwrap();
         connection
             .execute_batch(
@@ -1618,7 +1629,7 @@ mod tests {
             .unwrap();
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-backup-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let destination = directory.join("state-backup.db");
         db.backup_to(&destination).unwrap();
         assert!(destination.is_file());
@@ -1643,7 +1654,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-v1-{}", Uuid::new_v4()));
         let path = directory.join("state.db");
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let connection = Connection::open(&path).unwrap();
         connection
             .execute_batch(

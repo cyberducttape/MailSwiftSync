@@ -379,12 +379,10 @@ impl eframe::App for App {
                                 });
                                 ui.label(RichText::new(if self.form.dry_run {
                                     "Preflight checks access and mapping without intentionally changing the destination."
+                                } else if self.form.engine() == core::Engine::Dovecot {
+                                    "Live migration is enabled; review the Dovecot strategy and merge behavior before starting."
                                 } else {
-                                    if self.form.engine() == core::Engine::Dovecot {
-                                        "Live migration is enabled; review the Dovecot strategy and merge behavior before starting."
-                                    } else {
-                                        "Live migration is enabled; review the destination and deletion warning before starting."
-                                    }
+                                    "Live migration is enabled; review the destination and deletion warning before starting."
                                 }).color(if self.form.dry_run { self.theme_colors().text_secondary } else { self.theme_colors().danger }));
                                 ui.horizontal(|ui| {
                                     ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically");

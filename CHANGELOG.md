@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Restored a warning-clean release build: removed the obsolete dead-code
+  failure, derived the theme default, moved the theme test helper before its
+  test module, and collapsed the UI conditional flagged by Clippy. Database
+  migration and backup tests now create private temporary state directories
+  explicitly, making the hardened pathname boundary portable across CI hosts.
 - Removed imapsync's protocol-level `debugimap1` and `debugimap2` switches from
   the normal expert-option allowlist. Their authentication/protocol output can
   contain transformed secrets that literal redaction cannot reliably identify;
