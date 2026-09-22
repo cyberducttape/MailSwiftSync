@@ -32,11 +32,23 @@ mailswiftsync migrateaudit source.json destination.json assurance-report.json
 
 Each top-level JSON array is a resource category, such as `mailboxes`,
 `folders`, `messages`, `permissions`, `databases`, `dns`, or `ssl`. Records
-are matched by stable identity fields; equal identities with different content
-are reported as `modified`, and absent records as `missing` or `extra`.
+are matched by typed identities where a schema is known: messages use account,
+folder, UIDVALIDITY, and UID; mailboxes use account and mailbox; DNS records
+use zone, owner, type, and value; files use normalized paths; and databases use
+server, database, and object. Unknown categories use a heuristic identity and
+are labeled `identity_policy: "heuristic"` in the report. Equal identities
+with different content are reported as `modified`, and absent records as
+`missing` or `extra`.
 
 The command prints a one-line result, writes per-category counts and
 source/destination SHA-256 values, and exits 1 when any difference exists.
+Detail records are capped at 1,000 per category; `detail_count`,
+`details_truncated`, and `details_omitted` disclose that cap while aggregate
+counts remain complete. The current comparator materializes and sorts the
+snapshots in memory, so it is intended for bounded inventories, not yet for
+multi-million-message assurance. Large-scale assurance needs an indexed,
+restartable SQLite-backed comparison path before it can be treated as a
+scale-ready capability.
 The report can be checked with `verify` and signed with `sign`. It proves
 equality of the supplied snapshots; snapshot completeness remains the
 responsibility of the collector and is stated in the report.
