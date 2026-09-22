@@ -363,9 +363,11 @@ mod tests {
             "runs": []
         });
         let proof = with_proof_digest(original).unwrap();
-        let directory =
-            std::env::temp_dir().join(format!("mailswiftsync-proof-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("mailswiftsync-proof-{}", uuid::Uuid::new_v4()));
+        credentials::ensure_private_directory(&directory).unwrap();
         let path = directory.join("proof.json");
         std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
         assert!(
@@ -392,11 +394,14 @@ mod tests {
             "note": "customer-safe"
         }))
         .unwrap();
-        let directory = std::env::temp_dir().join(format!(
-            "mailswiftsync-customer-proof-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-customer-proof-{}",
+                uuid::Uuid::new_v4()
+            ));
+        credentials::ensure_private_directory(&directory).unwrap();
         let path = directory.join("proof.json");
         std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
         assert!(
@@ -454,11 +459,14 @@ mod tests {
             "runs": []
         });
         let proof = with_proof_digest(original).unwrap();
-        let directory = std::env::temp_dir().join(format!(
-            "mailswiftsync-signed-proof-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-signed-proof-{}",
+                uuid::Uuid::new_v4()
+            ));
+        credentials::ensure_private_directory(&directory).unwrap();
         let path = directory.join("proof.json");
         let key_path = directory.join("signing-key.pk8");
         std::fs::write(&path, serde_json::to_string_pretty(&proof).unwrap()).unwrap();
@@ -1185,9 +1193,11 @@ mod tests {
 
     #[test]
     fn verification_report_write_is_atomic_and_private() {
-        let directory =
-            std::env::temp_dir().join(format!("mailswiftsync-report-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("mailswiftsync-report-{}", uuid::Uuid::new_v4()));
+        credentials::ensure_private_directory(&directory).unwrap();
         let path = directory.join("report.md");
         write_private_atomic(&path, "report body").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "report body");

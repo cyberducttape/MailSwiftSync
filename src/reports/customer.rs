@@ -335,11 +335,14 @@ mod tests {
         store
             .add_mailbox(&project.id, "source@example.com", "destination@example.com")
             .unwrap();
-        let directory = std::env::temp_dir().join(format!(
-            "mailswiftsync-incomplete-proof-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-incomplete-proof-{}",
+                uuid::Uuid::new_v4()
+            ));
+        crate::credentials::ensure_private_directory(&directory).unwrap();
         let path = directory.join("proof.json");
 
         let branding = OperatorBranding::default();
@@ -361,11 +364,14 @@ mod tests {
         store
             .add_mailbox(&project.id, "source@example.com", "destination@example.com")
             .unwrap();
-        let directory = std::env::temp_dir().join(format!(
-            "mailswiftsync-unbranded-proof-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-unbranded-proof-{}",
+                uuid::Uuid::new_v4()
+            ));
+        crate::credentials::ensure_private_directory(&directory).unwrap();
         let path = directory.join("proof.json");
 
         export_from_store_with_options(
@@ -391,11 +397,14 @@ mod tests {
         store
             .add_mailbox(&project.id, "source@example.com", "destination@example.com")
             .unwrap();
-        let directory = std::env::temp_dir().join(format!(
-            "mailswiftsync-branded-proof-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&directory).unwrap();
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-branded-proof-{}",
+                uuid::Uuid::new_v4()
+            ));
+        crate::credentials::ensure_private_directory(&directory).unwrap();
         let path = directory.join("proof.json");
         let branding = OperatorBranding {
             name: "  Acme Managed Services  ".into(),
