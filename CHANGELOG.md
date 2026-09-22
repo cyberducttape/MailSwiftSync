@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Removed the message-mismatch `subject` column and model field. Durable
+  mismatch records now retain identity/reconciliation metadata only; human-
+  readable message content is not stored in the ledger.
 - Completed OAuth secret memory hygiene for JSON boundaries: refresh config,
   access-token, and rotated refresh-token fields now deserialize directly into
   `SecretString`, while non-secret OAuth metadata uses typed response structs

@@ -93,7 +93,6 @@ CREATE TABLE message_mismatches (
   dest_size_bytes INTEGER,
   source_date TEXT,               -- RFC 2822 date
   dest_date TEXT,
-  subject BLOB,                   -- Sanitized subject (bounded, for context)
   recorded_at TEXT,
   FOREIGN KEY(job_id) REFERENCES mailbox_jobs(id),
   FOREIGN KEY(run_id) REFERENCES runs(id)
@@ -245,7 +244,8 @@ Overall: 20,498 exact, 2 missing, 1 extra → ACCEPT or REMEDIATE
 
 #### Step 3: Mismatch Classification (New)
 - For each mismatch, classify as missing/extra/modified
-- Fetch message metadata (Date, Subject) for context
+- Retain only identity and reconciliation metadata (Message-ID, folder,
+  UID/UIDVALIDITY, size, date, flags, and content fingerprint)
 - Store in `message_mismatches` table
 
 #### Step 4: Operator Review (New)
@@ -264,7 +264,8 @@ Overall: 20,498 exact, 2 missing, 1 extra → ACCEPT or REMEDIATE
       - Extra: Message-ID <bar@example.com> (2024-02-01)
   ```
 - Customer proof includes summary of mismatches
-- Operator report includes full mismatch details (subject, Date, UIDs)
+- Operator report includes bounded identity details (folders, dates, sizes,
+  UIDs, and fingerprints); message content is not stored in the durable ledger
 
 ### Production-scale reconciliation boundary
 

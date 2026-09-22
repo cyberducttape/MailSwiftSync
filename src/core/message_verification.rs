@@ -54,7 +54,6 @@ pub struct MessageMismatch {
     pub dest_size_bytes: Option<u64>,
     pub source_date: Option<String>,
     pub dest_date: Option<String>,
-    pub subject: Option<String>,
 }
 
 /// Core message verification engine.
@@ -457,7 +456,6 @@ fn make_mismatch(
         dest_size_bytes: destination.and_then(|message| message.size_bytes),
         source_date: source.and_then(|message| message.internal_date.clone()),
         dest_date: destination.and_then(|message| message.internal_date.clone()),
-        subject: None,
     }
 }
 
