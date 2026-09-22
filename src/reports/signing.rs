@@ -181,20 +181,32 @@ pub(crate) fn sign_file(
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
     let mut value = with_proof_digest(value)?;
+    let public_key = hex_encode(key_pair.public_key().as_ref());
+    value
+        .as_object_mut()
+        .ok_or("Migration proof must be a JSON object.")?
+        .insert(
+            "proof_signature".into(),
+            serde_json::json!({
+                "algorithm": "Ed25519",
+                "key_id": key_id,
+                "public_key": public_key,
+                "signature": "",
+            }),
+        );
     let payload = canonical_signed_proof_payload(&value)?;
     let signature = key_pair.sign(payload.as_bytes());
     let object = value
         .as_object_mut()
         .ok_or("Migration proof must be a JSON object.")?;
-    object.insert(
-        "proof_signature".into(),
-        serde_json::json!({
-            "algorithm": "Ed25519",
-            "key_id": key_id,
-            "public_key": hex_encode(key_pair.public_key().as_ref()),
-            "signature": hex_encode(signature.as_ref()),
-        }),
-    );
+    object
+        .get_mut("proof_signature")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or("Migration proof signature must be an object.")?
+        .insert(
+            "signature".into(),
+            serde_json::Value::String(hex_encode(signature.as_ref())),
+        );
     let output = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
     write_private_atomic(path, &output).map_err(|error| error.to_string())?;
     Ok(format!("Signed migration proof with key {key_id}"))

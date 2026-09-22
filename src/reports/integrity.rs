@@ -48,10 +48,16 @@ pub(crate) fn with_proof_digest(mut value: serde_json::Value) -> Result<serde_js
 
 pub(crate) fn canonical_signed_proof_payload(value: &serde_json::Value) -> Result<String, String> {
     let mut unsigned = value.clone();
-    unsigned
+    let signature = unsigned
         .as_object_mut()
         .ok_or("Migration proof must be a JSON object.")?
-        .remove("proof_signature");
+        .get_mut("proof_signature");
+    if let Some(signature) = signature {
+        signature
+            .as_object_mut()
+            .ok_or("Migration proof signature must be an object.")?
+            .remove("signature");
+    }
     serde_json::to_string(&unsigned).map_err(|error| error.to_string())
 }
 

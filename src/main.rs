@@ -482,6 +482,14 @@ mod tests {
                 .contains("signature valid")
         );
         assert!(reports::signing::verify_file(&path, Some(&"00".repeat(32))).is_err());
+        let mut renamed_signer = signed.clone();
+        renamed_signer["proof_signature"]["key_id"] = "BigImportantAuditor".into();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&renamed_signer).unwrap(),
+        )
+        .unwrap();
+        assert!(reports::signing::verify_file(&path, None).is_err());
         let mut tampered = signed;
         tampered["project"]["name"] = "Altered migration".into();
         std::fs::write(&path, serde_json::to_string_pretty(&tampered).unwrap()).unwrap();
