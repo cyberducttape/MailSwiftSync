@@ -380,7 +380,11 @@ impl eframe::App for App {
                                 ui.label(RichText::new(if self.form.dry_run {
                                     "Preflight checks access and mapping without intentionally changing the destination."
                                 } else {
-                                    "Live migration is enabled; review the destination and deletion warning before starting."
+                                    if self.form.engine() == core::Engine::Dovecot {
+                                        "Live migration is enabled; review the Dovecot strategy and merge behavior before starting."
+                                    } else {
+                                        "Live migration is enabled; review the destination and deletion warning before starting."
+                                    }
                                 }).color(if self.form.dry_run { self.theme_colors().text_secondary } else { self.theme_colors().danger }));
                                 ui.horizontal(|ui| {
                                     ui.checkbox(&mut self.form.profile.automap, "Map standard folders automatically");
@@ -390,7 +394,7 @@ impl eframe::App for App {
                                 ui.horizontal(|ui| { ui.label("Extra imapsync options"); ui.text_edit_singleline(&mut self.form.profile.extra_options); });
                                 ui.horizontal(|ui| { ui.label("imapsync executable"); ui.text_edit_singleline(&mut self.form.profile.imapsync_path); });
                             });
-                            if self.form.profile.delete2 {
+                            if self.form.engine() == core::Engine::ImapSync && self.form.profile.delete2 {
                                 ui.group(|ui| {
                                     ui.label(RichText::new("⚠ DESTINATION DELETION ENABLED").strong().color(self.theme_colors().danger));
                                     ui.label(RichText::new("Messages that exist only on the destination may be removed during live migration.").color(self.theme_colors().danger));

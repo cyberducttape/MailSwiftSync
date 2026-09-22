@@ -59,15 +59,27 @@ pub(crate) fn assess_plan(
             },
             form.dry_run,
         ),
-        (
-            "Destructive options".into(),
-            if form.profile.delete2 {
-                "--delete2 enabled: destination-only messages may be removed".into()
-            } else {
-                "No destination deletion option selected".into()
-            },
-            !form.profile.delete2,
-        ),
+        if form.engine() == core::Engine::Dovecot {
+            (
+                "Dovecot migration strategy".into(),
+                format!(
+                    "{} — {}",
+                    form.profile.dovecot_strategy.label(),
+                    form.profile.dovecot_strategy.description()
+                ),
+                true,
+            )
+        } else {
+            (
+                "Destructive options".into(),
+                if form.profile.delete2 {
+                    "--delete2 enabled: destination-only messages may be removed".into()
+                } else {
+                    "No destination deletion option selected".into()
+                },
+                !form.profile.delete2,
+            )
+        },
         (
             "Credential persistence".into(),
             "Passwords are excluded from saved profiles and the SQLite ledger".into(),

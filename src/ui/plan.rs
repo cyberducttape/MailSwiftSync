@@ -36,23 +36,34 @@ impl App {
                     "{}  →  {}",
                     self.form.profile.source_host, self.form.profile.destination_host
                 ));
-                let deletion_enabled = self.form.profile.delete2;
                 ui.label("Source mail: not deleted by default");
-                ui.label(
-                    RichText::new(format!(
-                        "Destination deletion: {}",
-                        if deletion_enabled {
-                            "ENABLED ⚠"
+                if self.form.engine() == crate::core::Engine::Dovecot {
+                    ui.label(
+                        RichText::new(format!(
+                            "Dovecot strategy: {} — {}",
+                            self.form.profile.dovecot_strategy.label(),
+                            self.form.profile.dovecot_strategy.description()
+                        ))
+                        .color(self.theme_colors().warning),
+                    );
+                } else {
+                    let deletion_enabled = self.form.profile.delete2;
+                    ui.label(
+                        RichText::new(format!(
+                            "Destination deletion: {}",
+                            if deletion_enabled {
+                                "ENABLED ⚠"
+                            } else {
+                                "disabled"
+                            }
+                        ))
+                        .color(if deletion_enabled {
+                            self.theme_colors().danger
                         } else {
-                            "disabled"
-                        }
-                    ))
-                    .color(if deletion_enabled {
-                        self.theme_colors().danger
-                    } else {
-                        self.theme_colors().text_secondary
-                    }),
-                );
+                            self.theme_colors().text_secondary
+                        }),
+                    );
+                }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
@@ -387,11 +398,43 @@ impl App {
                         ui.label(RichText::new("Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count.").size(11.0).color(self.theme_colors().text_secondary));
                     });
                     ui.add_space(8.0);
-                    ui.group(|ui| {
-                        ui.heading(RichText::new("Destructive destination option").color(self.theme_colors().danger));
-                        ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)");
-                        ui.label(RichText::new("Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.").size(11.0).color(self.theme_colors().danger));
-                    });
+                    if self.form.engine() == crate::core::Engine::Dovecot {
+                        ui.group(|ui| {
+                            ui.heading("Dovecot migration strategy");
+                            egui::ComboBox::from_id_salt("dovecot_strategy")
+                                .selected_text(self.form.profile.dovecot_strategy.label())
+                                .show_ui(ui, |ui| {
+                                    for strategy in [
+                                        crate::migration_plan::DovecotMigrationStrategy::InitialMirror,
+                                        crate::migration_plan::DovecotMigrationStrategy::IncrementalMirror,
+                                        crate::migration_plan::DovecotMigrationStrategy::FinalPreservationPass,
+                                        crate::migration_plan::DovecotMigrationStrategy::DestinationAlreadyActive,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut self.form.profile.dovecot_strategy,
+                                            strategy,
+                                            strategy.label(),
+                                        );
+                                    }
+                                });
+                            ui.label(
+                                RichText::new(self.form.profile.dovecot_strategy.description())
+                                    .size(11.0)
+                                    .color(self.theme_colors().text_secondary),
+                            );
+                            ui.label(
+                                RichText::new("Dovecot native sync has no MailSwiftSync throttle; expect higher source load and repeat final passes after exit code 2.")
+                                    .size(11.0)
+                                    .color(self.theme_colors().warning),
+                            );
+                        });
+                    } else {
+                        ui.group(|ui| {
+                            ui.heading(RichText::new("Destructive destination option").color(self.theme_colors().danger));
+                            ui.checkbox(&mut self.form.profile.delete2, "Delete destination messages missing from source  (--delete2)");
+                            ui.label(RichText::new("Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.").size(11.0).color(self.theme_colors().danger));
+                        });
+                    }
                 });
                 if !editable {
                     ui.label(RichText::new("Advanced plan settings are locked while a migration is running.").color(self.theme_colors().text_secondary));

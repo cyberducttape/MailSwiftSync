@@ -220,7 +220,9 @@ pub(crate) fn successful_run_status(
             Some("verified_with_exceptions") => {
                 "Migration completed with accepted verification exceptions"
             }
-            Some("delta_required") => "Migration completed; final delta or review required",
+            Some("delta_required") => {
+                "Dovecot synchronization completed with changes pending; repeat the final pass until exit code 0"
+            }
             Some("verification_difference") => {
                 "Migration completed; verification found differences requiring review"
             }
