@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Fixed the atomic-artifact cleanup regression test on Windows. It now tests
+  replacement failure against a destination directory under a trusted parent,
+  matching the current behavior that securely creates missing parents.
 - Reconciled release documentation with the capability matrix: native Dovecot
   is described as wired but experimental pending integration/recovery CI, the
   production schema version is current, and release docs identify both the

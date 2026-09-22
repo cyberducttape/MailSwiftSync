@@ -157,15 +157,24 @@ mod tests {
 
     #[test]
     fn atomic_write_cleanup_on_error() -> std::io::Result<()> {
-        let temp_dir = std::env::temp_dir();
-        let path = temp_dir.join(format!(
-            "mailswiftsync-missing-{}/test.txt",
-            uuid::Uuid::new_v4()
-        ));
+        let temp_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-artifact-error-{}",
+                uuid::Uuid::new_v4()
+            ));
+        crate::credentials::ensure_private_directory(&temp_dir)?;
+        let path = temp_dir.join("destination");
+        fs::create_dir(&path)?;
 
-        // Directory doesn't exist, should fail
+        // The trusted parent is valid, but the destination is a directory, so
+        // replacement must fail after the temporary file is created.
         let result = write_private_atomic(&path, "hello");
         assert!(result.is_err());
+        assert!(path.is_dir());
+        assert_eq!(fs::read_dir(&temp_dir)?.count(), 1);
+        fs::remove_dir_all(temp_dir)?;
         Ok(())
     }
 
