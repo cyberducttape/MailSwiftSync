@@ -108,11 +108,10 @@ fn compare_category(source: &Value, destination: &Value) -> Result<(Value, usize
         let mut exact = 0;
         for item in &left {
             let key = serde_json::to_string(item).unwrap_or_default();
-            if let Some(count) = right_counts.get_mut(&key) {
-                if *count > 0 {
-                    *count -= 1;
-                    exact += 1;
-                }
+            if let Some(count) = right_counts.get_mut(&key)
+                && *count > 0 {
+                *count -= 1;
+                exact += 1;
             }
         }
         let modified = (left.len() - exact).min(right.len() - exact);
