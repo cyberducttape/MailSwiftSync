@@ -70,7 +70,7 @@ impl MessageVerification {
         dest_messages: &ExtractedMessages,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
         let mut mismatches = Vec::new();
-        let mut exact_matches = 0_u64;
+        let mut metadata_matches = 0_u64;
         let mut probable_matches = 0_u64;
         // UIDs are mailbox-local diagnostic metadata. Borrow them from the
         // input maps instead of cloning every UID into a second set.
@@ -116,7 +116,7 @@ impl MessageVerification {
                 {
                     unmatched_source.remove(source_key);
                     unmatched_dest.remove(dest_key);
-                    exact_matches += 1;
+                    metadata_matches += 1;
                 }
             }
 
@@ -170,7 +170,7 @@ impl MessageVerification {
                 unmatched_dest.remove(dest_uids[0]);
                 // Date + size is only a candidate identity. It is useful for
                 // reconciliation, but it is not proof that the messages are
-                // the same and must never contribute to exact_matches.
+                // the same and must never contribute to metadata_matches.
                 probable_matches += 1;
             }
         }
@@ -231,7 +231,7 @@ impl MessageVerification {
         let summary = VerificationSummary {
             total_source: source_messages.len() as u64,
             total_destination: dest_messages.len() as u64,
-            exact_matches,
+            metadata_matches,
             probable_matches,
             missing_count: mismatches
                 .iter()
@@ -356,7 +356,9 @@ fn make_mismatch(
 pub struct VerificationSummary {
     pub total_source: u64,
     pub total_destination: u64,
-    pub exact_matches: u64,
+    /// Messages with a unique Message-ID and matching available metadata.
+    /// This is not content verification.
+    pub metadata_matches: u64,
     /// Unique internal-date + size pairings. These are reconciliation
     /// candidates, not proof of message identity.
     pub probable_matches: u64,
@@ -373,8 +375,8 @@ pub struct VerificationSummary {
 /// matches cannot hide missing, changed, or unexpected destination messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceLevel {
-    Verified,
-    StronglyMatched,
+    MetadataMatched,
+    StrongMetadataMatch,
     ProbableMatch,
     Ambiguous,
     Missing,
@@ -385,8 +387,8 @@ pub enum EvidenceLevel {
 impl EvidenceLevel {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Verified => "verified",
-            Self::StronglyMatched => "strongly_matched",
+            Self::MetadataMatched => "metadata_matched",
+            Self::StrongMetadataMatch => "strong_metadata_match",
             Self::ProbableMatch => "probable_match",
             Self::Ambiguous => "ambiguous",
             Self::Missing => "missing",
@@ -397,21 +399,23 @@ impl EvidenceLevel {
 }
 
 impl VerificationSummary {
-    pub fn is_perfect_match(&self) -> bool {
+    /// Return whether all extracted records reconcile by metadata alone.
+    /// This must not be presented as content verification.
+    pub fn is_perfect_metadata_match(&self) -> bool {
         self.missing_count == 0
             && self.extra_count == 0
             && self.duplicated_count == 0
             && self.changed_count == 0
             && self.probable_matches == 0
-            && self.exact_matches == self.total_source
-            && self.exact_matches == self.total_destination
+            && self.metadata_matches == self.total_source
+            && self.metadata_matches == self.total_destination
     }
 
     /// Return the single authoritative message-evidence classification.
     ///
     /// This method intentionally evaluates every negative category before
-    /// successful match counts. A migration with 950 exact matches and 10,000
-    /// missing messages is therefore not high-confidence or verified.
+    /// successful match counts. A migration with 950 metadata matches and
+    /// 10,000 missing messages is therefore not high-confidence or verified.
     pub fn evidence_level(&self) -> EvidenceLevel {
         if self.missing_count > 0 {
             EvidenceLevel::Missing
@@ -421,12 +425,12 @@ impl VerificationSummary {
             EvidenceLevel::Unexpected
         } else if self.probable_matches > 0 {
             EvidenceLevel::ProbableMatch
-        } else if self.exact_matches == self.total_source
-            && self.exact_matches == self.total_destination
+        } else if self.metadata_matches == self.total_source
+            && self.metadata_matches == self.total_destination
         {
-            EvidenceLevel::Verified
-        } else if self.exact_matches > 0 {
-            EvidenceLevel::StronglyMatched
+            EvidenceLevel::MetadataMatched
+        } else if self.metadata_matches > 0 {
+            EvidenceLevel::StrongMetadataMatch
         } else {
             EvidenceLevel::Ambiguous
         }
@@ -479,7 +483,7 @@ mod tests {
 
         assert_eq!(summary.missing_count, 1);
         assert_eq!(summary.extra_count, 0);
-        assert_eq!(summary.exact_matches, 1);
+        assert_eq!(summary.metadata_matches, 1);
 
         let missing = mismatches
             .iter()
@@ -562,7 +566,7 @@ mod tests {
             MessageVerification::detect_mismatches("job1", "run1", &source, &dest).unwrap();
 
         assert_eq!(summary.changed_count, 1);
-        assert!(!summary.is_perfect_match());
+        assert!(!summary.is_perfect_metadata_match());
     }
 
     #[test]
@@ -624,10 +628,10 @@ mod tests {
             MessageVerification::detect_mismatches("job1", "run-id-only", &source, &destination)
                 .unwrap();
 
-        assert_eq!(summary.exact_matches, 0);
+        assert_eq!(summary.metadata_matches, 0);
         assert_eq!(summary.changed_count, 1);
         assert!(!mismatches.is_empty());
-        assert!(!summary.is_perfect_match());
+        assert!(!summary.is_perfect_metadata_match());
     }
 
     #[test]
@@ -655,9 +659,9 @@ mod tests {
             MessageVerification::detect_mismatches("job1", "run-one-sided", &source, &destination)
                 .unwrap();
 
-        assert_eq!(summary.exact_matches, 0);
+        assert_eq!(summary.metadata_matches, 0);
         assert_eq!(summary.changed_count, 1);
-        assert!(!summary.is_perfect_match());
+        assert!(!summary.is_perfect_metadata_match());
     }
 
     #[test]
@@ -678,8 +682,8 @@ mod tests {
         let (_mismatches, summary) =
             MessageVerification::detect_mismatches("job1", "run1", &source, &dest).unwrap();
 
-        assert!(summary.is_perfect_match());
-        assert_eq!(summary.exact_matches, 1);
+        assert!(summary.is_perfect_metadata_match());
+        assert_eq!(summary.metadata_matches, 1);
     }
 
     #[test]
@@ -712,8 +716,8 @@ mod tests {
         .unwrap();
 
         assert!(mismatches.is_empty());
-        assert!(summary.is_perfect_match());
-        assert_eq!(summary.exact_matches, 1);
+        assert!(summary.is_perfect_metadata_match());
+        assert_eq!(summary.metadata_matches, 1);
     }
 
     #[test]
@@ -746,8 +750,8 @@ mod tests {
         .unwrap();
 
         assert!(mismatches.is_empty());
-        assert!(!summary.is_perfect_match());
-        assert_eq!(summary.exact_matches, 0);
+        assert!(!summary.is_perfect_metadata_match());
+        assert_eq!(summary.metadata_matches, 0);
         assert_eq!(summary.probable_matches, 1);
     }
 
@@ -768,7 +772,7 @@ mod tests {
 
         assert_eq!(summary.missing_count, 2);
         assert_eq!(summary.extra_count, 2);
-        assert!(!summary.is_perfect_match());
+        assert!(!summary.is_perfect_metadata_match());
         assert_eq!(mismatches.len(), 4);
     }
 
@@ -787,7 +791,7 @@ mod tests {
             MessageVerification::detect_mismatches("job1", "run-duplicate", &source, &destination)
                 .unwrap();
 
-        assert_eq!(summary.exact_matches, 1);
+        assert_eq!(summary.metadata_matches, 1);
         assert_eq!(summary.extra_count, 0);
         assert!(
             mismatches
@@ -822,8 +826,8 @@ mod tests {
         .unwrap();
 
         assert!(mismatches.is_empty());
-        assert_eq!(summary.exact_matches, 2);
-        assert!(summary.is_perfect_match());
+        assert_eq!(summary.metadata_matches, 2);
+        assert!(summary.is_perfect_metadata_match());
     }
 
     #[test]
@@ -854,9 +858,9 @@ mod tests {
         .unwrap();
 
         assert!(mismatches.is_empty());
-        assert_eq!(summary.exact_matches, 2);
+        assert_eq!(summary.metadata_matches, 2);
         assert_eq!(summary.changed_count, 0);
-        assert!(summary.is_perfect_match());
+        assert!(summary.is_perfect_metadata_match());
     }
 
     #[test]
@@ -884,14 +888,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(summary.exact_matches, 1);
+        assert_eq!(summary.metadata_matches, 1);
         assert_eq!(summary.changed_count, 1);
         assert_eq!(summary.missing_count, 0);
         assert_eq!(summary.extra_count, 0);
         assert_eq!(summary.duplicated_count, 0);
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].mismatch_type, MismatchType::MessageIdOnly);
-        assert!(!summary.is_perfect_match());
+        assert!(!summary.is_perfect_metadata_match());
     }
 
     #[test]
@@ -928,7 +932,7 @@ mod tests {
 
     #[test]
     fn evidence_level_is_fail_closed_and_named() {
-        let summary = |exact_matches,
+        let summary = |metadata_matches,
                        probable_matches,
                        missing_count,
                        extra_count,
@@ -936,7 +940,7 @@ mod tests {
                        changed_count| VerificationSummary {
             total_source: 1_000,
             total_destination: 1_000,
-            exact_matches,
+            metadata_matches,
             probable_matches,
             missing_count,
             extra_count,
@@ -946,11 +950,15 @@ mod tests {
 
         assert_eq!(
             summary(1_000, 0, 0, 0, 0, 0).evidence_level(),
-            EvidenceLevel::Verified
+            EvidenceLevel::MetadataMatched
+        );
+        assert_eq!(
+            summary(1_000, 0, 0, 0, 0, 0).evidence_level().as_str(),
+            "metadata_matched"
         );
         assert_eq!(
             summary(950, 0, 0, 0, 0, 0).evidence_level(),
-            EvidenceLevel::StronglyMatched
+            EvidenceLevel::StrongMetadataMatch
         );
         assert_eq!(
             summary(0, 1, 0, 0, 0, 0).evidence_level(),
