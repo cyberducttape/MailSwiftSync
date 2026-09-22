@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Removed the misleading message-verification `verified` classification. The
+  prototype now reports metadata matches explicitly and reserves content
+  verification for a future folder-aware SHA-256 evidence path.
 - Centralized private-directory creation and validation across profiles,
   branding, appearance preferences, diagnostics, bootstrap, restore setup,
   and secret runtime paths. Existing directories are verified without being

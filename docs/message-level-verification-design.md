@@ -18,7 +18,7 @@ This is the single largest blocker to production trust. Without message-level ve
 **Current Limitation:** MailSwiftSync verifies "you have 1,000 messages" but NOT "these are the same 1,000 messages."
 
 **Impact When Implemented:** Enables operators to report:
-- ✅ 19,998 exact matches
+- ✅ 19,998 metadata matches (not content verified)
 - ⚠️ 2 missing (list them)
 - ⚠️ 0 changed
 - ⚠️ 0 unexplained extras
@@ -171,7 +171,7 @@ To achieve high-confidence verification, match messages on **combinations** rath
 - ✅ Subject + From + Date — heuristic recovery
 
 **Mismatch Classifications:**
-- `EXACT_MATCH` — Message-ID plus available metadata match (verified evidence)
+- `METADATA_MATCHED` — Message-ID plus available metadata match; not content verification
 - `CONTENT_MATCH` — Hash and date match, Message-ID missing/differs (strongly matched)
 - `DATE_SIZE_MATCH` — Internal date + size match (probable match only)
 - `MESSAGE_ID_ONLY` — Message-ID matches but date/size differ (changed evidence requiring review)
@@ -183,10 +183,12 @@ To achieve high-confidence verification, match messages on **combinations** rath
 
 The verifier distinguishes reconciliation from proof strength. A unique
 internal-date + size pair is recorded as `PROBABLE_MATCH`; it removes the
-candidate from missing/extra results but does not increment exact matches and
-cannot make `is_perfect_match()` succeed. Exact status currently requires a
-unique Message-ID with matching available metadata. A future content
-fingerprint can strengthen that classification; UID equality alone never can.
+candidate from missing/extra results but does not increment metadata matches
+and cannot make `is_perfect_metadata_match()` succeed. Metadata-matched status
+currently requires a unique Message-ID with matching available metadata, but
+it does not establish content equality or folder placement. A future
+folder-aware content fingerprint can promote evidence to `CONTENT_VERIFIED`;
+UID equality alone never can.
 
 The current library verifier still receives complete in-memory extraction maps.
 Its transient indexes borrow mailbox keys and message IDs, and its metadata
@@ -198,7 +200,7 @@ store, then reconciling through indexed queries before this feature is wired to
 the migration controller.
 
 The authoritative summary exposes named evidence levels rather than a
-percentage: `verified`, `strongly_matched`, `probable_match`, `ambiguous`,
+percentage: `metadata_matched`, `strong_metadata_match`, `probable_match`, `ambiguous`,
 `missing`, `changed`, or `unexpected`. Negative categories take precedence, so
 successful matches cannot conceal missing, changed, duplicate, or extra
 messages. The legacy display structures retain mismatch counts only; they do
@@ -209,14 +211,14 @@ not calculate an independent confidence score.
 Migration Summary: user@example.com
 ───────────────────────────────────────
 INBOX:
-  19,998 exact matches (Message-ID + hash + date)
+  19,998 metadata matches (Message-ID + available metadata; content not verified)
   2 missing (Message-ID <a@x>, Message-ID <b@x>)
   0 changed
   0 unexplained extras
-  ✅ VERIFIED
+  ⚠️ METADATA MATCHED (content and folder placement not verified)
 
 Sent:
-  500 exact matches
+  500 metadata matches
   0 missing
   0 changed
   1 extra (Message-ID <c@x>, 2024-02-15)
@@ -418,7 +420,8 @@ New module `message_verification`:
 - Accepts 20 missing, **rejects 20 extra** → requires remediation
 - Re-runs with specific Mailbox=Archive, target=dedup flag
 
-**Final verdict:** After remediation, message-level verification shows exact match. Operator confirms in final report.
+**Final verdict:** After remediation, metadata reconciliation is complete. A
+content-verified verdict requires the future folder-aware SHA-256 path.
 
 **Without message-level verification:** Migration accepted as "complete" despite data integrity issue.
 
