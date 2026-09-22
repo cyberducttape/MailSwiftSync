@@ -33,7 +33,7 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
 | **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Exercised by imapsync against local Dovecot server fixtures; native-Dovecot coverage pending |
-| **Message-level mismatch detection** | yes | no | unit+scenario | no | Code complete, NOT wired to migration pipeline |
+| **Message-level mismatch detection** | yes | no | unit+scenario | no | Folder-aware prototype with caller-supplied mappings; NOT wired to migration pipeline |
 | **Named message evidence levels** | yes | no | unit | no | MetadataMatched/StrongMetadataMatch are metadata-only; content verification is not implemented or used operationally |
 | **Checkpoint persistence** per message | no | no | none | no | NOT implemented; evidence persists per run, not per message |
 | **Crash recovery** | partial | partial | unit | no | Run-level recovery works; message-level recovery not wired |
