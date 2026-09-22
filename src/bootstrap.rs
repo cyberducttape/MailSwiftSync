@@ -414,6 +414,7 @@ impl App {
             // Migration windows are log-heavy and commonly run in dark,
             // low-glare operator environments.
             dark_mode: appearance.dark_mode,
+            theme: appearance.theme,
             ui_scale: appearance.ui_scale,
             branding: crate::branding::OperatorBranding::load(),
             bulk_live_confirm_open: false,
