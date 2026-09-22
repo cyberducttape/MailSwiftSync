@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Removed imapsync's protocol-level `debugimap1` and `debugimap2` switches from
+  the normal expert-option allowlist. Their authentication/protocol output can
+  contain transformed secrets that literal redaction cannot reliably identify;
+  the general `debug` flag remains available.
 - Made Migration Assurance reporting explicit about its evidence boundaries:
   recognized mailbox, message, DNS, file, and database categories now use
   typed composite identities, unknown categories are labeled as heuristic,
