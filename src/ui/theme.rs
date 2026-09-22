@@ -238,7 +238,7 @@ impl ThemeColors {
         Self {
             background: Color32::from_rgb(0, 128, 128),
             panel: Color32::from_rgb(192, 192, 192),
-            window: Color32::from_rgb(192, 192, 192),
+            window: Color32::from_rgb(166, 202, 240),
             text_primary: Color32::BLACK,
             text_secondary: Color32::from_rgb(35, 35, 35),
             info: navy,
@@ -253,11 +253,11 @@ impl ThemeColors {
 
     fn windows31() -> Self {
         Self {
-            background: Color32::from_rgb(0, 128, 128),
-            panel: Color32::from_rgb(170, 170, 170),
-            window: Color32::from_rgb(192, 192, 192),
+            background: Color32::from_rgb(0, 64, 64),
+            panel: Color32::from_rgb(128, 128, 128),
+            window: Color32::from_rgb(212, 208, 200),
             text_primary: Color32::BLACK,
-            text_secondary: Color32::from_rgb(40, 40, 40),
+            text_secondary: Color32::BLACK,
             info: Color32::from_rgb(0, 0, 128),
             success: Color32::from_rgb(0, 90, 0),
             warning: Color32::from_rgb(120, 65, 0),
@@ -353,6 +353,15 @@ mod tests {
         assert_eq!(ThemeKind::all().len(), 10);
         assert_eq!(ThemeKind::Windows95.label(), "Windows 95");
         assert_eq!(ThemeKind::Windows31.label(), "Windows 3.1");
+    }
+
+    #[test]
+    fn windows_retro_packs_have_distinct_surfaces() {
+        let windows95 = ThemeColors::for_theme(ThemeKind::Windows95, true);
+        let windows31 = ThemeColors::for_theme(ThemeKind::Windows31, true);
+        assert_ne!(windows95.background, windows31.background);
+        assert_ne!(windows95.panel, windows31.panel);
+        assert_ne!(windows95.window, windows31.window);
     }
 
     #[test]
