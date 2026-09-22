@@ -239,6 +239,14 @@ impl StateStore {
                     if engine_versions_table != 1 {
                         return Ok(false);
                     }
+                    let subject_column: i64 = self.connection.query_row(
+                        "SELECT COUNT(*) FROM pragma_table_info('message_mismatches') WHERE name='subject'",
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    if subject_column != 0 {
+                        return Ok(false);
+                    }
                     let legacy_plan: i64 = self.connection.query_row(
                         "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE preflight_plan IS NOT NULL AND (length(preflight_plan) <> 64 OR preflight_plan GLOB '*[^0-9A-Fa-f]*'))",
                         [],
@@ -277,7 +285,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), run_id TEXT REFERENCES runs(id), kind TEXT NOT NULL, detail TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS verification_acceptances (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-                 CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER, dest_size_bytes INTEGER, source_date TEXT, dest_date TEXT, subject BLOB, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER, destination_uidvalidity INTEGER, source_fingerprint TEXT, destination_fingerprint TEXT, source_flags TEXT, destination_flags TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER, dest_size_bytes INTEGER, source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER, destination_uidvalidity INTEGER, source_fingerprint TEXT, destination_fingerprint TEXT, source_flags TEXT, destination_flags TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS message_extraction (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), side TEXT NOT NULL DEFAULT 'unknown', mailbox TEXT, message_id TEXT, uid TEXT, uidvalidity INTEGER, size_bytes INTEGER, internal_date TEXT, content_fingerprint TEXT, flags TEXT, extracted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS message_mismatch_acceptance (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), mismatch_id TEXT NOT NULL REFERENCES message_mismatches(id), operator TEXT NOT NULL, reason TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
@@ -493,6 +501,9 @@ impl StateStore {
             .prepare("PRAGMA table_info(message_mismatches)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        if mismatch_columns.iter().any(|column| column == "subject") {
+            tx.execute("ALTER TABLE message_mismatches DROP COLUMN subject", [])?;
+        }
         for (column, definition) in [
             ("source_folder", "TEXT"),
             ("destination_folder", "TEXT"),

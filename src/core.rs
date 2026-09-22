@@ -63,7 +63,7 @@ pub use models::{
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+pub const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 pub(crate) use policy::{
     attention_reason_for, normalized_destination_identity, valid_dovecot_checkpoint,
@@ -1508,6 +1508,15 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        let subject_columns: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_mismatches') WHERE name='subject'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(subject_columns, 0);
         drop(db);
 
         let directory =
@@ -1521,6 +1530,29 @@ mod tests {
         drop(connection);
         assert!(StateStore::open(&path).is_err());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn migration_removes_legacy_message_subject_column() {
+        let db = StateStore::in_memory().unwrap();
+        db.connection
+            .execute("ALTER TABLE message_mismatches ADD COLUMN subject BLOB", [])
+            .unwrap();
+        db.connection
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION - 1)
+            .unwrap();
+
+        db.migrate().unwrap();
+
+        let subject_columns: i64 = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('message_mismatches') WHERE name='subject'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(subject_columns, 0);
     }
 
     #[test]

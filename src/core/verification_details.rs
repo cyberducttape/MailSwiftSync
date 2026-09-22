@@ -17,7 +17,6 @@ pub struct MismatchDetail {
     pub dest_size_bytes: Option<u64>,
     pub source_date: Option<String>,
     pub dest_date: Option<String>,
-    pub subject: Option<String>,
     pub acceptance_status: Option<AcceptanceStatus>,
 }
 
