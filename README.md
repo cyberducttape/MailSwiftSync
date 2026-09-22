@@ -77,6 +77,8 @@ Stable today:
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
 - Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
+- Native Dovecot execution is implemented and wired, but remains experimental
+  until its integration fixture and recovery scenarios pass in CI.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
 - Running jobs show elapsed time and can be stopped through an explicit confirmation; Advanced options include contextual guidance for per-process throttles.
@@ -142,7 +144,7 @@ MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its a
 
 ### 2. Download or build MailSwiftSync
 
-For released binaries, see [GitHub Releases](https://github.com/itchyitchy123/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a CycloneDX SBOM, and GitHub build-provenance attestations. Release tags use the `v0.1.0-alpha`, `v0.1.0-beta.1`, or `v0.1.0` scheme and are blocked when they do not match Cargo's package version.
+For released binaries, see [GitHub Releases](https://github.com/itchyitchy123/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Release tags use the `v0.1.0-alpha`, `v0.1.0-beta.1`, or `v0.1.0` scheme and are blocked when they do not match Cargo's package version.
 
 For contributors or users building from source:
 

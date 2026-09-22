@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Reconciled release documentation with the capability matrix: native Dovecot
+  is described as wired but experimental pending integration/recovery CI, the
+  production schema version is current, and release docs identify both the
+  Rust CycloneDX and final-image SPDX SBOM artifacts.
 - Corrected Migration Assurance truncation accounting for duplicate identities:
   `details_omitted` now counts omitted mismatch groups rather than subtracting
   detail entries from record totals, so the report cannot imply that duplicate

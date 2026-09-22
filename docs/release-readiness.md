@@ -40,9 +40,11 @@ and require the corresponding integration run.
 - Windows private files and directories now receive protected owner/System
   DACLs rather than relying on inherited ACLs; the native Windows runtime test
   suite remains the release evidence for this implementation.
-- CI and tagged releases generate a CycloneDX 1.5 SBOM from the locked Cargo
-  dependency graph and publish it with its own checksum. The SBOM serial and
-  timestamp are reproducible from `Cargo.lock` and `SOURCE_DATE_EPOCH`.
+- CI and tagged releases generate a Rust CycloneDX 1.5 SBOM from the locked
+  Cargo dependency graph and a final-image SPDX SBOM covering Debian packages,
+  Dovecot, imapsync, and runtime libraries. Each is published with its own
+  checksum; the Rust SBOM serial and timestamp are reproducible from
+  `Cargo.lock` and `SOURCE_DATE_EPOCH`.
 - The cross-platform CI matrix runs the full locked test suite on Linux,
   Windows, and macOS targets in addition to compiling release binaries. This
   is platform runtime coverage for shared behavior; the Windows native suite
