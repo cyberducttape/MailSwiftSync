@@ -1475,12 +1475,12 @@ mod tests {
         let path = directory.join("state.db");
         create_private_test_directory(&directory);
         let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
-        permissions.set_mode(0o755);
+        permissions.set_mode(0o750);
         std::fs::set_permissions(&directory, permissions).unwrap();
         let _store = StateStore::open(&path).unwrap();
         assert_eq!(
             std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
-            0o755
+            0o750
         );
         drop(_store);
         std::fs::remove_dir_all(directory).unwrap();
