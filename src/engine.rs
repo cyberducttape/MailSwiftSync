@@ -190,14 +190,6 @@ pub(crate) fn canonical_extra_options(extra_options: &str) -> Result<Vec<String>
             kind: OptionType::Boolean,
         },
         OptionSpec {
-            name: "debugimap1",
-            kind: OptionType::Boolean,
-        },
-        OptionSpec {
-            name: "debugimap2",
-            kind: OptionType::Boolean,
-        },
-        OptionSpec {
             name: "maxlinelength",
             kind: OptionType::Integer {
                 min: 1,

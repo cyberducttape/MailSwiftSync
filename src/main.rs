@@ -873,13 +873,25 @@ mod tests {
         assert!(form.validate().unwrap_err().contains("canonical"));
         form.profile.extra_options = "--timeout=30".into();
         assert!(form.validate().is_ok());
-        form.profile.extra_options = "--debug --debugimap1 --debugimap2".into();
+        form.profile.extra_options = "--debug".into();
         assert!(form.validate().is_ok());
+        form.profile.extra_options = "--debugimap1".into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("safe imapsync option allowlist")
+        );
+        form.profile.extra_options = "--debugimap2".into();
+        assert!(
+            form.validate()
+                .unwrap_err()
+                .contains("safe imapsync option allowlist")
+        );
         form.profile.extra_options = "--debugimap1=1".into();
         assert!(
             form.validate()
                 .unwrap_err()
-                .contains("does not accept a value")
+                .contains("safe imapsync option allowlist")
         );
         form.profile.extra_options = "--custom-helper /tmp/helper".into();
         let error = form.validate().unwrap_err();
