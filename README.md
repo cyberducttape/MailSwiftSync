@@ -19,6 +19,37 @@ MailSwiftSync helps administrators and MSPs plan, execute, verify, and audit mai
 
 The product value is the control plane around the transfer engine: endpoint checks, pilot and cutover planning, mailbox scope, controlled execution, durable run records, and evidence-led verification. The central workflow is **Plan → Preflight → Execute → Verify → Audit**.
 
+## Migration assurance snapshots
+
+For inventories not yet collected by the mailbox controller, `migrateaudit`
+compares two JSON snapshots and writes a deterministic assurance report:
+
+```text
+mailswiftsync migrateaudit source.json destination.json assurance-report.json
+```
+
+Each top-level JSON array is a resource category, such as `mailboxes`,
+`folders`, `messages`, `permissions`, `databases`, `dns`, or `ssl`. Records
+are matched by stable identity fields; equal identities with different content
+are reported as `modified`, and absent records as `missing` or `extra`.
+
+The command prints a one-line result, writes per-category counts and
+source/destination SHA-256 values, and exits 1 when any difference exists.
+The report can be checked with `verify` and signed with `sign`. It proves
+equality of the supplied snapshots; snapshot completeness remains the
+responsibility of the collector and is stated in the report.
+
+For a targeted retry or remediation pass, batch execution accepts an explicit
+durable job-ID set:
+
+```text
+mailswiftsync headless state.db batch-live --mailboxes job-123,job-456
+```
+
+Unknown IDs are rejected, and the command never expands a targeted request to
+the whole queue. The resulting customer proof now includes exact mailbox
+counts, exception counts, and aggregate missing/extra/modified message totals.
+
 ## Project status
 
 MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, and aggregate verification evidence are available today. Treat credential delivery, packaged installers, message-level reconciliation, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured, but native installers are not currently shipped.
