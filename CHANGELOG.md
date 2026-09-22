@@ -15,6 +15,12 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- A persisted appearance color-pack selector with ten palettes: Default,
+  Classic Green, Classic Amber, Classic White, Retro 80s Neon, High Contrast,
+  Terminal Blue, Commodore 64, Windows 95, and Windows 3.1. The retro packs
+  are inspired by the existing WayExpand GUI palettes; the Windows themes
+  use distinct, readable desktop-inspired surfaces. Added contrast and
+  palette-distinction regression tests.
 - A new wiki page, "Provider runbooks", with concrete endpoint/auth/folder
   guidance for the migration pairings MSPs run most often: Gmail/Google
   Workspace ↔ Microsoft 365, hosted cPanel/Dovecot → Google Workspace or
