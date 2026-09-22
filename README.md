@@ -19,6 +19,8 @@ MailSwiftSync helps administrators and MSPs plan, execute, verify, and audit mai
 
 The product value is the control plane around the transfer engine: endpoint checks, pilot and cutover planning, mailbox scope, controlled execution, durable run records, and evidence-led verification. The central workflow is **Plan → Preflight → Execute → Verify → Audit**.
 
+The desktop UI includes a persisted **Settings → Appearance → Color pack** selector. It includes the WayExpand-inspired Default, Classic Green, Classic Amber, Classic White, Retro 80s Neon, High Contrast, Terminal Blue, and Commodore 64 palettes, plus Windows 95 and Windows 3.1 desktop-inspired themes. The Default pack retains the Dark/Light toggle; the retro packs use their own fixed palettes.
+
 ## Migration assurance snapshots
 
 For inventories not yet collected by the mailbox controller, `migrateaudit`

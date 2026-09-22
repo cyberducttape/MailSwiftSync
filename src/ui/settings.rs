@@ -19,6 +19,7 @@ pub(crate) struct SettingsResult {
 pub(crate) fn show(
     ctx: &egui::Context,
     open: &mut bool,
+    theme: &mut crate::ui::ThemeKind,
     dark_mode: &mut bool,
     ui_scale: &mut f32,
     branding: &mut crate::branding::OperatorBranding,
@@ -45,11 +46,30 @@ pub(crate) fn show(
             ui.group(|ui| {
                 ui.heading("Appearance");
                 ui.horizontal(|ui| {
+                    ui.label("Color pack");
+                    egui::ComboBox::from_id_salt("appearance_theme")
+                        .selected_text(theme.label())
+                        .show_ui(ui, |ui| {
+                            for option in crate::ui::ThemeKind::all() {
+                                if ui.selectable_value(theme, *option, option.label()).clicked()
+                                    && let Err(value) = (crate::ui::AppearancePreferences {
+                                        theme: *theme,
+                                        dark_mode: *dark_mode,
+                                        ui_scale: *ui_scale,
+                                    }).save()
+                                {
+                                    error = Some(format!("Could not save appearance preference: {value}"));
+                                }
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
                     ui.label("Theme");
                     let label = if *dark_mode { "Dark" } else { "Light" };
                     if ui.button(label).clicked() {
                         *dark_mode = !*dark_mode;
                         if let Err(value) = (crate::ui::AppearancePreferences {
+                            theme: *theme,
                             dark_mode: *dark_mode,
                             ui_scale: *ui_scale,
                         })
@@ -70,6 +90,7 @@ pub(crate) fn show(
                 });
                 if ui.button("Save appearance preferences").clicked()
                     && let Err(value) = (crate::ui::AppearancePreferences {
+                        theme: *theme,
                         dark_mode: *dark_mode,
                         ui_scale: *ui_scale,
                     })
@@ -119,6 +140,7 @@ impl App {
         let result = show(
             ctx,
             &mut self.settings_open,
+            &mut self.theme,
             &mut self.dark_mode,
             &mut self.ui_scale,
             &mut self.branding,

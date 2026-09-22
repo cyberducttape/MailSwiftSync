@@ -133,6 +133,7 @@ pub(crate) struct App {
     pub(crate) deferred_events: VecDeque<Event>,
     pub(crate) run_started_at: Option<std::time::Instant>,
     pub(crate) dark_mode: bool,
+    pub(crate) theme: ThemeKind,
     pub(crate) ui_scale: f32,
     /// Operator/agency name and contact line applied to customer-proof
     /// exports. Independent of the migration plan/profile; see
@@ -200,11 +201,7 @@ impl App {
     }
 
     pub(crate) fn theme_colors(&self) -> ThemeColors {
-        if self.dark_mode {
-            ThemeColors::dark()
-        } else {
-            ThemeColors::light()
-        }
+        ThemeColors::for_theme(self.theme, self.dark_mode)
     }
 
     pub(crate) fn cached_report_mailbox(

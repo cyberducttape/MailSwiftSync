@@ -39,6 +39,9 @@ impl eframe::App for App {
         } else {
             egui::Visuals::light()
         };
+        v.override_text_color = Some(colors.text_primary);
+        v.panel_fill = colors.background;
+        v.extreme_bg_color = colors.background;
         v.panel_fill = colors.panel;
         v.window_fill = colors.window;
         v.widgets.active.bg_fill = colors.info;

@@ -138,10 +138,11 @@ use ui::job_state_badge;
 #[cfg(test)]
 use ui::recommended_next_action;
 use ui::{
-    AppearancePreferences, ThemeColors, WorkspaceRefreshOptions, WorkspaceSnapshot, WorkspaceView,
-    display_job_state, format_elapsed, format_phase_name, markdown_escape, needs_operator_review,
-    password_visibility_id, preferred_project_id, project_health_state_counts, push_visible_output,
-    render_account, status_color, successful_run_severity, successful_run_status, truncate_utf8,
+    AppearancePreferences, ThemeColors, ThemeKind, WorkspaceRefreshOptions, WorkspaceSnapshot,
+    WorkspaceView, display_job_state, format_elapsed, format_phase_name, markdown_escape,
+    needs_operator_review, password_visibility_id, preferred_project_id,
+    project_health_state_counts, push_visible_output, render_account, status_color,
+    successful_run_severity, successful_run_status, truncate_utf8,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
