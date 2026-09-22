@@ -1,8 +1,9 @@
 use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) enum ThemeKind {
+    #[default]
     Default,
     ClassicGreen,
     ClassicAmber,
@@ -13,12 +14,6 @@ pub(crate) enum ThemeKind {
     Commodore64,
     Windows95,
     Windows31,
-}
-
-impl Default for ThemeKind {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl ThemeKind {
@@ -345,6 +340,16 @@ impl AppearancePreferences {
 }
 
 #[cfg(test)]
+pub(crate) fn next_ui_scale(current: f32) -> f32 {
+    const SCALES: [f32; 5] = [0.90, 1.00, 1.10, 1.25, 1.50];
+    SCALES
+        .iter()
+        .copied()
+        .find(|scale| *scale > current + f32::EPSILON)
+        .unwrap_or(SCALES[0])
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -380,14 +385,4 @@ mod tests {
             );
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) fn next_ui_scale(current: f32) -> f32 {
-    const SCALES: [f32; 5] = [0.90, 1.00, 1.10, 1.25, 1.50];
-    SCALES
-        .iter()
-        .copied()
-        .find(|scale| *scale > current + f32::EPSILON)
-        .unwrap_or(SCALES[0])
 }

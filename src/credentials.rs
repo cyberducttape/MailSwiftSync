@@ -128,22 +128,20 @@ pub fn create_secret_directory() -> Result<PathBuf, String> {
 fn create_secret_directory_at(base: &Path) -> Result<PathBuf, String> {
     secure_runtime_directory(base).map_err(|error| error.to_string())?;
     let directory = base.join(format!("run-{}", uuid::Uuid::new_v4()));
-    fs::create_dir(&directory).map_err(|error| error.to_string())?;
-    if let Err(error) = secure_runtime_directory(&directory) {
-        let _ = fs::remove_dir(&directory);
-        return Err(error.to_string());
-    }
+    secure_runtime_directory(&directory).map_err(|error| error.to_string())?;
     Ok(directory)
 }
 
 #[cfg(unix)]
 fn secure_runtime_directory(path: &Path) -> std::io::Result<fs::File> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
     // mkdir is intentionally non-recursive: accepting a pre-existing path
     // must go through the no-follow/open-and-verify path below. In particular,
     // never use create_dir_all followed by metadata/chmod for secret material.
-    match fs::create_dir(path) {
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(error),
@@ -606,6 +604,7 @@ pub fn restrict_file_permissions(_: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 #[cfg(unix)]
 pub fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;

@@ -181,6 +181,17 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use uuid::Uuid;
 
+    fn create_private_test_directory(path: &std::path::Path) {
+        std::fs::create_dir_all(path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
     // GitHub Actions Windows runners restrict certain security operations (ACLs, nested jobs).
     // This macro skips tests that require unrestricted filesystem or process permissions.
     #[allow(unused_macros)]
@@ -402,7 +413,7 @@ mod tests {
             "mailswiftsync-support-bundle-{}",
             uuid::Uuid::new_v4()
         ));
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let state = directory.join("state.db");
         let output = directory.join("support.json");
         let store = core::StateStore::open(&state).unwrap();
@@ -1195,7 +1206,7 @@ mod tests {
     fn ledger_restore_validates_copy_and_preserves_previous_state() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-restore-{}", Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
+        create_private_test_directory(&directory);
         let source = directory.join("backup.db");
         let destination = directory.join("state.db");
         let source_store = core::StateStore::in_memory().unwrap();
@@ -2758,7 +2769,7 @@ mod tests {
     fn headless_status_is_secret_free_and_reports_durable_mailboxes() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-headless-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let state = directory.join("state.db");
         let db = core::StateStore::open(&state).unwrap();
         let project = db
@@ -2797,7 +2808,7 @@ mod tests {
     fn headless_status_identifies_configured_batch_projects() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-headless-batch-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
+        create_private_test_directory(&directory);
         let state = directory.join("state.db");
         let db = core::StateStore::open(&state).unwrap();
         let project = db
@@ -2827,8 +2838,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mailswiftsync-fleet-{}", Uuid::new_v4()));
         let shard_a = root.join("shard-a");
         let shard_b = root.join("nested").join("shard-b");
-        std::fs::create_dir_all(&shard_a).unwrap();
-        std::fs::create_dir_all(&shard_b).unwrap();
+        create_private_test_directory(&shard_a);
+        create_private_test_directory(&shard_b);
 
         let state_a = shard_a.join("state.db");
         let db_a = core::StateStore::open(&state_a).unwrap();
