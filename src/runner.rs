@@ -429,6 +429,65 @@ fn process_tail_text(tail: &Mutex<BoundedLineBuffer>) -> String {
         .unwrap_or_default()
 }
 
+fn register_process(
+    tx: &mpsc::SyncSender<crate::Event>,
+    run_id: &str,
+    job_id: &str,
+    executable: &str,
+    child: &std::process::Child,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let (start_ticks, process_group, session_id) = process_identity(child.id())
+        .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
+        .unwrap_or((None, None, None));
+    let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+    tx.send(crate::Event::ProcessStarted(
+        run_id.to_owned(),
+        job_id.to_owned(),
+        child.id(),
+        start_ticks,
+        process_group,
+        session_id,
+        executable.to_owned(),
+        ack_tx,
+    ))
+    .map_err(|_| "process event channel disconnected before durable registration".to_owned())?;
+    let deadline = std::time::Instant::now() + PROCESS_REGISTRATION_ACK_TIMEOUT;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled before durable process registration".to_owned());
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err("durable process registration acknowledgement timed out".to_owned());
+        }
+        match ack_rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => return Err(format!("process registration failed: {error}")),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("durable process registration response was lost".to_owned());
+            }
+        }
+    }
+}
+
+struct ProcessRegistrationGuard<'a> {
+    tx: &'a mpsc::SyncSender<crate::Event>,
+    run_id: String,
+    job_id: String,
+}
+
+impl Drop for ProcessRegistrationGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.tx.send(crate::Event::ProcessEnded {
+            run_id: self.run_id.clone(),
+            job_id: self.job_id.clone(),
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_capture_lines(
     executable: &str,
     args: &[String],
@@ -437,6 +496,7 @@ pub(crate) fn run_capture_lines(
     secrets: &[SecretString],
     timeout: Duration,
     observer: Option<OutputObserver>,
+    durable: Option<(&mpsc::SyncSender<crate::Event>, &str, &str)>,
 ) -> Result<(ProcessOutcome, Vec<String>, bool), String> {
     let mut command = Command::new(executable);
     command
@@ -493,6 +553,25 @@ pub(crate) fn run_capture_lines(
             }
         })
     });
+    let registration = durable.map(|(tx, run_id, job_id)| {
+        register_process(tx, run_id, job_id, executable, &child, cancel)
+    });
+    let registration_error = registration
+        .as_ref()
+        .and_then(|result| result.as_ref().err())
+        .cloned();
+    if registration_error.is_some() {
+        cancel.store(true, Ordering::Relaxed);
+        terminate_process_group(&mut child);
+    }
+    let _registration_guard = match (durable, registration_error.is_none()) {
+        (Some((tx, run_id, job_id)), true) => Some(ProcessRegistrationGuard {
+            tx,
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+        }),
+        _ => None,
+    };
     let status = wait_with_timeout(&mut child, timeout, cancel).map_err(|error| error.to_string());
     let stdout_lines = out_thread
         .join()
@@ -513,6 +592,9 @@ pub(crate) fn run_capture_lines(
             .map(|line| format!("[stderr] {line}")),
     );
     let status = status?;
+    if let Some(error) = registration_error {
+        return Err(error);
+    }
     if capture_truncated {
         lines.push(
             "[diagnostics truncated; semantic verification continued from the full stream]".into(),
@@ -549,6 +631,7 @@ pub(crate) fn probe_engine_version(executable: &str) -> Option<String> {
             &cancel,
             &[],
             Duration::from_secs(5),
+            None,
             None,
         ) else {
             continue;
@@ -615,7 +698,7 @@ pub(crate) fn run_dovecot_destination_preflight(
 ) -> Result<(), String> {
     for (index, (executable, args)) in commands.iter().enumerate() {
         let (status, lines, _) =
-            run_capture_lines(executable, args, &[], cancel, &[], timeout, None)?;
+            run_capture_lines(executable, args, &[], cancel, &[], timeout, None, None)?;
         for line in lines {
             let _ = tx.send(Event::RunLine {
                 run_id: run_id.to_owned(),
@@ -663,6 +746,7 @@ pub(crate) fn run_dovecot_verification(
             secrets,
             timeout,
             Some(observer),
+            Some((tx, run_id, job_id)),
         )?;
         for line in &report {
             let _ = tx.send(Event::RunLine {

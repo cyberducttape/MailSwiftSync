@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Extended durable child supervision to secret-bearing Dovecot verification
+  commands. The short-lived capture helper now performs ProcessStarted
+  registration with acknowledgement and guarantees ProcessEnded cleanup, while
+  credential-free version and preflight probes remain ephemeral.
 - Applied the private-directory trust boundary to atomic report/artifact
   writes. Artifact parents are now securely created or verified before a
   temporary file is opened, preventing symlinked or group/world-writable
