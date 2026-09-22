@@ -198,6 +198,7 @@ fn compare_category(
     let mut missing_total = 0;
     let mut extra_total = 0;
     let mut modified_total = 0;
+    let mut detail_groups: usize = 0;
     let identities = source_groups
         .keys()
         .chain(destination_groups.keys())
@@ -230,6 +231,9 @@ fn compare_category(
         missing_total += missing;
         extra_total += extra;
         modified_total += modified;
+        if missing > 0 || extra > 0 || modified > 0 {
+            detail_groups += 1;
+        }
         if details.len() < MAX_DETAILS && (missing > 0 || extra > 0 || modified > 0) {
             let source_value = left.iter().find(|item| !right.contains(item));
             let destination_value = right.iter().find(|item| !left.contains(item));
@@ -244,9 +248,8 @@ fn compare_category(
             }));
         }
     }
-    let total_detail_count = missing_total + extra_total + modified_total;
     let detail_count = details.len();
-    let details_omitted = total_detail_count.saturating_sub(detail_count);
+    let details_omitted = detail_groups.saturating_sub(detail_count);
     let identity_policy = if identity_schema(category).is_some() {
         "typed"
     } else {
@@ -356,6 +359,22 @@ mod tests {
         let a = serde_json::json!({"folders":[{"id":"b"},{"id":"a"}]});
         let b = serde_json::json!({"folders":[{"id":"a"},{"id":"b"}]});
         assert_eq!(compare(&a, &b).unwrap().differences, 0);
+    }
+
+    #[test]
+    fn duplicate_mismatches_report_omitted_groups_not_omitted_records() {
+        let source = serde_json::json!({"widgets": (0..1_001)
+            .map(|value| serde_json::json!({"id":"same", "value":value}))
+            .collect::<Vec<_>>()});
+        let destination = serde_json::json!({"widgets": (0..1_001)
+            .map(|value| serde_json::json!({"id":"same", "value":value + 1_001}))
+            .collect::<Vec<_>>()});
+        let result = compare(&source, &destination).unwrap();
+        let widgets = &result.report["categories"]["widgets"];
+        assert_eq!(widgets["modified"], 1_001);
+        assert_eq!(widgets["detail_count"], 1);
+        assert_eq!(widgets["details_omitted"], 0);
+        assert_eq!(widgets["details_truncated"], false);
     }
 
     #[test]

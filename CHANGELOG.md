@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Corrected Migration Assurance truncation accounting for duplicate identities:
+  `details_omitted` now counts omitted mismatch groups rather than subtracting
+  detail entries from record totals, so the report cannot imply that duplicate
+  records were individually omitted when their group is represented.
 - Extended durable child supervision to secret-bearing Dovecot verification
   commands. The short-lived capture helper now performs ProcessStarted
   registration with acknowledgement and guarantees ProcessEnded cleanup, while
