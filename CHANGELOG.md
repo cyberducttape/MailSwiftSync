@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Hardened webhook authentication configuration to fail closed: configured
+  empty, partial, malformed, invalid-encoding, or conflicting bearer/custom
+  header settings now refuse delivery instead of silently sending anonymously.
 - Removed the misleading message-verification `verified` classification. The
   prototype now reports metadata matches explicitly and reserves content
   verification for a future folder-aware SHA-256 evidence path.
