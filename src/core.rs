@@ -1649,6 +1649,33 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn database_copies_reject_symlinked_destinations() {
+        use std::os::unix::fs::symlink;
+
+        let db = StateStore::in_memory().unwrap();
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-copy-boundary-{}", Uuid::new_v4()));
+        create_private_test_directory(&directory);
+        let victim = directory.join("victim.db");
+        std::fs::write(&victim, b"must remain untouched").unwrap();
+        let backup_link = directory.join("backup.db");
+        symlink(&victim, &backup_link).unwrap();
+
+        assert!(db.backup_to(&backup_link).is_err());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"must remain untouched");
+
+        let source = directory.join("source.db");
+        db.backup_to(&source).unwrap();
+        let snapshot_link = directory.join("snapshot.db");
+        symlink(&victim, &snapshot_link).unwrap();
+        assert!(StateStore::snapshot_to(&source, &snapshot_link).is_err());
+        assert_eq!(std::fs::read(&victim).unwrap(), b"must remain untouched");
+
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn legacy_schema_migrates_destination_identity_column() {
         let directory =

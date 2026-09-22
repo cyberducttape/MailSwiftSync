@@ -34,11 +34,42 @@ fn verify_database_identity(path: &Path, expected: DatabaseIdentity) -> std::io:
     Ok(())
 }
 
+fn verify_database_parent(path: &Path) -> std::io::Result<&Path> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "state database path has no parent directory",
+        )
+    })?;
+    crate::credentials::verify_private_directory(parent)?;
+    Ok(parent)
+}
+
+fn create_private_database_file(path: &Path) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    options.open(path).map(drop)
+}
+
+fn remove_created_database_file(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = Path::new(&format!("{}{}", path.display(), suffix)).to_owned();
+        let _ = std::fs::remove_file(sidecar);
+    }
+}
+
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
-        let parent = path.parent().ok_or(rusqlite::Error::InvalidQuery)?;
-        crate::credentials::verify_private_directory(parent)
+        verify_database_parent(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         prepare_database_file(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -84,8 +115,7 @@ impl StateStore {
     /// can inspect historical state without rewriting the source file.
     pub fn open_readonly(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
-        let parent = path.parent().ok_or(rusqlite::Error::InvalidQuery)?;
-        crate::credentials::verify_private_directory(parent)
+        verify_database_parent(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let database_identity = database_identity(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -128,33 +158,56 @@ impl StateStore {
     /// hand. The destination must not already exist, preventing an operator
     /// typo from silently overwriting a prior recovery artifact.
     pub fn backup_to(&self, destination: &Path) -> rusqlite::Result<()> {
-        if destination.exists() {
+        verify_database_parent(destination)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        if create_private_database_file(destination).is_err() {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let destination_string = destination.to_string_lossy().into_owned();
-        self.connection
-            .execute("VACUUM INTO ?1", [&destination_string])?;
-        restrict_database_permissions(destination)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        let backup = Connection::open(destination)?;
-        let integrity: String = backup.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        if integrity != "ok" {
-            return Err(rusqlite::Error::InvalidQuery);
+        let result = (|| {
+            let mut backup = Connection::open_with_flags(
+                destination,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )?;
+            {
+                let backup_operation = backup::Backup::new(&self.connection, &mut backup)?;
+                backup_operation.run_to_completion(
+                    128,
+                    std::time::Duration::from_millis(1),
+                    None,
+                )?;
+            }
+            let integrity: String =
+                backup.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            drop(backup);
+            restrict_database_permissions(destination)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            restrict_database_sidecars(destination)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            Ok(())
+        })();
+        if result.is_err() {
+            remove_created_database_file(destination);
         }
-        restrict_database_sidecars(destination)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        Ok(())
+        result
     }
 
     /// Snapshot an on-disk ledger through SQLite's backup API. Unlike a file
     /// copy, this includes committed pages currently visible through a WAL
     /// and produces a standalone database without `-wal`/`-shm` sidecars.
     pub fn snapshot_to(source: &Path, destination: &Path) -> rusqlite::Result<()> {
-        if destination.exists() {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-        let source_connection =
-            Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        verify_database_parent(source)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let source_identity = database_identity(source)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let source_connection = Connection::open_with_flags(
+            source,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
+        verify_database_identity(source, source_identity)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         source_connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         let integrity: String =
             source_connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
@@ -162,21 +215,44 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
 
-        let mut destination_connection = Connection::open(destination)?;
-        {
-            let backup = backup::Backup::new(&source_connection, &mut destination_connection)?;
-            backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
-        }
-        let integrity: String =
-            destination_connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        if integrity != "ok" {
+        verify_database_parent(destination)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        if create_private_database_file(destination).is_err() {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let mut destination_connection = match Connection::open_with_flags(
+            destination,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        ) {
+            Ok(connection) => connection,
+            Err(error) => {
+                remove_created_database_file(destination);
+                return Err(error);
+            }
+        };
+        let result = (|| {
+            {
+                let backup = backup::Backup::new(&source_connection, &mut destination_connection)?;
+                backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
+            }
+            let integrity: String =
+                destination_connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            Ok(())
+        })();
         drop(destination_connection);
-        restrict_database_permissions(destination)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        restrict_database_sidecars(destination)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        if let Err(error) = result {
+            remove_created_database_file(destination);
+            return Err(error);
+        }
+        if let Err(error) = restrict_database_permissions(destination)
+            .and_then(|_| restrict_database_sidecars(destination))
+        {
+            remove_created_database_file(destination);
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(error)));
+        }
         Ok(())
     }
     pub(crate) fn migrate(&self) -> rusqlite::Result<()> {
