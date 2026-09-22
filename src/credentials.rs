@@ -72,15 +72,74 @@ impl Drop for CleanupGuard {
 
 pub fn create_secret_directory() -> Result<PathBuf, String> {
     let base = secret_runtime_base();
-    fs::create_dir_all(&base).map_err(|error| error.to_string())?;
-    restrict_directory_permissions(&base).map_err(|error| error.to_string())?;
+    create_secret_directory_at(&base)
+}
+
+fn create_secret_directory_at(base: &Path) -> Result<PathBuf, String> {
+    secure_runtime_directory(base).map_err(|error| error.to_string())?;
     let directory = base.join(format!("run-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).map_err(|error| error.to_string())?;
-    if let Err(error) = restrict_directory_permissions(&directory) {
+    if let Err(error) = secure_runtime_directory(&directory) {
         let _ = fs::remove_dir(&directory);
         return Err(error.to_string());
     }
     Ok(directory)
+}
+
+#[cfg(unix)]
+fn secure_runtime_directory(path: &Path) -> std::io::Result<fs::File> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    // mkdir is intentionally non-recursive: accepting a pre-existing path
+    // must go through the no-follow/open-and-verify path below. In particular,
+    // never use create_dir_all followed by metadata/chmod for secret material.
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(path)?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            "secret runtime path is not a directory",
+        ));
+    }
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "secret runtime directory has the wrong owner",
+        ));
+    }
+    if metadata.mode() & 0o022 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "secret runtime directory is group- or world-writable",
+        ));
+    }
+
+    // File::set_permissions uses fchmod on Unix, so the checked directory
+    // object—not a pathname that could be redirected—is changed.
+    directory.set_permissions(fs::Permissions::from_mode(0o700))?;
+    Ok(directory)
+}
+
+#[cfg(not(unix))]
+fn secure_runtime_directory(path: &Path) -> std::io::Result<()> {
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    restrict_directory_permissions(path)?;
+    Ok(())
 }
 
 pub fn secret_runtime_base() -> PathBuf {
@@ -114,6 +173,12 @@ pub fn cleanup_stale_secret_directories(base: &Path) {
 }
 
 fn cleanup_stale_secret_directories_at(base: &Path, now: SystemTime, max_age: Duration) {
+    // Cleanup must never inspect or remove children through an attacker-owned
+    // base path. The Unix helper opens with O_NOFOLLOW and verifies ownership
+    // and private permissions before read_dir is allowed to proceed.
+    let Ok(_base_guard) = secure_runtime_directory(base) else {
+        return;
+    };
     let Ok(entries) = fs::read_dir(base) else {
         return;
     };
@@ -595,6 +660,33 @@ mod tests {
         assert!(error.contains("hard-linked"));
         fs::remove_file(link).unwrap();
         fs::remove_file(target).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_runtime_rejects_a_preexisting_base_symlink() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+        let suffix = uuid::Uuid::new_v4();
+        let victim = std::env::temp_dir().join(format!("mailswiftsync-runtime-victim-{suffix}"));
+        let base = std::env::temp_dir().join(format!("mailswiftsync-runtime-link-{suffix}"));
+        fs::create_dir(&victim).unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&victim, &base).unwrap();
+        let mode_before = fs::symlink_metadata(&victim).unwrap().mode();
+
+        let result = super::create_secret_directory_at(&base);
+
+        assert!(result.is_err(), "expected the symlink base to be rejected");
+        assert_eq!(fs::symlink_metadata(&victim).unwrap().mode(), mode_before);
+        assert!(
+            fs::symlink_metadata(&base)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_file(base).unwrap();
+        fs::remove_dir(victim).unwrap();
     }
 
     #[cfg(unix)]
