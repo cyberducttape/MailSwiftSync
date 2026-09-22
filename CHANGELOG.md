@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Hardened SQLite backup and ledger snapshot destinations: parent directories
+  must pass the private ownership boundary, destination databases are created
+  with no-follow/create-new semantics, and the descriptor-backed SQLite backup
+  API replaces pathname-based `VACUUM INTO`/reopen flows. Symlinked destinations
+  are rejected without modifying the target.
 - Restored a warning-clean release build: removed the obsolete dead-code
   failure, derived the theme default, moved the theme test helper before its
   test module, and collapsed the UI conditional flagged by Clippy. Database
