@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Applied the private-directory trust boundary to atomic report/artifact
+  writes. Artifact parents are now securely created or verified before a
+  temporary file is opened, preventing symlinked or group/world-writable
+  output directories from becoming privileged write targets.
 - Hardened SQLite backup and ledger snapshot destinations: parent directories
   must pass the private ownership boundary, destination databases are created
   with no-follow/create-new semantics, and the descriptor-backed SQLite backup
