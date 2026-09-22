@@ -466,6 +466,55 @@ pub fn restrict_open_file_permissions(file: &fs::File) -> std::io::Result<()> {
     file.set_permissions(fs::Permissions::from_mode(0o600))
 }
 
+/// Verify an existing directory is a safe boundary for durable state.
+///
+/// Unix callers get descriptor-based no-follow validation so the result is
+/// not based on a pathname that can later resolve through a symlink. The
+/// directory must belong to the effective user and must not be writable by
+/// group or other users.
+#[cfg(unix)]
+pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(path)?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            "state directory is not a directory",
+        ));
+    }
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "state directory has the wrong owner",
+        ));
+    }
+    if metadata.mode() & 0o022 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "state directory is group- or world-writable",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            "state directory is not a directory",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn restrict_file_permissions(path: &Path) -> std::io::Result<()> {
     restrict_windows_acl(path, false)
