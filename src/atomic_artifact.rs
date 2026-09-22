@@ -7,6 +7,13 @@ use std::path::Path;
 /// then atomically replace the destination. A failed write never leaves a
 /// partially written destination artifact behind. Handles Windows and Unix.
 pub(crate) fn write_private_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "artifact path has no parent directory",
+        )
+    })?;
+    crate::credentials::ensure_private_directory(parent)?;
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = std::fs::OpenOptions::new();
@@ -97,7 +104,11 @@ mod tests {
 
     #[test]
     fn atomic_write_creates_new_file() -> std::io::Result<()> {
-        let temp_dir = std::env::temp_dir();
+        let temp_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("mailswiftsync-artifact-{}", uuid::Uuid::new_v4()));
+        crate::credentials::ensure_private_directory(&temp_dir)?;
         let path = temp_dir.join(format!("mailswiftsync-test-{}.txt", uuid::Uuid::new_v4()));
         let result = (|| {
             write_private_atomic(&path, "hello")?;
@@ -110,7 +121,7 @@ mod tests {
             }
             Ok(())
         })();
-        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&temp_dir);
         result
     }
 
@@ -124,7 +135,11 @@ mod tests {
             return Ok(());
         }
 
-        let temp_dir = std::env::temp_dir();
+        let temp_dir = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("mailswiftsync-artifact-{}", uuid::Uuid::new_v4()));
+        crate::credentials::ensure_private_directory(&temp_dir)?;
         let path = temp_dir.join(format!("mailswiftsync-test-{}.txt", uuid::Uuid::new_v4()));
 
         let result = (|| {
@@ -136,18 +151,39 @@ mod tests {
             }
             Ok(())
         })();
-        let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir_all(&temp_dir);
         result
     }
 
     #[test]
     fn atomic_write_cleanup_on_error() -> std::io::Result<()> {
         let temp_dir = std::env::temp_dir();
-        let path = temp_dir.join(format!("subdir-{}/test.txt", uuid::Uuid::new_v4()));
+        let path = temp_dir.join(format!(
+            "mailswiftsync-missing-{}/test.txt",
+            uuid::Uuid::new_v4()
+        ));
 
         // Directory doesn't exist, should fail
         let result = write_private_atomic(&path, "hello");
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_rejects_a_symlinked_parent() -> std::io::Result<()> {
+        use std::os::unix::fs::symlink;
+
+        let suffix = uuid::Uuid::new_v4();
+        let victim = std::env::temp_dir().join(format!("mailswiftsync-artifact-victim-{suffix}"));
+        let link = std::env::temp_dir().join(format!("mailswiftsync-artifact-link-{suffix}"));
+        fs::create_dir(&victim)?;
+        symlink(&victim, &link)?;
+        let result = write_private_atomic(&link.join("report.json"), "secret");
+        assert!(result.is_err());
+        assert!(victim.read_dir()?.next().is_none());
+        fs::remove_file(link)?;
+        fs::remove_dir(victim)?;
         Ok(())
     }
 }
