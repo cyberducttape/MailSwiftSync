@@ -58,7 +58,6 @@ MailSwiftSync is an early, usable 0.1 development release aimed at technical ope
 
 Stable today:
 
-- Dovecot-native `doveadm sync -1`/`backup` planning and execution, including remote `imapc` sources.
 - `imapsync` fallback for arbitrary IMAP endpoints.
 - CSV/XLS/XLSX batch queue with bounded operator-selected concurrency (1–16 workers), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states.
 - Explicit imapsync message and byte throttles for provider-friendly single-mailbox runs.
@@ -72,6 +71,9 @@ Stable today:
 
 Experimental or planned:
 
+- Native Dovecot execution is implemented and wired, but remains experimental
+  until its integration fixture and recovery scenarios pass in CI. The
+  capability manifest tracks this separately from code and wiring status.
 - Interactive provider consent/authorization and unattended secret brokering
   (the imapsync path accepts operator-supplied OAuth 2.0 access tokens
   through the OS keyring or session form, and can automatically refresh them
@@ -170,7 +172,7 @@ The desktop runner does not persist passwords or OAuth access tokens. For imapsy
 
 ### Dovecot mode
 
- Dovecot mode configures the destination-side command in the form `doveadm ... sync -l 300 -s STATE -1Ru DESTINATION imapc:`. The last committed state is reused for subsequent live passes, while the first pass supplies an empty state; `-l 300` gives another dsync operation up to five minutes to release the mailbox lock. A newly emitted state is committed atomically with the child result, and dry preflight remains non-stateful. The Dovecot engine dialog supports local `doveadm`; legacy remote-SSH profiles are shown as unavailable and cannot be promoted until secret-safe brokering exists. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion selects `doveadm backup`, which makes the destination mirror the source and can remove destination-only mail. Dry preflight performs a non-mutating `imapc` mailbox listing against the source plus destination user and mailbox-list checks; it is a readiness check, not proof that the full migration will succeed.
+ Dovecot mode configures the destination-side command using the selected migration strategy: initial/incremental mirrors use `doveadm backup`, while final preservation and destination-already-active passes use `doveadm sync -1`. The last committed state is reused for subsequent live passes, while the first pass supplies an empty state; `-l 300` gives another dsync operation up to five minutes to release the mailbox lock. A newly emitted state is committed atomically with the child result, and dry preflight remains non-stateful. The Dovecot engine dialog supports local `doveadm`; legacy remote-SSH profiles are shown as unavailable and cannot be promoted until secret-safe brokering exists. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Dovecot exit code 2 is retained as delta-required and the final pass should be repeated until exit code 0. Dry preflight performs a non-mutating `imapc` mailbox listing against the source plus destination user and mailbox-list checks; it is a readiness check, not proof that the full migration will succeed.
 
 ## Verification
 
