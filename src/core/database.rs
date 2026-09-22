@@ -78,9 +78,7 @@ impl StateStore {
         let store = Self {
             connection: Connection::open_with_flags(
                 path,
-                OpenFlags::SQLITE_OPEN_READ_WRITE
-                    | OpenFlags::SQLITE_OPEN_CREATE
-                    | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
             )?,
         };
         verify_database_identity(path, database_identity)
@@ -121,7 +119,7 @@ impl StateStore {
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let connection = Connection::open_with_flags(
             path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         verify_database_identity(path, database_identity)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -166,7 +164,7 @@ impl StateStore {
         let result = (|| {
             let mut backup = Connection::open_with_flags(
                 destination,
-                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                OpenFlags::SQLITE_OPEN_READ_WRITE,
             )?;
             {
                 let backup_operation = backup::Backup::new(&self.connection, &mut backup)?;
@@ -204,7 +202,7 @@ impl StateStore {
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let source_connection = Connection::open_with_flags(
             source,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
         verify_database_identity(source, source_identity)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -222,7 +220,7 @@ impl StateStore {
         }
         let mut destination_connection = match Connection::open_with_flags(
             destination,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            OpenFlags::SQLITE_OPEN_READ_WRITE,
         ) {
             Ok(connection) => connection,
             Err(error) => {
