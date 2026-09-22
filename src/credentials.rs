@@ -6,6 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor};
 use zeroize::Zeroizing;
 
 /// Owned secret material. The only string access exposed to callers is
@@ -39,6 +40,55 @@ impl SecretString {
 impl fmt::Debug for SecretString {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SecretString(REDACTED)")
+    }
+}
+
+impl Serialize for SecretString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SecretStringVisitor;
+
+        impl<'de> Visitor<'de> for SecretStringVisitor {
+            type Value = SecretString;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a secret string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(SecretString::from(value))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(SecretString::from(value))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(SecretString::from(value))
+            }
+        }
+
+        deserializer.deserialize_string(SecretStringVisitor)
     }
 }
 

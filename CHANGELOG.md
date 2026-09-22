@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Completed OAuth secret memory hygiene for JSON boundaries: refresh config,
+  access-token, and rotated refresh-token fields now deserialize directly into
+  `SecretString`, while non-secret OAuth metadata uses typed response structs
+  instead of generic JSON values.
 - Clarified unsigned proof verification output: the embedded SHA-256 is now
   reported as an internal checksum, not authentication; the CLI explicitly
   warns that a modified report can be re-digested.
