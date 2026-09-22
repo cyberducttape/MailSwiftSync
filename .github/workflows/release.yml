@@ -184,18 +184,28 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
-      - name: Generate SBOM from Cargo.lock
+      - name: Generate Rust dependency SBOM from Cargo.lock
         run: |
-          scripts/generate-sbom.sh dist/mailswiftsync-sbom.json
-          (cd dist && sha256sum mailswiftsync-sbom.json) > dist/mailswiftsync-sbom.json.sha256
-      - name: Attest SBOM
+          scripts/generate-sbom.sh dist/mailswiftsync-rust-sbom.cdx.json
+          (cd dist && sha256sum mailswiftsync-rust-sbom.cdx.json) > dist/mailswiftsync-rust-sbom.cdx.json.sha256
+      - name: Build final runtime image for image SBOM
+        run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:sbom .
+      - name: Generate final image package SBOM
+        run: |
+          scripts/generate-image-sbom.sh mailswiftsync:sbom dist/mailswiftsync-image-sbom.spdx.json
+          (cd dist && sha256sum mailswiftsync-image-sbom.spdx.json) > dist/mailswiftsync-image-sbom.spdx.json.sha256
+      - name: Attest Rust SBOM
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/mailswiftsync-sbom.json
+          subject-path: dist/mailswiftsync-rust-sbom.cdx.json
+      - name: Attest image SBOM
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/mailswiftsync-image-sbom.spdx.json
       - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: mailswiftsync-sbom
-          path: dist/mailswiftsync-sbom.json*
+          path: dist/mailswiftsync-*-sbom.*
 
   packaged-integration:
     name: Packaged Dovecot + imapsync integration

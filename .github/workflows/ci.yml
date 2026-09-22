@@ -85,11 +85,11 @@ jobs:
       - name: Generate and validate SBOM
         run: |
           mkdir -p dist
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)" scripts/generate-sbom.sh dist/mailswiftsync-sbom.json
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)" scripts/generate-sbom.sh dist/mailswiftsync-sbom-repeat.json
-          cmp --silent dist/mailswiftsync-sbom.json dist/mailswiftsync-sbom-repeat.json
-          rm dist/mailswiftsync-sbom-repeat.json
-          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' dist/mailswiftsync-sbom.json
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)" scripts/generate-sbom.sh dist/mailswiftsync-rust-sbom.cdx.json
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)" scripts/generate-sbom.sh dist/mailswiftsync-rust-sbom-repeat.cdx.json
+          cmp --silent dist/mailswiftsync-rust-sbom.cdx.json dist/mailswiftsync-rust-sbom-repeat.cdx.json
+          rm dist/mailswiftsync-rust-sbom-repeat.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' dist/mailswiftsync-rust-sbom.cdx.json
 
   cross-platform-build:
     name: Build (${{ matrix.target }})

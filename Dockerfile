@@ -3,6 +3,9 @@
 # of attempting to open a display server. Note: base images use mutable tags
 # The Debian and Rust bases are pinned by OCI manifest digest; apt repositories
 # remain live, so rebuilds still require an explicit package/release record.
+# For historical reproducibility, rebuild from a dated Debian snapshot or
+# archived package artifacts; the regular mirror may eventually expire a
+# pinned package version.
 # The imapsync .deb is SHA-256 pinned.
 
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS imapsync-package
