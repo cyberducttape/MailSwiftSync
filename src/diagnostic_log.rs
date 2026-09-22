@@ -12,7 +12,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::credentials::{restrict_directory_permissions, restrict_file_permissions};
+use crate::credentials::{ensure_private_directory, restrict_file_permissions};
 
 const RETAIN_FILES: usize = 20;
 const MAX_LINE_BYTES: usize = 16 * 1024;
@@ -29,31 +29,8 @@ struct FileState {
 
 impl DiagnosticLogger {
     pub(crate) fn create(directory: &Path) -> Result<Self, String> {
-        let existed = match fs::symlink_metadata(directory) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() {
-                    return Err("diagnostic log directory must not be a symlink".into());
-                }
-                true
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => {
-                return Err(format!(
-                    "could not inspect diagnostic log directory: {error}"
-                ));
-            }
-        };
-        fs::create_dir_all(directory)
-            .map_err(|error| format!("could not create diagnostic log directory: {error}"))?;
-        let metadata = fs::symlink_metadata(directory)
-            .map_err(|error| format!("could not inspect diagnostic log directory: {error}"))?;
-        if !metadata.is_dir() {
-            return Err("diagnostic log path is not a directory".into());
-        }
-        if !existed {
-            restrict_directory_permissions(directory)
-                .map_err(|error| format!("could not restrict diagnostic log directory: {error}"))?;
-        }
+        ensure_private_directory(directory)
+            .map_err(|error| format!("could not secure diagnostic log directory: {error}"))?;
         let logger = Self {
             directory: directory.to_owned(),
             file: Mutex::new(None),

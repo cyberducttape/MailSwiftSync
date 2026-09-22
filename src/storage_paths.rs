@@ -1,7 +1,7 @@
 //! Durable state-path selection and verified SQLite ledger restoration.
 
+use crate::core;
 use crate::credentials::restrict_file_permissions;
-use crate::{core, restrict_directory_permissions};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -63,9 +63,7 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // Parent does not exist. Create it and restrict permissions.
-            std::fs::create_dir_all(parent)
-                .map_err(|error| format!("could not create restore directory: {error}"))?;
-            restrict_directory_permissions(parent)
+            crate::credentials::ensure_private_directory(parent)
                 .map_err(|error| format!("could not secure restore directory: {error}"))?;
         }
         Err(e) => return Err(format!("Could not access restore directory parent: {e}")),

@@ -503,6 +503,37 @@ pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Open or create a private directory without changing permissions on an
+/// existing directory. Missing parents are created one component at a time,
+/// and every existing component must pass the same no-follow trust check.
+pub fn ensure_private_directory(path: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => return verify_private_directory(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "private directory has no parent",
+        )
+    })?;
+    if parent.as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "private directory has no usable parent",
+        ));
+    }
+    match fs::symlink_metadata(parent) {
+        Ok(_) => verify_private_directory(parent)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure_private_directory(parent)?;
+        }
+        Err(error) => return Err(error),
+    }
+    secure_runtime_directory(path).map(|_| ())
+}
+
 #[cfg(not(unix))]
 pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
@@ -735,6 +766,37 @@ mod tests {
                 .is_symlink()
         );
         fs::remove_file(base).unwrap();
+        fs::remove_dir(victim).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_private_directory_does_not_chmod_existing_or_follow_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let suffix = uuid::Uuid::new_v4();
+        let existing = std::env::temp_dir().join(format!("mailswiftsync-config-{suffix}"));
+        let victim = std::env::temp_dir().join(format!("mailswiftsync-config-victim-{suffix}"));
+        let link = std::env::temp_dir().join(format!("mailswiftsync-config-link-{suffix}"));
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(super::ensure_private_directory(&existing).is_ok());
+        assert_eq!(
+            fs::metadata(&existing).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+
+        fs::create_dir(&victim).unwrap();
+        fs::set_permissions(&victim, fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&victim, &link).unwrap();
+        assert!(super::ensure_private_directory(&link).is_err());
+        assert_eq!(
+            fs::metadata(&victim).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+
+        fs::remove_dir(existing).unwrap();
+        fs::remove_file(link).unwrap();
         fs::remove_dir(victim).unwrap();
     }
 

@@ -8,7 +8,7 @@ use crate::{
     plan_identity::{
         configured_file_content_identity, executable_content_identity, snapshot_sha256,
     },
-    restrict_directory_permissions, write_secret_file,
+    write_secret_file,
 };
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
@@ -382,8 +382,7 @@ impl Form {
     pub(crate) fn save(&self) -> Result<(), String> {
         let path = Self::path()?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            restrict_directory_permissions(parent).map_err(|e| e.to_string())?;
+            credentials::ensure_private_directory(parent).map_err(|e| e.to_string())?;
         }
         let content = toml::to_string_pretty(&self.profile).map_err(|e| e.to_string())?;
         write_private_atomic(&path, &content).map_err(|e| e.to_string())

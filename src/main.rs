@@ -67,7 +67,7 @@ pub(crate) use controller::{Event, StreamOutcome};
 use credentials::CleanupGuard;
 use credentials::{
     SecretString, cleanup_paths, cleanup_stale_secret_directories, create_secret_directory,
-    restrict_directory_permissions, secret_runtime_base, write_secret_file,
+    secret_runtime_base, write_secret_file,
 };
 pub(crate) use diagnostic_log::DiagnosticLogger;
 use headless::export_support_bundle;

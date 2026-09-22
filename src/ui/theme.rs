@@ -335,8 +335,8 @@ impl AppearancePreferences {
     pub(crate) fn save(&self) -> Result<(), String> {
         let path = Self::path();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            crate::restrict_directory_permissions(parent).map_err(|error| error.to_string())?;
+            crate::credentials::ensure_private_directory(parent)
+                .map_err(|error| error.to_string())?;
         }
         let content = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
         crate::atomic_artifact::write_private_atomic(&path, &content)

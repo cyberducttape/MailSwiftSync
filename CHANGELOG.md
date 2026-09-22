@@ -6,6 +6,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Centralized private-directory creation and validation across profiles,
+  branding, appearance preferences, diagnostics, bootstrap, restore setup,
+  and secret runtime paths. Existing directories are verified without being
+  chmodded; only newly created directories are made private, and symlinked or
+  untrusted parents are rejected.
 - Hardened SQLite state opens against pathname substitution: existing state
   directories are verified through no-follow directory descriptors for current
   UID ownership and group/other non-writability, SQLite uses
