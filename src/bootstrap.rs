@@ -37,8 +37,7 @@ impl App {
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                             // Parent does not exist. Create it and restrict permissions.
-                            std::fs::create_dir_all(parent)
-                                .and_then(|_| restrict_directory_permissions(parent))
+                            crate::credentials::ensure_private_directory(parent)
                                 .err()
                                 .map(|error| {
                                     format!("Could not create and secure persistent state directory: {error}")
