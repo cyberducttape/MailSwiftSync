@@ -300,6 +300,6 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
         ));
     }
     Ok(format!(
-        "Migration proof integrity verified (unsigned artifact): {actual}; this validates {format} artifact integrity only, not signer identity or independent migration completion"
+        "Internal checksum verified: {actual}; artifact authenticity is not established; a modified report can be re-digested. This validates {format} corruption resistance only, not signer identity or independent migration completion"
     ))
 }

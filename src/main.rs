@@ -360,7 +360,7 @@ mod tests {
         assert!(
             reports::signing::verify_file(&path, None)
                 .unwrap()
-                .contains("verified")
+                .contains("Internal checksum verified")
         );
 
         let mut tampered = proof;
@@ -391,7 +391,7 @@ mod tests {
         assert!(
             reports::signing::verify_file(&path, None)
                 .unwrap()
-                .contains("verified")
+                .contains("Internal checksum verified")
         );
         let _ = std::fs::remove_dir_all(directory);
     }
