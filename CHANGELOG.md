@@ -1411,6 +1411,12 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Replaced native Dovecot's boolean delete-extras framing with explicit
+  migration strategies: Initial mirror, Incremental mirror, Final preservation
+  pass, and Destination already active. The selected strategy now determines
+  `doveadm backup` versus `doveadm sync -1`, with merge and source-load guidance
+  in the UI. Dovecot exit code 2 remains a delta-required state that must be
+  rerun until exit code 0.
 - Added Drop-based cleanup guards for prepared secret directories, retaining stale-directory cleanup for forced termination.
 - Batch validation retries only classified transient transport failures up to three times with exponential backoff; authentication and configuration failures remain terminal.
 

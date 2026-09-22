@@ -60,7 +60,7 @@ impl App {
                             ui.text_edit_singleline(&mut self.form.profile.dovecot_config);
                         });
                         ui.label(RichText::new("Remote Dovecot execution is unavailable until a secret-safe broker is implemented. Use local doveadm or imapsync.").size(11.0).color(self.theme_colors().danger));
-                        ui.label(RichText::new("Dry mode only lists the destination mailbox. A live run uses sync -1; enabling destination deletion switches to backup.").size(11.0).color(self.theme_colors().text_secondary));
+                        ui.label(RichText::new("Dry mode only lists the destination mailbox. Native Dovecot uses the selected migration strategy; backup and sync -1 have different merge behavior.").size(11.0).color(self.theme_colors().text_secondary));
                     }
                 });
                 if !editable {

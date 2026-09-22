@@ -61,6 +61,25 @@ Only after validation succeeds and the durable project still matches the display
 
 For dual-IMAPS imapsync plans, live admission performs a fresh certificate-validated authentication probe against both endpoints immediately before mutation. If the plan is edited while that probe is running, the probe and live confirmation no longer apply to the edited plan.
 
-Dovecot mode uses `sync -1` by default so destination-side changes are preserved during the migration. After a live run, MailSwiftSync queries both source and destination mailbox status and stores aggregate folder/message/virtual-size evidence. Enabling destination deletion switches to `backup`; this can remove destination-only messages. In imapsync mode, the final summary is parsed against the supported output contract for the packaged imapsync `2.314` profile: all six aggregate records, the exact completion marker, and an explicit error-count record are required. The executable version is resolved before launch and selects the streaming parser profile. If the version is unavailable or not explicitly supported, the transfer may run but its output cannot become verification evidence. Unknown wording, extra prose, or missing fields likewise produces incomplete evidence rather than success. Do not treat an incomplete summary or failed verification as success.
+Native Dovecot mode exposes four migration strategies: **Initial mirror** uses
+`doveadm backup`; **Incremental mirror** repeats `backup` with the durable
+checkpoint; **Final preservation pass** uses `doveadm sync -1` for the cutover;
+and **Destination already active** is an advanced preservation mode using
+`sync -1`. These are migration strategies, not a simple delete-extras switch:
+review how each treats destination-side changes. Native Dovecot has no
+MailSwiftSync throttle and may place high load on the source. Dovecot exit code
+2 means synchronization completed but was not perfect; MailSwiftSync marks the
+run as delta-required and the final pass should be repeated until exit code 0.
+After a live run, MailSwiftSync queries both source and destination mailbox
+status and stores aggregate folder/message/virtual-size evidence. In imapsync
+mode, the final summary is parsed against the supported output contract for
+the packaged imapsync `2.314` profile: all six aggregate records, the exact
+completion marker, and an explicit error-count record are required. The
+executable version is resolved before launch and selects the streaming parser
+profile. If the version is unavailable or not explicitly supported, the
+transfer may run but its output cannot become verification evidence. Unknown
+wording, extra prose, or missing fields likewise produces incomplete evidence
+rather than success. Do not treat an incomplete summary or failed verification
+as success.
 
 For a production window, follow the [production migration runbook](Production-runbook.md), including the pilot sequence, crash/restart recovery, Attention review, and report export checklist.

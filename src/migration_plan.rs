@@ -73,6 +73,10 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) fastio1: bool,
     pub(crate) fastio2: bool,
     pub(crate) allowsizemismatch: bool,
+    #[serde(default)]
+    pub(crate) dovecot_strategy: DovecotMigrationStrategy,
+    /// Legacy imapsync destructive flag. Native Dovecot uses
+    /// `dovecot_strategy` instead.
     pub(crate) delete2: bool,
     pub(crate) extra_options_sha256: String,
     pub(crate) dovecot_checkpoint_sha256: Option<String>,
@@ -84,6 +88,54 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) destination_ca_bundle_sha256: String,
     #[serde(default)]
     pub(crate) dovecot_config_sha256: String,
+}
+
+/// Native Dovecot migration strategies. These are intentionally named after
+/// the operational phase rather than exposing `delete2` as a boolean: backup
+/// and sync -1 have different merge semantics and should be chosen knowingly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DovecotMigrationStrategy {
+    InitialMirror,
+    IncrementalMirror,
+    #[default]
+    FinalPreservationPass,
+    DestinationAlreadyActive,
+}
+
+impl DovecotMigrationStrategy {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::InitialMirror => "Initial mirror",
+            Self::IncrementalMirror => "Incremental mirror",
+            Self::FinalPreservationPass => "Final preservation pass",
+            Self::DestinationAlreadyActive => "Destination already active",
+        }
+    }
+
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::InitialMirror => {
+                "doveadm backup: mirror source mail to the destination; destination-only changes may be replaced."
+            }
+            Self::IncrementalMirror => {
+                "doveadm backup with the durable checkpoint: repeat an initial mirror before cutover."
+            }
+            Self::FinalPreservationPass => {
+                "doveadm sync -1: preserve destination-side changes for the final cutover pass."
+            }
+            Self::DestinationAlreadyActive => {
+                "Advanced preservation mode using doveadm sync -1; review merge behavior and Dovecot load carefully."
+            }
+        }
+    }
+
+    pub(crate) fn uses_preservation_sync(self) -> bool {
+        matches!(
+            self,
+            Self::FinalPreservationPass | Self::DestinationAlreadyActive
+        )
+    }
 }
 
 pub(crate) fn decode_report_run_snapshot(
@@ -197,6 +249,9 @@ pub(crate) struct Profile {
     pub(crate) fastio1: bool,
     pub(crate) fastio2: bool,
     pub(crate) allowsizemismatch: bool,
+    #[serde(default)]
+    pub(crate) dovecot_strategy: DovecotMigrationStrategy,
+    /// Retained for imapsync compatibility and legacy profile decoding.
     pub(crate) delete2: bool,
     pub(crate) extra_options: String,
 }
@@ -999,6 +1054,7 @@ impl Form {
                 fastio1: profile.fastio1,
                 fastio2: profile.fastio2,
                 allowsizemismatch: profile.allowsizemismatch,
+                dovecot_strategy: profile.dovecot_strategy,
                 delete2: profile.delete2,
                 extra_options_sha256,
                 dovecot_checkpoint_sha256: (self.engine() == core::Engine::Dovecot
@@ -1112,13 +1168,15 @@ impl Form {
             // empty state requests an initial stateful pass; a prior
             // committed checkpoint makes later passes incremental.
             args.extend(["-s".into(), checkpoint.unwrap_or_default().to_owned()]);
-            args.extend([if self.profile.delete2 {
-                "backup"
-            } else {
-                "sync"
-            }
-            .into()]);
-            if !self.profile.delete2 {
+            args.push(
+                if self.profile.dovecot_strategy.uses_preservation_sync() {
+                    "sync"
+                } else {
+                    "backup"
+                }
+                .into(),
+            );
+            if self.profile.dovecot_strategy.uses_preservation_sync() {
                 args.push("-1".into());
             }
             args.extend([

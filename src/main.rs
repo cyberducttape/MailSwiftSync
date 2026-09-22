@@ -246,6 +246,38 @@ mod tests {
     }
 
     #[test]
+    fn dovecot_initial_and_incremental_strategies_use_backup() {
+        for strategy in [
+            migration_plan::DovecotMigrationStrategy::InitialMirror,
+            migration_plan::DovecotMigrationStrategy::IncrementalMirror,
+        ] {
+            let mut form = dovecot_form();
+            form.dry_run = false;
+            form.profile.dovecot_strategy = strategy;
+            let (_, args) = form.command_with_checkpoint(true, Some("checkpoint"));
+            assert!(args.contains(&"backup".into()));
+            assert!(!args.contains(&"sync".into()));
+            assert!(!args.contains(&"-1".into()));
+        }
+    }
+
+    #[test]
+    fn dovecot_preservation_strategies_use_sync_minus_one() {
+        for strategy in [
+            migration_plan::DovecotMigrationStrategy::FinalPreservationPass,
+            migration_plan::DovecotMigrationStrategy::DestinationAlreadyActive,
+        ] {
+            let mut form = dovecot_form();
+            form.dry_run = false;
+            form.profile.dovecot_strategy = strategy;
+            let (_, args) = form.command(true);
+            assert!(args.contains(&"sync".into()));
+            assert!(args.contains(&"-1".into()));
+            assert!(!args.contains(&"backup".into()));
+        }
+    }
+
+    #[test]
     fn live_dovecot_plan_uses_previous_checkpoint() {
         let mut form = dovecot_form();
         form.dry_run = false;
@@ -1402,7 +1434,7 @@ mod tests {
         );
         assert_eq!(
             successful_run_status(false, false, Some("delta_required")),
-            "Migration completed; final delta or review required"
+            "Dovecot synchronization completed with changes pending; repeat the final pass until exit code 0"
         );
         assert_eq!(
             successful_run_status(false, false, None),
