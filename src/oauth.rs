@@ -134,6 +134,8 @@ mod tests {
             let count = chunk.len().min(buffer.len());
             buffer[..count].copy_from_slice(&chunk[..count]);
             if count < chunk.len() {
+                // CodeQL false positive: this test mock only buffers test data,
+                // not sensitive information. The VecDeque is not a log file.
                 self.reads.push_front(chunk[count..].to_vec());
             }
             Ok(count)
