@@ -1,15 +1,15 @@
 use crate::credentials::read_secret_file;
 use crate::headless::{
-    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute,
+    HeadlessCredentials, export_support_bundle, fleet_status, headless_batch_execute_selected,
     headless_execute_with_credentials, headless_recover, headless_status, headless_status_summary,
     headless_supervise,
 };
 use crate::maintenance_window::MaintenanceWindow;
 use crate::*;
 use eframe::egui;
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{collections::HashSet, ffi::OsString};
 
 const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]]";
 
@@ -171,6 +171,48 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
             Err(error) => {
                 eprintln!("Migration proof signing failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if matches!(command.to_str(), Some("audit" | "migrateaudit")) {
+        let (Some(source), Some(destination), Some(output)) =
+            (arguments.next(), arguments.next(), arguments.next())
+        else {
+            eprintln!(
+                "Usage: mailswiftsync migrateaudit <source-snapshot.json> <destination-snapshot.json> <report.json>"
+            );
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!(
+                "Usage: mailswiftsync migrateaudit <source-snapshot.json> <destination-snapshot.json> <report.json>"
+            );
+            std::process::exit(2);
+        }
+        match crate::migrate_audit::compare_files(
+            std::path::Path::new(&source),
+            std::path::Path::new(&destination),
+            std::path::Path::new(&output),
+        ) {
+            Ok(result) => {
+                println!(
+                    "Migration assurance {}: {} difference(s). Report: {}",
+                    if result.differences == 0 {
+                        "passed"
+                    } else {
+                        "failed"
+                    },
+                    result.differences,
+                    output.to_string_lossy()
+                );
+                if result.differences != 0 {
+                    std::process::exit(1);
+                }
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Migration assurance failed: {error}");
                 std::process::exit(1);
             }
         }
@@ -628,7 +670,7 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
-                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
             );
             std::process::exit(2);
         };
@@ -636,7 +678,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             Some(mode) => mode,
             None => {
                 eprintln!(
-                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
+                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
                 );
                 std::process::exit(2);
             }
@@ -644,12 +686,33 @@ pub(crate) fn run() -> eframe::Result<()> {
         let mut source_secret_file = None;
         let mut destination_secret_file = None;
         let mut diagnostic_log = None;
+        let mut mailbox_ids: Option<HashSet<String>> = None;
         while let Some(option) = arguments.next() {
             let Some(option) = option.to_str() else {
                 eprintln!("Headless migration refused: option must be valid UTF-8");
                 std::process::exit(2);
             };
             let target = match option {
+                "--mailboxes" => {
+                    let Some(value) = arguments.next() else {
+                        eprintln!("Headless --mailboxes option requires a comma-separated value");
+                        std::process::exit(2);
+                    };
+                    let ids = value
+                        .to_string_lossy()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .collect::<HashSet<_>>();
+                    if ids.is_empty() || mailbox_ids.replace(ids).is_some() {
+                        eprintln!(
+                            "Headless --mailboxes requires one or more unique job IDs and may appear only once"
+                        );
+                        std::process::exit(2);
+                    }
+                    continue;
+                }
                 "--source-secret-file" => Some(&mut source_secret_file),
                 "--destination-secret-file" => Some(&mut destination_secret_file),
                 "--diagnostic-log" => Some(&mut diagnostic_log),
@@ -672,6 +735,10 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!(
                 "Secret-file and --diagnostic-log options are supported for single-mailbox headless execution only."
             );
+            std::process::exit(2);
+        }
+        if !mode.is_batch() && mailbox_ids.is_some() {
+            eprintln!("Headless --mailboxes is supported only for batch execution.");
             std::process::exit(2);
         }
         let credentials = match (source_secret_file, destination_secret_file) {
@@ -713,8 +780,12 @@ pub(crate) fn run() -> eframe::Result<()> {
                 credentials,
                 diagnostic_log.as_deref(),
             ),
-            HeadlessMode::BatchPreflight => headless_batch_execute(&state, false),
-            HeadlessMode::BatchLive => headless_batch_execute(&state, true),
+            HeadlessMode::BatchPreflight => {
+                headless_batch_execute_selected(&state, false, mailbox_ids.as_ref())
+            }
+            HeadlessMode::BatchLive => {
+                headless_batch_execute_selected(&state, true, mailbox_ids.as_ref())
+            }
         };
         match result {
             Ok(message) => {
@@ -739,7 +810,7 @@ fn print_cli_help() {
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
     println!(
-        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate secret-free status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST secret-free status JSON to an operator-configured https:// URL\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate secret-free status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST secret-free status JSON to an operator-configured https:// URL\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
     );
     println!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."

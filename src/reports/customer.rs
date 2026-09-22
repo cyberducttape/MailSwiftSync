@@ -64,6 +64,40 @@ pub(crate) fn export_from_store_with_options_and_identity(
         return Err("The project has no mailbox jobs to report.".into());
     }
     let durably_complete = is_durably_complete(&snapshot);
+    let total_mailboxes = snapshot.mailboxes.len();
+    let exact_mailboxes = snapshot
+        .mailboxes
+        .iter()
+        .filter(|mailbox| {
+            mailbox
+                .evidence
+                .as_ref()
+                .is_some_and(|(_, value, _)| value.is_exact_match())
+        })
+        .count();
+    let mailbox_exceptions = total_mailboxes.saturating_sub(exact_mailboxes);
+    let message_counts = snapshot.mailboxes.iter().filter_map(|mailbox| {
+        mailbox.evidence.as_ref().map(|(_, value, _)| {
+            serde_json::json!({
+                "source": value.source_messages,
+                "destination": value.destination_messages,
+                "missing": value.missing_messages,
+                "extra": value.extra_messages,
+                "modified": value.modified_messages,
+                "unmatched": value.unmatched_messages,
+                "failed": value.failed_messages,
+            })
+        })
+    }).fold(
+        serde_json::json!({"source": 0_u64, "destination": 0_u64, "missing": 0_u64, "extra": 0_u64, "modified": 0_u64, "unmatched": 0_u64, "failed": 0_u64}),
+        |mut total, value| {
+            for field in ["source", "destination", "missing", "extra", "modified", "unmatched", "failed"] {
+                let current = total[field].as_u64().unwrap_or(0);
+                total[field] = serde_json::json!(current + value[field].as_u64().unwrap_or(0));
+            }
+            total
+        },
+    );
     let project = snapshot.project;
     let mailboxes = snapshot
         .mailboxes
@@ -87,6 +121,10 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "destination_bytes": value.destination_bytes,
                         "unmatched_messages": value.unmatched_messages,
                         "failed_messages": value.failed_messages,
+                        "missing_messages": value.missing_messages,
+                        "extra_messages": value.extra_messages,
+                        "modified_messages": value.modified_messages,
+                        "certificate_status": if value.is_exact_match() { "exact" } else { "exception" },
                     }))
                 }
                 None => None,
@@ -138,6 +176,12 @@ pub(crate) fn export_from_store_with_options_and_identity(
             } else {
                 "This is an explicitly requested incomplete progress artifact. It is not a completion certificate; digest or signature validation proves artifact integrity or signer authenticity only."
             }
+        },
+        "verification_summary": {
+            "mailboxes_total": total_mailboxes,
+            "mailboxes_exact": exact_mailboxes,
+            "mailboxes_with_exceptions": mailbox_exceptions,
+            "messages": message_counts,
         },
         "project": {
             "project_id": project.id.clone(),

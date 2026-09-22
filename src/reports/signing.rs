@@ -211,7 +211,9 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
         .to_owned();
     if !matches!(
         format.as_str(),
-        "mailswiftsync-project-report" | "mailswiftsync-customer-proof"
+        "mailswiftsync-project-report"
+            | "mailswiftsync-customer-proof"
+            | "mailswiftsync-migration-assurance"
     ) {
         return Err("Unsupported migration proof format.".into());
     }

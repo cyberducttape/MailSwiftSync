@@ -7,7 +7,7 @@ use crate::{
     secret_runtime_base, terminate_recorded_process_group,
 };
 use serde::Serialize;
-use std::{sync::atomic::Ordering, thread, time::Duration};
+use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
 
@@ -608,6 +608,17 @@ pub(crate) fn headless_batch_execute(
     state_path: &std::path::Path,
     live: bool,
 ) -> Result<String, String> {
+    headless_batch_execute_selected(state_path, live, None)
+}
+
+/// Execute only the requested durable batch jobs. This is the automation
+/// boundary for selective remediation: unknown IDs are rejected rather than
+/// silently broadening a repair run to the whole queue.
+pub(crate) fn headless_batch_execute_selected(
+    state_path: &std::path::Path,
+    live: bool,
+    requested_ids: Option<&HashSet<String>>,
+) -> Result<String, String> {
     let mut app = App::from_state_path(Some(state_path));
     if !app.persistence_available {
         return Err("durable SQLite state is unavailable; batch execution is blocked".into());
@@ -635,6 +646,9 @@ pub(crate) fn headless_batch_execute(
         .bulk_job_ids
         .iter()
         .filter_map(|job_id| {
+            if requested_ids.is_some_and(|ids| !ids.contains(job_id)) {
+                return None;
+            }
             let state = app.store.mailbox_state(job_id).ok().flatten()?;
             let reason = app.store.mailbox_attention_reason(job_id).ok().flatten();
             app.bulk_retry_scope
@@ -642,6 +656,19 @@ pub(crate) fn headless_batch_execute(
                 .then_some(job_id.clone())
         })
         .collect();
+    if let Some(requested_ids) = requested_ids {
+        let unknown = requested_ids
+            .iter()
+            .filter(|job_id| !app.bulk_job_ids.contains(*job_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(format!(
+                "selective remediation includes mailbox ID(s) outside the durable batch: {}",
+                unknown.join(", ")
+            ));
+        }
+    }
     if app.bulk_selected_ids.is_empty() {
         return Err(
             "no automation-safe batch work is queued; operator-review and verification-difference rows were not retried"
