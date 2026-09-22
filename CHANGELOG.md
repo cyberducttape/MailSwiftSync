@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Clarified unsigned proof verification output: the embedded SHA-256 is now
+  reported as an internal checksum, not authentication; the CLI explicitly
+  warns that a modified report can be re-digested.
 - Bound signed-proof signer metadata to the Ed25519 payload: changing an
   embedded `key_id`, algorithm, or public key now invalidates the signature;
   only the signature bytes themselves are excluded from canonical signing.
