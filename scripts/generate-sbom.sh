@@ -4,7 +4,7 @@ set -euo pipefail
 # Generate a CycloneDX 1.5 SBOM from the exact Cargo.lock dependency graph.
 # The output contains package metadata only; it never reads profiles, keyring
 # values, mailbox data, or the SQLite ledger.
-output="${1:-dist/mailswiftsync-sbom.json}"
+output="${1:-dist/mailswiftsync-rust-sbom.cdx.json}"
 project_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 metadata="$(mktemp "${TMPDIR:-/tmp}/mailswiftsync-cargo-metadata.XXXXXX.json")"
 cleanup() { rm -f -- "$metadata"; }

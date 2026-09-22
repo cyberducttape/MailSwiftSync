@@ -61,6 +61,12 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Release SBOM coverage now distinguishes the Rust dependency graph from the
+  final runtime image: releases publish
+  `mailswiftsync-rust-sbom.cdx.json` and
+  `mailswiftsync-image-sbom.spdx.json`. The image artifact inventories the
+  final Debian dpkg database, including Dovecot, imapsync dependencies, and
+  runtime libraries; source/file provenance remains explicitly `NOASSERTION`.
 - A persisted appearance color-pack selector with ten palettes: Default,
   Classic Green, Classic Amber, Classic White, Retro 80s Neon, High Contrast,
   Terminal Blue, Commodore 64, Windows 95, and Windows 3.1. The retro packs

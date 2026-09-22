@@ -41,8 +41,14 @@ Get-Content .\mailswiftsync-x86_64-pc-windows-msvc.zip.sha256
 
 ```bash
 sha256sum -c mailswiftsync-release-manifest.txt.sha256
-sha256sum -c mailswiftsync-sbom.json.sha256
+sha256sum -c mailswiftsync-rust-sbom.cdx.json.sha256
 ```
+
+Releases also include `mailswiftsync-image-sbom.spdx.json`, which inventories
+the Debian packages in the final headless runtime image. The Rust SBOM covers
+Cargo dependencies; the image SBOM covers operating-system packages and their
+installed versions. Neither artifact claims source/file provenance for Debian
+packages beyond what the package database exposes.
 
 The manifest contains the digest of every release artifact. If the GitHub CLI
 is installed, also verify the build provenance attached to the manifest:
