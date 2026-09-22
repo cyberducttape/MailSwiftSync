@@ -9,6 +9,10 @@ All notable changes to MailSwiftSync are documented here.
 - Removed the misleading message-verification `verified` classification. The
   prototype now reports metadata matches explicitly and reserves content
   verification for a future folder-aware SHA-256 evidence path.
+- Made prototype message reconciliation folder-aware: expected source-to-
+  destination mappings are part of matching, and messages found in another
+  folder are reported as `MESSAGE_PRESENT_WRONG_FOLDER` rather than counted
+  as matches. Provider-specific label semantics remain caller-supplied.
 - Centralized private-directory creation and validation across profiles,
   branding, appearance preferences, diagnostics, bootstrap, restore setup,
   and secret runtime paths. Existing directories are verified without being

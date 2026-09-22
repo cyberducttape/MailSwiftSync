@@ -90,6 +90,9 @@ pub fn mismatch_type_description(mismatch_type: &str) -> &'static str {
         "message_id_only" => {
             "Message-ID matches but size/date differs; changed evidence requires review"
         }
+        "message_present_wrong_folder" => {
+            "Message identity and metadata match, but the destination folder is wrong"
+        }
         "missing" => "Present in source, absent in destination",
         "extra" => "Present in destination, absent in source (may be post-migration addition)",
         "duplicated" => "Multiple instances of same message-ID in destination",
@@ -111,6 +114,9 @@ pub fn mismatch_remediation(mismatch_type: &str) -> &'static str {
         "date_size_match" => "Message content appears correct despite Message-ID mismatch.",
         "message_id_only" => {
             "REVIEW: Message-ID matches but size/date differ; check if message was modified in transit."
+        }
+        "message_present_wrong_folder" => {
+            "ATTENTION: Move or remap the message to its expected destination folder."
         }
         "missing" => "ATTENTION: Review exclusion rules or retry final delta sync.",
         "extra" => {
@@ -136,6 +142,7 @@ pub fn mismatch_severity(mismatch_type: &str) -> &'static str {
         "content_match" => "ok",
         "date_size_match" => "ok",
         "message_id_only" => "warning",
+        "message_present_wrong_folder" => "error",
         "missing" => "error",
         "extra" => "info",
         "duplicated" => "error",
@@ -187,6 +194,7 @@ mod tests {
             "content_match",
             "date_size_match",
             "message_id_only",
+            "message_present_wrong_folder",
             "missing",
             "extra",
             "duplicated",

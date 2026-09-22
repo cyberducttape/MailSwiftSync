@@ -179,6 +179,8 @@ To achieve high-confidence verification, match messages on **combinations** rath
 - `EXTRA` — Present in destination, absent in source (unclear origin)
 - `DUPLICATED` — Multiple instances of same message-ID in destination
 - `FOLDER_MISMATCH` — Same message in different folder on destination
+- `MESSAGE_PRESENT_WRONG_FOLDER` — Message identity and metadata match, but
+  the destination folder differs from the expected mapped folder
 - `CHANGED` — Same portable identity but different metadata or content fingerprint
 
 The verifier distinguishes reconciliation from proof strength. A unique

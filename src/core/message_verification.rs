@@ -12,6 +12,9 @@ use super::message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMess
 pub enum MismatchType {
     /// Message-ID matches but available metadata differs.
     MessageIdOnly,
+    /// The message is present with matching metadata, but not in its expected
+    /// destination folder.
+    PresentWrongFolder,
     /// Present in source, absent in destination
     Missing,
     /// Present in destination, absent in source
@@ -24,6 +27,7 @@ impl MismatchType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::MessageIdOnly => "message_id_only",
+            Self::PresentWrongFolder => "message_present_wrong_folder",
             Self::Missing => "missing",
             Self::Extra => "extra",
             Self::Duplicated => "duplicated",
@@ -69,6 +73,26 @@ impl MessageVerification {
         source_messages: &ExtractedMessages,
         dest_messages: &ExtractedMessages,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        Self::detect_mismatches_with_folder_mapping(
+            job_id,
+            run_id,
+            source_messages,
+            dest_messages,
+            &HashMap::new(),
+        )
+    }
+
+    /// Detect mismatches while enforcing the expected source-to-destination
+    /// folder mapping. An absent mapping entry means the source folder is
+    /// expected to retain its name. Provider-specific label semantics belong
+    /// in the mapping supplied by the caller, not in this generic verifier.
+    pub fn detect_mismatches_with_folder_mapping(
+        job_id: &str,
+        run_id: &str,
+        source_messages: &ExtractedMessages,
+        dest_messages: &ExtractedMessages,
+        folder_mapping: &HashMap<String, String>,
+    ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
         let mut mismatches = Vec::new();
         let mut metadata_matches = 0_u64;
         let mut probable_matches = 0_u64;
@@ -95,12 +119,14 @@ impl MessageVerification {
             // A repeated Message-ID identifies a group, not an ordering.
             // Reconcile the group's metadata multiset first so UID/mailbox
             // ordering cannot turn preserved duplicates into false changes.
+            // The expected destination folder is part of this key; a matching
+            // message in another folder must never count as a match.
             let mut destination_by_metadata =
-                HashMap::<MetadataFingerprint<'_>, VecDeque<&MailboxMessageKey>>::new();
+                HashMap::<(String, MetadataFingerprint<'_>), VecDeque<&MailboxMessageKey>>::new();
             for dest_key in dest_uids {
                 if let Some(fingerprint) = metadata_fingerprint(&dest_messages[*dest_key]) {
                     destination_by_metadata
-                        .entry(fingerprint)
+                        .entry((dest_key.mailbox.clone(), fingerprint))
                         .or_default()
                         .push_back(*dest_key);
                 }
@@ -110,8 +136,9 @@ impl MessageVerification {
                 let Some(fingerprint) = metadata_fingerprint(source_msg) else {
                     continue;
                 };
+                let expected_folder = expected_destination_folder(source_key, folder_mapping);
                 if let Some(dest_key) = destination_by_metadata
-                    .get_mut(&fingerprint)
+                    .get_mut(&(expected_folder, fingerprint))
                     .and_then(VecDeque::pop_front)
                 {
                     unmatched_source.remove(source_key);
@@ -132,6 +159,13 @@ impl MessageVerification {
             let remaining_dest = dest_uids
                 .iter()
                 .copied()
+                .filter(|key| {
+                    source_uids.iter().any(|source_key| {
+                        unmatched_source.contains(source_key)
+                            && expected_destination_folder(source_key, folder_mapping)
+                                == key.mailbox
+                    })
+                })
                 .filter(|key| unmatched_dest.contains(key))
                 .collect::<Vec<_>>();
             for (source_key, dest_key) in remaining_source.iter().zip(remaining_dest.iter()) {
@@ -151,11 +185,62 @@ impl MessageVerification {
             }
         }
 
+        // A matching identity in an unexpected folder is a placement error,
+        // not a successful cross-folder match. Prefer metadata equality when
+        // pairing duplicate Message-IDs, then retain the full folder context
+        // in the mismatch record for operator remediation.
+        let mut wrong_folder_pairs = Vec::new();
+        for (message_id, source_uids) in &source_by_message_id {
+            let Some(dest_uids) = dest_by_message_id.get(message_id) else {
+                continue;
+            };
+            for source_key in source_uids {
+                if !unmatched_source.contains(source_key) {
+                    continue;
+                }
+                let expected_folder = expected_destination_folder(source_key, folder_mapping);
+                let destination = dest_uids
+                    .iter()
+                    .filter(|dest_key| {
+                        unmatched_dest.contains(*dest_key) && dest_key.mailbox != expected_folder
+                    })
+                    .find(|dest_key| {
+                        metadata_fingerprint(&source_messages[source_key])
+                            == metadata_fingerprint(&dest_messages[dest_key])
+                    })
+                    .or_else(|| {
+                        dest_uids.iter().find(|dest_key| {
+                            unmatched_dest.contains(*dest_key)
+                                && dest_key.mailbox != expected_folder
+                        })
+                    });
+                if let Some(dest_key) = destination {
+                    wrong_folder_pairs.push((*source_key, *dest_key));
+                }
+            }
+        }
+        for (source_key, dest_key) in wrong_folder_pairs {
+            if !unmatched_source.remove(source_key) || !unmatched_dest.remove(dest_key) {
+                continue;
+            }
+            mismatches.push(make_mismatch(
+                job_id,
+                run_id,
+                MismatchType::PresentWrongFolder,
+                Some(source_key),
+                Some(dest_key),
+                Some(&source_messages[source_key]),
+                Some(&dest_messages[dest_key]),
+            ));
+        }
+
         // Internal date + size is a useful fallback only when unique on both
         // sides. Ambiguous fingerprints are left unresolved rather than
         // silently pairing unrelated messages.
-        let source_by_fingerprint = index_by_fingerprint(source_messages, &unmatched_source);
-        let dest_by_fingerprint = index_by_fingerprint(dest_messages, &unmatched_dest);
+        let source_by_fingerprint =
+            index_by_fingerprint(source_messages, &unmatched_source, folder_mapping, true);
+        let dest_by_fingerprint =
+            index_by_fingerprint(dest_messages, &unmatched_dest, folder_mapping, false);
         let mut fingerprints = source_by_fingerprint
             .keys()
             .filter(|fingerprint| dest_by_fingerprint.contains_key(*fingerprint))
@@ -247,7 +332,12 @@ impl MessageVerification {
                 .count() as u64,
             changed_count: mismatches
                 .iter()
-                .filter(|m| matches!(m.mismatch_type, MismatchType::MessageIdOnly))
+                .filter(|m| {
+                    matches!(
+                        m.mismatch_type,
+                        MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
+                    )
+                })
                 .count() as u64,
         };
 
@@ -274,17 +364,37 @@ fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&Mailb
 fn index_by_fingerprint<'a>(
     messages: &'a ExtractedMessages,
     eligible: &HashSet<&'a MailboxMessageKey>,
-) -> HashMap<MetadataFingerprint<'a>, Vec<&'a MailboxMessageKey>> {
+    folder_mapping: &HashMap<String, String>,
+    source_side: bool,
+) -> HashMap<(String, MetadataFingerprint<'a>), Vec<&'a MailboxMessageKey>> {
     let mut index = HashMap::new();
     for uid in eligible {
         let message = &messages[*uid];
         let Some(fingerprint) = metadata_fingerprint(message) else {
             continue;
         };
-        index.entry(fingerprint).or_insert_with(Vec::new).push(*uid);
+        let folder = if source_side {
+            expected_destination_folder(uid, folder_mapping)
+        } else {
+            uid.mailbox.clone()
+        };
+        index
+            .entry((folder, fingerprint))
+            .or_insert_with(Vec::new)
+            .push(*uid);
     }
     index.values_mut().for_each(|uids| uids.sort());
     index
+}
+
+fn expected_destination_folder(
+    source_key: &MailboxMessageKey,
+    folder_mapping: &HashMap<String, String>,
+) -> String {
+    folder_mapping
+        .get(&source_key.mailbox)
+        .cloned()
+        .unwrap_or_else(|| source_key.mailbox.clone())
 }
 
 /// Borrowed metadata key used only while reconciling one in-memory batch.
@@ -592,11 +702,12 @@ mod tests {
             },
         )]);
 
-        let (mismatches, _) = MessageVerification::detect_mismatches(
+        let (mismatches, _) = MessageVerification::detect_mismatches_with_folder_mapping(
             "job1",
             "run-local-identity",
             &source,
             &destination,
+            &HashMap::from([("INBOX".to_owned(), "Migrated/INBOX".to_owned())]),
         )
         .unwrap();
 
@@ -611,6 +722,41 @@ mod tests {
         assert_eq!(mismatch.destination_uidvalidity, Some(909));
         assert_eq!(mismatch.source_uid.as_deref(), Some("42"));
         assert_eq!(mismatch.dest_uid.as_deref(), Some("7742"));
+    }
+
+    #[test]
+    fn matching_message_in_wrong_folder_is_not_counted_as_metadata_match() {
+        let message = ExtractedMessage {
+            message_id: Some("<wrong-folder@example.com>".to_owned()),
+            uid: Some("1".to_owned()),
+            size_bytes: Some(1_000),
+            internal_date: Some("2024-01-01".to_owned()),
+        };
+        let source = HashMap::from([(MailboxMessageKey::new("INBOX", "1"), message.clone())]);
+        let destination = HashMap::from([(MailboxMessageKey::new("WrongFolder", "9"), message)]);
+
+        let (mismatches, summary) = MessageVerification::detect_mismatches_with_folder_mapping(
+            "job1",
+            "run-wrong-folder",
+            &source,
+            &destination,
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(summary.metadata_matches, 0);
+        assert_eq!(summary.changed_count, 1);
+        assert_eq!(summary.missing_count, 0);
+        assert_eq!(summary.extra_count, 0);
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(
+            mismatches[0].mismatch_type,
+            MismatchType::PresentWrongFolder
+        );
+        assert_eq!(
+            MismatchType::PresentWrongFolder.as_str(),
+            "message_present_wrong_folder"
+        );
     }
 
     #[test]
