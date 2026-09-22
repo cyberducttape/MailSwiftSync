@@ -1411,6 +1411,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Changed
 
+- Corrected README readiness language: native Dovecot execution is implemented
+  and wired but remains experimental until its integration fixture and recovery
+  scenarios pass in CI, matching the capability manifest.
 - Replaced native Dovecot's boolean delete-extras framing with explicit
   migration strategies: Initial mirror, Incremental mirror, Final preservation
   pass, and Destination already active. The selected strategy now determines
