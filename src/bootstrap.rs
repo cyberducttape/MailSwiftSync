@@ -21,10 +21,14 @@ impl App {
                     // If the parent already exists, verify its permissions rather than mutating them.
                     // This prevents privilege-escalation attacks where a malicious state_path
                     // could cause MailSwiftSync to chmod /tmp, /var/lib, or other system directories.
-                    match std::fs::metadata(parent) {
+                    match std::fs::symlink_metadata(parent) {
                         Ok(_) => {
-                            // Parent exists. Verify we can write to it, but do NOT chmod it.
-                            match crate::credentials::verify_directory_writable(parent) {
+                            // Establish the no-follow ownership and permission
+                            // boundary before probing writability; the probe
+                            // creates a file below this directory.
+                            match crate::credentials::verify_private_directory(parent)
+                                .and_then(|_| crate::credentials::verify_directory_writable(parent))
+                            {
                                 Ok(()) => None,
                                 Err(e) => Some(format!(
                                     "State directory exists but is not writable: {e}"

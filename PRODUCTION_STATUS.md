@@ -150,7 +150,9 @@ tests; message-level verification is not wired into those labs yet.
 ### File Operations ✅ VERIFIED
 - ✅ Cross-platform atomic file replacement (Windows ReplaceFileW, Unix rename)
 - ✅ Temporary files use UUIDs (not predictable)
-- ✅ No TOCTOU vulnerabilities in state writes
+- ✅ State-directory and SQLite opens reject untrusted directory boundaries and
+  final-component symlinks; remaining same-UID filesystem races are not
+  claimed as fully eliminated.
 - ✅ Directory sync after writes (durability)
 
 ### Audit & Compliance ✅ VERIFIED

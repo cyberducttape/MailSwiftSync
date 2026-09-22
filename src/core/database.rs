@@ -1,13 +1,59 @@
 use super::*;
 
+#[cfg(unix)]
+type DatabaseIdentity = (u64, u64);
+#[cfg(not(unix))]
+type DatabaseIdentity = ();
+
+fn database_identity(path: &Path) -> std::io::Result<DatabaseIdentity> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "state database path is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(())
+    }
+}
+
+fn verify_database_identity(path: &Path, expected: DatabaseIdentity) -> std::io::Result<()> {
+    if database_identity(path)? != expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "state database path changed while opening",
+        ));
+    }
+    Ok(())
+}
+
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
+        let parent = path.parent().ok_or(rusqlite::Error::InvalidQuery)?;
+        crate::credentials::verify_private_directory(parent)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         prepare_database_file(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let database_identity = database_identity(path)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let store = Self {
-            connection: Connection::open(path)?,
+            connection: Connection::open_with_flags(
+                path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | OpenFlags::SQLITE_OPEN_CREATE
+                    | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )?,
         };
+        verify_database_identity(path, database_identity)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         let stored_schema_version: i64 =
             store
                 .connection
@@ -38,12 +84,17 @@ impl StateStore {
     /// can inspect historical state without rewriting the source file.
     pub fn open_readonly(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let path = path.as_ref();
-        let metadata = std::fs::symlink_metadata(path)
+        let parent = path.parent().ok_or(rusqlite::Error::InvalidQuery)?;
+        crate::credentials::verify_private_directory(parent)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(rusqlite::Error::InvalidQuery);
-        }
-        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let database_identity = database_identity(path)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
+        verify_database_identity(path, database_identity)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         let stored_schema_version: i64 =
             connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;

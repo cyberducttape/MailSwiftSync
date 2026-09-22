@@ -53,10 +53,12 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
 
     // Security boundary: only restrict permissions on directories we create.
     // If the parent already exists, verify it is writable; do not chmod system directories.
-    match std::fs::metadata(parent) {
+    match std::fs::symlink_metadata(parent) {
         Ok(_) => {
-            // Parent exists. Verify we can write to it, but do NOT chmod it.
-            crate::credentials::verify_directory_writable(parent)
+            // Establish the no-follow ownership and permission boundary
+            // before probing writability; do not chmod system directories.
+            crate::credentials::verify_private_directory(parent)
+                .and_then(|_| crate::credentials::verify_directory_writable(parent))
                 .map_err(|e| format!("Restore directory exists but is not writable: {e}"))?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

@@ -6,6 +6,12 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Hardened SQLite state opens against pathname substitution: existing state
+  directories are verified through no-follow directory descriptors for current
+  UID ownership and group/other non-writability, SQLite uses
+  `SQLITE_OPEN_NOFOLLOW`, and the database identity is checked before and
+  after opening. Bootstrap and restore paths now establish the same boundary
+  before probing directory writability.
 - Fixed provider qualification evidence generation to consume the actual
   customer-proof schema, validate the embedded canonical proof digest, reject
   failed/incomplete mailbox runs, and require nontrivial high-confidence

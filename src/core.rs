@@ -1475,6 +1475,31 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn state_store_rejects_a_symlinked_parent_directory() {
+        use std::os::unix::fs::symlink;
+
+        let suffix = Uuid::new_v4();
+        let victim = std::env::temp_dir().join(format!("mailswiftsync-db-victim-{suffix}"));
+        let link = std::env::temp_dir().join(format!("mailswiftsync-db-link-{suffix}"));
+        std::fs::create_dir(&victim).unwrap();
+        symlink(&victim, &link).unwrap();
+
+        let error = StateStore::open(link.join("state.db"));
+
+        assert!(error.is_err());
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(victim.read_dir().unwrap().next().is_none());
+        std::fs::remove_file(link).unwrap();
+        std::fs::remove_dir(victim).unwrap();
+    }
+
     #[test]
     fn schema_version_is_recorded_and_future_versions_are_rejected() {
         let db = StateStore::in_memory().unwrap();
