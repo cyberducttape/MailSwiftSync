@@ -394,7 +394,10 @@ pub(crate) fn prepare_selected_batch_jobs(
     for (selected_index, job) in jobs.iter_mut().enumerate() {
         let queue_index = selected_indices[selected_index];
         let credential_load = if mode.is_live() {
-            job.form.reload_configured_keyring_credentials()
+            // Do not mint queue-wide OAuth access tokens here. A selected
+            // mailbox may wait behind many workers; its live worker refreshes
+            // immediately before authentication and engine launch.
+            job.form.load_static_configured_keyring_credentials()
         } else {
             job.form.load_configured_keyring_credentials()
         };

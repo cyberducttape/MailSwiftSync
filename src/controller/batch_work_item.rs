@@ -63,7 +63,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         resolved_imapsync,
     } = context;
     let live = mode.is_live();
-    while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
+    while let Ok((index, job_id, child_run_id, checkpoint, mut job)) = job_rx.recv() {
         if cancel.load(Ordering::Relaxed) {
             let _ = tx.send(Event::JobState {
                 job_id: job_id.clone(),
@@ -135,6 +135,39 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         for attempt in 0..=retry_count {
             if !launch_limiter.acquire(&cancel) {
                 break;
+            }
+            if live {
+                // A queue-level admission must not mint an access token for
+                // every selected mailbox. Refresh immediately before this
+                // worker authenticates and launches the engine, so waiting in
+                // a large queue cannot consume an expired bearer token.
+                if let Err(error) = job.form.reload_configured_keyring_credentials() {
+                    failed.store(true, Ordering::Relaxed);
+                    let _ = tx.send(Event::RunLine {
+                        run_id: child_run_id.clone(),
+                        job_id: job_id.clone(),
+                        text: format!(
+                            "[{}] OAuth credential refresh failed before launch: {error}",
+                            index + 1
+                        ),
+                    });
+                    let _ = tx.send(Event::JobState {
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        state: "Failed".into(),
+                    });
+                    let _ = tx.send(Event::JobFinished {
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        state: "failed".into(),
+                        detail: classified_failure_detail(&error),
+                        credential_fingerprint: None,
+                    });
+                    if let Ok(mut terminal) = terminal_jobs.lock() {
+                        terminal.insert(index);
+                    }
+                    break;
+                }
             }
             if live && let Err(error) = fresh_dual_imaps_authentication(&job.form) {
                 if should_retry_batch_error(&error, attempt, retry_count) {

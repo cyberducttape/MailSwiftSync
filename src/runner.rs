@@ -577,9 +577,25 @@ pub(crate) fn run_internal_launcher(arguments: Vec<std::ffi::OsString>) -> i32 {
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    match command.spawn().and_then(|mut child| child.wait()) {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(_) => 125,
+    // On Unix, replace the gatekeeper image instead of creating a second
+    // process. The durable ProcessStarted record therefore continues to
+    // identify the actual migration engine, while the session/process group
+    // and PR_SET_PDEATHSIG containment survive the exec. Spawning the engine
+    // here leaves a dead launcher PID in the ledger after a controller crash,
+    // allowing the real child to outlive its recorded ownership.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let error = command.exec();
+        eprintln!("could not exec migration engine: {error}");
+        125
+    }
+    #[cfg(not(unix))]
+    {
+        match command.spawn().and_then(|mut child| child.wait()) {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(_) => 125,
+        }
     }
 }
 

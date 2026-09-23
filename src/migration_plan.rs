@@ -238,14 +238,7 @@ impl Form {
             .map_err(|error| format!("Could not delete the OS keyring credential: {error}"))
     }
     pub(crate) fn load_configured_keyring_credentials(&mut self) -> Result<(), String> {
-        if self.source_password.is_empty() && !self.profile.source_credential_id.trim().is_empty() {
-            self.load_keyring_password(true)?;
-        }
-        if self.destination_password.is_empty()
-            && !self.profile.destination_credential_id.trim().is_empty()
-        {
-            self.load_keyring_password(false)?;
-        }
+        self.load_static_configured_keyring_credentials()?;
         // An automatic OAuth refresh reference is itself a credential source.
         // Refresh it during preflight as well as live admission so a profile
         // that has no ordinary credential ID can still obtain the access token
@@ -270,6 +263,21 @@ impl Form {
         }
         Ok(())
     }
+
+    /// Load only static keyring credentials. Live batch admission uses this
+    /// to validate the stable credential identity without creating an access
+    /// token that may expire while another queued mailbox is running.
+    pub(crate) fn load_static_configured_keyring_credentials(&mut self) -> Result<(), String> {
+        if self.source_password.is_empty() && !self.profile.source_credential_id.trim().is_empty() {
+            self.load_keyring_password(true)?;
+        }
+        if self.destination_password.is_empty()
+            && !self.profile.destination_credential_id.trim().is_empty()
+        {
+            self.load_keyring_password(false)?;
+        }
+        Ok(())
+    }
     /// Reload configured references immediately before live admission. The
     /// ordinary loader intentionally preserves a password typed into the
     /// current form; live promotion must instead use the current keyring
@@ -279,12 +287,7 @@ impl Form {
     /// resumed single mailbox does not launch with a token that expired
     /// while it waited.
     pub(crate) fn reload_configured_keyring_credentials(&mut self) -> Result<(), String> {
-        if !self.profile.source_credential_id.trim().is_empty() {
-            self.load_keyring_password(true)?;
-        }
-        if !self.profile.destination_credential_id.trim().is_empty() {
-            self.load_keyring_password(false)?;
-        }
+        self.load_static_configured_keyring_credentials()?;
         self.refresh_oauth_access_token(true)?;
         self.refresh_oauth_access_token(false)?;
         Ok(())
@@ -406,7 +409,19 @@ impl Form {
                 self.profile.destination_user.as_str(),
             ),
         ];
-        if require_credentials {
+        let source_automatic_refresh = auth_method_is_oauth(&self.profile.source_auth)
+            && !self
+                .profile
+                .source_oauth_refresh_credential_id
+                .trim()
+                .is_empty();
+        let destination_automatic_refresh = auth_method_is_oauth(&self.profile.destination_auth)
+            && !self
+                .profile
+                .destination_oauth_refresh_credential_id
+                .trim()
+                .is_empty();
+        if require_credentials && !source_automatic_refresh {
             required.push((
                 if auth_method_is_oauth(&self.profile.source_auth) {
                     "Source OAuth 2.0 access token"
@@ -416,7 +431,10 @@ impl Form {
                 self.source_password.as_str(),
             ));
         }
-        if require_credentials && self.engine() != core::Engine::Dovecot {
+        if require_credentials
+            && self.engine() != core::Engine::Dovecot
+            && !destination_automatic_refresh
+        {
             required.push((
                 if auth_method_is_oauth(&self.profile.destination_auth) {
                     "Destination OAuth 2.0 access token"
