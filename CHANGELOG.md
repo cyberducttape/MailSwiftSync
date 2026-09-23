@@ -6,6 +6,26 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Fixed release CI with Clippy 1.92+: addressed newly enforced lints and
+  explicitly marked intentionally unwired prototype helpers as such.
+- Fixed crash ownership around the internal migration launcher on Unix. The
+  launcher now `exec`s the engine after durable registration, so the durable
+  PID remains the engine PID and parent-death/process-group containment also
+  applies to the real worker.
+- Fixed batch OAuth timing: queue admission no longer refreshes every selected
+  mailbox up front. Each worker refreshes automatic OAuth credentials
+  immediately before authentication and engine launch.
+- Removed the release-evidence self-reference: source-controlled policy and
+  schema are now separate from externally supplied/generated release evidence.
+  Release evidence still must identify the exact immutable release commit.
+- Removed unsupported remote-Dovecot wrapper wording and clarified that
+  MailSwiftSync certificate pins protect readiness/admission while external
+  imapsync remains CA-validated but not leaf-pin-bound.
+- Replaced synthetic unmatched-message counts with nullable evidence and
+  exposed explicit verification assurance levels in UI and JSON reports.
+- Split profile/schema/default logic and credential-identity binding out of
+  `migration_plan.rs` into auditable modules.
+
 - Fixed the atomic-artifact cleanup regression test on Windows. It now tests
   replacement failure against a destination directory under a trusted parent,
   matching the current behavior that securely creates missing parents.
@@ -93,6 +113,13 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Added
 
+- Added `mailswiftsync doctor [state.db]`, a read-only qualification-envelope
+  report covering OS/architecture, engine version, TLS/auth configuration,
+  keyring references, database state, free space, and the trusted imapsync
+  verification version. It never prints credential material.
+- Added explicit release-evidence hand-off documentation so generated
+  provider evidence can be retained as an external, auditable release input
+  instead of being committed into the release SHA it certifies.
 - Release SBOM coverage now distinguishes the Rust dependency graph from the
   final runtime image: releases publish
   `mailswiftsync-rust-sbom.cdx.json` and
