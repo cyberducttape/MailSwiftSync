@@ -1,3 +1,6 @@
+mod credential_identity;
+mod profile;
+
 use crate::atomic_artifact::write_private_atomic;
 use crate::command::{remove_option, shell_quote};
 use crate::imap_probe::{command_endpoint_parts, command_port};
@@ -11,132 +14,14 @@ use crate::{
     write_secret_file,
 };
 use keyring::Entry;
-use serde::{Deserialize, Serialize};
+pub(crate) use profile::{
+    DovecotMigrationStrategy, Profile, RunPlanSnapshot, RunProfileSnapshot, auth_method_is_oauth,
+    completeness, default_auth_method, default_destination_tls, default_doveadm_path,
+    default_dovecot_execution, default_migration_timeout_hours, default_source_tls,
+    default_ssh_path,
+};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-
-/// The durable run snapshot deliberately does not serialize `Profile`.
-/// Operator-supplied extra options are retained only as a digest so a
-/// password or token embedded in an expert option cannot enter SQLite or an
-/// exported report.
-#[derive(Serialize, Deserialize)]
-pub(crate) struct RunPlanSnapshot {
-    pub(crate) dry_run: bool,
-    pub(crate) profile: RunProfileSnapshot,
-}
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct RunProfileSnapshot {
-    pub(crate) name: String,
-    pub(crate) source_host: String,
-    pub(crate) source_port: String,
-    pub(crate) source_tls: String,
-    pub(crate) source_ca_bundle: String,
-    pub(crate) source_certificate_pin_sha256: String,
-    pub(crate) allow_insecure_source_transport: bool,
-    pub(crate) source_user: String,
-    #[serde(default = "default_auth_method")]
-    pub(crate) source_auth: String,
-    pub(crate) source_credential_id: String,
-    #[serde(default)]
-    pub(crate) source_oauth_refresh_credential_id: String,
-    pub(crate) destination_host: String,
-    pub(crate) destination_user: String,
-    #[serde(default = "default_auth_method")]
-    pub(crate) destination_auth: String,
-    pub(crate) destination_credential_id: String,
-    #[serde(default)]
-    pub(crate) destination_oauth_refresh_credential_id: String,
-    pub(crate) destination_port: String,
-    pub(crate) destination_tls: String,
-    pub(crate) destination_ca_bundle: String,
-    pub(crate) destination_certificate_pin_sha256: String,
-    pub(crate) imapsync_path: String,
-    pub(crate) engine: core::Engine,
-    pub(crate) doveadm_path: String,
-    pub(crate) ssh_path: String,
-    pub(crate) dovecot_execution: String,
-    pub(crate) dovecot_ssh_user: String,
-    pub(crate) dovecot_config: String,
-    pub(crate) batch_concurrency: usize,
-    pub(crate) batch_retry_count: usize,
-    pub(crate) max_messages_per_second: u32,
-    pub(crate) max_bytes_per_second: u64,
-    pub(crate) migration_timeout_hours: u64,
-    pub(crate) allow_remote_password_in_argv: bool,
-    pub(crate) automap: bool,
-    pub(crate) addheader: bool,
-    pub(crate) justfolders: bool,
-    pub(crate) sync_internaldates: bool,
-    pub(crate) useuid: bool,
-    pub(crate) usecache: bool,
-    pub(crate) fastio1: bool,
-    pub(crate) fastio2: bool,
-    pub(crate) allowsizemismatch: bool,
-    #[serde(default)]
-    pub(crate) dovecot_strategy: DovecotMigrationStrategy,
-    /// Legacy imapsync destructive flag. Native Dovecot uses
-    /// `dovecot_strategy` instead.
-    pub(crate) delete2: bool,
-    pub(crate) extra_options_sha256: String,
-    pub(crate) dovecot_checkpoint_sha256: Option<String>,
-    #[serde(default)]
-    pub(crate) execution_executable_sha256: String,
-    #[serde(default)]
-    pub(crate) source_ca_bundle_sha256: String,
-    #[serde(default)]
-    pub(crate) destination_ca_bundle_sha256: String,
-    #[serde(default)]
-    pub(crate) dovecot_config_sha256: String,
-}
-
-/// Native Dovecot migration strategies. These are intentionally named after
-/// the operational phase rather than exposing `delete2` as a boolean: backup
-/// and sync -1 have different merge semantics and should be chosen knowingly.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum DovecotMigrationStrategy {
-    InitialMirror,
-    IncrementalMirror,
-    #[default]
-    FinalPreservationPass,
-    DestinationAlreadyActive,
-}
-
-impl DovecotMigrationStrategy {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::InitialMirror => "Initial mirror",
-            Self::IncrementalMirror => "Incremental mirror",
-            Self::FinalPreservationPass => "Final preservation pass",
-            Self::DestinationAlreadyActive => "Destination already active",
-        }
-    }
-
-    pub(crate) fn description(self) -> &'static str {
-        match self {
-            Self::InitialMirror => {
-                "doveadm backup: mirror source mail to the destination; destination-only changes may be replaced."
-            }
-            Self::IncrementalMirror => {
-                "doveadm backup with the durable checkpoint: repeat an initial mirror before cutover."
-            }
-            Self::FinalPreservationPass => {
-                "doveadm sync -1: preserve destination-side changes for the final cutover pass."
-            }
-            Self::DestinationAlreadyActive => {
-                "Advanced preservation mode using doveadm sync -1; review merge behavior and Dovecot load carefully."
-            }
-        }
-    }
-
-    pub(crate) fn uses_preservation_sync(self) -> bool {
-        matches!(
-            self,
-            Self::FinalPreservationPass | Self::DestinationAlreadyActive
-        )
-    }
-}
 
 pub(crate) fn decode_report_run_snapshot(
     snapshot: &str,
@@ -162,143 +47,6 @@ pub(crate) fn validate_certificate_pin(value: &str, label: &str) -> Result<(), S
     Ok(())
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub(crate) struct Profile {
-    pub(crate) name: String,
-    pub(crate) source_host: String,
-    #[serde(default)]
-    pub(crate) source_port: String,
-    #[serde(default = "default_source_tls")]
-    pub(crate) source_tls: String,
-    #[serde(default)]
-    pub(crate) source_ca_bundle: String,
-    #[serde(default)]
-    pub(crate) source_certificate_pin_sha256: String,
-    /// Explicit operator acknowledgement required before a live cleartext
-    /// source connection. This is part of the plan fingerprint.
-    #[serde(default)]
-    pub(crate) allow_insecure_source_transport: bool,
-    pub(crate) source_user: String,
-    /// `password` uses LOGIN/password authentication; `oauth2` uses an
-    /// operator-supplied OAuth 2.0 access token with XOAUTH2.
-    #[serde(default = "default_auth_method")]
-    pub(crate) source_auth: String,
-    #[serde(default)]
-    pub(crate) source_credential_id: String,
-    /// Keyring reference for an optional automatic-refresh configuration
-    /// (token endpoint, operator-registered client ID/secret, refresh
-    /// token). Empty means the operator supplies a fresh access token by
-    /// hand, as before.
-    #[serde(default)]
-    pub(crate) source_oauth_refresh_credential_id: String,
-    pub(crate) destination_host: String,
-    pub(crate) destination_user: String,
-    #[serde(default = "default_auth_method")]
-    pub(crate) destination_auth: String,
-    #[serde(default)]
-    pub(crate) destination_credential_id: String,
-    #[serde(default)]
-    pub(crate) destination_oauth_refresh_credential_id: String,
-    #[serde(default)]
-    pub(crate) destination_port: String,
-    #[serde(default = "default_destination_tls")]
-    pub(crate) destination_tls: String,
-    #[serde(default)]
-    pub(crate) destination_ca_bundle: String,
-    #[serde(default)]
-    pub(crate) destination_certificate_pin_sha256: String,
-    pub(crate) imapsync_path: String,
-    #[serde(default)]
-    pub(crate) engine: core::Engine,
-    #[serde(default = "default_doveadm_path")]
-    pub(crate) doveadm_path: String,
-    #[serde(default = "default_ssh_path")]
-    pub(crate) ssh_path: String,
-    /// Where to invoke doveadm. `automatic` preserves legacy hostname-based
-    /// inference; new profiles should prefer an explicit location.
-    #[serde(default = "default_dovecot_execution")]
-    pub(crate) dovecot_execution: String,
-    #[serde(default)]
-    pub(crate) dovecot_ssh_user: String,
-    #[serde(default)]
-    pub(crate) dovecot_config: String,
-    #[serde(default = "default_batch_concurrency")]
-    pub(crate) batch_concurrency: usize,
-    #[serde(default)]
-    pub(crate) batch_retry_count: usize,
-    /// Optional imapsync throttle. Zero means unlimited.
-    #[serde(default)]
-    pub(crate) max_messages_per_second: u32,
-    /// Optional imapsync throttle. Zero means unlimited.
-    #[serde(default)]
-    pub(crate) max_bytes_per_second: u64,
-    /// Maximum runtime for one migration process, in hours.
-    #[serde(default = "default_migration_timeout_hours")]
-    pub(crate) migration_timeout_hours: u64,
-    /// Legacy profile field retained for deserialization compatibility. Remote
-    /// Dovecot execution is rejected until a deployment-independent secret
-    /// broker is available, so this value has no effect.
-    #[serde(default)]
-    pub(crate) allow_remote_password_in_argv: bool,
-    pub(crate) automap: bool,
-    pub(crate) addheader: bool,
-    pub(crate) justfolders: bool,
-    pub(crate) sync_internaldates: bool,
-    pub(crate) useuid: bool,
-    pub(crate) usecache: bool,
-    pub(crate) fastio1: bool,
-    pub(crate) fastio2: bool,
-    pub(crate) allowsizemismatch: bool,
-    #[serde(default)]
-    pub(crate) dovecot_strategy: DovecotMigrationStrategy,
-    /// Retained for imapsync compatibility and legacy profile decoding.
-    pub(crate) delete2: bool,
-    pub(crate) extra_options: String,
-}
-
-/// Count only locally provable plan fields. Network authentication and
-/// server capability checks belong to the explicit preflight, not this UI
-/// completeness indicator.
-pub(crate) fn completeness(profile: &Profile) -> (usize, usize) {
-    let checks = 4;
-    let passed = [
-        !profile.source_host.trim().is_empty(),
-        !profile.destination_host.trim().is_empty(),
-        !profile.source_user.trim().is_empty(),
-        !profile.destination_user.trim().is_empty(),
-    ]
-    .into_iter()
-    .filter(|ok| *ok)
-    .count();
-    (passed, checks)
-}
-pub(crate) fn default_doveadm_path() -> String {
-    "doveadm".into()
-}
-pub(crate) fn default_ssh_path() -> String {
-    "ssh".into()
-}
-pub(crate) fn default_dovecot_execution() -> String {
-    "automatic".into()
-}
-pub(crate) fn default_batch_concurrency() -> usize {
-    2
-}
-pub(crate) fn default_migration_timeout_hours() -> u64 {
-    24
-}
-pub(crate) fn default_source_tls() -> String {
-    "imaps".into()
-}
-
-pub(crate) fn default_auth_method() -> String {
-    "password".into()
-}
-
-pub(crate) fn auth_method_is_oauth(method: &str) -> bool {
-    method == "oauth2"
-}
-
 /// The result of an attempted automatic OAuth refresh, distinguishing "this
 /// side is not using OAuth, or has no refresh configuration" (a no-op) from
 /// an actual successful exchange, so callers can report a meaningful status
@@ -306,10 +54,6 @@ pub(crate) fn auth_method_is_oauth(method: &str) -> bool {
 pub(crate) enum OAuthRefreshOutcome {
     NotConfigured,
     Refreshed { expires_in: Option<u64> },
-}
-
-pub(crate) fn default_destination_tls() -> String {
-    "imaps".into()
 }
 
 pub(crate) fn effective_destination_tls(mode: &str) -> &str {
@@ -643,90 +387,6 @@ impl Form {
         Ok(OAuthRefreshOutcome::Refreshed { expires_in })
     }
 
-    /// A process-local comparison value for credential material. It is never
-    /// persisted or included in a plan snapshot and is used only to bind the
-    /// immediate live authentication probe to the bytes it actually tested.
-    pub(crate) fn credential_fingerprint(&self) -> String {
-        let mut digest = Sha256::new();
-        digest.update(self.source_password.as_bytes());
-        digest.update([0]);
-        digest.update(self.destination_password.as_bytes());
-        format!("{:x}", digest.finalize())
-    }
-
-    /// A process-local identity for the credentials approved during
-    /// preflight. Static passwords and manually supplied OAuth access tokens
-    /// use their material fingerprint. When automatic OAuth refresh is
-    /// configured, the bearer token is intentionally excluded because it is
-    /// expected to rotate; the binding instead covers the account, auth mode,
-    /// refresh keyring reference, and non-secret OAuth endpoint/client ID.
-    pub(crate) fn credential_binding_fingerprint(&self) -> String {
-        let mut digest = Sha256::new();
-        let mut update = |value: &str| {
-            digest.update(value.len().to_string().as_bytes());
-            digest.update([0]);
-            digest.update(value.as_bytes());
-            digest.update([0xff]);
-        };
-        let mut update_side = |side: &str,
-                               host: &str,
-                               user: &str,
-                               auth: &str,
-                               credential_id: &str,
-                               refresh_id: &str,
-                               password: &SecretString,
-                               source: bool| {
-            update(side);
-            update(host);
-            update(user);
-            update(auth);
-            update(credential_id);
-            if auth_method_is_oauth(auth) && !refresh_id.trim().is_empty() {
-                update("automatic-oauth-refresh");
-                update(refresh_id.trim());
-                if let Ok(Some(config)) = self.load_oauth_refresh_config(source) {
-                    update(&config.token_endpoint);
-                    update(&config.client_id);
-                } else {
-                    // The actual refresh/load path fails closed before
-                    // execution when the configured entry is unavailable.
-                    // Keep this marker deterministic for diagnostics without
-                    // including any secret material.
-                    update("oauth-refresh-config-unavailable");
-                }
-            } else {
-                update("static-credential-material");
-                update(&self.material_fingerprint(password));
-            }
-        };
-        update_side(
-            "source",
-            &self.profile.source_host,
-            &self.profile.source_user,
-            &self.profile.source_auth,
-            &self.profile.source_credential_id,
-            &self.profile.source_oauth_refresh_credential_id,
-            &self.source_password,
-            true,
-        );
-        update_side(
-            "destination",
-            &self.profile.destination_host,
-            &self.profile.destination_user,
-            &self.profile.destination_auth,
-            &self.profile.destination_credential_id,
-            &self.profile.destination_oauth_refresh_credential_id,
-            &self.destination_password,
-            false,
-        );
-        format!("{:x}", digest.finalize())
-    }
-
-    fn material_fingerprint(&self, password: &SecretString) -> String {
-        let mut digest = Sha256::new();
-        digest.update(password.as_bytes());
-        format!("{:x}", digest.finalize())
-    }
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_internal(true)
     }
