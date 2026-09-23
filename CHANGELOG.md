@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Removed `Serialize` from `SecretString`. Secret material can now be
+  serialized only at explicit keyring-storage boundaries, preventing an
+  innocent future `#[derive(Serialize)]` from emitting a secret by default.
 - Split comprehensive IMAP preflight from the immediate live-launch probe.
   Live retries now perform TLS, authentication, post-authentication capability
   validation, and NOOP without repeating namespace, full folder discovery, or

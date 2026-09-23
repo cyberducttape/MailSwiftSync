@@ -56,8 +56,8 @@ impl OAuthRefreshConfig {
 }
 
 /// Serialize a refresh config for keyring storage. Field values are plain
-/// JSON strings, not `SecretString`, so this never derives `Serialize` on the
-/// secret type itself; the encoded text exists only as long as it takes to
+/// JSON strings, not `SecretString`, so plaintext serialization is explicit at
+/// this keyring boundary; the encoded text exists only as long as it takes to
 /// hand it to the keyring backend, mirroring how the existing password path
 /// hands `entry.set_password` a borrowed `&str`.
 pub(crate) fn encode_refresh_config(config: &OAuthRefreshConfig) -> Zeroizing<String> {
@@ -65,16 +65,16 @@ pub(crate) fn encode_refresh_config(config: &OAuthRefreshConfig) -> Zeroizing<St
     struct StoredOAuthRefreshConfig<'a> {
         token_endpoint: &'a str,
         client_id: &'a str,
-        client_secret: &'a SecretString,
-        refresh_token: &'a SecretString,
+        client_secret: &'a str,
+        refresh_token: &'a str,
     }
 
     Zeroizing::new(
         serde_json::to_string(&StoredOAuthRefreshConfig {
             token_endpoint: &config.token_endpoint,
             client_id: &config.client_id,
-            client_secret: &config.client_secret,
-            refresh_token: &config.refresh_token,
+            client_secret: config.client_secret.as_str(),
+            refresh_token: config.refresh_token.as_str(),
         })
         .expect("OAuth refresh configuration fields are serializable"),
     )
