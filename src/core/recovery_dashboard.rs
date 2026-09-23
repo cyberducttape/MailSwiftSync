@@ -34,6 +34,19 @@ pub enum InterruptionReason {
 }
 
 impl InterruptionReason {
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "user_initiated" => Self::UserInitiated,
+            "network_timeout" => Self::NetworkTimeout,
+            "provider_throttled" => Self::ProviderThrottled,
+            "endpoint_unavailable" => Self::EndpointUnavailable,
+            "process_terminated" => Self::ProcessTerminated,
+            "crash_or_shutdown" => Self::CrashOrShutdown,
+            "unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::UserInitiated => "user_initiated",

@@ -217,6 +217,130 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("runbook") {
+        let (Some(source), Some(destination)) = (arguments.next(), arguments.next()) else {
+            eprintln!("Usage: mailswiftsync runbook <source-provider> <destination-provider>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync runbook <source-provider> <destination-provider>");
+            std::process::exit(2);
+        }
+        let report = crate::core::provider_runbooks::RunbookGenerator::generate(
+            &source.to_string_lossy(),
+            &destination.to_string_lossy(),
+        );
+        match serde_json::to_string_pretty(&report) {
+            Ok(report) => {
+                println!("{report}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Runbook serialization failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("risk") {
+        let (Some(messages), Some(folders), Some(bytes)) =
+            (arguments.next(), arguments.next(), arguments.next())
+        else {
+            eprintln!("Usage: mailswiftsync risk <messages> <folders> <bytes>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync risk <messages> <folders> <bytes>");
+            std::process::exit(2);
+        }
+        let parsed = messages
+            .to_str()
+            .and_then(|value| value.parse::<u64>().ok())
+            .zip(folders.to_str().and_then(|value| value.parse::<u64>().ok()))
+            .zip(bytes.to_str().and_then(|value| value.parse::<u64>().ok()))
+            .map(|((messages, folders), bytes)| (messages, folders, bytes));
+        let Some((messages, folders, bytes)) = parsed else {
+            eprintln!(
+                "Risk assessment refused: messages, folders, and bytes must be unsigned integers"
+            );
+            std::process::exit(2);
+        };
+        let report = crate::core::pre_migration_report::PreMigrationRisk::assess(
+            messages, folders, bytes, "",
+        );
+        match serde_json::to_string_pretty(&report) {
+            Ok(report) => {
+                println!("{report}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Risk report serialization failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("post-report") {
+        let values = arguments.collect::<Vec<_>>();
+        if values.len() != 6 {
+            eprintln!(
+                "Usage: mailswiftsync post-report <processed> <skipped> <failed> <missing> <extra> <changed>"
+            );
+            std::process::exit(2);
+        }
+        let Some(values) = values
+            .iter()
+            .map(|value| value.to_str().and_then(|value| value.parse::<u64>().ok()))
+            .collect::<Option<Vec<_>>>()
+        else {
+            eprintln!("Post-migration report refused: all values must be unsigned integers");
+            std::process::exit(2);
+        };
+        let report = crate::core::post_migration_report::PostMigrationReport::generate(
+            values[0], values[1], values[2], values[3], values[4], values[5],
+        );
+        match serde_json::to_string_pretty(&report) {
+            Ok(report) => {
+                println!("{report}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Post-migration report serialization failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if command == std::ffi::OsStr::new("recovery-guidance") {
+        let Some(reason) = arguments.next() else {
+            eprintln!("Usage: mailswiftsync recovery-guidance <reason>");
+            std::process::exit(2);
+        };
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync recovery-guidance <reason>");
+            std::process::exit(2);
+        }
+        let Some(reason) = reason
+            .to_str()
+            .and_then(crate::core::recovery_dashboard::InterruptionReason::parse)
+        else {
+            eprintln!(
+                "Recovery guidance refused: use user_initiated, network_timeout, provider_throttled, endpoint_unavailable, process_terminated, crash_or_shutdown, or unknown"
+            );
+            std::process::exit(2);
+        };
+        let guidance = crate::core::recovery_dashboard::RecoveryPlanner::generate_guidance(reason);
+        match serde_json::to_string_pretty(&serde_json::json!({
+            "reason": reason.as_str(),
+            "guidance": guidance,
+        })) {
+            Ok(guidance) => {
+                println!("{guidance}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Recovery guidance serialization failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("backup") {
         let (Some(source), Some(destination)) = (arguments.next(), arguments.next()) else {
             eprintln!("Usage: mailswiftsync backup <state.db> <backup.db>");
@@ -810,10 +934,13 @@ fn print_cli_help() {
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
     println!(
-        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate secret-free status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST secret-free status JSON to an operator-configured https:// URL\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate secret-free status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST secret-free status JSON to an operator-configured https:// URL\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
     );
     println!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
+    );
+    println!(
+        "\nAdditional operator workflow command:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON"
     );
 }
 

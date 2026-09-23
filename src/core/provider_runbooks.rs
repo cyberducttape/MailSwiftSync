@@ -32,8 +32,16 @@ pub struct RunbookGenerator;
 impl RunbookGenerator {
     /// Generate a runbook for the given provider combination.
     pub fn generate(source_provider: &str, dest_provider: &str) -> ProviderRunbook {
-        let src = source_provider.to_lowercase().replace(" 365", "");
-        let dst = dest_provider.to_lowercase().replace(" 365", "");
+        let normalize = |provider: &str| {
+            provider
+                .to_lowercase()
+                .replace(['-', '_'], " ")
+                .replace("microsoft365", "microsoft")
+                .replace("office365", "microsoft")
+                .replace(" 365", "")
+        };
+        let src = normalize(source_provider);
+        let dst = normalize(dest_provider);
         let src_normalized = src.trim();
         let dst_normalized = dst.trim();
 
@@ -357,6 +365,12 @@ mod tests {
         let runbook = RunbookGenerator::generate("O365", "gmail");
         assert_eq!(runbook.provider, "Microsoft 365 → Gmail");
         assert!(!runbook.pre_migration_checklist.is_empty());
+    }
+
+    #[test]
+    fn normalizes_compact_microsoft365_provider_names() {
+        let runbook = RunbookGenerator::generate("gmail", "microsoft365");
+        assert_eq!(runbook.provider, "Gmail → Microsoft 365");
     }
 
     #[test]

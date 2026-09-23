@@ -32,19 +32,14 @@ mod message_verification;
 mod models;
 mod phases;
 mod policy;
-#[allow(dead_code)]
-mod post_migration_report;
-#[allow(dead_code)]
-mod pre_migration_report;
+pub(crate) mod post_migration_report;
+pub(crate) mod pre_migration_report;
 mod projects;
-#[allow(dead_code)]
-mod provider_intelligence;
-#[allow(dead_code)]
-mod provider_runbooks;
+pub(crate) mod provider_intelligence;
+pub(crate) mod provider_runbooks;
 mod queries;
 mod recovery;
-#[allow(dead_code)]
-mod recovery_dashboard;
+pub(crate) mod recovery_dashboard;
 mod reports;
 mod run_queries;
 mod runs;

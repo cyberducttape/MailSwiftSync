@@ -60,8 +60,8 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
-| **Generic error classification** | yes | yes | integration | generic-lab | src/controller/failure.rs: classifies auth/quota/capacity/transport/config/message/verification failures |
-| **Provider-specific classification** | yes | no | unit | no | Provider-intelligence subsystem exists, NOT wired to controller |
+| **Generic error classification** | yes | yes | integration | generic-lab | src/controller/failure.rs consumes shared provider-intelligence signals and maps them to durable controller classes |
+| **Provider-specific classification** | yes | partial | unit | no | Generic provider-intelligence patterns are now wired into controller retry classification; provider-context-specific rules remain pending |
 | **Automatic retry with backoff** | yes | yes | integration | generic-lab | Transient failures auto-retry with bounded backoff (src/controller/batch_work_item.rs); also uses imapsync's native retry |
 | **Rate limit detection** | yes | partial | unit | no | Pattern matching implemented for generic rate limits; provider-specific patterns NOT applied |
 | **Connection exhaustion handling** | yes | partial | unit | no | Configured per provider; generic connection failures retried; provider-specific limits NOT applied |
@@ -72,10 +72,10 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
-| **Pre-migration risk report** | yes | partial | unit | no | Code exists, generates warnings; NOT integrated into UI workflow |
-| **Post-migration exception report** | yes | no | unit | no | Data structures exist, NOT generated during migration |
-| **Provider-specific runbooks** | yes | no | unit | no | 6 provider pairs, NOT exposed in UI or CLI |
-| **Recovery guidance** (7 scenarios) | yes | no | unit | no | Guidance text defined, NOT surfaced to operators |
+| **Pre-migration risk report** | yes | partial | unit | no | Scale report is available through the headless `risk` command; automatic GUI/live gating remains pending |
+| **Post-migration exception report** | yes | partial | unit | no | Report is available through the headless `post-report` command; automatic generation from durable live evidence remains pending |
+| **Provider-specific runbooks** | yes | partial | unit | no | Runbooks are exposed through the headless `runbook` command; GUI workflow surfacing remains pending |
+| **Recovery guidance** (7 scenarios) | yes | partial | unit | no | Fail-closed guidance is exposed through the headless `recovery-guidance` command; dashboard/UI integration remains pending |
 | **Resume/recovery dashboard** | yes | no | unit | no | Data structures defined, NOT implemented in UI |
 
 ---
@@ -121,12 +121,12 @@ particular target.
 
 ## What's Partially Working
 
-⚠️ **Code exists but not wired to pipeline:**
+⚠️ **Code exists but not fully wired to pipeline:**
 - Message-level mismatch detection (algorithms work, not used operationally)
-- Provider error classification (patterns defined, not applied)
+- Provider-context-specific error classification (generic provider-intelligence mapping is now applied; provider-specific context remains pending)
 - Provider-specific throttling (not implemented; generic profile throttles are enforced)
-- Pre/post-migration reports (data structures exist, not generated)
-- Recovery guidance (text exists, not surfaced)
+- Pre/post-migration reports (available as explicit CLI exports, not automatically generated for every live run)
+- Recovery guidance (available as explicit CLI output, not yet a UI dashboard)
 
 ⚠️ **Unit-tested but not integration-tested:**
 - Native Dovecot engine execution (`doveadm sync`, native preflight, and native verification)

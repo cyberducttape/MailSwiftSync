@@ -83,6 +83,49 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
     {
         return class;
     }
+
+    // Keep the controller taxonomy as the durable contract, but delegate
+    // provider/IMAP signal recognition to the provider-intelligence module.
+    // This is deliberately provider-neutral here because a failure can be
+    // emitted by either endpoint; the richer provider context remains a
+    // future plan-level input. Previously this classifier duplicated only a
+    // subset of those patterns, leaving quota and connection-capacity signals
+    // on the generic/unknown path.
+    let normalized_error = error.to_ascii_lowercase();
+    // IMAP diagnostics often prefix a server response with a local operation
+    // label such as "authentication failed". Preserve the signal from the
+    // response itself when it clearly says the provider is busy.
+    if normalized_error.contains("server busy") {
+        return FailureClass::Capacity;
+    }
+    match crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error) {
+        crate::core::provider_intelligence::ProviderErrorType::RateLimited
+        | crate::core::provider_intelligence::ProviderErrorType::ConnectionCapacity => {
+            return FailureClass::Capacity;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::MailboxQuotaExceeded
+        | crate::core::provider_intelligence::ProviderErrorType::StorageQuotaExceeded => {
+            return FailureClass::Quota;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::Authentication => {
+            return FailureClass::Authentication;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::TemporaryProviderFailure => {
+            // Preserve the controller's established retry contract: an IMAP
+            // "server busy" response is capacity pressure and receives the
+            // longer backoff, while other temporary provider failures remain
+            // ordinary transport retries.
+            if normalized_error.contains("server busy") {
+                return FailureClass::Capacity;
+            }
+            return FailureClass::Transport;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::Network => {
+            return FailureClass::Transport;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::PermanentProviderFailure => {}
+    }
+
     let error = error.to_ascii_lowercase();
     if ["cancelled", "canceled", "operator cancellation"]
         .iter()
