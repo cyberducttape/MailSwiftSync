@@ -23,8 +23,8 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 | IMAP message transfer (imapsync) | yes | yes | integration | pending | Engine: imapsync 2.314 |
 | Native IMAP message transfer (Dovecot) | yes | yes | no | pending | Dedicated native-engine fixture added; no successful CI execution has yet been recorded |
 | Folder/label mapping | yes | yes | integration | pending | Integration coverage is through generic imapsync mapping/automap; no provider-specific namespace translation engine |
-| Message extraction (imapsync) | yes | no | unit | no | Parser exists and is tested locally; no production runner/controller call site |
-| Message extraction (Dovecot) | yes | no | unit | no | Parser exists and is tested locally; no production runner/controller call site |
+| Message extraction (imapsync) | yes | yes (TLS live path) | unit | pending | Post-transfer verifier enumerates selectable folders and fetches bounded UID, Message-ID, size, and date metadata; live-provider evidence is pending |
+| Message extraction (Dovecot) | yes | partial | unit | pending | Native Dovecot aggregate verification remains live; the generic IMAP metadata verifier currently services imapsync runs |
 
 ---
 
@@ -33,8 +33,8 @@ This manifest documents what MailSwiftSync actually does, not what it claims to 
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
 | **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Exercised by imapsync against local Dovecot server fixtures; native-Dovecot coverage pending |
-| **Message-level mismatch detection** | yes | no | unit+scenario | no | Folder-aware prototype with caller-supplied mappings; NOT wired to migration pipeline |
-| **Named message evidence levels** | yes | no | unit | no | MetadataMatched/StrongMetadataMatch are metadata-only; content verification is not implemented or used operationally |
+| **Message-level mismatch detection** | yes | yes (TLS imapsync path) | unit+scenario | pending | Folder-aware verifier is called after successful imapsync transfers; failures remain operator-reviewable and are never downgraded to aggregate success |
+| **Named message evidence levels** | yes | partial | unit | pending | MetadataMatched/StrongMetadataMatch are now produced by the live verifier; content hashing remains unimplemented and is not claimed |
 | **Checkpoint persistence** per message | no | no | none | no | NOT implemented; evidence persists per run, not per message |
 | **Crash recovery** | partial | partial | unit | no | Run-level recovery works; message-level recovery not wired |
 | **Exception acceptance workflow** | yes | yes | unit | no | UI accepts exceptions, stored durably |
@@ -153,11 +153,11 @@ particular target.
 
 ## Known Limitations
 
-1. **Message-level verification is a prototype**
-   - Fully implemented and tested in isolation
-   - Not wired to the actual migration pipeline
-   - Would require checkpoint persistence per message (not implemented)
-   - Would require UI integration (not implemented)
+1. **Message-level verification is metadata reconciliation, not content proof**
+   - Wired after successful TLS imapsync transfers for the full selectable-folder inventory
+   - Uses Message-ID, INTERNALDATE, and RFC822.SIZE; it does not hash message bodies
+   - Bounded fetch pages and account/message limits fail closed rather than silently producing partial evidence
+   - Mismatch rows are durably committed with terminal evidence and rendered in the operator verification report; per-message checkpoint persistence remains future work
 
 2. **Provider throttling is not enforced**
    - Configurations defined for Gmail, O365, Fastmail
@@ -186,8 +186,8 @@ particular target.
 - Early adoption with careful operator oversight
 
 **Not yet ready for:**
-- Unattended migrations (no adaptive throttling or recovery)
-- Large-scale deployments (message-level verification not wired)
+- Unattended migrations (no adaptive throttling or recovery approval)
+- Large-scale deployments without a qualified provider pilot (message metadata verification is bounded and requires live-provider validation)
 - Critical customer mailboxes (lacking live provider validation)
 - Automated migrations (recovery guidance not surfaced)
 
@@ -198,7 +198,8 @@ particular target.
 To reach GA 1.0, the following work is required:
 
 **Immediate (Before shipping v0.1):**
-- [ ] Wire message-level verification into migration pipeline
+- [x] Wire metadata-level message verification into the imapsync migration pipeline
+- [ ] Add content-fingerprint verification and durable per-message checkpoints
 - [ ] Implement message-level checkpoint persistence
 - [ ] Add recovery guidance to operator UI
 - [ ] Validate OAuth with real provider accounts

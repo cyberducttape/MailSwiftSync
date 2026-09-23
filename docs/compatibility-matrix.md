@@ -8,7 +8,7 @@ This matrix documents provider support and test coverage.
 - **Scenario tests** — Automated model/scenario coverage for match detection,
   recovery, and edge cases. These are not provider integration tests; current
   runnable counts and pass/fail results come from the CI test summary artifact.
-- **Message verification** — Aggregate verification is wired; message-level reconciliation is a prototype and is not part of live migrations
+- **Message verification** — Aggregate verification is wired for all engines; encrypted imapsync runs additionally perform bounded metadata-level reconciliation, while body-content proof remains out of scope
 
 A row is not considered generally supported (1.0 release) until it has a successful live pilot using disposable or fully backed-up mailboxes. Current status shows code-level support and is suitable for technical previews and early adoption.
 

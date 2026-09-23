@@ -116,6 +116,7 @@ pub(crate) enum Event {
         job_id: String,
         child_run_id: String,
         evidence: core::MailboxEvidence,
+        mismatches: Vec<core::MessageMismatch>,
     },
     Checkpoint {
         run_id: String,
@@ -123,6 +124,11 @@ pub(crate) enum Event {
         value: String,
     },
     Evidence(core::MailboxEvidence),
+    MessageMismatches {
+        run_id: String,
+        job_id: String,
+        mismatches: Vec<core::MessageMismatch>,
+    },
     VerificationFailed(String),
     Finished(Result<StreamOutcome, String>),
 }

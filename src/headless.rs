@@ -682,6 +682,12 @@ pub(crate) fn headless_batch_execute_selected(
     app.form.dry_run = true;
     app.bulk_mode = BatchExecutionMode::Preflight;
     app.start_bulk();
+    if app.receiver.is_none() {
+        return Err(format!(
+            "batch preflight was not admitted; refusing success: {}",
+            app.bulk_message
+        ));
+    }
     wait_for_headless_controller(&mut app)?;
     let project_id = app
         .bulk_project_id
@@ -699,6 +705,11 @@ pub(crate) fn headless_batch_execute_selected(
         .filter(|job_id| app.bulk_selected_ids.contains(*job_id))
         .cloned()
         .collect::<Vec<_>>();
+    if job_ids.is_empty() {
+        return Err(
+            "batch preflight resolved zero selected durable mailbox IDs; refusing success".into(),
+        );
+    }
     let states = app
         .store
         .batch_admission_states(&project_id, &job_ids)
@@ -724,6 +735,12 @@ pub(crate) fn headless_batch_execute_selected(
     app.bulk_mode = BatchExecutionMode::Live;
     app.bulk_live_confirmed = true;
     app.start_bulk();
+    if app.receiver.is_none() {
+        return Err(format!(
+            "batch live execution was not admitted; refusing success: {}",
+            app.bulk_message
+        ));
+    }
     wait_for_headless_controller(&mut app)?;
     let final_mailboxes = app
         .store
@@ -733,6 +750,12 @@ pub(crate) fn headless_batch_execute_selected(
         .iter()
         .filter(|mailbox| app.bulk_selected_ids.contains(&mailbox.id))
         .collect::<Vec<_>>();
+    if final_selected.is_empty() {
+        return Err(
+            "headless batch live run resolved zero selected durable mailbox states; refusing success"
+                .into(),
+        );
+    }
     if final_selected.len() != job_ids.len() {
         return Err(format!(
             "headless batch live run returned {} mailbox state(s) for {} selected mailbox(es); refusing success",

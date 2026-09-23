@@ -10,6 +10,7 @@ pub(crate) struct BatchChildCompletion<'a> {
     pub(crate) state: &'a str,
     pub(crate) detail: &'a str,
     pub(crate) evidence: Option<&'a core::MailboxEvidence>,
+    pub(crate) mismatches: Option<&'a Vec<core::MessageMismatch>>,
     pub(crate) checkpoint: Option<&'a str>,
 }
 
@@ -32,7 +33,7 @@ pub(crate) fn finish_batch_child(
     };
     let checkpoint = completion.checkpoint.filter(|_| run_status == "completed");
     if let Some(evidence) = completion.evidence {
-        store.finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
+        store.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
             &run.project_id,
             completion.job_id,
             completion.child_run_id,
@@ -40,6 +41,7 @@ pub(crate) fn finish_batch_child(
             &final_state,
             completion.detail,
             evidence,
+            completion.mismatches.map(Vec::as_slice).unwrap_or(&[]),
             preflight_plan,
             checkpoint,
         )

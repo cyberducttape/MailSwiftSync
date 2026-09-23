@@ -343,6 +343,7 @@ impl App {
         let migration_timeout =
             Duration::from_secs(self.form.profile.migration_timeout_hours * 60 * 60);
         spawn_single_run_worker(SingleRunWorkerSpec {
+            form: self.form.clone(),
             executable: exe,
             args,
             env: prepared_env,

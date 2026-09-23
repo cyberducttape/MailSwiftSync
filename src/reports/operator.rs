@@ -271,6 +271,9 @@ pub(crate) fn build_verification_report(
         "durable project/mailbox fallback (legacy run snapshot unavailable)"
     };
     let evidence_reference = evidence_digest(&run.id, &plan_snapshot, &evidence);
+    let (mismatches, mismatches_truncated) = store
+        .message_mismatches_for_run(job_id, &evidence_run_id, 500)
+        .map_err(|error| error.to_string())?;
     let mut report = format!(
         "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
         markdown_escape(&snapshot.project.name),
@@ -301,6 +304,34 @@ pub(crate) fn build_verification_report(
         optional_count(evidence.unmatched_messages),
         evidence.failed_messages,
     );
+    report.push_str("\n## Message-level mismatch details\n\n");
+    if mismatches.is_empty() {
+        report
+            .push_str("No durable message mismatch records were recorded for this evidence run.\n");
+    } else {
+        report.push_str("| Type | Source folder | Destination folder | Source Message-ID | Destination Message-ID | Source UID | Destination UID | Source size | Destination size |\n|---|---|---|---|---|---|---|---:|---:|\n");
+        for mismatch in &mismatches {
+            report.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                mismatch.mismatch_type.as_str(),
+                markdown_escape(mismatch.source_folder.as_deref().unwrap_or("—")),
+                markdown_escape(mismatch.destination_folder.as_deref().unwrap_or("—")),
+                markdown_escape(mismatch.source_message_id.as_deref().unwrap_or("—")),
+                markdown_escape(mismatch.dest_message_id.as_deref().unwrap_or("—")),
+                markdown_escape(mismatch.source_uid.as_deref().unwrap_or("—")),
+                markdown_escape(mismatch.dest_uid.as_deref().unwrap_or("—")),
+                mismatch
+                    .source_size_bytes
+                    .map_or_else(|| "—".into(), |value| value.to_string()),
+                mismatch
+                    .dest_size_bytes
+                    .map_or_else(|| "—".into(), |value| value.to_string()),
+            ));
+        }
+        if mismatches_truncated {
+            report.push_str("\nOnly the first 500 durable mismatch records are shown; query the ledger for the complete set.\n");
+        }
+    }
     if let Some(index) = report.find("- Run ID:") {
         report.insert_str(
             index,

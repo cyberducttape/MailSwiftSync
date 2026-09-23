@@ -34,6 +34,10 @@ mkdir -p "$workspace/config/mailswiftsync"
 chmod 0700 "$workspace" "$workspace/config" "$workspace/config/mailswiftsync"
 cat > "$workspace/fake-engine" <<EOF
 #!/usr/bin/env bash
+if [[ "\${1:-}" == "--version" ]]; then
+  printf '%s\n' 'fake-engine 1.0'
+  exit 0
+fi
 printf '%s' "\$\$" > "$workspace/engine.pid"
 trap '' TERM INT HUP
 sleep 300

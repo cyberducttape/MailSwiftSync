@@ -66,7 +66,7 @@ counts, exception counts, and aggregate missing/extra/modified message totals.
 
 ## Project status
 
-MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, and aggregate verification evidence are available today. Treat credential delivery, packaged installers, message-level reconciliation, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured, but native installers are not currently shipped.
+MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, and bounded metadata-level reconciliation for encrypted imapsync runs are available today. Treat credential delivery, packaged installers, content-level proof, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured, but native installers are not currently shipped.
 
 Stable today:
 
@@ -95,7 +95,7 @@ Experimental or planned:
   authorization flow, so the operator obtains that refresh token through the
   provider's own tooling).
 - Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
-- A scheduler/API that can survive the desktop closing, and message-level verification for live batches. (`supervise` provides a foreground, maintenance-window-aware batch controller; see below.)
+- A scheduler/API that can survive the desktop closing, and content-level verification for live batches. (`supervise` provides a foreground, maintenance-window-aware batch controller; encrypted imapsync runs now perform bounded Message-ID/size/date reconciliation; see below.)
 - UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
 - Published large-scale migration case studies and compatibility matrix.
 
@@ -207,12 +207,12 @@ The desktop runner does not persist passwords or OAuth access tokens. For imapsy
 
 Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches can be accepted as `Aggregate match`, but they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
 
-Current live verification reaches **Level 2 — Aggregate reconciliation** when
-folder/message/size totals are available; engine-confirmed imapsync output is
-identified separately. Level 3 message-identity sampling and Level 4 full
-message-level reconciliation are not yet wired into live migrations, so the
-reports never claim those levels. A successful process without usable evidence
-is Level 0 — process completed, verification incomplete.
+Current live verification reaches **Level 2 — Aggregate reconciliation** for
+native Dovecot runs and **metadata-level message reconciliation** for encrypted
+imapsync runs when the independent IMAP fetch succeeds. The latter compares
+Message-ID, INTERNALDATE, and RFC822.SIZE across every selectable folder; it is
+not body-content proof and is never reported as such. A successful process
+without usable evidence is Level 0 — process completed, verification incomplete.
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
 

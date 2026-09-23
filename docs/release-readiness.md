@@ -255,7 +255,7 @@ and require the corresponding integration run.
   provide a reliable query.
 - Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints remain engine resume tokens, not UIDVALIDITY-aware message proof.
 - Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
-- Independent message-level mismatch reporting and reconciliation; current reports are aggregate/engine evidence plus durable exception acceptance.
+- Independent metadata-level message mismatch reporting and reconciliation is now wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports; body-content hashing, per-message extraction staging, and live-provider qualification remain outstanding.
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is covered by `scripts/engine-storage-fault-smoke.sh`.
 - **Dovecot 2.4.x probe stall safeguard (resolved in the controller):** the LIST/discovery reader now retries transient socket `TimedOut`/`WouldBlock` reads only within its 60-second total deadline, instead of checking the deadline only after a successful read. A regression test covers a timeout during LIST followed by a valid response. Dovecot 2.4.x remains a compatibility-matrix qualification target until a disposable live pilot is recorded; the controller will now fail with bounded discovery evidence rather than hang for the external 300-second watchdog.
@@ -270,7 +270,7 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 1. Add provider OAuth/Modern Auth and a secret-safe remote execution path.
 2. Expand the compatibility matrix with provider-specific dry/live pilots,
    interruption recovery, and evidence exports.
-3. Add independent message-level reconciliation and UIDVALIDITY-aware evidence.
+3. Add body-content hashing, UIDVALIDITY-aware evidence, and per-message checkpoints.
 4. Add controller crash/restart, storage-fault, and cross-platform supervision
    tests against disposable servers.
 5. Publish signed native installers, upgrade/rollback guidance, and results

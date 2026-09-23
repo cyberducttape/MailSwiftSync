@@ -2,20 +2,25 @@
 
 ## Implementation Status & Priority
 
-**STATUS:** 🔴 **DESIGN COMPLETE; IMPLEMENTATION PENDING**  
+**STATUS:** 🟡 **METADATA RECONCILIATION AND MISMATCH PERSISTENCE WIRED; CONTENT/SCALE DESIGN PENDING**
 **Priority:** 🚨 **CRITICAL — Largest Product-Level Trust Gap**  
 **Last verified:** 2026-09-20
 
-This is the single largest blocker to production trust. Without message-level verification, operators cannot definitively prove that specific messages were successfully migrated. Aggregate counts can match while individual mailbox contents are corrupted, lost, or duplicated.
+The independent metadata verifier closes the selective-loss gap for encrypted
+imapsync runs, but it does not prove body-content equality. Aggregate counts can
+match while individual mailbox contents are corrupted or rewritten, so content
+hashing and durable per-message staging remain production trust work.
 
-> **Implementation boundary:** This document describes the target design, not
-> the current live product. The current verifier prototype must not compare
-> source and destination UIDs as identities. It supports Message-ID matching,
-> unique internal-date/size fallback matching, duplicate-ID detection, and
-> missing/extra reporting in isolated tests. Content hashes, folder-aware
-> matching, and live extraction/persistence are not implemented yet.
+> **Implementation boundary:** The current live imapsync path independently
+> fetches selectable folders and compares Message-ID, INTERNALDATE, and
+> RFC822.SIZE using the verifier below. It must not compare source and
+> destination UIDs as identities. Mismatch records now commit atomically with
+> terminal evidence and are visible in the operator verification report.
+> Content hashes and per-message extraction staging remain target-design work.
 
-**Current Limitation:** MailSwiftSync verifies "you have 1,000 messages" but NOT "these are the same 1,000 messages."
+**Current Limitation:** MailSwiftSync can now verify portable metadata for the
+same message population on encrypted imapsync runs, but it does not yet prove
+that the message bodies are byte-for-byte identical.
 
 **Impact When Implemented:** Enables operators to report:
 - ✅ 19,998 metadata matches (not content verified)
@@ -279,9 +284,10 @@ fingerprint stored as rows. Indexed SQL joins (or bounded batches over those
 indexes) should perform reconciliation and persist mismatches transactionally.
 
 This keeps process memory bounded and makes the evidence durable even if the
-report process is interrupted. Until that controller/database path is wired,
-message-level verification remains an engine/module capability rather than a
-production-scale feature claim.
+report process is interrupted. The current controller path wires bounded
+in-memory metadata reconciliation and durable mismatch persistence; the SQLite
+extraction staging design remains required before claiming full production-scale
+content verification for very large mailboxes.
 
 ## Phase 2: Implementation Plan
 

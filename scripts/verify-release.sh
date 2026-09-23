@@ -10,10 +10,24 @@ if ((${#checksums[@]} == 0)); then
   exit 1
 fi
 for manifest in "${checksums[@]}"; do
-  while read -r expected file; do
+  while read -r expected file extra; do
+    [[ -n "$expected" && -n "$file" && -z "${extra:-}" ]] || {
+      echo "Malformed checksum entry in $manifest" >&2
+      exit 1
+    }
+    [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || {
+      echo "Invalid SHA-256 digest in $manifest" >&2
+      exit 1
+    }
     case "$file" in
       "$release_dir"/*) file="${file#"$release_dir"/}" ;;
       ./*) file="${file#./}" ;;
+    esac
+    case "$file" in
+      ""|/*|..|../*|*/../*|*/..)
+        echo "Unsafe release path in $manifest: $file" >&2
+        exit 1
+        ;;
     esac
     path="$release_dir/$file"
     test -f "$path" || { echo "Missing release file: $path" >&2; exit 1; }

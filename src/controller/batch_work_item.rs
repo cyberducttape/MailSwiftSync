@@ -15,7 +15,8 @@ use crate::{
     process::ProcessLaunchLimiter,
     runner::{
         ResolvedImapsyncIdentity, RunContext, persist_engine_identity_before_launch,
-        run_dovecot_destination_preflight, run_dovecot_verification, run_streaming,
+        run_dovecot_destination_preflight, run_dovecot_verification, run_imap_message_verification,
+        run_streaming,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -374,17 +375,38 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         imapsync_output_profile,
                         diagnostic_logger: None,
                     })
-                    .map(|stream| {
+                    .and_then(|stream| {
                         if !job.form.dry_run
+                            && job.form.engine() == core::Engine::ImapSync
+                        {
+                            let (evidence, mismatches) = run_imap_message_verification(
+                                &job.form,
+                                &job_id,
+                                &child_run_id,
+                                &cancel,
+                            )
+                            .map_err(|error| {
+                                format!(
+                                    "migration completed; message-level verification failed: {error}"
+                                )
+                            })?;
+                            let _ = tx.send(Event::BatchEvidence {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                evidence,
+                                mismatches,
+                            });
+                        } else if !job.form.dry_run
                             && let Some(evidence) = stream.imapsync_evidence
                         {
                             let _ = tx.send(Event::BatchEvidence {
                                 job_id: job_id.clone(),
                                 child_run_id: child_run_id.clone(),
                                 evidence,
+                                mismatches: Vec::new(),
                             });
                         }
-                        stream.outcome
+                        Ok(stream.outcome)
                     });
                     let result = if result.is_ok()
                         && job.form.dry_run
@@ -441,6 +463,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                     job_id: job_id.clone(),
                                     child_run_id: child_run_id.clone(),
                                     evidence,
+                                    mismatches: Vec::new(),
                                 });
                                 outcome
                             })

@@ -107,7 +107,11 @@ pub(crate) fn admit_batch_launch(
     )?;
     let concurrency = fallback_profile.batch_concurrency.clamp(1, 16);
     validate_batch_throttle(fallback_profile, concurrency)?;
-    let mailboxes = jobs
+    // Durable project identity belongs to the complete queue, not to the
+    // selected retry subset.  The selected indices are positions in
+    // `source_jobs`; creating a subset project here would produce a shorter
+    // `job_ids` vector and make those two index spaces incompatible.
+    let mailboxes = source_jobs
         .iter()
         .map(|job| {
             let config = durable_batch_profile_config(&job.form.profile)?;
@@ -118,7 +122,7 @@ pub(crate) fn admit_batch_launch(
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let identity = batch_project_identity(&jobs, fallback_profile);
+    let identity = batch_project_identity(source_jobs, fallback_profile);
     let (project_id, job_ids) = prepare_batch_project(
         store,
         requested_project_id,
@@ -595,7 +599,7 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
 mod tests {
     use super::{
         BatchExecutionMode, BatchLaunchRequest, admit_batch_launch, batch_project_identity,
-        decode_persisted_batch_profile, prepare_selected_batch_jobs,
+        decode_persisted_batch_profile, prepare_batch_run, prepare_selected_batch_jobs,
     };
     use crate::{bulk_import::BulkJob, migration_plan::Form};
     use std::collections::HashSet;
@@ -612,6 +616,26 @@ mod tests {
                 .err()
                 .unwrap();
         assert!(error.contains("not ready for live execution"));
+    }
+
+    #[test]
+    fn targeted_batch_run_maps_original_queue_index_to_full_durable_queue() {
+        let selected_job = BulkJob {
+            label: "third mailbox".into(),
+            form: Form::default(),
+            state: "imported".into(),
+        };
+        let queue_job_ids = vec!["A1".into(), "B1".into(), "C1".into(), "D1".into()];
+        let prepared = prepare_batch_run(
+            &[selected_job],
+            &[2],
+            &queue_job_ids,
+            &[None, None, None, None],
+            BatchExecutionMode::Preflight,
+        )
+        .expect("targeted row should map into the full durable queue");
+
+        assert_eq!(prepared.selected_job_ids, vec!["C1"]);
     }
 
     #[test]

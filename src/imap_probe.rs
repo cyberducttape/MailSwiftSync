@@ -8,9 +8,11 @@ use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
+    sync::atomic::AtomicBool,
     time::{Duration, Instant},
 };
 
@@ -66,6 +68,16 @@ fn read_imap_tagged<S: Read>(
     response: &mut String,
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
+    read_imap_tagged_with_limit(stream, tag, response, buffer, 1_048_576)
+}
+
+fn read_imap_tagged_with_limit<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+    max_bytes: usize,
+) -> Result<(), String> {
     loop {
         let count = stream.read(buffer).map_err(|e| e.to_string())?;
         if count == 0 {
@@ -75,8 +87,10 @@ fn read_imap_tagged<S: Read>(
         if response.lines().any(|line| is_tagged_response(line, tag)) {
             return Ok(());
         }
-        if response.len() > 1_048_576 {
-            return Err("IMAP preflight response exceeded 1 MiB".into());
+        if response.len() > max_bytes {
+            return Err(format!(
+                "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
+            ));
         }
     }
 }
@@ -85,11 +99,44 @@ const MAX_IMAP_LIST_LINE_BYTES: usize = 64 * 1024;
 const MAX_IMAP_LIST_LITERAL_BYTES: usize = 1024 * 1024;
 const MAX_IMAP_LIST_MAILBOXES: usize = 100_000;
 const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
+const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
+const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
+
+pub(crate) struct MessageFetchBudget<'a> {
+    deadline: Instant,
+    cancel: &'a AtomicBool,
+}
+
+pub(crate) struct FetchedAccountMessages {
+    pub(crate) messages: crate::core::ExtractedMessages,
+    pub(crate) content_fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
+}
+
+impl<'a> MessageFetchBudget<'a> {
+    pub(crate) fn new(timeout: Duration, cancel: &'a AtomicBool) -> Self {
+        Self {
+            deadline: Instant::now() + timeout,
+            cancel,
+        }
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("message-level verification cancelled by operator".into());
+        }
+        if Instant::now() >= self.deadline {
+            return Err("message-level verification exceeded its execution deadline".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ListInventorySummary {
     mailbox_count: usize,
     special_use_mailboxes: usize,
+    selectable_mailbox_count: usize,
 }
 
 /// Consume an authenticated LIST response without retaining the complete
@@ -103,6 +150,24 @@ fn read_imap_list_response<S: Read>(
     stream: &mut S,
     tag: &str,
     buffer: &mut [u8; 4096],
+) -> Result<ListInventorySummary, String> {
+    read_imap_list_response_inner(stream, tag, buffer, None)
+}
+
+fn read_imap_list_response_with_mailboxes<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    buffer: &mut [u8; 4096],
+    mailboxes: &mut Vec<String>,
+) -> Result<ListInventorySummary, String> {
+    read_imap_list_response_inner(stream, tag, buffer, Some(mailboxes))
+}
+
+fn read_imap_list_response_inner<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    buffer: &mut [u8; 4096],
+    mut mailboxes: Option<&mut Vec<String>>,
 ) -> Result<ListInventorySummary, String> {
     let mut line = Vec::new();
     let started = Instant::now();
@@ -170,6 +235,14 @@ fn read_imap_list_response<S: Read>(
                 {
                     summary.special_use_mailboxes = summary.special_use_mailboxes.saturating_add(1);
                 }
+                if !crate::imap_protocol::list_has_attribute(text, r"\NOSELECT")
+                    && let Some(mailboxes) = mailboxes.as_deref_mut()
+                    && let Some(mailbox) = parse_list_mailbox_name(text)
+                {
+                    mailboxes.push(mailbox);
+                    summary.selectable_mailbox_count =
+                        summary.selectable_mailbox_count.saturating_add(1);
+                }
             }
             if is_tagged_response(text, tag) {
                 let status = text.split_whitespace().nth(1);
@@ -200,6 +273,36 @@ fn read_imap_list_response<S: Read>(
             line.clear();
         }
     }
+}
+
+/// Parse the final mailbox-name atom from a normal, non-literal LIST record.
+/// Literal mailbox names are intentionally not guessed: the caller receives
+/// the inventory count but message verification fails closed if a provider
+/// requires literal decoding that this bounded parser cannot retain.
+fn parse_list_mailbox_name(line: &str) -> Option<String> {
+    let mut tokens = Vec::new();
+    let mut chars = line.split_whitespace().peekable();
+    while let Some(token) = chars.next() {
+        if token.starts_with('"') {
+            let mut value = token.to_owned();
+            while !value.ends_with('"') {
+                value.push(' ');
+                value.push_str(chars.next()?);
+            }
+            let value = value
+                .strip_prefix('"')?
+                .strip_suffix('"')?
+                .replace("\\\\", "\\")
+                .replace("\\\"", "\"");
+            tokens.push(value);
+        } else {
+            tokens.push(token.to_owned());
+        }
+    }
+    tokens
+        .last()
+        .filter(|value| !value.starts_with('{'))
+        .cloned()
 }
 
 /// A socket read timeout is only a progress hint; it is not the same as the
@@ -646,6 +749,388 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
     Ok(())
 }
 
+/// Fetch bounded message metadata for one mailbox over an authenticated TLS
+/// IMAP session. This is deliberately independent of the transfer engine:
+/// imapsync output contains local UIDs and counters, not a portable message
+/// identity. A fresh source and destination read therefore provides the
+/// evidence used by the message reconciler instead of trusting engine prose.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fetch_tls_mailbox_messages(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+    budget: &MessageFetchBudget<'_>,
+    mailbox: &str,
+) -> Result<
+    (
+        crate::core::ExtractedMessages,
+        HashMap<crate::core::MailboxMessageKey, String>,
+    ),
+    String,
+> {
+    budget.check()?;
+    if transport == "plain" {
+        return Err(
+            "message-level verification requires TLS; refusing to inspect a plain IMAP session"
+                .into(),
+        );
+    }
+    if mailbox.trim().is_empty() {
+        return Err("message-level verification requires a non-empty mailbox".into());
+    }
+    let (stream, greeting) =
+        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
+    let (mut stream, _) =
+        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
+    let quoted_mailbox = imap_quote(mailbox)?;
+    let select = format!("v001 SELECT {quoted_mailbox}\r\n");
+    stream
+        .write_all(select.as_bytes())
+        .map_err(|error| format!("{host}: could not select mailbox: {error}"))?;
+    let mut response = String::new();
+    let mut buffer = [0; 4096];
+    read_imap_tagged_with_limit(&mut stream, "v001", &mut response, &mut buffer, 1_048_576)?;
+    if !imap_command_succeeded(&response, "v001") {
+        return Err(imap_command_failure(
+            &response,
+            "v001",
+            "SELECT mailbox for message verification",
+            host,
+        ));
+    }
+    let (exists, uidvalidity) = parse_selected_mailbox(&response, host, mailbox)?;
+    let mut messages = HashMap::new();
+    let mut content_fingerprints = HashMap::new();
+    let mut start = 1_u64;
+    let mut page = 0_u64;
+    while start <= exists {
+        budget.check()?;
+        let end = start
+            .saturating_add(MESSAGE_FETCH_PAGE_SIZE.saturating_sub(1))
+            .min(exists);
+        let tag = format!("v{:03}", page + 2);
+        let command = format!(
+            "{tag} UID FETCH {start}:{end} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)] BODY.PEEK[])\r\n"
+        );
+        stream
+            .write_all(command.as_bytes())
+            .map_err(|error| format!("{host}: could not fetch mailbox metadata: {error}"))?;
+        response.clear();
+        read_imap_tagged_with_limit(
+            &mut stream,
+            &tag,
+            &mut response,
+            &mut buffer,
+            MAX_MESSAGE_FETCH_RESPONSE_BYTES,
+        )?;
+        if !imap_command_succeeded(&response, &tag) {
+            return Err(imap_command_failure(
+                &response,
+                &tag,
+                "FETCH mailbox metadata",
+                host,
+            ));
+        }
+        let (page_messages, page_fingerprints) =
+            parse_message_fetch_response_with_fingerprints(&response, mailbox, uidvalidity)?;
+        for (key, message) in page_messages {
+            if messages.insert(key, message).is_some() {
+                return Err(format!(
+                    "{host}: mailbox {mailbox} returned a duplicate UID during message verification"
+                ));
+            }
+            if messages.len() > MAX_MESSAGE_FETCH_RECORDS {
+                return Err(format!(
+                    "{host}: mailbox {mailbox} exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
+                ));
+            }
+        }
+        for (key, fingerprint) in page_fingerprints {
+            if messages.contains_key(&key) {
+                // The key was inserted above; fingerprints are optional only
+                // for servers that return NIL BODY[] and otherwise must be
+                // one-to-one with the fetched message records.
+                content_fingerprints.insert(key, fingerprint);
+            }
+        }
+        start = end.saturating_add(1);
+        page = page.saturating_add(1);
+    }
+    let _ = stream.write_all(b"v999 LOGOUT\r\n");
+    Ok((messages, content_fingerprints))
+}
+
+/// Reconcile an entire IMAP account by enumerating selectable folders first.
+/// The account-level operation deliberately opens a fresh authenticated
+/// session per folder so one provider's SELECT/FETCH failure cannot leave a
+/// partially trusted connection state affecting the next folder. The folder
+/// count and every message record remain bounded by the LIST/FETCH limits.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fetch_tls_account_messages(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+    budget: &MessageFetchBudget<'_>,
+) -> Result<FetchedAccountMessages, String> {
+    budget.check()?;
+    if transport == "plain" {
+        return Err(
+            "message-level verification requires TLS; refusing to inspect a plain IMAP session"
+                .into(),
+        );
+    }
+    let (stream, greeting) =
+        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
+    let (mut stream, post_auth_response) =
+        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
+    stream
+        .write_all(authenticated_list_command(advertises_capability(
+            &post_auth_response,
+            "SPECIAL-USE",
+        )))
+        .map_err(|error| format!("{host}: could not enumerate folders: {error}"))?;
+    let mut buffer = [0; 4096];
+    let mut mailboxes = Vec::new();
+    let summary =
+        read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)?;
+    let _ = stream.write_all(b"a999 LOGOUT\r\n");
+    if summary.mailbox_count == 0 || mailboxes.is_empty() {
+        return Err(format!(
+            "{host}: folder inventory did not expose selectable mailbox names"
+        ));
+    }
+    if summary.selectable_mailbox_count != mailboxes.len() {
+        return Err(format!(
+            "{host}: folder inventory included literal or otherwise unparseable mailbox names"
+        ));
+    }
+    mailboxes.sort();
+    mailboxes.dedup();
+    let mut all_messages = HashMap::new();
+    let mut all_fingerprints = HashMap::new();
+    for mailbox in mailboxes {
+        budget.check()?;
+        let (folder_messages, folder_fingerprints) = fetch_tls_mailbox_messages(
+            host,
+            user,
+            credential,
+            auth_method,
+            transport,
+            ca_bundle,
+            certificate_pin_sha256,
+            budget,
+            &mailbox,
+        )?;
+        for (key, message) in folder_messages {
+            if all_messages.insert(key, message).is_some() {
+                return Err(format!(
+                    "{host}: folder inventory produced duplicate message identity"
+                ));
+            }
+            if all_messages.len() > MAX_MESSAGE_FETCH_RECORDS {
+                return Err(format!(
+                    "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
+                ));
+            }
+        }
+        all_fingerprints.extend(folder_fingerprints);
+    }
+    Ok(FetchedAccountMessages {
+        messages: all_messages,
+        content_fingerprints: all_fingerprints,
+    })
+}
+
+fn parse_selected_mailbox(
+    response: &str,
+    host: &str,
+    mailbox: &str,
+) -> Result<(u64, Option<u64>), String> {
+    let mut exists = None;
+    let mut uidvalidity = None;
+    for line in response.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() >= 3 && fields[0] == "*" && fields[2].eq_ignore_ascii_case("EXISTS") {
+            exists = fields[1].parse::<u64>().ok();
+        }
+        if let Some(index) = fields.iter().position(|field| {
+            field
+                .trim_matches(['[', ']'])
+                .eq_ignore_ascii_case("UIDVALIDITY")
+        }) && let Some(value) = fields.get(index + 1)
+        {
+            uidvalidity = value.trim_matches(['[', ']']).parse::<u64>().ok();
+        }
+    }
+    let exists = exists.ok_or_else(|| {
+        format!("{host}: SELECT {mailbox} did not return an untagged EXISTS count")
+    })?;
+    Ok((exists, uidvalidity))
+}
+
+#[allow(dead_code)]
+fn parse_message_fetch_response(
+    response: &str,
+    mailbox: &str,
+    uidvalidity: Option<u64>,
+) -> Result<crate::core::ExtractedMessages, String> {
+    Ok(parse_message_fetch_response_with_fingerprints(response, mailbox, uidvalidity)?.0)
+}
+
+fn parse_message_fetch_response_with_fingerprints(
+    response: &str,
+    mailbox: &str,
+    uidvalidity: Option<u64>,
+) -> Result<
+    (
+        crate::core::ExtractedMessages,
+        HashMap<crate::core::MailboxMessageKey, String>,
+    ),
+    String,
+> {
+    let starts = fetch_record_starts(response);
+    let mut messages = HashMap::new();
+    let mut content_fingerprints = HashMap::new();
+    for (index, start) in starts.iter().copied().enumerate() {
+        let end = starts.get(index + 1).copied().unwrap_or(response.len());
+        let record = &response[start..end];
+        let first_line_end = record
+            .find("\r\n")
+            .ok_or_else(|| "IMAP FETCH record had no line terminator".to_owned())?;
+        let first_line = &record[..first_line_end];
+        let uid = fetch_number(first_line, "UID")
+            .ok_or_else(|| "IMAP FETCH record omitted UID".to_owned())?;
+        let size_bytes = fetch_number(first_line, "RFC822.SIZE");
+        let internal_date = fetch_quoted(first_line, "INTERNALDATE");
+        let message_id = fetch_message_id(record).filter(|value| !value.is_empty());
+        let uid = uid.to_string();
+        let key = match uidvalidity {
+            Some(value) => {
+                crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
+            }
+            None => crate::core::MailboxMessageKey::new(mailbox, uid.clone()),
+        };
+        messages.insert(
+            key.clone(),
+            crate::core::ExtractedMessage {
+                message_id,
+                uid: Some(uid),
+                size_bytes,
+                internal_date,
+            },
+        );
+        if let Some(fingerprint) = fetch_content_fingerprint(record) {
+            content_fingerprints.insert(key, fingerprint);
+        }
+    }
+    Ok((messages, content_fingerprints))
+}
+
+/// Locate untagged FETCH record boundaries while skipping every IMAP literal.
+/// A raw message body is arbitrary octets and can itself contain lines that
+/// look like `* n FETCH`; treating those bytes as protocol framing would
+/// silently hash or report the wrong message.
+fn fetch_record_starts(response: &str) -> Vec<usize> {
+    let bytes = response.as_bytes();
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let Some(line_end) = response[offset..].find("\r\n") else {
+            break;
+        };
+        let absolute_end = offset + line_end;
+        let line = &response[offset..absolute_end];
+        if (offset == 0 || bytes[offset - 1] == b'\n')
+            && line.starts_with("* ")
+            && line.contains(" FETCH (")
+        {
+            starts.push(offset);
+        }
+        let next_line = absolute_end + 2;
+        if let Some(literal_size) = imap_literal_size(line) {
+            offset = next_line.saturating_add(literal_size);
+        } else {
+            offset = next_line;
+        }
+    }
+    starts
+}
+
+fn imap_literal_size(line: &str) -> Option<usize> {
+    let close = line.strip_suffix('}')?;
+    let open = close.rfind('{')?;
+    close[open + 1..].parse::<usize>().ok()
+}
+
+fn fetch_content_fingerprint(record: &str) -> Option<String> {
+    let marker_start = record.find("BODY[]")? + "BODY[]".len();
+    let literal = record[marker_start..].trim_start();
+    if literal.starts_with("NIL") {
+        return None;
+    }
+    let open = literal.find('{')?;
+    let close = literal[open..].find("}\r\n")? + open;
+    let size = literal[open + 1..close].parse::<usize>().ok()?;
+    let body_offset = marker_start + record[marker_start..].find("\r\n")? + 2;
+    let body = record
+        .as_bytes()
+        .get(body_offset..body_offset.checked_add(size)?)?;
+    Some(format!("{:x}", Sha256::digest(body)))
+}
+
+fn fetch_number(line: &str, field: &str) -> Option<u64> {
+    let start = line.find(field)? + field.len();
+    let value = line[start..].trim_start();
+    let end = value
+        .find(|character: char| !character.is_ascii_digit())
+        .unwrap_or(value.len());
+    (end > 0).then(|| value[..end].parse().ok()).flatten()
+}
+
+fn fetch_quoted(line: &str, field: &str) -> Option<String> {
+    let start = line.find(field)? + field.len();
+    let value = line[start..].trim_start().strip_prefix('"')?;
+    let end = value.find('"')?;
+    Some(value[..end].to_owned())
+}
+
+fn fetch_message_id(record: &str) -> Option<String> {
+    let marker = "BODY[HEADER.FIELDS (MESSAGE-ID)]";
+    let marker_start = record.find(marker)? + marker.len();
+    let literal = record[marker_start..].trim_start();
+    if literal.starts_with("NIL") {
+        return None;
+    }
+    let literal_size_end = literal.find("}\r\n")?;
+    let literal_size = literal.strip_prefix('{')?[..literal_size_end - 1]
+        .parse::<usize>()
+        .ok()?;
+    let body_start = marker_start + record[marker_start..].find("\r\n")? + 2;
+    let body = record
+        .as_bytes()
+        .get(body_start..body_start + literal_size)?;
+    let body = String::from_utf8_lossy(body);
+    body.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim().eq_ignore_ascii_case("message-id").then(|| {
+            value
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_owned()
+        })
+    })
+}
+
 pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
     !form.dry_run
         && form.engine() == core::Engine::ImapSync
@@ -655,8 +1140,14 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{authenticated_list_command, read_imap_list_response};
+    use super::{
+        MessageFetchBudget, authenticated_list_command, parse_list_mailbox_name,
+        parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
+        read_imap_list_response, read_imap_list_response_with_mailboxes,
+    };
     use std::io::{self, Cursor, Read};
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
 
     struct TimeoutThenData {
         timed_out: bool,
@@ -754,5 +1245,82 @@ mod tests {
                 .unwrap_err()
                 .contains("literal exceeded")
         );
+    }
+
+    #[test]
+    fn list_mailbox_parser_preserves_quoted_spaces_and_escaped_names() {
+        assert_eq!(
+            parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "Sent Items""#),
+            Some("Sent Items".into())
+        );
+        assert_eq!(
+            parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "a\\b\"c""#),
+            Some("a\\b\"c".into())
+        );
+    }
+
+    #[test]
+    fn list_parser_collects_selectable_mailboxes_without_retaining_default_inventory() {
+        let response = b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\n\
+                       * LIST (\\Noselect) \"/\" \"Archive\"\r\n\
+                       a005 OK LIST completed\r\n";
+        let mut stream = Cursor::new(response);
+        let mut buffer = [0_u8; 4096];
+        let mut mailboxes = Vec::new();
+        let summary = read_imap_list_response_with_mailboxes(
+            &mut stream,
+            "a005",
+            &mut buffer,
+            &mut mailboxes,
+        )
+        .unwrap();
+        assert_eq!(summary.mailbox_count, 2);
+        assert_eq!(summary.selectable_mailbox_count, 1);
+        assert_eq!(mailboxes, ["INBOX"]);
+    }
+
+    #[test]
+    fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
+        let response = "* 1 FETCH (UID 5 RFC822.SIZE 100 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <a@example.com>\r\n\r\n)\r\n\
+                       * 2 FETCH (UID 9 RFC822.SIZE 200 INTERNALDATE \"02-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] NIL)\r\n\
+                       v002 OK FETCH completed\r\n";
+        let messages = parse_message_fetch_response(response, "INBOX", Some(77)).unwrap();
+        assert_eq!(messages.len(), 2);
+        let first = &messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "5")];
+        assert_eq!(first.message_id.as_deref(), Some("<a@example.com>"));
+        assert_eq!(first.size_bytes, Some(100));
+        assert_eq!(
+            first.internal_date.as_deref(),
+            Some("01-Jan-2024 00:00:00 +0000")
+        );
+        let second = &messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "9")];
+        assert_eq!(second.message_id, None);
+    }
+
+    #[test]
+    fn fetch_parser_hashes_bounded_full_message_literals() {
+        let response = concat!(
+            "* 1 FETCH (UID 9 RFC822.SIZE 5 INTERNALDATE \"01-Jan-2026 00:00:00 +0000\" ",
+            "BODY[HEADER.FIELDS (MESSAGE-ID)] {21}\r\n",
+            "Message-ID: <a@b>\r\n\r\n",
+            "BODY[] {5}\r\n",
+            "abcde\r\n)\r\n",
+            "v002 OK FETCH completed\r\n"
+        );
+        let (messages, fingerprints) =
+            parse_message_fetch_response_with_fingerprints(response, "INBOX", Some(77)).unwrap();
+        let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "9");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            fingerprints[&key],
+            "36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c"
+        );
+    }
+
+    #[test]
+    fn message_fetch_budget_honors_operator_cancellation() {
+        let cancelled = AtomicBool::new(true);
+        let budget = MessageFetchBudget::new(Duration::from_secs(60), &cancelled);
+        assert!(budget.check().unwrap_err().contains("cancelled"));
     }
 }

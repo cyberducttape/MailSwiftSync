@@ -1,6 +1,63 @@
 use super::*;
 
 impl StateStore {
+    /// Load a bounded operator-facing mismatch page for one evidence run.
+    /// The boolean indicates that additional durable rows exist beyond the
+    /// returned page, so reports cannot imply that a truncated view is
+    /// complete.
+    pub(crate) fn message_mismatches_for_run(
+        &self,
+        job_id: &str,
+        run_id: &str,
+        limit: usize,
+    ) -> rusqlite::Result<(Vec<MessageMismatch>, bool)> {
+        let limit = limit.clamp(1, 10_000);
+        let mut statement = self.connection.prepare(
+            "SELECT id,mismatch_type,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_fingerprint,destination_fingerprint FROM message_mismatches WHERE job_id=?1 AND run_id=?2 ORDER BY recorded_at,id LIMIT ?3",
+        )?;
+        let mut rows = statement.query(params![job_id, run_id, (limit + 1) as i64])?;
+        let mut mismatches = Vec::with_capacity(limit.min(256));
+        while let Some(row) = rows.next()? {
+            let mismatch_type: String = row.get(1)?;
+            let Some(mismatch_type) = MismatchType::parse(&mismatch_type) else {
+                return Err(rusqlite::Error::InvalidQuery);
+            };
+            mismatches.push(MessageMismatch {
+                id: row.get(0)?,
+                job_id: job_id.to_owned(),
+                run_id: run_id.to_owned(),
+                mismatch_type,
+                source_folder: row.get(2)?,
+                destination_folder: row.get(3)?,
+                source_uidvalidity: row
+                    .get::<_, Option<i64>>(4)?
+                    .and_then(|value| value.try_into().ok()),
+                destination_uidvalidity: row
+                    .get::<_, Option<i64>>(5)?
+                    .and_then(|value| value.try_into().ok()),
+                source_uid: row.get(6)?,
+                dest_uid: row.get(7)?,
+                source_message_id: row.get(8)?,
+                dest_message_id: row.get(9)?,
+                source_size_bytes: row
+                    .get::<_, Option<i64>>(10)?
+                    .and_then(|value| value.try_into().ok()),
+                dest_size_bytes: row
+                    .get::<_, Option<i64>>(11)?
+                    .and_then(|value| value.try_into().ok()),
+                source_date: row.get(12)?,
+                dest_date: row.get(13)?,
+                source_fingerprint: row.get(14)?,
+                destination_fingerprint: row.get(15)?,
+            });
+        }
+        let truncated = mismatches.len() > limit;
+        if truncated {
+            mismatches.truncate(limit);
+        }
+        Ok((mismatches, truncated))
+    }
+
     // Legacy evidence insertion is retained only as a fixture helper for
     // historical-state tests. Production callers must use the run-owned
     // terminal methods above, which atomically bind evidence to the run and

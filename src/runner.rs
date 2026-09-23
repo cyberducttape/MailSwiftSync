@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     io::{Read, Write},
     process::{Command, Stdio},
     sync::{
@@ -57,6 +58,97 @@ use crate::{
 pub(crate) struct StreamResult {
     pub(crate) outcome: StreamOutcome,
     pub(crate) imapsync_evidence: Option<core::MailboxEvidence>,
+}
+
+/// Perform independent, folder-aware IMAP reconciliation after a successful
+/// imapsync transfer. Engine counters remain useful as a fallback, but they
+/// cannot prove portable message identity; this adapter fetches Message-ID,
+/// INTERNALDATE, and RFC822.SIZE from both accounts and feeds the bounded
+/// records into the shared verifier.
+pub(crate) fn run_imap_message_verification(
+    form: &crate::Form,
+    job_id: &str,
+    run_id: &str,
+    cancel: &AtomicBool,
+) -> Result<(core::MailboxEvidence, Vec<core::MessageMismatch>), String> {
+    let budget = crate::imap_probe::MessageFetchBudget::new(
+        Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
+        cancel,
+    );
+    let source_host = crate::imap_probe::endpoint_for_probe(
+        &form.profile.source_host,
+        &form.profile.source_port,
+    )?;
+    let destination_host = crate::imap_probe::endpoint_for_probe(
+        &form.profile.destination_host,
+        &form.profile.destination_port,
+    )?;
+    let source = crate::imap_probe::fetch_tls_account_messages(
+        &source_host,
+        &form.profile.source_user,
+        form.source_password.as_str(),
+        &form.profile.source_auth,
+        &form.profile.source_tls,
+        &form.profile.source_ca_bundle,
+        &form.profile.source_certificate_pin_sha256,
+        &budget,
+    )?;
+    let destination = crate::imap_probe::fetch_tls_account_messages(
+        &destination_host,
+        &form.profile.destination_user,
+        form.destination_password.as_str(),
+        &form.profile.destination_auth,
+        crate::effective_destination_tls(&form.profile.destination_tls),
+        &form.profile.destination_ca_bundle,
+        &form.profile.destination_certificate_pin_sha256,
+        &budget,
+    )?;
+    let (mismatches, summary) =
+        core::MessageVerification::detect_mismatches_with_content_fingerprints(
+            job_id,
+            run_id,
+            &source.messages,
+            &destination.messages,
+            &source.content_fingerprints,
+            &destination.content_fingerprints,
+        )?;
+    let source_bytes = source
+        .messages
+        .values()
+        .filter_map(|message| message.size_bytes)
+        .fold(0_u64, u64::saturating_add);
+    let destination_bytes = destination
+        .messages
+        .values()
+        .filter_map(|message| message.size_bytes)
+        .fold(0_u64, u64::saturating_add);
+    let source_folders = source
+        .messages
+        .keys()
+        .map(|key| key.mailbox.as_str())
+        .collect::<HashSet<_>>()
+        .len() as u64;
+    let destination_folders = destination
+        .messages
+        .keys()
+        .map(|key| key.mailbox.as_str())
+        .collect::<HashSet<_>>()
+        .len() as u64;
+    let evidence = core::MailboxEvidence {
+        source_messages: summary.total_source,
+        destination_messages: summary.total_destination,
+        source_bytes,
+        destination_bytes,
+        unmatched_messages: Some(summary.probable_matches),
+        failed_messages: 0,
+        source_folders,
+        destination_folders,
+        authoritative: false,
+        missing_messages: summary.missing_count,
+        extra_messages: summary.extra_count.saturating_add(summary.duplicated_count),
+        modified_messages: summary.changed_count,
+    };
+    Ok((evidence, mismatches))
 }
 
 /// Inputs for one externally executed migration process. Keeping these
