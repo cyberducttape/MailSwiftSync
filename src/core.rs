@@ -559,6 +559,10 @@ mod tests {
         };
         assert_eq!(evidence.confidence_percent(), 0);
         assert_eq!(evidence.evidence_level(), "Aggregate mismatch");
+        assert_eq!(
+            evidence.verification_level(),
+            "Level 2 — Aggregate reconciliation"
+        );
         assert!(!evidence.is_exact_match());
     }
 
@@ -612,6 +616,10 @@ mod tests {
         };
         assert_eq!(evidence.confidence_percent(), 0);
         assert_eq!(evidence.evidence_level(), "Incomplete evidence");
+        assert_eq!(
+            evidence.verification_level(),
+            "Level 0 — Process completed, verification incomplete"
+        );
     }
 
     #[test]

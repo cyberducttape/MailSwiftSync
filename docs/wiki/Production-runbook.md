@@ -24,7 +24,7 @@ independent supervisor.
 ## Before the window
 
 - Use one operator session on a locked-down host. Do not run a second MailSwiftSync instance against the same workspace; if the instance-lock message appears, close the existing owner and do not delete the lock file.
-- Confirm `imapsync`, `doveadm`, and `ssh` are installed at the expected versions and paths. Prefer local Dovecot execution or imapsync over remote Dovecot when destination administration is unavailable.
+- Confirm `imapsync` and local `doveadm` are installed at the expected versions and paths. Remote Dovecot execution is unavailable until a secret-safe broker exists.
 - Confirm outbound access only to the source, destination, and any approved SSH target. Check NTP, disk space, and the configured process timeout for the actual migration window.
 - Keep plain source transport disabled. Remote Dovecot execution is unavailable; use local doveadm or imapsync.
 

@@ -120,6 +120,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                     Some(serde_json::json!({
                         "run_id": run_id,
                         "scope": value.evidence_scope().label(),
+                        "verification_level": value.verification_level(),
                         "evidence_level": value.evidence_level(),
                         "reason": value.verification_reason(),
                         "evidence_digest": evidence_digest(&run_id, &plan_snapshot, &value),

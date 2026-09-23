@@ -149,7 +149,7 @@ transfer-only and review it manually; it is not a verified migration.
 
 Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
 
-MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its authenticated IMAP readiness probe. The probe validates certificates, authenticates, refreshes capabilities after authentication, and inspects namespace/folder listing; implicit IMAPS and STARTTLS use the same fresh encrypted live-authentication path. It does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires `doveadm` on the destination host (or an operator-managed wrapper/remote shell); the desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a configurable 1–720 hour safety timeout plus an operator cancellation control. Plain plans remain limited to the selected engine's preflight and require explicit cleartext acknowledgement.
+MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its authenticated IMAP readiness probe. The probe validates certificates, authenticates, refreshes capabilities after authentication, and inspects namespace/folder listing; implicit IMAPS and STARTTLS use the same fresh encrypted live-authentication path. It does **not** require OpenSSL development headers or `pkg-config` to build. Dovecot-native execution requires local `doveadm` on the destination host; remote Dovecot execution is unavailable until a secret-safe broker is implemented. The desktop does not install or configure Dovecot for you. Source port and source TLS mode are explicit plan fields, and long-running commands have a configurable 1–720 hour safety timeout plus an operator cancellation control. Plain plans remain limited to the selected engine's preflight and require explicit cleartext acknowledgement.
 
 ### 2. Download or build MailSwiftSync
 
@@ -206,6 +206,13 @@ The desktop runner does not persist passwords or OAuth access tokens. For imapsy
 ## Verification
 
 Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches can be accepted as `Aggregate match`, but they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
+
+Current live verification reaches **Level 2 — Aggregate reconciliation** when
+folder/message/size totals are available; engine-confirmed imapsync output is
+identified separately. Level 3 message-identity sampling and Level 4 full
+message-level reconciliation are not yet wired into live migrations, so the
+reports never claim those levels. A successful process without usable evidence
+is Level 0 — process completed, verification incomplete.
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
 
