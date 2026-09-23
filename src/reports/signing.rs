@@ -6,19 +6,50 @@ use crate::{
     },
 };
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
-use std::path::Path;
+use std::{io::Read, path::Path};
 
 #[cfg(unix)]
-fn require_private_key_permissions(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(path)
-        .map_err(|error| format!("could not inspect signing key: {error}"))?
-        .permissions()
-        .mode();
-    if mode & 0o077 != 0 {
-        return Err("signing key must be owner-only (0600 or stricter)".into());
+fn read_private_signing_key(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    const MAX_SIGNING_KEY_BYTES: u64 = 64 * 1024;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| format!("could not open signing key: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("could not inspect signing key: {error}"))?;
+    if !metadata.is_file() {
+        return Err("signing key must be a regular file".into());
     }
-    Ok(())
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err("signing key must be owned by the effective user".into());
+    }
+    if metadata.permissions().mode() & 0o777 != 0o600 {
+        return Err("signing key must have mode 0600".into());
+    }
+    if metadata.nlink() != 1 {
+        return Err("signing key must not be hard-linked".into());
+    }
+    if metadata.len() > MAX_SIGNING_KEY_BYTES {
+        return Err(format!(
+            "signing key exceeds the {MAX_SIGNING_KEY_BYTES}-byte limit"
+        ));
+    }
+    let mut key_bytes = zeroize::Zeroizing::new(Vec::with_capacity(
+        metadata.len().min(MAX_SIGNING_KEY_BYTES) as usize,
+    ));
+    file.by_ref()
+        .take(MAX_SIGNING_KEY_BYTES + 1)
+        .read_to_end(&mut key_bytes)
+        .map_err(|error| format!("could not read signing key: {error}"))?;
+    if key_bytes.len() as u64 > MAX_SIGNING_KEY_BYTES {
+        return Err(format!(
+            "signing key exceeds the {MAX_SIGNING_KEY_BYTES}-byte limit"
+        ));
+    }
+    Ok(key_bytes)
 }
 
 #[cfg(windows)]
@@ -170,11 +201,16 @@ pub(crate) fn sign_file(
     signing_key_path: &Path,
     key_id: &str,
 ) -> Result<String, String> {
-    require_private_key_permissions(signing_key_path)?;
-    let key_bytes = zeroize::Zeroizing::new(
-        std::fs::read(signing_key_path)
-            .map_err(|error| format!("could not read signing key: {error}"))?,
-    );
+    #[cfg(unix)]
+    let key_bytes = read_private_signing_key(signing_key_path)?;
+    #[cfg(not(unix))]
+    let key_bytes = {
+        require_private_key_permissions(signing_key_path)?;
+        zeroize::Zeroizing::new(
+            std::fs::read(signing_key_path)
+                .map_err(|error| format!("could not read signing key: {error}"))?,
+        )
+    };
     let key_pair = Ed25519KeyPair::from_pkcs8(&key_bytes)
         .map_err(|_| "signing key is not a supported Ed25519 PKCS#8 key".to_owned())?;
     let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
@@ -302,4 +338,45 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
     Ok(format!(
         "Internal checksum verified: {actual}; artifact authenticity is not established; a modified report can be re-digested. This validates {format} corruption resistance only, not signer identity or independent migration completion"
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::read_private_signing_key;
+    use std::{
+        fs,
+        os::unix::fs::{PermissionsExt, symlink},
+    };
+
+    #[test]
+    fn signing_key_reader_rejects_symlinks_before_reading() {
+        let suffix = uuid::Uuid::new_v4();
+        let target = std::env::temp_dir().join(format!("mailswiftsync-signing-target-{suffix}"));
+        let link = std::env::temp_dir().join(format!("mailswiftsync-signing-link-{suffix}"));
+        fs::write(&target, b"not-a-key").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&target, &link).unwrap();
+
+        let error = read_private_signing_key(&link).unwrap_err();
+        assert!(error.contains("open signing key"));
+
+        fs::remove_file(link).unwrap();
+        fs::remove_file(target).unwrap();
+    }
+
+    #[test]
+    fn signing_key_reader_rejects_hard_links() {
+        let suffix = uuid::Uuid::new_v4();
+        let target = std::env::temp_dir().join(format!("mailswiftsync-signing-target-{suffix}"));
+        let link = std::env::temp_dir().join(format!("mailswiftsync-signing-hardlink-{suffix}"));
+        fs::write(&target, b"not-a-key").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::hard_link(&target, &link).unwrap();
+
+        let error = read_private_signing_key(&target).unwrap_err();
+        assert!(error.contains("hard-linked"));
+
+        fs::remove_file(link).unwrap();
+        fs::remove_file(target).unwrap();
+    }
 }
