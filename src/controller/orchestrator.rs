@@ -4,7 +4,7 @@ use crate::{
     runner::{
         RunContext, persist_engine_identity_before_launch, probe_engine_version,
         resolve_imapsync_identity, run_dovecot_destination_preflight, run_dovecot_verification,
-        run_streaming,
+        run_streaming, send_reliable_event,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -143,11 +143,11 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                         &job_id,
                     )
                     .map(|evidence| {
-                        let _ = tx.send(Event::Evidence(evidence));
+                        let _ = send_reliable_event(&tx, Event::Evidence(evidence));
                         stream
                     })
                     .map_err(|error| {
-                        let _ = tx.send(Event::VerificationFailed(error.clone()));
+                        let _ = send_reliable_event(&tx, Event::VerificationFailed(error.clone()));
                         format!("migration completed; Dovecot verification failed: {error}")
                     })
                 });
@@ -155,14 +155,17 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             if let Ok(stream) = &result
                 && let Some(evidence) = stream.imapsync_evidence.clone()
             {
-                let _ = tx.send(Event::Evidence(evidence));
+                let _ = send_reliable_event(&tx, Event::Evidence(evidence));
             }
-            let _ = tx.send(Event::Finished(result.map(|stream| stream.outcome)));
+            let _ = send_reliable_event(&tx, Event::Finished(result.map(|stream| stream.outcome)));
         }));
         if worker_result.is_err() {
-            let _ = tx.send(Event::Finished(Err(
-                "single-run worker panicked; migration requires operator review".into(),
-            )));
+            let _ = send_reliable_event(
+                &tx,
+                Event::Finished(Err(
+                    "single-run worker panicked; migration requires operator review".into(),
+                )),
+            );
         }
     });
 }

@@ -11,7 +11,35 @@ use std::{
 };
 
 const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+const RELIABLE_EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Reliable lifecycle events must not wait forever behind lossy diagnostic
+/// output. A timeout is deliberately fail-closed: the caller reports the
+/// durability failure and cleanup can proceed instead of retaining secrets or
+/// a child-process guard indefinitely.
+pub(crate) fn send_reliable_event(
+    tx: &mpsc::SyncSender<crate::Event>,
+    mut event: crate::Event,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + RELIABLE_EVENT_SEND_TIMEOUT;
+    loop {
+        match tx.try_send(event) {
+            Ok(()) => return Ok(()),
+            Err(mpsc::TrySendError::Full(returned)) => {
+                event = returned;
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err("reliable lifecycle event queue remained full".into());
+                }
+                thread::sleep(remaining.min(Duration::from_millis(10)));
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err("reliable lifecycle event channel disconnected".into());
+            }
+        }
+    }
+}
 
 use crate::{
     BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES,
@@ -344,13 +372,15 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     // The process identity is only valid for this attempt. Clear it before
     // returning so a transient retry (or a crash during its backoff) cannot
     // leave an exited PID looking like an active orphan.
-    let process_end_error = tx
-        .send(Event::ProcessEnded {
+    let process_end_error = send_reliable_event(
+        tx,
+        Event::ProcessEnded {
             run_id: run_id.to_owned(),
             job_id: job_id.to_owned(),
-        })
-        .err()
-        .map(|_| "process event channel disconnected while clearing process identity".to_owned());
+        },
+    )
+    .err()
+    .map(|error| format!("could not clear durable process identity: {error}"));
     match result {
         Ok(outcome) if reader_error.is_none() => {
             if let Some(error) = process_end_error {
@@ -365,14 +395,14 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 .map_err(|_| "Dovecot checkpoint collector was poisoned".to_owned())?
                 .clone();
             if let Some(value) = &checkpoint {
-                tx.send(Event::Checkpoint {
-                    run_id: run_id.to_owned(),
-                    job_id: job_id.to_owned(),
-                    value: value.clone(),
-                })
-                .map_err(|_| {
-                    "process event channel disconnected while delivering checkpoint".to_owned()
-                })?;
+                send_reliable_event(
+                    tx,
+                    Event::Checkpoint {
+                        run_id: run_id.to_owned(),
+                        job_id: job_id.to_owned(),
+                        value: value.clone(),
+                    },
+                )?;
             }
             Ok(StreamResult {
                 outcome,
@@ -440,17 +470,19 @@ fn register_process(
         .map(|(start, group, session)| (Some(start), Some(group), Some(session)))
         .unwrap_or((None, None, None));
     let (ack_tx, ack_rx) = mpsc::sync_channel(1);
-    tx.send(crate::Event::ProcessStarted(
-        run_id.to_owned(),
-        job_id.to_owned(),
-        child.id(),
-        start_ticks,
-        process_group,
-        session_id,
-        executable.to_owned(),
-        ack_tx,
-    ))
-    .map_err(|_| "process event channel disconnected before durable registration".to_owned())?;
+    send_reliable_event(
+        tx,
+        crate::Event::ProcessStarted(
+            run_id.to_owned(),
+            job_id.to_owned(),
+            child.id(),
+            start_ticks,
+            process_group,
+            session_id,
+            executable.to_owned(),
+            ack_tx,
+        ),
+    )?;
     let deadline = std::time::Instant::now() + PROCESS_REGISTRATION_ACK_TIMEOUT;
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -559,10 +591,13 @@ struct ProcessRegistrationGuard<'a> {
 
 impl Drop for ProcessRegistrationGuard<'_> {
     fn drop(&mut self) {
-        let _ = self.tx.send(crate::Event::ProcessEnded {
-            run_id: self.run_id.clone(),
-            job_id: self.job_id.clone(),
-        });
+        let _ = send_reliable_event(
+            &self.tx,
+            crate::Event::ProcessEnded {
+                run_id: self.run_id.clone(),
+                job_id: self.job_id.clone(),
+            },
+        );
     }
 }
 
@@ -753,13 +788,15 @@ pub(crate) fn persist_engine_identity_before_launch(
     version: &str,
 ) -> Result<(), String> {
     let (reply_tx, reply_rx) = mpsc::sync_channel(1);
-    tx.send(crate::Event::EngineVersion {
-        run_id: run_id.to_owned(),
-        job_id: job_id.to_owned(),
-        version: version.to_owned(),
-        reply: reply_tx,
-    })
-    .map_err(|_| "engine identity event channel disconnected before launch".to_owned())?;
+    send_reliable_event(
+        tx,
+        crate::Event::EngineVersion {
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+            version: version.to_owned(),
+            reply: reply_tx,
+        },
+    )?;
     reply_rx
         .recv_timeout(PROCESS_REGISTRATION_ACK_TIMEOUT)
         .map_err(|_| "engine identity was not durably acknowledged before launch".to_owned())?
