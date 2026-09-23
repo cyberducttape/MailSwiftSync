@@ -103,6 +103,9 @@ pub(crate) fn run() -> eframe::Result<()> {
             Box::new(|_| Ok(Box::<App>::default())),
         );
     };
+    if command == std::ffi::OsStr::new("--internal-launcher") {
+        std::process::exit(crate::runner::run_internal_launcher(arguments.collect()));
+    }
     if matches!(command.to_str(), Some("help" | "--help" | "-h")) {
         print_cli_help();
         return Ok(());

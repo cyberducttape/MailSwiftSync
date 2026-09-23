@@ -1,4 +1,5 @@
 use std::{
+    io::{Read, Write},
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -67,17 +68,11 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         imapsync_output_profile,
         diagnostic_logger,
     } = context;
-    let mut command = Command::new(executable);
-    command
-        .args(args)
-        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_process_group(&mut command);
+    let mut command = execution_command(executable, args, env)?;
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
         Ok(supervisor) => supervisor,
         Err(error) => {
@@ -265,6 +260,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             Err(format!(
                 "process registration failed; child cancelled: {error}"
             ))
+        } else if let Err(error) = release_engine(&mut release_stdin) {
+            cancel.store(true, Ordering::Relaxed);
+            let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
+            Err(format!("engine release failed; child cancelled: {error}"))
         } else {
             match wait_with_timeout(&mut child, timeout, cancel) {
                 Err(error) => Err(error.to_string()),
@@ -472,6 +471,86 @@ fn register_process(
     }
 }
 
+/// Start MailSwiftSync's internal gatekeeper instead of the external engine.
+/// The gatekeeper inherits the configured environment, waits for the durable
+/// ProcessStarted acknowledgement, and only then launches the engine. This
+/// closes the crash window between OS process creation and durable ownership.
+#[cfg(not(test))]
+fn execution_command(
+    executable: &str,
+    args: &[String],
+    env: &[(String, SecretString)],
+) -> Result<Command, String> {
+    let current_executable = std::env::current_exe()
+        .map_err(|error| format!("could not locate MailSwiftSync launcher: {error}"))?;
+    let mut command = Command::new(current_executable);
+    command
+        .arg("--internal-launcher")
+        .arg(executable)
+        .arg("--")
+        .args(args)
+        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    Ok(command)
+}
+
+/// Unit-test binaries do not dispatch through the application CLI, so retain
+/// direct execution there while production binaries always use the gate.
+#[cfg(test)]
+fn execution_command(
+    executable: &str,
+    args: &[String],
+    env: &[(String, SecretString)],
+) -> Result<Command, String> {
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    Ok(command)
+}
+
+fn release_engine(release_stdin: &mut Option<std::process::ChildStdin>) -> Result<(), String> {
+    if let Some(mut stdin) = release_stdin.take() {
+        stdin
+            .write_all(b"GO\n")
+            .map_err(|error| format!("could not signal the internal launcher: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Entry point used only by the production binary's internal launcher mode.
+/// Arguments are passed as OS strings so executable paths and engine options
+/// do not undergo shell parsing or lossy Unicode conversion.
+pub(crate) fn run_internal_launcher(arguments: Vec<std::ffi::OsString>) -> i32 {
+    let Some((executable, remainder)) = arguments.split_first() else {
+        return 125;
+    };
+    let Some(separator) = remainder.iter().position(|argument| argument == "--") else {
+        return 125;
+    };
+    let mut release = [0_u8; 3];
+    if std::io::stdin().read_exact(&mut release).is_err() || release != *b"GO\n" {
+        return 125;
+    }
+    let mut command = Command::new(executable);
+    command
+        .args(&remainder[separator + 1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    match command.spawn().and_then(|mut child| child.wait()) {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(_) => 125,
+    }
+}
+
 struct ProcessRegistrationGuard<'a> {
     tx: &'a mpsc::SyncSender<crate::Event>,
     run_id: String,
@@ -498,17 +577,11 @@ pub(crate) fn run_capture_lines(
     observer: Option<OutputObserver>,
     durable: Option<(&mpsc::SyncSender<crate::Event>, &str, &str)>,
 ) -> Result<(ProcessOutcome, Vec<String>, bool), String> {
-    let mut command = Command::new(executable);
-    command
-        .args(args)
-        .envs(env.iter().map(|(key, value)| (key, value.as_str())))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    configure_process_group(&mut command);
+    let mut command = execution_command(executable, args, env)?;
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
+    let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
         Ok(supervisor) => supervisor,
         Err(error) => {
@@ -556,10 +629,15 @@ pub(crate) fn run_capture_lines(
     let registration = durable.map(|(tx, run_id, job_id)| {
         register_process(tx, run_id, job_id, executable, &child, cancel)
     });
-    let registration_error = registration
+    let mut registration_error = registration
         .as_ref()
         .and_then(|result| result.as_ref().err())
         .cloned();
+    if registration_error.is_none() {
+        if let Err(error) = release_engine(&mut release_stdin) {
+            registration_error = Some(format!("engine release failed; child cancelled: {error}"));
+        }
+    }
     if registration_error.is_some() {
         cancel.store(true, Ordering::Relaxed);
         terminate_process_group(&mut child);
