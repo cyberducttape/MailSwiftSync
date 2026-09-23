@@ -244,6 +244,23 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("doctor") {
+        let state = arguments.next().map(std::path::PathBuf::from);
+        if arguments.next().is_some() {
+            eprintln!("Usage: mailswiftsync doctor [state.db]");
+            std::process::exit(2);
+        }
+        match serde_json::to_string_pretty(&crate::doctor::run(state.as_deref())) {
+            Ok(report) => {
+                println!("{report}");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Doctor report serialization failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("risk") {
         let (Some(messages), Some(folders), Some(bytes)) =
             (arguments.next(), arguments.next(), arguments.next())
@@ -944,6 +961,9 @@ fn print_cli_help() {
     );
     println!(
         "\nAdditional operator workflow command:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON"
+    );
+    println!(
+        "\nDoctor:\n  doctor [state.db]              Report the local qualification envelope as JSON"
     );
 }
 

@@ -15,7 +15,7 @@
 
 MailSwiftSync is for hosting administrators, consultants, and MSPs moving multiple mailboxes between IMAP systems who need more than a command wrapper: a preflightable plan, controlled execution, restart-aware state, and evidence they can hand to a customer.
 
-MailSwiftSync helps administrators and MSPs plan, execute, verify, and audit mailbox migrations. Select Dovecot native execution when the destination is Dovecot and administrative access is available; otherwise the conservative default uses a locally installed `imapsync` executable for arbitrary IMAP-to-IMAP migrations. Both paths provide a redacted plan, durable project state, phased execution, and an operator journal.
+MailSwiftSync is a local-first migration control plane for auditable mail cutovers. It helps administrators and MSPs plan, execute, verify, and audit mailbox migrations. Select Dovecot native execution when the destination is Dovecot and administrative access is available; otherwise the conservative default uses a locally installed `imapsync` executable for arbitrary IMAP-to-IMAP migrations. The transfer engines are workers; MailSwiftSync owns admission, credential boundaries, execution ownership, resumption, verification, exceptions, auditability, and proof.
 
 The product value is the control plane around the transfer engine: endpoint checks, pilot and cutover planning, mailbox scope, controlled execution, durable run records, and evidence-led verification. The central workflow is **Plan → Preflight → Execute → Verify → Audit**.
 
@@ -257,6 +257,7 @@ or recovered without opening the GUI:
 mailswiftsync status /path/to/state.db
 mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync fleet-status /path/to/ledger-directory
+mailswiftsync doctor [/path/to/state.db]
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
 mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
@@ -318,6 +319,14 @@ several ledgers. `notify-webhook` POSTs that same secret-free summary as
 JSON to one operator-configured `https://` URL — for updating a PSA/ticketing
 system without a vendor-specific integration; see
 [PSA and ticketing notifications](docs/wiki/PSA-notifications.md).
+
+`doctor` is a read-only qualification-envelope check. It reports the
+operating system, configured engine/TLS/auth modes, keyring reference
+presence, database state, free space, and the installed imapsync version
+against the exact 2.314 verification qualification. It never prints
+credential material. A `review` result means the host may still be usable for
+a technical preview, but the operator is outside a qualified envelope and
+should resolve the reported condition before claiming trusted verification.
 `supervise` is a foreground, GUI-independent batch controller. It processes
 only automation-safe queued/retryable work, waits through GUI lock ownership,
 and leaves Attention and verification-difference rows untouched. The optional
