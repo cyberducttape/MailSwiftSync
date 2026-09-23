@@ -4,9 +4,14 @@
 # wording in the Markdown compatibility matrix.
 set -euo pipefail
 
-EVIDENCE_DIR="${MAILSWIFTSYNC_EVIDENCE_DIR:-tests/provider-evidence}"
-POLICY_FILE="$EVIDENCE_DIR/policy.json"
-SCHEMA_FILE="$EVIDENCE_DIR/schema.json"
+REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Policy and schema are source-controlled contracts. Evidence is deliberately
+# a separate input: release evidence is generated or downloaded after the
+# release checkout, so an evidence record can name the immutable release SHA
+# without requiring a commit to contain a hash of itself.
+EVIDENCE_DIR="${MAILSWIFTSYNC_EVIDENCE_DIR:-$REPOSITORY_ROOT/tests/provider-evidence}"
+POLICY_FILE="${MAILSWIFTSYNC_POLICY_FILE:-$REPOSITORY_ROOT/tests/provider-evidence/policy.json}"
+SCHEMA_FILE="${MAILSWIFTSYNC_SCHEMA_FILE:-$REPOSITORY_ROOT/tests/provider-evidence/schema.json}"
 MODE="preview"
 if [[ "${1:-}" == "--release" ]]; then
   MODE="release"
