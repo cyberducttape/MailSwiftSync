@@ -33,6 +33,17 @@ impl MismatchType {
             Self::Duplicated => "duplicated",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "message_id_only" => Self::MessageIdOnly,
+            "message_present_wrong_folder" => Self::PresentWrongFolder,
+            "missing" => Self::Missing,
+            "extra" => Self::Extra,
+            "duplicated" => Self::Duplicated,
+            _ => return None,
+        })
+    }
 }
 
 /// Mismatch record to persist in the database.
@@ -54,6 +65,8 @@ pub struct MessageMismatch {
     pub dest_size_bytes: Option<u64>,
     pub source_date: Option<String>,
     pub dest_date: Option<String>,
+    pub source_fingerprint: Option<String>,
+    pub destination_fingerprint: Option<String>,
 }
 
 /// Core message verification engine.
@@ -79,6 +92,68 @@ impl MessageVerification {
             dest_messages,
             &HashMap::new(),
         )
+    }
+
+    /// Reconcile metadata first, then classify same-identity messages whose
+    /// independently fetched RFC822 bytes differ. Content hashes are only
+    /// authoritative when both sides supplied a bounded SHA-256 fingerprint;
+    /// missing fingerprints preserve the existing metadata-only result.
+    pub fn detect_mismatches_with_content_fingerprints(
+        job_id: &str,
+        run_id: &str,
+        source_messages: &ExtractedMessages,
+        dest_messages: &ExtractedMessages,
+        source_fingerprints: &HashMap<MailboxMessageKey, String>,
+        dest_fingerprints: &HashMap<MailboxMessageKey, String>,
+    ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        let (mut mismatches, mut summary) =
+            Self::detect_mismatches(job_id, run_id, source_messages, dest_messages)?;
+        let dest_by_message_id = index_by_message_id(dest_messages);
+        let mut used_dest = HashSet::new();
+        for source_key in sorted_keys(&source_messages.keys().collect()) {
+            let Some(source_message_id) = source_messages[source_key]
+                .message_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let Some(source_fingerprint) = source_fingerprints.get(source_key) else {
+                continue;
+            };
+            let Some(dest_keys) = dest_by_message_id.get(source_message_id) else {
+                continue;
+            };
+            let Some(dest_key) = dest_keys.iter().copied().find(|dest_key| {
+                !used_dest.contains(dest_key)
+                    && metadata_fingerprint(&source_messages[source_key])
+                        == metadata_fingerprint(&dest_messages[dest_key])
+                    && dest_fingerprints.contains_key(*dest_key)
+            }) else {
+                continue;
+            };
+            used_dest.insert(dest_key);
+            let destination_fingerprint = &dest_fingerprints[dest_key];
+            if source_fingerprint == destination_fingerprint {
+                continue;
+            }
+            let mut mismatch = make_mismatch(
+                job_id,
+                run_id,
+                MismatchType::MessageIdOnly,
+                Some(source_key),
+                Some(dest_key),
+                Some(&source_messages[source_key]),
+                Some(&dest_messages[dest_key]),
+            );
+            mismatch.source_fingerprint = Some(source_fingerprint.clone());
+            mismatch.destination_fingerprint = Some(destination_fingerprint.clone());
+            mismatches.push(mismatch);
+            summary.metadata_matches = summary.metadata_matches.saturating_sub(1);
+            summary.changed_count = summary.changed_count.saturating_add(1);
+        }
+        Ok((mismatches, summary))
     }
 
     /// Detect mismatches while enforcing the expected source-to-destination
@@ -456,6 +531,8 @@ fn make_mismatch(
         dest_size_bytes: destination.and_then(|message| message.size_bytes),
         source_date: source.and_then(|message| message.internal_date.clone()),
         dest_date: destination.and_then(|message| message.internal_date.clone()),
+        source_fingerprint: None,
+        destination_fingerprint: None,
     }
 }
 
@@ -644,6 +721,52 @@ mod tests {
             .find(|m| m.mismatch_type == MismatchType::Extra)
             .unwrap();
         assert_eq!(extra.dest_uid, Some("2".to_string()));
+    }
+
+    #[test]
+    fn detects_same_metadata_with_different_content_fingerprints() {
+        let source_key = key("1");
+        let dest_key = key("99");
+        let message = ExtractedMessage {
+            message_id: Some("<same@example.com>".into()),
+            uid: Some("1".into()),
+            size_bytes: Some(100),
+            internal_date: Some("2024-01-01".into()),
+        };
+        let mut source = HashMap::new();
+        source.insert(source_key.clone(), message.clone());
+        let mut destination = HashMap::new();
+        destination.insert(
+            dest_key.clone(),
+            ExtractedMessage {
+                uid: Some("99".into()),
+                ..message
+            },
+        );
+        let mut source_fingerprints = HashMap::new();
+        source_fingerprints.insert(source_key, "aaaa".into());
+        let mut destination_fingerprints = HashMap::new();
+        destination_fingerprints.insert(dest_key, "bbbb".into());
+
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches_with_content_fingerprints(
+                "job1",
+                "run1",
+                &source,
+                &destination,
+                &source_fingerprints,
+                &destination_fingerprints,
+            )
+            .unwrap();
+
+        assert_eq!(summary.metadata_matches, 0);
+        assert_eq!(summary.changed_count, 1);
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].source_fingerprint.as_deref(), Some("aaaa"));
+        assert_eq!(
+            mismatches[0].destination_fingerprint.as_deref(),
+            Some("bbbb")
+        );
     }
 
     #[test]

@@ -280,6 +280,7 @@ impl App {
                             && let Some(index) = run.batch_child_index(&job_id, &child_run_id)
                         {
                             let evidence = self.pending_batch_evidence.get(&child_run_id);
+                            let mismatches = self.pending_batch_mismatches.get(&child_run_id);
                             let final_state = batch_mailbox_state(&state, evidence);
                             let checkpoint = self
                                 .pending_batch_checkpoints
@@ -294,6 +295,7 @@ impl App {
                                     state: &state,
                                     detail: &detail,
                                     evidence,
+                                    mismatches,
                                     checkpoint,
                                 },
                             );
@@ -333,6 +335,7 @@ impl App {
                                     *recovered_durability = true;
                                 }
                                 self.pending_batch_evidence.remove(&child_run_id);
+                                self.pending_batch_mismatches.remove(&child_run_id);
                                 self.pending_batch_checkpoints.remove(&child_run_id);
                             }
                             if completion_persisted
@@ -357,12 +360,16 @@ impl App {
                         job_id,
                         child_run_id,
                         evidence,
+                        mismatches,
                     } => {
                         if let Some(run) = active_run.as_ref()
                             && matches!(run.kind, RunKind::Batch)
                             && run.batch_child_index(&job_id, &child_run_id).is_some()
                         {
-                            self.pending_batch_evidence.insert(child_run_id, evidence);
+                            self.pending_batch_evidence
+                                .insert(child_run_id.clone(), evidence);
+                            self.pending_batch_mismatches
+                                .insert(child_run_id, mismatches);
                         } else {
                             durability_errors.push(format!(
                                 "ignored evidence event for unknown child run {child_run_id}"
@@ -403,6 +410,22 @@ impl App {
                                 run_id.to_owned(),
                                 "verification_evidence".into(),
                                 format!("evidence level: {evidence_level}"),
+                            ));
+                        }
+                    }
+                    Event::MessageMismatches {
+                        run_id,
+                        job_id,
+                        mismatches,
+                    } => {
+                        if active_run
+                            .as_ref()
+                            .is_some_and(|run| run.owns_process(&run_id, &job_id))
+                        {
+                            self.pending_mismatches = mismatches;
+                        } else {
+                            durability_errors.push(format!(
+                                "ignored message mismatch event for unknown run {run_id}"
                             ));
                         }
                     }

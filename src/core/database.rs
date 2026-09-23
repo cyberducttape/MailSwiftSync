@@ -366,9 +366,13 @@ impl StateStore {
                 [],
             )?;
         tx.execute(
-                "CREATE INDEX IF NOT EXISTS idx_engine_versions_captured ON engine_versions(captured_at DESC)",
-                [],
-            )?;
+            "CREATE INDEX IF NOT EXISTS idx_engine_versions_captured ON engine_versions(captured_at DESC)",
+            [],
+        )?;
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_mismatches_job_run ON message_mismatches(job_id, run_id, recorded_at)",
+            [],
+        )?;
         // Existing pre-0.1 databases need the new verification dimensions too.
         let columns = tx
             .prepare("PRAGMA table_info(evidence)")?

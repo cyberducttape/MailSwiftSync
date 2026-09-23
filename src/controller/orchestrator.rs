@@ -4,7 +4,7 @@ use crate::{
     runner::{
         RunContext, persist_engine_identity_before_launch, probe_engine_version,
         resolve_imapsync_identity, run_dovecot_destination_preflight, run_dovecot_verification,
-        run_streaming, send_reliable_event,
+        run_imap_message_verification, run_streaming, send_reliable_event,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -19,6 +19,7 @@ use std::{
 /// completed admission. Keeping this owned specification outside egui makes
 /// the same process lifecycle reusable by GUI and headless callers.
 pub(crate) struct SingleRunWorkerSpec {
+    pub(crate) form: crate::Form,
     pub(crate) executable: String,
     pub(crate) args: Vec<String>,
     pub(crate) env: Vec<(String, SecretString)>,
@@ -42,6 +43,7 @@ pub(crate) struct SingleRunWorkerSpec {
 pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
     thread::spawn(move || {
         let SingleRunWorkerSpec {
+            form,
             executable,
             args,
             env,
@@ -152,7 +154,36 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     })
                 });
             }
-            if let Ok(stream) = &result
+            if result.is_ok() && !dry_run && engine == core::Engine::ImapSync {
+                result = result.and_then(|stream| {
+                    run_imap_message_verification(&form, &job_id, &run_id, &cancel)
+                        .map(|(evidence, mismatches)| {
+                            let _ = send_reliable_event(
+                                &tx,
+                                Event::MessageMismatches {
+                                    run_id: run_id.clone(),
+                                    job_id: job_id.clone(),
+                                    mismatches,
+                                },
+                            );
+                            let _ = send_reliable_event(&tx, Event::Evidence(evidence));
+                            stream
+                        })
+                        .map_err(|error| {
+                            let _ = send_reliable_event(
+                                &tx,
+                                Event::VerificationFailed(format!(
+                                    "message-level IMAP verification failed: {error}"
+                                )),
+                            );
+                            format!(
+                                "migration completed; message-level verification failed: {error}"
+                            )
+                        })
+                });
+            }
+            if (dry_run || engine != core::Engine::ImapSync)
+                && let Ok(stream) = &result
                 && let Some(evidence) = stream.imapsync_evidence.clone()
             {
                 let _ = send_reliable_event(&tx, Event::Evidence(evidence));

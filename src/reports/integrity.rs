@@ -8,7 +8,7 @@ pub(crate) fn evidence_digest(
     evidence: &core::MailboxEvidence,
 ) -> String {
     let canonical = format!(
-        "run_id={run_id}\nplan_snapshot_sha256={}\nsource_folders={}\ndestination_folders={}\nsource_messages={}\ndestination_messages={}\nsource_bytes={}\ndestination_bytes={}\nunmatched_messages={}\nfailed_messages={}\nauthoritative={}\n",
+        "run_id={run_id}\nplan_snapshot_sha256={}\nsource_folders={}\ndestination_folders={}\nsource_messages={}\ndestination_messages={}\nsource_bytes={}\ndestination_bytes={}\nunmatched_messages={}\nfailed_messages={}\nauthoritative={}\nmissing_messages={}\nextra_messages={}\nmodified_messages={}\n",
         snapshot_sha256(plan_snapshot),
         evidence.source_folders,
         evidence.destination_folders,
@@ -21,6 +21,9 @@ pub(crate) fn evidence_digest(
             .map_or_else(|| "unknown".to_owned(), |count| count.to_string()),
         evidence.failed_messages,
         evidence.authoritative,
+        evidence.missing_messages,
+        evidence.extra_messages,
+        evidence.modified_messages,
     );
     snapshot_sha256(&canonical)
 }

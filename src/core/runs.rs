@@ -613,6 +613,7 @@ impl StateStore {
     /// Atomically records verification evidence, completes the run, updates
     /// the mailbox state, and optionally stores the new Dovecot checkpoint.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub fn finish_run_for_mailbox_with_evidence_and_checkpoint(
         &self,
         project_id: &str,
@@ -624,7 +625,7 @@ impl StateStore {
         value: &MailboxEvidence,
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
-        self.finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
+        self.finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
             project_id,
             job_id,
             run_id,
@@ -632,6 +633,35 @@ impl StateStore {
             mailbox_state,
             detail,
             value,
+            &[],
+            checkpoint,
+        )
+    }
+
+    /// Atomically records evidence and durable mismatch records, completes a
+    /// mailbox run, and optionally stores the new Dovecot checkpoint.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+        value: &MailboxEvidence,
+        mismatches: &[MessageMismatch],
+        checkpoint: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        self.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
+            project_id,
+            job_id,
+            run_id,
+            run_status,
+            mailbox_state,
+            detail,
+            value,
+            mismatches,
             None,
             checkpoint,
         )
@@ -640,6 +670,7 @@ impl StateStore {
     /// Atomically records evidence, completes a mailbox run, and optionally
     /// persists both the dry-preflight digest and Dovecot checkpoint.
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub fn finish_run_for_mailbox_with_evidence_and_preflight_plan_and_checkpoint(
         &self,
         project_id: &str,
@@ -649,6 +680,39 @@ impl StateStore {
         mailbox_state: &str,
         detail: &str,
         value: &MailboxEvidence,
+        preflight_plan: Option<&str>,
+        checkpoint: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        self.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
+            project_id,
+            job_id,
+            run_id,
+            run_status,
+            mailbox_state,
+            detail,
+            value,
+            &[],
+            preflight_plan,
+            checkpoint,
+        )
+    }
+
+    /// Atomically records evidence, durable per-message mismatch records,
+    /// completes a mailbox run, and optionally persists the preflight digest
+    /// and Dovecot checkpoint. Mismatch rows are committed in the same
+    /// transaction as the evidence so an accepted terminal run can never
+    /// outlive the detailed records that explain its counters.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
+        &self,
+        project_id: &str,
+        job_id: &str,
+        run_id: &str,
+        run_status: &str,
+        mailbox_state: &str,
+        detail: &str,
+        value: &MailboxEvidence,
+        mismatches: &[MessageMismatch],
         preflight_plan: Option<&str>,
         checkpoint: Option<&str>,
     ) -> rusqlite::Result<()> {
@@ -703,6 +767,120 @@ impl StateStore {
         }
         tx.execute("INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)", params![job_id, run_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative, value.missing_messages, value.extra_messages, value.modified_messages])?;
         tx.execute("INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) ON CONFLICT(job_id) DO UPDATE SET source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,captured_at=CURRENT_TIMESTAMP", params![job_id, value.source_messages, value.destination_messages, value.source_bytes, value.destination_bytes, value.unmatched_messages, value.failed_messages, value.source_folders, value.destination_folders, value.authoritative, value.missing_messages, value.extra_messages, value.modified_messages])?;
+        if mismatches.len() > 1_000_000
+            || mismatches.iter().any(|mismatch| {
+                mismatch.job_id != job_id
+                    || mismatch.run_id != run_id
+                    || mismatch.id.is_empty()
+                    || mismatch.id.len() > 256
+                    || mismatch
+                        .source_uid
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 256)
+                    || mismatch
+                        .dest_uid
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 256)
+                    || mismatch
+                        .source_folder
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 4096)
+                    || mismatch
+                        .destination_folder
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 4096)
+                    || mismatch
+                        .source_message_id
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 4096)
+                    || mismatch
+                        .dest_message_id
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 4096)
+                    || mismatch
+                        .source_date
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 256)
+                    || mismatch
+                        .dest_date
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 256)
+                    || mismatch
+                        .source_fingerprint
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 128)
+                    || mismatch
+                        .destination_fingerprint
+                        .as_deref()
+                        .is_some_and(|value| value.len() > 128)
+                    || [
+                        mismatch.source_uid.as_deref(),
+                        mismatch.dest_uid.as_deref(),
+                        mismatch.source_folder.as_deref(),
+                        mismatch.destination_folder.as_deref(),
+                        mismatch.source_message_id.as_deref(),
+                        mismatch.dest_message_id.as_deref(),
+                        mismatch.source_date.as_deref(),
+                        mismatch.dest_date.as_deref(),
+                        mismatch.source_fingerprint.as_deref(),
+                        mismatch.destination_fingerprint.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .any(|value| value.chars().any(char::is_control))
+            })
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        tx.execute(
+            "DELETE FROM message_mismatches WHERE job_id=?1 AND run_id=?2",
+            params![job_id, run_id],
+        )?;
+        for mismatch in mismatches {
+            let source_size = mismatch
+                .source_size_bytes
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let destination_size = mismatch
+                .dest_size_bytes
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let source_uidvalidity = mismatch
+                .source_uidvalidity
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            let destination_uidvalidity = mismatch
+                .destination_uidvalidity
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            tx.execute(
+                "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                params![
+                    mismatch.id,
+                    job_id,
+                    run_id,
+                    mismatch.mismatch_type.as_str(),
+                    mismatch.source_uid,
+                    mismatch.dest_uid,
+                    mismatch.source_message_id,
+                    mismatch.dest_message_id,
+                    source_size,
+                    destination_size,
+                    mismatch.source_date,
+                    mismatch.dest_date,
+                    mismatch.source_folder,
+                    mismatch.destination_folder,
+                    source_uidvalidity,
+                    destination_uidvalidity,
+                    mismatch.source_fingerprint,
+                    mismatch.destination_fingerprint,
+                ],
+            )?;
+        }
         tx.execute(
             "UPDATE mailbox_jobs SET state=?1,attention_reason=?2,preflight_plan=COALESCE(?3,preflight_plan),checkpoint=COALESCE(?4,checkpoint) WHERE id=?5 AND project_id=?6",
             params![mailbox_state, attention_reason, preflight_plan, checkpoint, job_id, project_id],

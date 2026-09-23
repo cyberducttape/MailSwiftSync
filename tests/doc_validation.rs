@@ -64,9 +64,9 @@ fn capability_manifest_is_current() {
         "Capability manifest should document message verification"
     );
     assert!(
-        manifest.contains("Message extraction (imapsync) | yes | no")
-            && manifest.contains("Message extraction (Dovecot) | yes | no"),
-        "Capability manifest should not claim unwired extractors are operational"
+        manifest.contains("Message extraction (imapsync) | yes | yes (TLS live path)")
+            && manifest.contains("Message extraction (Dovecot) | yes | partial"),
+        "Capability manifest should distinguish the wired imapsync path from native Dovecot scope"
     );
     assert!(
         manifest.contains("Native IMAP message transfer (Dovecot) | yes | yes | no"),
@@ -137,10 +137,8 @@ fn compatibility_matrix_references_tested_providers() {
         );
     }
     assert!(
-        matrix.contains(
-            "Aggregate verification is wired; message-level reconciliation is a prototype"
-        ),
-        "Compatibility matrix must distinguish aggregate evidence from message-level proof"
+        matrix.contains("Aggregate verification is wired for all engines; encrypted imapsync runs additionally perform bounded metadata-level reconciliation"),
+        "Compatibility matrix must distinguish aggregate evidence from metadata and content proof"
     );
 }
 

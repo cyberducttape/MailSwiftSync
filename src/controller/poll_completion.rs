@@ -27,6 +27,7 @@ impl App {
             // as a fallback, because that would bypass the profile invariant
             // and could promote incomplete output.
             let terminal_evidence = self.pending_evidence.clone();
+            let terminal_mismatches = self.pending_mismatches.clone();
             let terminal_checkpoint = if !was_bulk_run && succeeded {
                 self.pending_checkpoint.clone()
             } else {
@@ -109,7 +110,7 @@ impl App {
                     if run_status == "completed" {
                         if let Some(evidence) = terminal_evidence.as_ref() {
                             self.store
-                                .finish_run_for_mailbox_with_evidence_and_checkpoint(
+                                .finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
                                     project,
                                     job,
                                     run_id,
@@ -117,6 +118,7 @@ impl App {
                                     state,
                                     &detail,
                                     evidence,
+                                    &terminal_mismatches,
                                     terminal_checkpoint.as_deref(),
                                 )
                         } else {
@@ -171,6 +173,7 @@ impl App {
                     // a retry would be unable to reproduce the same durable
                     // result.
                     self.pending_evidence = None;
+                    self.pending_mismatches.clear();
                     self.pending_checkpoint = None;
                 }
                 // A terminal run commit is the boundary between an external
@@ -279,6 +282,7 @@ impl App {
             self.active_run = None;
             self.locked_profile = None;
             self.pending_batch_evidence.clear();
+            self.pending_batch_mismatches.clear();
             // Keep the durable queue after completion so a validated batch
             // can be promoted to live execution, and failed/live jobs can be
             // deliberately retried or run through another delta pass.

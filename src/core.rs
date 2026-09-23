@@ -52,6 +52,8 @@ pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
     ReportRunSnapshot, VerificationAcceptance,
 };
+pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
+pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,
     ProjectListItem, RunListItem, RunSummary,
@@ -358,6 +360,77 @@ mod tests {
         db.record_evidence(&job, &evidence).unwrap();
 
         assert_eq!(db.evidence(&job).unwrap(), Some(evidence));
+    }
+
+    #[test]
+    fn message_mismatch_details_commit_atomically_with_terminal_evidence() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("message-details", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "a@example", "a@example")
+            .unwrap();
+        let run_id = "message-detail-run";
+        db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
+        let evidence = MailboxEvidence {
+            source_messages: 1,
+            destination_messages: 0,
+            source_bytes: 42,
+            destination_bytes: 0,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 1,
+            extra_messages: 0,
+            modified_messages: 0,
+        };
+        let mismatch = MessageMismatch {
+            id: "message-detail-mismatch".into(),
+            job_id: job.clone(),
+            run_id: run_id.into(),
+            mismatch_type: message_verification::MismatchType::Missing,
+            source_folder: Some("INBOX".into()),
+            destination_folder: None,
+            source_uidvalidity: Some(7),
+            destination_uidvalidity: None,
+            source_uid: Some("12".into()),
+            dest_uid: None,
+            source_message_id: Some("<missing@example>".into()),
+            dest_message_id: None,
+            source_size_bytes: Some(42),
+            dest_size_bytes: None,
+            source_date: Some("2026-01-01T00:00:00Z".into()),
+            dest_date: None,
+            source_fingerprint: None,
+            destination_fingerprint: None,
+        };
+
+        db.finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
+            &project.id,
+            &job,
+            run_id,
+            "completed",
+            "verification_difference",
+            "message mismatch",
+            &evidence,
+            &[mismatch],
+            None,
+        )
+        .unwrap();
+
+        let stored: (i64, String, String) = db
+            .connection
+            .query_row(
+                "SELECT COUNT(*),mismatch_type,source_message_id FROM message_mismatches WHERE job_id=?1 AND run_id=?2",
+                rusqlite::params![job, run_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (1, "missing".into(), "<missing@example>".into()));
+        assert_eq!(db.run_status(run_id).unwrap().as_deref(), Some("completed"));
     }
 
     #[test]

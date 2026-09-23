@@ -48,6 +48,7 @@ impl App {
         self.durability_error = false;
         self.durability_recovery_pending = false;
         self.pending_batch_evidence.clear();
+        self.pending_batch_mismatches.clear();
         self.pending_batch_checkpoints.clear();
         let run_id = uuid::Uuid::new_v4().to_string();
         let admission = match admit_batch_launch(BatchLaunchRequest {
@@ -81,6 +82,11 @@ impl App {
         self.bulk_project_id = Some(project_id.clone());
         self.selected_project_id = Some(project_id.clone());
         self.bulk_job_ids = job_ids;
+        // Admission may have replaced a stale durable project. Keep the
+        // in-memory selection in the same durable ID space as the admitted
+        // run; otherwise headless completion filtering can turn a real run
+        // into an empty, apparently successful result.
+        self.bulk_selected_ids = selected_job_ids.iter().cloned().collect();
         self.rebuild_bulk_job_index();
         self.bulk_live_run = live;
         self.run_id = Some(run_id.clone());
