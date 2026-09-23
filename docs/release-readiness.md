@@ -220,7 +220,11 @@ and require the corresponding integration run.
   certificate-validated TLS connection built the same way as the IMAP
   readiness probe. This remains provider-consent-free: MailSwiftSync still
   does not implement an OAuth authorization flow, so the operator must
-  obtain the initial refresh token through the provider's own tooling.
+  obtain the initial refresh token through the provider's own tooling. A
+  rotated refresh token is persisted with bounded retries; if the keyring
+  remains unavailable, live execution fails closed and retains the rotated
+  configuration only in protected process memory for persistence recovery,
+  without attempting another provider exchange.
 
 ## Available in 0.1
 

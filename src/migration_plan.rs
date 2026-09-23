@@ -21,7 +21,7 @@ pub(crate) use profile::{
     default_ssh_path,
 };
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::{path::PathBuf, thread, time::Duration};
 
 pub(crate) fn decode_report_run_snapshot(
     snapshot: &str,
@@ -54,6 +54,34 @@ pub(crate) fn validate_certificate_pin(value: &str, label: &str) -> Result<(), S
 pub(crate) enum OAuthRefreshOutcome {
     NotConfigured,
     Refreshed { expires_in: Option<u64> },
+}
+
+const OAUTH_REFRESH_PERSIST_ATTEMPTS: usize = 3;
+const OAUTH_REFRESH_PERSIST_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+/// Keyring writes are outside the provider transaction. Retry short-lived
+/// backend/IPC failures before declaring that a provider-side rotation has
+/// entered the catastrophic recovery state.
+fn persist_rotated_refresh_config_with_retry<F>(
+    config: &crate::oauth_refresh::OAuthRefreshConfig,
+    mut persist: F,
+) -> Result<(), String>
+where
+    F: FnMut(&crate::oauth_refresh::OAuthRefreshConfig) -> Result<(), String>,
+{
+    let mut last_error = None;
+    for attempt in 0..OAUTH_REFRESH_PERSIST_ATTEMPTS {
+        match persist(config) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 < OAUTH_REFRESH_PERSIST_ATTEMPTS {
+                    thread::sleep(OAUTH_REFRESH_PERSIST_RETRY_DELAY);
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "OAuth refresh configuration persistence failed".into()))
 }
 
 pub(crate) fn effective_destination_tls(mode: &str) -> &str {
@@ -325,7 +353,11 @@ impl Form {
                 format!(
                     "Could not store the OAuth refresh configuration in the OS keyring: {error}"
                 )
-            })
+            })?;
+        if let Some(key) = self.oauth_refresh_recovery_key(source) {
+            crate::oauth_refresh::clear_refresh_recovery(&key)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn load_oauth_refresh_config(
@@ -347,7 +379,20 @@ impl Form {
             .ok_or("Enter an OAuth refresh keyring ID before deleting a refresh configuration.")?;
         entry.delete_credential().map_err(|error| {
             format!("Could not delete the OS keyring OAuth refresh configuration: {error}")
-        })
+        })?;
+        if let Some(key) = self.oauth_refresh_recovery_key(source) {
+            crate::oauth_refresh::clear_refresh_recovery(&key)?;
+        }
+        Ok(())
+    }
+
+    fn oauth_refresh_recovery_key(&self, source: bool) -> Option<String> {
+        let id = if source {
+            self.profile.source_oauth_refresh_credential_id.trim()
+        } else {
+            self.profile.destination_oauth_refresh_credential_id.trim()
+        };
+        (!id.is_empty()).then(|| format!("{}:{id}", if source { "source" } else { "destination" }))
     }
 
     /// Exchange a configured refresh token for a fresh access token and
@@ -368,6 +413,34 @@ impl Form {
         if !auth_method_is_oauth(auth_method) {
             return Ok(OAuthRefreshOutcome::NotConfigured);
         }
+        let recovery_key = self.oauth_refresh_recovery_key(source);
+        if let Some(recovery_key) = recovery_key.as_deref()
+            && let Some(recovery) = crate::oauth_refresh::take_refresh_recovery(recovery_key)?
+        {
+            if let Err(error) =
+                persist_rotated_refresh_config_with_retry(&recovery.config, |config| {
+                    self.store_oauth_refresh_config(source, config)
+                })
+            {
+                let recovery_error =
+                    crate::oauth_refresh::put_refresh_recovery(recovery_key.to_owned(), recovery)
+                        .err();
+                return Err(format!(
+                    "[oauth_refresh_rotation_persistence_pending] CRITICAL: OAuth refresh rotation succeeded but the rotated refresh token could not be persisted; no new token exchange was attempted. Retry keyring persistence before resuming the migration (persistence error: {error}{})",
+                    recovery_error.map_or_else(String::new, |value| format!(
+                        "; recovery retention error: {value}"
+                    ))
+                ));
+            }
+            if source {
+                self.source_password = recovery.access_token;
+            } else {
+                self.destination_password = recovery.access_token;
+            }
+            return Ok(OAuthRefreshOutcome::Refreshed {
+                expires_in: recovery.expires_in,
+            });
+        }
         let Some(config) = self.load_oauth_refresh_config(source)? else {
             return Ok(OAuthRefreshOutcome::NotConfigured);
         };
@@ -375,17 +448,44 @@ impl Form {
         let refreshed = crate::oauth_refresh::refresh_access_token(&config.as_request())
             .map_err(|error| format!("Could not refresh the {side} OAuth access token: {error}"))?;
         let expires_in = refreshed.expires_in;
-        if source {
-            self.source_password = refreshed.access_token;
-        } else {
-            self.destination_password = refreshed.access_token;
-        }
         if let Some(rotated_refresh_token) = refreshed.refresh_token {
             let rotated = crate::oauth_refresh::OAuthRefreshConfig {
                 refresh_token: rotated_refresh_token,
                 ..config
             };
-            self.store_oauth_refresh_config(source, &rotated)?;
+            if let Err(error) = persist_rotated_refresh_config_with_retry(&rotated, |config| {
+                self.store_oauth_refresh_config(source, config)
+            }) {
+                let recovery = crate::oauth_refresh::OAuthRefreshRecovery {
+                    config: rotated,
+                    access_token: refreshed.access_token,
+                    expires_in,
+                };
+                let retention_error = recovery_key
+                    .ok_or_else(|| {
+                        "OAuth refresh rotation returned a new token but no recovery key was configured"
+                            .to_owned()
+                    })
+                    .and_then(|key| {
+                        crate::oauth_refresh::put_refresh_recovery(key, recovery)
+                    })
+                .err();
+                return Err(format!(
+                    "[oauth_refresh_rotation_persistence_pending] CRITICAL: OAuth refresh rotation succeeded but the rotated refresh token could not be persisted; the original refresh token may already be consumed. Retry keyring persistence before resuming the migration (persistence error: {error}{})",
+                    retention_error.map_or_else(String::new, |value| format!(
+                        "; recovery retention error: {value}"
+                    ))
+                ));
+            }
+            if source {
+                self.source_password = refreshed.access_token;
+            } else {
+                self.destination_password = refreshed.access_token;
+            }
+        } else if source {
+            self.source_password = refreshed.access_token;
+        } else {
+            self.destination_password = refreshed.access_token;
         }
         Ok(OAuthRefreshOutcome::Refreshed { expires_in })
     }
@@ -1102,7 +1202,16 @@ pub(crate) struct PreparedCommand {
 
 #[cfg(test)]
 mod tests {
-    use super::{Form, OAuthRefreshOutcome, decode_report_run_snapshot, validate_certificate_pin};
+    use super::{
+        Form, OAuthRefreshOutcome, decode_report_run_snapshot,
+        persist_rotated_refresh_config_with_retry, validate_certificate_pin,
+    };
+    use crate::SecretString;
+    use crate::oauth_refresh::OAuthRefreshConfig;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[test]
     fn report_snapshot_decode_allows_empty_legacy_snapshots() {
@@ -1161,5 +1270,27 @@ mod tests {
             form.refresh_oauth_access_token(true).unwrap(),
             OAuthRefreshOutcome::NotConfigured
         ));
+    }
+
+    #[test]
+    fn rotated_refresh_persistence_retries_an_injected_first_keyring_failure() {
+        let config = OAuthRefreshConfig {
+            token_endpoint: "https://oauth.example.test/token".into(),
+            client_id: "client".into(),
+            client_secret: SecretString::default(),
+            refresh_token: SecretString::from("rotated-refresh-token"),
+        };
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&attempts);
+        persist_rotated_refresh_config_with_retry(&config, |_config| {
+            let attempt = observed.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                Err("injected keyring write failure".into())
+            } else {
+                Ok(())
+            }
+        })
+        .expect("a transient keyring failure should be retried");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 }
