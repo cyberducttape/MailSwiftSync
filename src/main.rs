@@ -8,6 +8,7 @@ mod controller;
 mod core;
 mod credentials;
 mod diagnostic_log;
+mod doctor;
 mod endpoint;
 mod engine;
 mod headless;
