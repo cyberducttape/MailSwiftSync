@@ -16,6 +16,13 @@ The generated evidence records must still contain the exact release SHA in
 `MAILSWIFTSYNC_RELEASE_COMMIT`, and `scripts/verify-evidence-gate.sh --release`
 fails closed if any record differs.
 
+The release workflow obtains the bundle from two repository-level Actions
+variables: `MAILSWIFTSYNC_RELEASE_EVIDENCE_URL` (an HTTPS `.tar.gz` bundle URL)
+and `MAILSWIFTSYNC_RELEASE_EVIDENCE_SHA256` (its pinned SHA-256). The workflow
+downloads and verifies that archive into the runner's temporary directory
+before invoking the gate; it no longer reads release evidence from the source
+tree.
+
 Example hand-off for a release candidate:
 
 ```bash
