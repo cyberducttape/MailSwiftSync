@@ -19,6 +19,9 @@ All notable changes to MailSwiftSync are documented here.
 - Fixed batch OAuth timing: queue admission no longer refreshes every selected
   mailbox up front. Each worker refreshes automatic OAuth credentials
   immediately before authentication and engine launch.
+- Serialized batch refreshes that share one rotating OAuth keyring reference
+  while allowing unrelated refresh identities to proceed concurrently. Each
+  attempt now reloads the latest refresh configuration before authentication.
 - Removed the release-evidence self-reference: source-controlled policy and
   schema are now separate from externally supplied/generated release evidence.
   Release evidence still must identify the exact immutable release commit.
