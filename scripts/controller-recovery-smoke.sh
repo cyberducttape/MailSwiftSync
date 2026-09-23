@@ -168,9 +168,9 @@ if [[ ! "$engine_pid" =~ ^[0-9]+$ ]]; then
   echo "FAIL: engine interruption fixture recorded an invalid engine PID" >&2
   exit 1
 fi
-# The runner owns the engine as a process group. Interrupt the whole group so
-# the wrapper's blocking child cannot survive as an orphan and turn this into
-# a different, correctly-rejected process-identity scenario.
+# The production runner records the engine itself as the process-group leader
+# after the internal launcher execs it. Interrupt the whole group to exercise
+# the same ownership boundary used by startup recovery.
 kill -KILL -- "-$engine_pid"
 engine_pid=""
 

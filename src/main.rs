@@ -80,7 +80,8 @@ use process::ProcessLaunchLimiter;
 #[cfg(all(test, unix))]
 use process::terminate_process_group_by_pid;
 use process::{
-    InstanceLock, acquire_instance_lock, recorded_process_matches, terminate_recorded_process_group,
+    InstanceLock, acquire_instance_lock, recorded_process_is_gone, recorded_process_matches,
+    terminate_recorded_process_group,
 };
 #[cfg(all(test, unix))]
 use process::{configure_process_group, process_identity};
