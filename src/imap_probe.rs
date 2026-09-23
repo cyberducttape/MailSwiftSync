@@ -423,6 +423,41 @@ pub(crate) fn probe_tls_capabilities_with_transport(
     complete_authenticated_imap_probe(stream, host, user, credential, auth_method, greeting)
 }
 
+/// Authenticate an already TLS-protected connection and perform only the
+/// post-authentication readiness checks needed immediately before a live
+/// engine launch. Folder discovery, namespace analysis, and quota collection
+/// belong to the comprehensive preflight probe below, not this hot path.
+pub(crate) fn probe_tls_authentication_with_transport(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+) -> Result<(), String> {
+    let (stream, greeting) =
+        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
+    let (mut stream, _) =
+        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
+    let mut response = String::new();
+    let mut buffer = [0; 4096];
+    stream
+        .write_all(b"a004 NOOP\r\n")
+        .map_err(|e| e.to_string())?;
+    read_imap_tagged(&mut stream, "a004", &mut response, &mut buffer)?;
+    if !imap_command_succeeded(&response, "a004") {
+        return Err(imap_command_failure(
+            &response,
+            "a004",
+            "post-auth NOOP",
+            host,
+        ));
+    }
+    let _ = stream.write_all(b"a005 LOGOUT\r\n");
+    Ok(())
+}
+
 fn verify_certificate_pin(
     stream: &StreamOwned<ClientConnection, TcpStream>,
     host: &str,
@@ -443,14 +478,14 @@ fn verify_certificate_pin(
     Ok(())
 }
 
-fn complete_authenticated_imap_probe<S: Read + Write>(
+fn authenticate_imap_stream<S: Read + Write>(
     mut stream: S,
     host: &str,
     user: &str,
     credential: &str,
     auth_method: &str,
     greeting: String,
-) -> Result<crate::core::ServerCapabilities, String> {
+) -> Result<(S, String), String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
     stream
@@ -519,6 +554,20 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
             host,
         ));
     }
+    Ok((stream, post_auth_response))
+}
+
+fn complete_authenticated_imap_probe<S: Read + Write>(
+    stream: S,
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    greeting: String,
+) -> Result<crate::core::ServerCapabilities, String> {
+    let (mut stream, post_auth_response) =
+        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
+    let mut buffer = [0; 4096];
     stream
         .write_all(b"a004 NAMESPACE\r\n")
         .map_err(|e| e.to_string())?;
@@ -576,7 +625,7 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.destination_host,
         &form.profile.destination_port,
     )?;
-    let _source_capabilities = probe_tls_capabilities_with_transport(
+    probe_tls_authentication_with_transport(
         &source,
         &form.profile.source_user,
         form.source_password.as_str(),
@@ -585,10 +634,7 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.source_ca_bundle,
         &form.profile.source_certificate_pin_sha256,
     )?;
-    // A full source quota does not prevent reading existing messages. Source
-    // quota is advisory here because MailSwiftSync never deletes or modifies
-    // source mail; destination capacity is the admission boundary.
-    let destination_capabilities = probe_tls_capabilities_with_transport(
+    probe_tls_authentication_with_transport(
         &destination,
         &form.profile.destination_user,
         form.destination_password.as_str(),
@@ -597,21 +643,6 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.destination_ca_bundle,
         &form.profile.destination_certificate_pin_sha256,
     )?;
-    if destination_capabilities.quota_exceeded {
-        let detail = destination_capabilities
-            .quota_resources
-            .get("STORAGE")
-            .map(|quota| {
-                format!(
-                    " (usage {} / limit {} provider units)",
-                    quota.used, quota.limit
-                )
-            })
-            .unwrap_or_default();
-        return Err(format!(
-            "destination mailbox quota is exhausted according to the authenticated IMAP quota response{detail}"
-        ));
-    }
     Ok(())
 }
 

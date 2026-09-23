@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Split comprehensive IMAP preflight from the immediate live-launch probe.
+  Live retries now perform TLS, authentication, post-authentication capability
+  validation, and NOOP without repeating namespace, full folder discovery, or
+  quota enumeration for every queued mailbox.
 - Fixed quota admission semantics: a full source mailbox is now reported as
   advisory because migrations read source mail without deleting it, while an
   exhausted destination remains a hard block. Authenticated IMAP quota usage
