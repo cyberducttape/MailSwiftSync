@@ -775,3 +775,19 @@ pub(crate) fn recorded_process_matches(process: &core::ActiveProcess) -> bool {
         false
     }
 }
+
+/// Return true only when the recorded PID no longer has an inspectable
+/// process identity. A missing process is different from a mismatched live
+/// process: recovery may clear a stale record for the former, but must retain
+/// the latter for operator review rather than risking a PID-reuse signal.
+pub(crate) fn recorded_process_is_gone(process: &core::ActiveProcess) -> bool {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        process_identity(process.pid).is_none()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = process;
+        false
+    }
+}

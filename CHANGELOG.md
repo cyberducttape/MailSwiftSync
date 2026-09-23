@@ -12,6 +12,10 @@ All notable changes to MailSwiftSync are documented here.
   launcher now `exec`s the engine after durable registration, so the durable
   PID remains the engine PID and parent-death/process-group containment also
   applies to the real worker.
+- Fixed recovery of a process that already exited after controller death:
+  recovery now distinguishes a missing recorded PID from a live mismatched
+  identity, clears the former, and continues to preserve the latter for
+  operator review.
 - Fixed batch OAuth timing: queue admission no longer refreshes every selected
   mailbox up front. Each worker refreshes automatic OAuth credentials
   immediately before authentication and engine launch.

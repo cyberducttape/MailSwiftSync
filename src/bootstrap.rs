@@ -95,6 +95,10 @@ impl App {
                 for process in &processes {
                     if process.pid > 0 && recorded_process_matches(process) {
                         terminate_recorded_process_group(process);
+                    } else if recorded_process_is_gone(process) {
+                        // The registered process exited before startup
+                        // recovery could inspect it; do not preserve a dead
+                        // PID as if it were an unverified live owner.
                     } else {
                         unverified.push(process.clone());
                     }

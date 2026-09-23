@@ -3,8 +3,8 @@ use crate::credentials::SecretString;
 use crate::maintenance_window::MaintenanceWindow;
 use crate::{
     App, BatchExecutionMode, BulkRetryScope, cleanup_stale_secret_directories, core,
-    is_verified_terminal_state, plan_fingerprint_digest, recorded_process_matches,
-    secret_runtime_base, terminate_recorded_process_group,
+    is_verified_terminal_state, plan_fingerprint_digest, recorded_process_is_gone,
+    recorded_process_matches, secret_runtime_base, terminate_recorded_process_group,
 };
 use serde::Serialize;
 use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
@@ -463,6 +463,10 @@ pub(crate) fn headless_recover(
     for process in &processes {
         if process.pid > 0 && recorded_process_matches(process) {
             terminate_recorded_process_group(process);
+        } else if recorded_process_is_gone(process) {
+            // The owned process already exited (for example after the
+            // Linux parent-death signal). There is nothing left to signal,
+            // and retaining the stale PID would wedge recovery forever.
         } else {
             unverified.push(process.clone());
         }
