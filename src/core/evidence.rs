@@ -101,7 +101,7 @@ impl MailboxEvidence {
     }
 
     pub fn evidence_level(&self) -> &'static str {
-        if self.failed_messages > 0 || self.unmatched_messages.map_or(true, |count| count > 0) {
+        if self.failed_messages > 0 || self.unmatched_messages.is_none_or(|count| count > 0) {
             return "Incomplete evidence";
         }
         if self.has_message_level_mismatch() {

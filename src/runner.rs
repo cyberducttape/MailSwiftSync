@@ -608,7 +608,7 @@ struct ProcessRegistrationGuard<'a> {
 impl Drop for ProcessRegistrationGuard<'_> {
     fn drop(&mut self) {
         let _ = send_reliable_event(
-            &self.tx,
+            self.tx,
             crate::Event::ProcessEnded {
                 run_id: self.run_id.clone(),
                 job_id: self.job_id.clone(),
@@ -684,10 +684,10 @@ pub(crate) fn run_capture_lines(
         .as_ref()
         .and_then(|result| result.as_ref().err())
         .cloned();
-    if registration_error.is_none() {
-        if let Err(error) = release_engine(&mut release_stdin) {
-            registration_error = Some(format!("engine release failed; child cancelled: {error}"));
-        }
+    if registration_error.is_none()
+        && let Err(error) = release_engine(&mut release_stdin)
+    {
+        registration_error = Some(format!("engine release failed; child cancelled: {error}"));
     }
     if registration_error.is_some() {
         cancel.store(true, Ordering::Relaxed);
