@@ -127,12 +127,14 @@ impl PostMigrationReport {
         }
     }
 
+    #[allow(dead_code)]
     pub fn has_critical_issues(&self) -> bool {
         self.exceptions
             .iter()
             .any(|e| e.severity == ExceptionSeverity::Critical)
     }
 
+    #[allow(dead_code)]
     pub fn is_successful(&self) -> bool {
         self.total_failed == 0 && !self.has_critical_issues() && self.exceptions.is_empty()
     }

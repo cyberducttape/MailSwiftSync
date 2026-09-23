@@ -28,6 +28,7 @@ pub enum ProviderErrorType {
 
 impl ProviderErrorType {
     /// Determine if retry is safe for this error.
+    #[allow(dead_code)]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -39,6 +40,7 @@ impl ProviderErrorType {
     }
 
     /// Suggested delay before retry.
+    #[allow(dead_code)]
     pub fn suggested_retry_delay(&self) -> Option<Duration> {
         match self {
             Self::RateLimited => Some(Duration::from_secs(60)),

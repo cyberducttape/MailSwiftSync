@@ -106,10 +106,12 @@ impl PreMigrationRisk {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_ready(&self) -> bool {
         self.estimated_readiness == MigrationReadiness::Ready
     }
 
+    #[allow(dead_code)]
     pub fn has_blocking_errors(&self) -> bool {
         self.estimated_readiness == MigrationReadiness::BlockedByErrors
     }
