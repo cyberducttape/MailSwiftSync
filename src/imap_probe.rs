@@ -111,11 +111,13 @@ fn read_imap_list_response<S: Read>(
     let mut literal_separator_remaining = 0_u8;
     let mut summary = ListInventorySummary::default();
     const MAX_INTER_READ_STALL: Duration = Duration::from_secs(15);
+    let deadline = started + MAX_IMAP_LIST_DURATION;
     loop {
         if last_read.elapsed() > MAX_INTER_READ_STALL {
             return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
         }
-        let count = stream.read(buffer).map_err(|error| error.to_string())?;
+        let read_deadline = (last_read + MAX_INTER_READ_STALL).min(deadline);
+        let count = read_with_deadline(stream, buffer, read_deadline)?;
         last_read = Instant::now();
         if count == 0 {
             return Err(format!("IMAP connection closed before {tag} completed"));
@@ -196,6 +198,34 @@ fn read_imap_list_response<S: Read>(
                 literal_remaining = literal_size;
             }
             line.clear();
+        }
+    }
+}
+
+/// A socket read timeout is only a progress hint; it is not the same as the
+/// LIST operation's total deadline. TLS/read adapters can return `TimedOut`
+/// while waiting for the rest of a record, so retry transient reads until the
+/// bounded LIST deadline expires instead of allowing discovery to stall.
+fn read_with_deadline<S: Read>(
+    stream: &mut S,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<usize, String> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
+        }
+        match stream.read(buffer) {
+            Ok(count) => return Ok(count),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
         }
     }
 }
@@ -586,7 +616,22 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{authenticated_list_command, read_imap_list_response};
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Read};
+
+    struct TimeoutThenData {
+        timed_out: bool,
+        data: Cursor<Vec<u8>>,
+    }
+
+    impl Read for TimeoutThenData {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if !self.timed_out {
+                self.timed_out = true;
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "synthetic timeout"));
+            }
+            self.data.read(buffer)
+        }
+    }
 
     #[test]
     fn list_request_asks_for_rfc6154_attributes_when_supported() {
@@ -609,6 +654,19 @@ mod tests {
 
         assert!(error.contains("[UNAVAILABLE] Server busy"));
         assert!(error.len() < 600);
+    }
+
+    #[test]
+    fn list_discovery_retries_transient_read_timeout_without_losing_the_deadline() {
+        let mut stream = TimeoutThenData {
+            timed_out: false,
+            data: Cursor::new(
+                b"* LIST (\\HasNoChildren) \"/\" \"INBOX\"\r\na005 OK LIST completed\r\n".to_vec(),
+            ),
+        };
+        let mut buffer = [0_u8; 4096];
+        let summary = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap();
+        assert_eq!(summary.mailbox_count, 1);
     }
 
     #[test]

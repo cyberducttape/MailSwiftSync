@@ -1,10 +1,13 @@
 # Service-manager deployment
 
-`supervise` is a foreground controller for automation-safe queued work. It
-does not provide OAuth refresh, a secret broker, or remote Dovecot credential
-delivery. Use a service manager only after the queue has been imported,
-reviewed, and provisioned with the approved credential references. Keep
-Attention and verification-difference rows for operator review.
+`supervise` is a foreground controller for automation-safe queued work. When
+automatic OAuth refresh is configured with an OS-keyring refresh credential,
+it refreshes access tokens before live launches, including queued batch
+children. It does not provide provider consent, a secret broker, or remote
+Dovecot credential delivery. Use a service manager only after the queue has
+been imported, reviewed, and provisioned with the approved credential
+references. Keep Attention and verification-difference rows for operator
+review.
 
 ## Linux systemd
 
@@ -100,7 +103,7 @@ host before scheduling a customer migration window.
 ## Operational boundary
 
 This deployment pattern is appropriate for restart-aware supervision of work
-that has already passed MailSwiftSync’s durable gates. It is not evidence that
-MailSwiftSync supports unattended production cutovers: provider OAuth consent
-and refresh, secret-safe remote Dovecot execution, and independent approval of
-Attention rows remain operator responsibilities.
+that has already passed MailSwiftSync’s durable gates. Automatic token refresh
+does not replace provider OAuth consent or initial refresh-token provisioning,
+and it does not make remote Dovecot execution available. Independent approval
+of Attention rows remains an operator responsibility.
