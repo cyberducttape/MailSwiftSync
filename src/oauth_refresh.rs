@@ -12,7 +12,12 @@
 //! every exchange) is honored and persisted by the caller.
 use crate::credentials::SecretString;
 use serde::{Deserialize, Serialize};
-use std::{io::Read, sync::OnceLock, time::Duration};
+use std::{
+    collections::HashMap,
+    io::Read,
+    sync::{Mutex, OnceLock},
+    time::Duration,
+};
 use zeroize::Zeroizing;
 
 /// Bound on the token endpoint response so a hostile or misbehaving endpoint
@@ -36,12 +41,58 @@ pub(crate) struct RefreshRequest<'a> {
 /// the plain password/access-token entries, so an operator who never
 /// configures automatic refresh sees no change to the existing credential
 /// storage.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct OAuthRefreshConfig {
     pub(crate) token_endpoint: String,
     pub(crate) client_id: String,
     pub(crate) client_secret: SecretString,
     pub(crate) refresh_token: SecretString,
+}
+
+/// A rotated refresh token whose provider-side exchange succeeded but whose
+/// local keyring write did not. This stays process-local and zeroizing until
+/// the operator or a later worker can complete the keyring write; it is never
+/// serialized into the ledger or emitted in diagnostics.
+#[derive(Clone, Debug)]
+pub(crate) struct OAuthRefreshRecovery {
+    pub(crate) config: OAuthRefreshConfig,
+    pub(crate) access_token: SecretString,
+    pub(crate) expires_in: Option<u64>,
+}
+
+static PENDING_REFRESH_RECOVERIES: OnceLock<Mutex<HashMap<String, OAuthRefreshRecovery>>> =
+    OnceLock::new();
+
+fn pending_refresh_recoveries() -> &'static Mutex<HashMap<String, OAuthRefreshRecovery>> {
+    PENDING_REFRESH_RECOVERIES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn take_refresh_recovery(key: &str) -> Result<Option<OAuthRefreshRecovery>, String> {
+    pending_refresh_recoveries()
+        .lock()
+        .map_err(|_| "OAuth refresh recovery registry was poisoned".to_owned())
+        .map(|mut recoveries| recoveries.remove(key))
+}
+
+pub(crate) fn put_refresh_recovery(
+    key: String,
+    recovery: OAuthRefreshRecovery,
+) -> Result<(), String> {
+    pending_refresh_recoveries()
+        .lock()
+        .map_err(|_| "OAuth refresh recovery registry was poisoned".to_owned())
+        .map(|mut recoveries| {
+            recoveries.insert(key, recovery);
+        })
+}
+
+pub(crate) fn clear_refresh_recovery(key: &str) -> Result<(), String> {
+    pending_refresh_recoveries()
+        .lock()
+        .map_err(|_| "OAuth refresh recovery registry was poisoned".to_owned())
+        .map(|mut recoveries| {
+            recoveries.remove(key);
+        })
 }
 
 impl OAuthRefreshConfig {
@@ -111,7 +162,9 @@ pub(crate) struct RefreshedToken {
     pub(crate) access_token: SecretString,
     /// Present only when the provider rotates refresh tokens on use. The
     /// caller must persist this back to the credential store or the next
-    /// refresh will fail with an already-consumed token.
+    /// refresh will fail with an already-consumed token. The Form refresh
+    /// path retries that write and retains a process-local recovery record if
+    /// the keyring remains unavailable.
     pub(crate) refresh_token: Option<SecretString>,
     pub(crate) expires_in: Option<u64>,
 }
@@ -369,5 +422,26 @@ mod tests {
             refresh_token: SecretString::from("r"),
         };
         assert!(config.as_request().client_secret.is_none());
+    }
+
+    #[test]
+    fn refresh_recovery_round_trips_without_exposing_secret_material() {
+        let key = format!("test-recovery-{}", uuid::Uuid::new_v4());
+        let recovery = OAuthRefreshRecovery {
+            config: OAuthRefreshConfig {
+                token_endpoint: "https://oauth.example.test/token".into(),
+                client_id: "client".into(),
+                client_secret: SecretString::from("client-secret"),
+                refresh_token: SecretString::from("rotated-refresh"),
+            },
+            access_token: SecretString::from("access-token"),
+            expires_in: Some(3600),
+        };
+        put_refresh_recovery(key.clone(), recovery).unwrap();
+        let recovered = take_refresh_recovery(&key).unwrap().unwrap();
+        assert_eq!(recovered.config.refresh_token.as_str(), "rotated-refresh");
+        assert_eq!(recovered.access_token.as_str(), "access-token");
+        assert_eq!(recovered.expires_in, Some(3600));
+        assert!(!format!("{recovered:?}").contains("access-token"));
     }
 }
