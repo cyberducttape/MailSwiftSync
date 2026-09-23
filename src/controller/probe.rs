@@ -7,7 +7,9 @@
 use super::{CapabilityProbeResult, LiveAuthProof};
 use crate::core;
 use crate::credentials::SecretString;
-use crate::imap_probe::probe_tls_capabilities_with_transport;
+use crate::imap_probe::{
+    probe_tls_authentication_with_transport, probe_tls_capabilities_with_transport,
+};
 use std::sync::mpsc::{self, Receiver};
 
 pub(crate) struct ImapProbeEndpoint {
@@ -54,8 +56,8 @@ pub(crate) fn spawn_live_auth_probe(
 ) -> Receiver<Result<LiveAuthProof, String>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = probe_endpoint(&spec.source).and_then(|_| {
-            probe_endpoint(&spec.destination).map(|_| LiveAuthProof {
+        let result = probe_auth_endpoint(&spec.source).and_then(|_| {
+            probe_auth_endpoint(&spec.destination).map(|_| LiveAuthProof {
                 plan_fingerprint: spec.plan_fingerprint,
                 credential_fingerprint: spec.credential_fingerprint,
             })
@@ -67,6 +69,18 @@ pub(crate) fn spawn_live_auth_probe(
 
 fn probe_endpoint(endpoint: &ImapProbeEndpoint) -> Result<core::ServerCapabilities, String> {
     probe_tls_capabilities_with_transport(
+        &endpoint.endpoint,
+        &endpoint.user,
+        endpoint.password.as_str(),
+        &endpoint.auth,
+        &endpoint.tls,
+        &endpoint.ca_bundle,
+        &endpoint.certificate_pin_sha256,
+    )
+}
+
+fn probe_auth_endpoint(endpoint: &ImapProbeEndpoint) -> Result<(), String> {
+    probe_tls_authentication_with_transport(
         &endpoint.endpoint,
         &endpoint.user,
         endpoint.password.as_str(),
