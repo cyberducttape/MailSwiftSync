@@ -17,6 +17,18 @@ Required CI inputs are `RELEASE_GPG_PRIVATE_KEY_BASE64`,
 inputs intentionally fail the tag workflow instead of publishing unsigned
 artifacts.
 
+## Linux distribution gate
+
+Portable archives and the pinned container image are sufficient for the alpha
+preview. Before a stable Linux release, complete the
+[Linux packaging roadmap](distribution/linux-packaging-roadmap.md): signed
+Debian/Ubuntu and RHEL-family repositories, x86_64 and ARM64 artifacts, shell
+completions, an installed man page, a dependency doctor, deterministic
+upgrade/uninstall behavior, and automated enforcement of the qualified
+imapsync `2.314` engine contract. Do not present the current package from a
+Linux distribution as verification-qualified merely because a transfer can
+run with it.
+
 The container build uses immutable OCI digests for its Debian and Rust base
 images. The imapsync package is independently SHA-256 verified before
 installation. Base-image digest updates are deliberate supply-chain changes

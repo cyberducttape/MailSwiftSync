@@ -161,6 +161,12 @@ For contributors or users building from source:
 cargo run --release
 ```
 
+Linux packaging targets for a stable release are tracked in the
+[Linux packaging roadmap](docs/distribution/linux-packaging-roadmap.md): signed
+Debian/Ubuntu and RHEL-family packages and repositories, x86_64/ARM64 builds,
+shell completions, a man page, and a dependency doctor. The alpha release
+continues to use portable archives and the pinned container image.
+
 If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Preflight** selected and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
 
 ### 3. First migration
@@ -271,7 +277,8 @@ means the requested operation reached its documented terminal condition.
 
 For Linux headless deployments, see the [container deployment guide](docs/container.md).
 The image uses `/var/lib/mailswiftsync` for durable state and an isolated
-`/run/user/10001` runtime volume for short-lived secrets.
+`/run/user/10001` runtime directory for short-lived secrets; mount that path as
+owner-only tmpfs rather than a persistent volume.
 
 `status` emits secret-free JSON containing project/mailbox states and recorded
 process identities. For large ledgers, `status --summary` emits a bounded
