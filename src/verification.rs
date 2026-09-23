@@ -6,6 +6,12 @@ use crate::core;
 /// verification.
 const SUPPORTED_IMAPSYNC_VERSION: &str = "2.314";
 
+pub(crate) fn unqualified_imapsync_message(version: &str) -> String {
+    format!(
+        "[verification] Engine {version} is not qualified for MailSwiftSync verification. Transfer may work, but MailSwiftSync cannot provide trusted migration evidence from this version. Qualified version: {SUPPORTED_IMAPSYNC_VERSION}"
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImapsyncOutputProfile {
     Packaged2314,
@@ -269,6 +275,14 @@ pub(crate) fn parse_dovecot_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unqualified_engine_message_names_the_trusted_version() {
+        assert_eq!(
+            unqualified_imapsync_message("2.315"),
+            "[verification] Engine 2.315 is not qualified for MailSwiftSync verification. Transfer may work, but MailSwiftSync cannot provide trusted migration evidence from this version. Qualified version: 2.314"
+        );
+    }
 
     #[test]
     fn imapsync_accumulator_keeps_latest_summary_after_noisy_output() {

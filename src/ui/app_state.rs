@@ -365,6 +365,18 @@ impl App {
                 .destination_credential_id
                 .trim()
                 .is_empty()
+            || !self
+                .form
+                .profile
+                .source_oauth_refresh_credential_id
+                .trim()
+                .is_empty()
+            || !self
+                .form
+                .profile
+                .destination_oauth_refresh_credential_id
+                .trim()
+                .is_empty()
     }
 
     /// Cheap marker used only to discard a keyring result if the operator

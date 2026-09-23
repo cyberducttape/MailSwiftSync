@@ -16,8 +16,8 @@ single customer migration; MailSwiftSync uses it for the durable project name.
 The per-row `name` remains the mailbox label shown in the queue.
 
 ```csv
-project_name,name,source_host,source_user,source_password,source_credential_id,destination_host,destination_user,destination_password,destination_credential_id
-Finance archive,imap.old.example,finance@example.com,,finance-source,imap.new.example,finance@example.com,,finance-destination
+project_name,name,source_host,source_user,source_credential_id,destination_host,destination_user,destination_credential_id
+Finance archive,finance mailbox,imap.old.example,finance@example.com,finance-source,imap.new.example,finance@example.com,finance-destination
 ```
 
 Required columns are:
@@ -27,7 +27,7 @@ Required columns are:
 - `destination_host`
 - `destination_user`
 
-Optional columns are `project_name`, `source_password`, `destination_password`, `source_credential_id`, `destination_credential_id`, and `name`. Keyring IDs let each row resolve its own credential without putting secrets in the file. Engine options are trusted application settings and cannot be imported from a spreadsheet. If password columns and keyring IDs are omitted, enter credentials in the masked per-row fields after import. Start from the [CSV template](../bulk-migrations-template.csv) when a protected credential-bearing import is genuinely required.
+Optional columns are `project_name`, `source_credential_id`, `destination_credential_id`, and `name`. Password columns are intentionally rejected by default, even when blank; use the masked per-row fields or keyring IDs instead. An explicitly opt-in plaintext example is available as [`bulk-migrations-PLAINTEXT-SECRETS-UNSAFE.csv`](../bulk-migrations-PLAINTEXT-SECRETS-UNSAFE.csv) and requires `MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1`. Engine options are trusted application settings and cannot be imported from a spreadsheet. Start from the [CSV template](../bulk-migrations-template.csv) for the normal protected workflow.
 
 ## Import and review
 

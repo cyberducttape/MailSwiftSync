@@ -222,17 +222,19 @@ pub(crate) fn job_from_values(
     row: usize,
     allow_plaintext_secrets: bool,
 ) -> Result<BulkJob, String> {
-    let source_password_present = values.contains_key("source_password");
-    let destination_password_present = values.contains_key("destination_password");
-
-    if (source_password_present || destination_password_present) && !allow_plaintext_secrets {
-        return Err(
-            "Plaintext credential columns were detected. Use credential IDs instead (source_credential_id, destination_credential_id), or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
-        );
-    }
-
     let source_password = values.remove("source_password").unwrap_or_default();
     let destination_password = values.remove("destination_password").unwrap_or_default();
+    // Direct callers may provide password fields, but plaintext material is
+    // still opt-in. Normal CSV/XLS(X) imports are rejected earlier when the
+    // headers themselves are present unless the operator explicitly enables
+    // plaintext-secret imports.
+    if !allow_plaintext_secrets
+        && (!source_password.trim().is_empty() || !destination_password.trim().is_empty())
+    {
+        return Err(
+            "Plaintext credential values were detected. Use credential IDs instead (source_credential_id, destination_credential_id), or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
+        );
+    }
     let get = |key: &str| {
         values
             .get(key)
@@ -297,7 +299,7 @@ pub(crate) fn validate_headers(
         seen.contains("source_password") || seen.contains("destination_password");
     if has_plaintext_passwords && !allow_plaintext_secrets {
         return Err(
-            "Plaintext credential columns detected. Use credential IDs instead (source_credential_id, destination_credential_id), or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
+            "Plaintext credential columns detected. Remove source_password and destination_password, use credential IDs instead, or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
         );
     }
 

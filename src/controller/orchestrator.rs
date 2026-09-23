@@ -73,7 +73,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 ImapsyncOutputProfile::Unknown,
             )
         };
-        if let Err(error) =
+        let identity_persisted = if let Err(error) =
             persist_engine_identity_before_launch(&tx, &run_id, &job_id, &engine_version)
         {
             imapsync_output_profile = ImapsyncOutputProfile::Unknown;
@@ -83,6 +83,19 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 text: format!(
                     "[verification] engine identity is not durable; output evidence disabled: {error}"
                 ),
+            });
+            false
+        } else {
+            true
+        };
+        if engine == core::Engine::ImapSync
+            && identity_persisted
+            && imapsync_output_profile == ImapsyncOutputProfile::Unknown
+        {
+            let _ = tx.send(Event::RunLine {
+                run_id: run_id.clone(),
+                job_id: job_id.clone(),
+                text: crate::verification::unqualified_imapsync_message(&engine_version),
             });
         }
         let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

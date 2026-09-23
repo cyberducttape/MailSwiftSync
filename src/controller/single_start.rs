@@ -165,9 +165,9 @@ impl App {
                 },
                 None => false,
             };
-            let current_credential_fingerprint = self.form.credential_fingerprint();
+            let current_credential_binding = self.form.credential_binding_fingerprint();
             let credentials_match = self.preflight_credential_fingerprint.as_deref()
-                == Some(current_credential_fingerprint.as_str());
+                == Some(current_credential_binding.as_str());
             let mailbox_ready = match self.job_id.as_deref() {
                 Some(job) => match self.store.mailbox_state(job) {
                     Ok(Some(state)) => state == "ready" || state == "delta_required",
@@ -214,7 +214,7 @@ impl App {
             }
         }
         let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
-        let credential_fingerprint = self.form.credential_fingerprint();
+        let credential_fingerprint = self.form.credential_binding_fingerprint();
         let run_engine = self.form.engine();
         let run_dry_run = self.form.dry_run;
         let (run_project_id, run_job_id) = match (self.project_id.clone(), self.job_id.clone()) {

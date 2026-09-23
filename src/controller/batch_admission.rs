@@ -406,7 +406,7 @@ pub(crate) fn prepare_selected_batch_jobs(
             ));
         }
         if mode.is_live() {
-            let current = job.form.credential_fingerprint();
+            let current = job.form.credential_binding_fingerprint();
             let expected = expected_credential_fingerprints
                 .get(queue_index)
                 .and_then(Option::as_deref);
