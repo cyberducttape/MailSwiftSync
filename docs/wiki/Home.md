@@ -8,7 +8,7 @@ MailSwiftSync is a local mailbox migration control plane. It uses Dovecot's nati
 
 ## Start here
 
-1. Install `doveadm` on or use an operator-managed wrapper for the Dovecot destination; install `imapsync` for the fallback path.
+1. Install local `doveadm` on the Dovecot destination controller, or install `imapsync` for the fallback path. Remote Dovecot execution is unavailable until a secret-safe broker exists.
 2. Open MailSwiftSync and create or select a migration project.
 3. On **Migration plan**, choose the engine and leave **Preflight** selected.
 4. Enter the source and destination account details.

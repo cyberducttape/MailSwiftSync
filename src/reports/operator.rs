@@ -155,6 +155,7 @@ pub(crate) fn build_project_json(
                         "evidence": {
                             "run_id": evidence_run_id,
                             "scope": evidence.evidence_scope().label(),
+                            "verification_level": evidence.verification_level(),
                             "evidence_level": evidence.evidence_level(),
                             "reason": evidence.verification_reason(),
                             "authoritative": evidence.authoritative,

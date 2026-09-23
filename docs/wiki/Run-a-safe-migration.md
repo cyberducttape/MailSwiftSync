@@ -46,6 +46,12 @@ untrusted private CA. Dovecot-native mode accepts a source CA bundle for its
 `imapc` source, but certificate pins are not enforced by the native engine and
 are rejected during validation.
 
+For imapsync, the pin protects MailSwiftSync's authenticated readiness proof
+and live-admission re-authentication. The external transfer engine receives
+the CA-validation settings but does not currently consume MailSwiftSync's leaf
+certificate pin; its transfer connection therefore remains CA-validated rather
+than pin-bound.
+
 ## 5. Run validation
 
 Click **Run preflight**. The **Execution journal** streams output from the selected engine. A successful Dovecot check should authenticate to the remote source and list its mailboxes; a successful imapsync check should show both logins succeeding and a sensible folder map.

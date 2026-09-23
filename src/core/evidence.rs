@@ -129,6 +129,17 @@ impl MailboxEvidence {
         }
     }
 
+    /// Named assurance level exposed to operators and proof consumers. Live
+    /// adapters currently provide aggregate reconciliation; message identity
+    /// sampling and full reconciliation are deliberately not inferred.
+    pub fn verification_level(&self) -> &'static str {
+        if self.unmatched_messages.is_none() || self.failed_messages > 0 {
+            "Level 0 — Process completed, verification incomplete"
+        } else {
+            "Level 2 — Aggregate reconciliation"
+        }
+    }
+
     #[allow(dead_code)]
     pub fn confidence_percent(&self) -> u8 {
         if self.has_verification_exception() {
