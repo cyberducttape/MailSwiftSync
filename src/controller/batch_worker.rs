@@ -21,6 +21,7 @@ const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const MAX_BATCH_PENDING_EVENTS: usize = 4_096;
 
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
+pub(crate) type OAuthRefreshLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
 
 pub(crate) struct BatchWorkerLaunch {
     pub(crate) cancel: Arc<AtomicBool>,
@@ -72,6 +73,7 @@ pub(crate) fn spawn_batch_worker(
         jobs,
     } = context;
     let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
+    let oauth_refresh_locks: OAuthRefreshLocks = Arc::new(Mutex::new(HashMap::new()));
     thread::spawn(move || {
         let failed = Arc::new(AtomicBool::new(false));
         let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
@@ -109,6 +111,7 @@ pub(crate) fn spawn_batch_worker(
             let batch_project_id = batch_project_id.clone();
             let batch_run_id = batch_run_id.clone();
             let resolved_imapsync = Arc::clone(&resolved_imapsync);
+            let oauth_refresh_locks = Arc::clone(&oauth_refresh_locks);
             workers.push(thread::spawn(move || {
                 process_batch_work_items(BatchWorkerContext {
                     concurrency,
@@ -123,6 +126,7 @@ pub(crate) fn spawn_batch_worker(
                     batch_project_id,
                     batch_run_id,
                     resolved_imapsync,
+                    oauth_refresh_locks,
                 });
             }));
         }

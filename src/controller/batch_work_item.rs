@@ -1,6 +1,7 @@
 //! Per-mailbox batch execution worker.
 
 use super::batch::BatchExecutionMode;
+use super::batch_worker::OAuthRefreshLocks;
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
@@ -43,6 +44,45 @@ pub(crate) struct BatchWorkerContext {
     pub(crate) batch_project_id: String,
     pub(crate) batch_run_id: String,
     pub(crate) resolved_imapsync: Arc<std::collections::HashMap<String, ResolvedImapsyncIdentity>>,
+    pub(crate) oauth_refresh_locks: OAuthRefreshLocks,
+}
+
+fn refresh_live_credentials(
+    form: &mut crate::migration_plan::Form,
+    locks: &OAuthRefreshLocks,
+) -> Result<(), String> {
+    form.load_static_configured_keyring_credentials()?;
+    let refreshes = [
+        (
+            true,
+            form.profile.source_auth.clone(),
+            form.profile.source_oauth_refresh_credential_id.clone(),
+        ),
+        (
+            false,
+            form.profile.destination_auth.clone(),
+            form.profile.destination_oauth_refresh_credential_id.clone(),
+        ),
+    ];
+    for (source, auth, refresh_id) in refreshes {
+        if auth != "oauth2" || refresh_id.trim().is_empty() {
+            continue;
+        }
+        let refresh_lock = {
+            let mut lock_map = locks
+                .lock()
+                .map_err(|_| "OAuth refresh lock registry was poisoned".to_owned())?;
+            lock_map
+                .entry(refresh_id.trim().to_owned())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = refresh_lock
+            .lock()
+            .map_err(|_| "OAuth refresh lock was poisoned".to_owned())?;
+        form.refresh_oauth_access_token(source)?;
+    }
+    Ok(())
 }
 
 /// Execute mailbox work items for one batch worker. All output is emitted as
@@ -61,6 +101,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         batch_project_id,
         batch_run_id,
         resolved_imapsync,
+        oauth_refresh_locks,
     } = context;
     let live = mode.is_live();
     while let Ok((index, job_id, child_run_id, checkpoint, mut job)) = job_rx.recv() {
@@ -141,7 +182,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 // every selected mailbox. Refresh immediately before this
                 // worker authenticates and launches the engine, so waiting in
                 // a large queue cannot consume an expired bearer token.
-                if let Err(error) = job.form.reload_configured_keyring_credentials() {
+                if let Err(error) = refresh_live_credentials(&mut job.form, &oauth_refresh_locks) {
                     failed.store(true, Ordering::Relaxed);
                     let _ = tx.send(Event::RunLine {
                         run_id: child_run_id.clone(),
