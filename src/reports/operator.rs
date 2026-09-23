@@ -6,6 +6,10 @@ use crate::{
 };
 use std::path::Path;
 
+fn optional_count(value: Option<u64>) -> String {
+    value.map_or_else(|| "unknown".into(), |count| count.to_string())
+}
+
 pub(crate) fn build_project_report(
     store: &core::StateStore,
     project_id: &str,
@@ -75,7 +79,7 @@ pub(crate) fn build_project_report(
                 )),
                 evidence.source_messages,
                 evidence.destination_messages,
-                evidence.unmatched_messages,
+                optional_count(evidence.unmatched_messages),
                 evidence.failed_messages,
             ));
         } else {
@@ -152,6 +156,7 @@ pub(crate) fn build_project_json(
                             "run_id": evidence_run_id,
                             "scope": evidence.evidence_scope().label(),
                             "evidence_level": evidence.evidence_level(),
+                            "reason": evidence.verification_reason(),
                             "authoritative": evidence.authoritative,
                             "evidence_digest": digest,
                             "source_folders": evidence.source_folders,
@@ -292,7 +297,7 @@ pub(crate) fn build_verification_report(
         evidence.destination_messages,
         evidence.source_bytes,
         evidence.destination_bytes,
-        evidence.unmatched_messages,
+        optional_count(evidence.unmatched_messages),
         evidence.failed_messages,
     );
     if let Some(index) = report.find("- Run ID:") {

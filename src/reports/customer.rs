@@ -76,7 +76,13 @@ pub(crate) fn export_from_store_with_options_and_identity(
         })
         .count();
     let mailbox_exceptions = total_mailboxes.saturating_sub(exact_mailboxes);
-    let message_counts = snapshot.mailboxes.iter().filter_map(|mailbox| {
+    let unmatched_count_unknown = snapshot.mailboxes.iter().any(|mailbox| {
+        mailbox
+            .evidence
+            .as_ref()
+            .is_some_and(|(_, value, _)| value.unmatched_messages.is_none())
+    });
+    let mut message_counts = snapshot.mailboxes.iter().filter_map(|mailbox| {
         mailbox.evidence.as_ref().map(|(_, value, _)| {
             serde_json::json!({
                 "source": value.source_messages,
@@ -98,6 +104,9 @@ pub(crate) fn export_from_store_with_options_and_identity(
             total
         },
     );
+    if unmatched_count_unknown {
+        message_counts["unmatched"] = serde_json::Value::Null;
+    }
     let project = snapshot.project;
     let mailboxes = snapshot
         .mailboxes
@@ -112,6 +121,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "run_id": run_id,
                         "scope": value.evidence_scope().label(),
                         "evidence_level": value.evidence_level(),
+                        "reason": value.verification_reason(),
                         "evidence_digest": evidence_digest(&run_id, &plan_snapshot, &value),
                         "source_folders": value.source_folders,
                         "destination_folders": value.destination_folders,
@@ -289,7 +299,7 @@ mod tests {
                             destination_messages: 1,
                             source_bytes: 1,
                             destination_bytes: 1,
-                            unmatched_messages: 0,
+                            unmatched_messages: Some(0),
                             failed_messages: 0,
                             source_folders: 1,
                             destination_folders: 1,
