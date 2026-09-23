@@ -16,7 +16,10 @@ Release enforcement is defined by the machine-readable
 `tests/provider-evidence/policy.json`, not by wording in this document. The
 release workflow requires a separate passing evidence record for every policy
 phase (dry pilot, live pilot, and recovery test), with the expected imapsync
-engine and version. This Markdown matrix remains the human-readable report.
+engine and version. Evidence is generated or supplied as an external release
+bundle after checkout so its commit field can name the exact immutable release
+SHA; see [the release evidence hand-off](provider-evidence-release.md). This
+Markdown matrix remains the human-readable report.
 
 | Source | Destination | Engine | TLS/auth | Folder namespace | Dovecot/provider version | Dry pilot | Live pilot | Recovery | Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
