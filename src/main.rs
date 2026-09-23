@@ -335,7 +335,7 @@ mod tests {
             destination_messages: 10,
             source_bytes: 100,
             destination_bytes: 100,
-            unmatched_messages: 0,
+            unmatched_messages: Some(0),
             failed_messages: 0,
             source_folders: 2,
             destination_folders: 2,

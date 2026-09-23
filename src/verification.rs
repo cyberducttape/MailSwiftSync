@@ -141,7 +141,10 @@ impl ImapsyncEvidenceAccumulator {
             destination_messages: self.destination_messages?,
             source_bytes: self.source_bytes?,
             destination_bytes: self.destination_bytes?,
-            unmatched_messages: if self.sync_good { 0 } else { 1 },
+            // imapsync's aggregate output does not report a literal unmatched
+            // message count. A missing completion proof is uncertainty, not
+            // evidence that exactly one message was unmatched.
+            unmatched_messages: self.sync_good.then_some(0),
             failed_messages: self.failed_messages?,
             source_folders: self.source_folders?,
             destination_folders: self.destination_folders?,
@@ -247,7 +250,7 @@ pub(crate) fn dovecot_evidence_from_accumulators(
             destination_messages: destination.messages,
             source_bytes: source.bytes,
             destination_bytes: destination.bytes,
-            unmatched_messages: 0,
+            unmatched_messages: Some(0),
             failed_messages: 0,
             source_folders: source.folders,
             destination_folders: destination.folders,
@@ -341,7 +344,7 @@ mod tests {
             .unwrap();
         assert!(!evidence.authoritative);
         assert_eq!(evidence.failed_messages, 2);
-        assert_eq!(evidence.unmatched_messages, 1);
+        assert_eq!(evidence.unmatched_messages, None);
     }
 
     #[test]

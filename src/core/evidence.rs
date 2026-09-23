@@ -9,7 +9,9 @@ pub struct MailboxEvidence {
     pub source_bytes: u64,
     pub destination_bytes: u64,
     /// A literal unresolved-message count when the verifier provides one.
-    pub unmatched_messages: u64,
+    /// `None` means the verifier could not establish a count; it is never a
+    /// sentinel for an unknown or incomplete result.
+    pub unmatched_messages: Option<u64>,
     pub failed_messages: u64,
     pub source_folders: u64,
     pub destination_folders: u64,
@@ -85,7 +87,9 @@ impl MailboxEvidence {
     }
 
     fn has_verification_exception(&self) -> bool {
-        self.failed_messages > 0 || self.unmatched_messages > 0 || self.has_message_level_mismatch()
+        self.failed_messages > 0
+            || self.unmatched_messages.is_some_and(|count| count > 0)
+            || self.has_message_level_mismatch()
     }
 
     pub fn evidence_scope(&self) -> EvidenceScope {
@@ -97,7 +101,7 @@ impl MailboxEvidence {
     }
 
     pub fn evidence_level(&self) -> &'static str {
-        if self.failed_messages > 0 || self.unmatched_messages > 0 {
+        if self.failed_messages > 0 || self.unmatched_messages.map_or(true, |count| count > 0) {
             return "Incomplete evidence";
         }
         if self.has_message_level_mismatch() {
@@ -110,6 +114,18 @@ impl MailboxEvidence {
             "Aggregate match"
         } else {
             "Aggregate mismatch"
+        }
+    }
+
+    pub fn verification_reason(&self) -> Option<&'static str> {
+        if self.unmatched_messages.is_none() {
+            Some("imapsync completion proof absent")
+        } else if self.failed_messages > 0 {
+            Some("engine reported migration errors")
+        } else if self.has_message_level_mismatch() {
+            Some("message-level reconciliation found differences")
+        } else {
+            None
         }
     }
 

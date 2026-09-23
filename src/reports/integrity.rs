@@ -16,7 +16,9 @@ pub(crate) fn evidence_digest(
         evidence.destination_messages,
         evidence.source_bytes,
         evidence.destination_bytes,
-        evidence.unmatched_messages,
+        evidence
+            .unmatched_messages
+            .map_or_else(|| "unknown".to_owned(), |count| count.to_string()),
         evidence.failed_messages,
         evidence.authoritative,
     );

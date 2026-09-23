@@ -113,7 +113,7 @@ impl App {
                     Some((_, evidence, _)) => {
                         ui.label("Durable mailbox reconciliation");
                         if ui.button("Export verification report…").clicked() { self.report_export_result("Verification report", self.export_verification_report()); }
-                        for (label, value) in [("Folders", format!("{} source / {} destination", evidence.source_folders, evidence.destination_folders)), ("Messages", format!("{} source / {} destination", evidence.source_messages, evidence.destination_messages)), ("Bytes", format!("{} source / {} destination", evidence.source_bytes, evidence.destination_bytes)), ("Unmatched", evidence.unmatched_messages.to_string()), ("Failed", evidence.failed_messages.to_string()), ("Evidence level", evidence.evidence_level().into())] {
+                        for (label, value) in [("Folders", format!("{} source / {} destination", evidence.source_folders, evidence.destination_folders)), ("Messages", format!("{} source / {} destination", evidence.source_messages, evidence.destination_messages)), ("Bytes", format!("{} source / {} destination", evidence.source_bytes, evidence.destination_bytes)), ("Unmatched", evidence.unmatched_messages.map_or_else(|| "unknown".into(), |count| count.to_string())), ("Failed", evidence.failed_messages.to_string()), ("Evidence level", evidence.evidence_level().into()), ("Reason", evidence.verification_reason().unwrap_or("none").into())] {
                             ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); });
                         }
                     }
