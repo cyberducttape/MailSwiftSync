@@ -1,4 +1,12 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaResource {
+    /// Provider-reported quota units. IMAP commonly reports STORAGE in KiB;
+    /// the unit is intentionally preserved rather than guessed or converted.
+    pub used: u64,
+    pub limit: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerCapabilities {
@@ -8,6 +16,7 @@ pub struct ServerCapabilities {
     pub special_use_mailboxes: usize,
     pub quota_observed: bool,
     pub quota_exceeded: bool,
+    pub quota_resources: BTreeMap<String, QuotaResource>,
 }
 
 impl ServerCapabilities {
@@ -69,6 +78,7 @@ impl ServerCapabilities {
             special_use_mailboxes,
             quota_observed: false,
             quota_exceeded: false,
+            quota_resources: BTreeMap::new(),
         }
     }
 
@@ -81,12 +91,18 @@ impl ServerCapabilities {
             let mut saw_valid_resource = false;
             let mut index = 2;
             while index + 2 < tokens.len() {
-                let resource = tokens[index].trim_matches(['(', ')']).to_ascii_uppercase();
+                let resource = tokens[index]
+                    .trim_matches(['(', ')', '\r'])
+                    .to_ascii_uppercase();
                 if matches!(resource.as_str(), "STORAGE" | "MESSAGE" | "MESSAGES") {
                     let usage = tokens[index + 1].parse::<u64>();
-                    let limit = tokens[index + 2].parse::<u64>();
+                    let limit = tokens[index + 2]
+                        .trim_matches(['(', ')', '\r'])
+                        .parse::<u64>();
                     if let (Ok(usage), Ok(limit)) = (usage, limit) {
                         saw_valid_resource = true;
+                        self.quota_resources
+                            .insert(resource.clone(), QuotaResource { used: usage, limit });
                         if limit > 0 && usage >= limit {
                             self.quota_exceeded = true;
                         }

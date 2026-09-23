@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Fixed quota admission semantics: a full source mailbox is now reported as
+  advisory because migrations read source mail without deleting it, while an
+  exhausted destination remains a hard block. Authenticated IMAP quota usage
+  and limits are retained for preflight and diagnostic reporting.
 - Fixed release CI with Clippy 1.92+: addressed newly enforced lints and
   explicitly marked intentionally unwired prototype helpers as such.
 - Fixed crash ownership around the internal migration launcher on Unix. The

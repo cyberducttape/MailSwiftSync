@@ -576,7 +576,7 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.destination_host,
         &form.profile.destination_port,
     )?;
-    let source_capabilities = probe_tls_capabilities_with_transport(
+    let _source_capabilities = probe_tls_capabilities_with_transport(
         &source,
         &form.profile.source_user,
         form.source_password.as_str(),
@@ -585,12 +585,9 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.source_ca_bundle,
         &form.profile.source_certificate_pin_sha256,
     )?;
-    if source_capabilities.quota_exceeded {
-        return Err(
-            "source mailbox quota is exhausted according to the authenticated IMAP quota response"
-                .into(),
-        );
-    }
+    // A full source quota does not prevent reading existing messages. Source
+    // quota is advisory here because MailSwiftSync never deletes or modifies
+    // source mail; destination capacity is the admission boundary.
     let destination_capabilities = probe_tls_capabilities_with_transport(
         &destination,
         &form.profile.destination_user,
@@ -601,7 +598,19 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
         &form.profile.destination_certificate_pin_sha256,
     )?;
     if destination_capabilities.quota_exceeded {
-        return Err("destination mailbox quota is exhausted according to the authenticated IMAP quota response".into());
+        let detail = destination_capabilities
+            .quota_resources
+            .get("STORAGE")
+            .map(|quota| {
+                format!(
+                    " (usage {} / limit {} provider units)",
+                    quota.used, quota.limit
+                )
+            })
+            .unwrap_or_default();
+        return Err(format!(
+            "destination mailbox quota is exhausted according to the authenticated IMAP quota response{detail}"
+        ));
     }
     Ok(())
 }

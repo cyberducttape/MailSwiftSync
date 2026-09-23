@@ -86,8 +86,8 @@ pub(crate) fn assess_plan(
             true,
         ),
     ];
-    append_capability_check(&mut checks, "Source", source_capabilities);
-    append_capability_check(&mut checks, "Destination", destination_capabilities);
+    append_capability_check(&mut checks, "Source", source_capabilities, false);
+    append_capability_check(&mut checks, "Destination", destination_capabilities, true);
     if form.engine() == core::Engine::ImapSync {
         checks.push((
             "Transport security".into(),
@@ -110,6 +110,7 @@ fn append_capability_check(
     checks: &mut Vec<(String, String, bool)>,
     side: &str,
     capabilities: Option<&core::ServerCapabilities>,
+    quota_is_blocking: bool,
 ) {
     let Some(capabilities) = capabilities else {
         return;
@@ -128,21 +129,32 @@ fn append_capability_check(
             } else {
                 String::new()
             },
-            quota_summary(capabilities),
+            quota_summary(capabilities, quota_is_blocking),
         ),
-        capabilities.inventory_complete && !capabilities.quota_exceeded,
+        capabilities.inventory_complete && (!quota_is_blocking || !capabilities.quota_exceeded),
     ));
 }
 
-fn quota_summary(capabilities: &core::ServerCapabilities) -> &'static str {
+fn quota_summary(capabilities: &core::ServerCapabilities, quota_is_blocking: bool) -> String {
     if !capabilities.supports("QUOTA") {
-        "quota not advertised"
+        "quota not advertised".into()
     } else if capabilities.quota_exceeded {
-        "quota exceeded"
+        if quota_is_blocking {
+            "quota exceeded; destination capacity check blocked".into()
+        } else {
+            "quota full; source remains readable and is advisory".into()
+        }
     } else if capabilities.quota_observed {
-        "quota reported within limit"
+        let storage = capabilities.quota_resources.get("STORAGE");
+        match storage {
+            Some(quota) => format!(
+                "quota reported within limit (usage {} / limit {} provider units)",
+                quota.used, quota.limit
+            ),
+            None => "quota reported within limit".into(),
+        }
     } else {
-        "quota status unavailable; verify capacity with the provider"
+        "quota status unavailable; verify capacity with the provider".into()
     }
 }
 
