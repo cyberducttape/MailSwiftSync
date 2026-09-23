@@ -15,10 +15,20 @@ pub(crate) struct BatchProjectIdentity {
 pub(crate) struct BatchLaunchAdmission {
     pub(crate) project_id: String,
     pub(crate) job_ids: Vec<String>,
-    pub(crate) selected_indices: Vec<usize>,
-    pub(crate) jobs: Vec<BulkJob>,
+    pub(crate) selected_jobs: Vec<SelectedBatchJob>,
     pub(crate) prepared: PreparedBatchRun,
     pub(crate) active_run: ActiveRunContext,
+}
+
+/// One execution-scoped row with all identity domains joined explicitly.
+/// `queue_index` is only an in-memory position; `durable_job_id` is the
+/// identity persisted in the existing batch project and used for the run.
+#[derive(Clone)]
+pub(crate) struct SelectedBatchJob {
+    pub(crate) queue_index: usize,
+    pub(crate) durable_job_id: String,
+    pub(crate) job: BulkJob,
+    pub(crate) admission: Option<core::BatchAdmissionState>,
 }
 
 pub(crate) struct BatchLaunchRequest<'a> {
@@ -98,7 +108,13 @@ pub(crate) fn admit_batch_launch(
             retry_scope.label()
         ));
     }
-    let jobs = prepare_selected_batch_jobs(
+    if !selected_ids.is_empty() && queue_job_ids.len() != source_jobs.len() {
+        return Err(
+            "Explicit batch selection cannot be resolved because the queue has no complete durable identity; create or restore the batch project first."
+                .into(),
+        );
+    }
+    let selected_jobs = prepare_selected_batch_jobs(
         source_jobs,
         &selected_indices,
         &durable_admissions,
@@ -131,19 +147,45 @@ pub(crate) fn admit_batch_launch(
         &identity.source_endpoint,
         &identity.destination_endpoint,
     )?;
-    let prepared = prepare_batch_run(
-        &jobs,
-        &selected_indices,
-        &job_ids,
-        &durable_admissions,
-        mode,
-    )?;
+    if job_ids.len() != source_jobs.len() {
+        return Err(
+            "Durable batch project does not contain the complete admitted queue; refusing ambiguous execution."
+                .into(),
+        );
+    }
+    if requested_project_id.is_some_and(|requested| requested != project_id) {
+        return Err(
+            "Durable batch project identity changed during admission; refusing execution.".into(),
+        );
+    }
+    if selected_jobs.is_empty() || selected_jobs.len() != selected_indices.len() {
+        return Err(
+            "Selected batch rows could not be resolved in the admitted project; refusing execution."
+                .into(),
+        );
+    }
+    let durable_job_ids = job_ids.iter().collect::<HashSet<_>>();
+    let mut selected_jobs = selected_jobs;
+    for selected in &mut selected_jobs {
+        selected.durable_job_id = job_ids.get(selected.queue_index).cloned().ok_or_else(|| {
+            format!(
+                "Batch queue row {} has no durable job ID in the admitted project.",
+                selected.queue_index + 1
+            )
+        })?;
+        if !durable_job_ids.contains(&selected.durable_job_id) {
+            return Err(
+                "Selected batch row does not belong to the admitted durable project; refusing execution."
+                    .into(),
+            );
+        }
+    }
+    let prepared = prepare_batch_run(&selected_jobs, mode)?;
     let active_run = admit_batch_run(store, &project_id, run_id, mode, prepared.clone())?;
     Ok(BatchLaunchAdmission {
         project_id,
         job_ids,
-        selected_indices,
-        jobs,
+        selected_jobs,
         prepared,
         active_run,
     })
@@ -307,27 +349,23 @@ pub(crate) fn prepare_batch_project(
     source_endpoint: &str,
     destination_endpoint: &str,
 ) -> Result<(String, Vec<String>), String> {
-    let reusable_project = if let Some(project_id) = requested_project_id {
+    if let Some(project_id) = requested_project_id {
         match store.mailboxes(project_id) {
-            Ok(stored) if matches_queue(&stored, mailboxes) => Some(project_id.to_owned()),
-            Ok(_) => None,
+            Ok(stored) if matches_queue(&stored, mailboxes) => {
+                let job_ids = stored.into_iter().map(|job| job.id).collect();
+                return Ok((project_id.to_owned(), job_ids));
+            }
+            Ok(_) => {
+                return Err(
+                    "The existing durable batch no longer matches the admitted queue; refusing to create a replacement project. Re-import the queue as a new batch before retrying.".into(),
+                );
+            }
             Err(error) => {
                 return Err(format!(
                     "Could not inspect the existing durable batch; no new batch was created: {error}"
                 ));
             }
         }
-    } else {
-        None
-    };
-    if let Some(project_id) = reusable_project {
-        let job_ids = store
-            .mailboxes(&project_id)
-            .map_err(|error| format!("Could not read the reusable durable batch: {error}"))?
-            .into_iter()
-            .map(|job| job.id)
-            .collect();
-        return Ok((project_id, job_ids));
     }
     let (project, job_ids) = store
         .create_project_with_mailbox_configs(
@@ -350,7 +388,7 @@ pub(crate) fn prepare_selected_batch_jobs(
     durable_admissions: &[Option<core::BatchAdmissionState>],
     mode: BatchExecutionMode,
     expected_credential_fingerprints: &[Option<String>],
-) -> Result<Vec<BulkJob>, String> {
+) -> Result<Vec<SelectedBatchJob>, String> {
     if mode.is_live() {
         for &index in selected_indices {
             let job = source_jobs
@@ -384,7 +422,7 @@ pub(crate) fn prepare_selected_batch_jobs(
             }
         }
     }
-    let mut jobs = selected_indices
+    let mut selected_jobs = selected_indices
         .iter()
         .map(|&index| {
             let mut job = source_jobs
@@ -392,28 +430,36 @@ pub(crate) fn prepare_selected_batch_jobs(
                 .cloned()
                 .ok_or_else(|| format!("Batch queue row {} no longer exists.", index + 1))?;
             job.form.dry_run = mode.is_preflight();
-            Ok(job)
+            Ok(SelectedBatchJob {
+                queue_index: index,
+                durable_job_id: String::new(),
+                job,
+                admission: durable_admissions.get(index).and_then(Clone::clone),
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    for (selected_index, job) in jobs.iter_mut().enumerate() {
-        let queue_index = selected_indices[selected_index];
+    for selected in &mut selected_jobs {
+        let queue_index = selected.queue_index;
         let credential_load = if mode.is_live() {
             // Do not mint queue-wide OAuth access tokens here. A selected
             // mailbox may wait behind many workers; its live worker refreshes
             // immediately before authentication and engine launch.
-            job.form.load_static_configured_keyring_credentials()
+            selected
+                .job
+                .form
+                .load_static_configured_keyring_credentials()
         } else {
-            job.form.load_configured_keyring_credentials()
+            selected.job.form.load_configured_keyring_credentials()
         };
         if let Err(error) = credential_load {
             return Err(format!(
-                "Could not load credentials for mailbox {} (queue row {}): {error}",
-                selected_index + 1,
-                queue_index + 1
+                "Could not load credentials for queue row {} (durable mailbox {}): {error}",
+                queue_index + 1,
+                selected.durable_job_id
             ));
         }
         if mode.is_live() {
-            let current = job.form.credential_binding_fingerprint();
+            let current = selected.job.form.credential_binding_fingerprint();
             let expected = expected_credential_fingerprints
                 .get(queue_index)
                 .and_then(Option::as_deref);
@@ -425,29 +471,38 @@ pub(crate) fn prepare_selected_batch_jobs(
             }
         }
     }
-    if let Some((selected_index, error)) = jobs
-        .iter()
-        .enumerate()
-        .find_map(|(index, job)| job.form.validate().err().map(|error| (index, error)))
-    {
+    if let Some(selected) = selected_jobs.iter().find_map(|selected| {
+        selected
+            .job
+            .form
+            .validate()
+            .err()
+            .map(|error| (selected, error))
+    }) {
+        let (selected, error) = selected;
         return Err(format!(
             "Mailbox {} is not ready for validation: {error}",
-            selected_indices[selected_index] + 1
+            selected.queue_index + 1
         ));
     }
     if mode.is_live()
-        && jobs
+        && selected_jobs
             .iter()
-            .any(|job| job.form.requires_insecure_transport_ack())
+            .any(|selected| selected.job.form.requires_insecure_transport_ack())
     {
         return Err("Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into());
     }
     if mode.is_live()
-        && let Some(error) = duplicate_destination(&jobs)?
+        && let Some(error) = duplicate_destination(
+            &selected_jobs
+                .iter()
+                .map(|selected| selected.job.clone())
+                .collect::<Vec<_>>(),
+        )?
     {
         return Err(error);
     }
-    Ok(jobs)
+    Ok(selected_jobs)
 }
 
 #[derive(Clone)]
@@ -509,57 +564,57 @@ pub(crate) fn admit_batch_run(
 /// deterministic controller operation and deliberately has no egui or
 /// process-launch responsibilities.
 pub(crate) fn prepare_batch_run(
-    jobs: &[BulkJob],
-    selected_indices: &[usize],
-    queue_job_ids: &[String],
-    durable_admissions: &[Option<core::BatchAdmissionState>],
+    selected_jobs: &[SelectedBatchJob],
     mode: BatchExecutionMode,
 ) -> Result<PreparedBatchRun, String> {
-    let selected_job_ids = selected_indices
+    if selected_jobs.is_empty() {
+        return Err(
+            "Batch admission resolved zero selected durable jobs; refusing to start.".into(),
+        );
+    }
+    let selected_job_ids = selected_jobs
         .iter()
-        .map(|&index| {
-            queue_job_ids
-                .get(index)
-                .cloned()
-                .ok_or_else(|| format!("Batch queue row {} has no durable job ID.", index + 1))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let queue_checkpoints = selected_indices
+        .map(|selected| selected.durable_job_id.clone())
+        .collect::<Vec<_>>();
+    let queue_checkpoints = selected_jobs
         .iter()
-        .zip(jobs.iter())
-        .map(|(&index, job)| {
-            if mode.is_live() && job.form.engine() == core::Engine::Dovecot {
-                durable_admissions
-                    .get(index)
-                    .and_then(Option::as_ref)
+        .map(|selected| {
+            if mode.is_live() && selected.job.form.engine() == core::Engine::Dovecot {
+                selected
+                    .admission
+                    .as_ref()
                     .and_then(|admission| admission.checkpoint.clone())
             } else {
                 None
             }
         })
         .collect::<Vec<_>>();
-    let batch_plan_fingerprints = jobs
+    let batch_plan_fingerprints = selected_jobs
         .iter()
-        .map(|job| crate::plan_identity::fingerprint_digest(&job.form.plan_fingerprint()))
+        .map(|selected| {
+            crate::plan_identity::fingerprint_digest(&selected.job.form.plan_fingerprint())
+        })
         .collect::<Vec<_>>();
     let expected_plans = if mode.is_live() {
         batch_plan_fingerprints.clone()
     } else {
         Vec::new()
     };
-    let snapshots = jobs
+    let snapshots = selected_jobs
         .iter()
         .zip(queue_checkpoints.iter())
-        .map(|(job, checkpoint)| {
-            job.form
+        .map(|(selected, checkpoint)| {
+            selected
+                .job
+                .form
                 .plan_snapshot_with_checkpoint(checkpoint.as_deref())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let child_plans = jobs
+    let child_plans = selected_jobs
         .iter()
         .zip(snapshots.iter())
-        .map(|(job, plan_snapshot)| core::BatchChildPlan {
-            engine: job.form.engine().label().to_owned(),
+        .map(|(selected, plan_snapshot)| core::BatchChildPlan {
+            engine: selected.job.form.engine().label().to_owned(),
             plan_snapshot: plan_snapshot.clone(),
             engine_version: None,
         })
@@ -598,8 +653,9 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        BatchExecutionMode, BatchLaunchRequest, admit_batch_launch, batch_project_identity,
-        decode_persisted_batch_profile, prepare_batch_run, prepare_selected_batch_jobs,
+        BatchExecutionMode, BatchLaunchRequest, SelectedBatchJob, admit_batch_launch,
+        batch_project_identity, decode_persisted_batch_profile, prepare_batch_run,
+        prepare_selected_batch_jobs,
     };
     use crate::{bulk_import::BulkJob, migration_plan::Form};
     use std::collections::HashSet;
@@ -625,12 +681,13 @@ mod tests {
             form: Form::default(),
             state: "imported".into(),
         };
-        let queue_job_ids = vec!["A1".into(), "B1".into(), "C1".into(), "D1".into()];
         let prepared = prepare_batch_run(
-            &[selected_job],
-            &[2],
-            &queue_job_ids,
-            &[None, None, None, None],
+            &[SelectedBatchJob {
+                queue_index: 2,
+                durable_job_id: "C1".into(),
+                job: selected_job,
+                admission: None,
+            }],
             BatchExecutionMode::Preflight,
         )
         .expect("targeted row should map into the full durable queue");
@@ -691,6 +748,146 @@ mod tests {
         .expect("empty queue must be rejected");
         assert!(error.contains("No mailboxes match"));
         assert!(store.latest_project().unwrap().is_none());
+    }
+
+    #[test]
+    fn targeted_admission_preserves_project_and_full_queue_for_every_selection_shape() {
+        for selected_positions in [
+            vec![0],
+            vec![2],
+            vec![1, 3],
+            vec![0, 3],
+            vec![0, 1, 2, 3],
+            Vec::new(),
+        ] {
+            let store = crate::core::StateStore::in_memory().unwrap();
+            let jobs = (0..4)
+                .map(|index| {
+                    let mut form = Form::default();
+                    form.profile.source_host = "source.example".into();
+                    form.profile.destination_host = "destination.example".into();
+                    form.profile.source_user = format!("source-{index}@example.com");
+                    form.profile.destination_user = format!("destination-{index}@example.com");
+                    form.source_password = "source-secret".into();
+                    form.destination_password = "destination-secret".into();
+                    BulkJob {
+                        label: format!("mailbox-{index}"),
+                        form,
+                        state: "queued".into(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mailboxes = jobs
+                .iter()
+                .map(|job| {
+                    Ok((
+                        job.form.profile.source_user.clone(),
+                        job.form.profile.destination_user.clone(),
+                        super::durable_batch_profile_config(&job.form.profile)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()
+                .unwrap();
+            let (project, queue_job_ids) = store
+                .create_project_with_mailbox_configs(
+                    "targeted batch",
+                    "source.example",
+                    "destination.example",
+                    &mailboxes,
+                )
+                .unwrap();
+            let original_project_id = project.id.clone();
+            let original_job_ids = queue_job_ids.clone();
+            let selected_ids = selected_positions
+                .iter()
+                .map(|&index| queue_job_ids[index].clone())
+                .collect::<HashSet<_>>();
+            let admission = admit_batch_launch(BatchLaunchRequest {
+                store: &store,
+                requested_project_id: Some(&project.id),
+                source_jobs: &jobs,
+                queue_job_ids: &queue_job_ids,
+                selected_ids: &selected_ids,
+                retry_scope: super::BulkRetryScope::All,
+                mode: BatchExecutionMode::Preflight,
+                fallback_profile: &jobs[0].form.profile,
+                expected_credential_fingerprints: &[None, None, None, None],
+                run_id: "targeted-selection-test",
+            })
+            .unwrap();
+
+            assert_eq!(admission.project_id, original_project_id);
+            assert_eq!(admission.job_ids, original_job_ids);
+            let expected = if selected_positions.is_empty() {
+                original_job_ids.clone()
+            } else {
+                selected_positions
+                    .iter()
+                    .map(|&index| original_job_ids[index].clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(admission.prepared.selected_job_ids, expected);
+            assert_eq!(admission.active_run.project_id, original_project_id);
+            assert_eq!(admission.active_run.batch_job_ids, expected);
+        }
+    }
+
+    #[test]
+    fn existing_project_mismatch_refuses_subset_replacement() {
+        let store = crate::core::StateStore::in_memory().unwrap();
+        let error = super::prepare_batch_project(
+            &store,
+            Some("missing-project"),
+            &[("source".into(), "destination".into(), "config".into())],
+            "replacement",
+            "source.example",
+            "destination.example",
+        )
+        .expect_err("a missing requested project must not create a replacement");
+        assert!(error.contains("no longer matches the admitted queue"));
+        assert!(store.latest_project().unwrap().is_none());
+    }
+
+    #[test]
+    fn first_batch_admission_creates_one_full_project_before_selecting_rows() {
+        let store = crate::core::StateStore::in_memory().unwrap();
+        let jobs = (0..3)
+            .map(|index| {
+                let mut form = Form::default();
+                form.profile.source_host = "source.example".into();
+                form.profile.destination_host = "destination.example".into();
+                form.profile.source_user = format!("source-{index}@example.com");
+                form.profile.destination_user = format!("destination-{index}@example.com");
+                form.source_password = "source-secret".into();
+                form.destination_password = "destination-secret".into();
+                BulkJob {
+                    label: format!("mailbox-{index}"),
+                    form,
+                    state: "imported".into(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let admission = admit_batch_launch(BatchLaunchRequest {
+            store: &store,
+            requested_project_id: None,
+            source_jobs: &jobs,
+            queue_job_ids: &[],
+            selected_ids: &HashSet::new(),
+            retry_scope: super::BulkRetryScope::All,
+            mode: BatchExecutionMode::Preflight,
+            fallback_profile: &jobs[0].form.profile,
+            expected_credential_fingerprints: &[],
+            run_id: "first-batch-admission-test",
+        })
+        .unwrap();
+
+        assert_eq!(admission.job_ids.len(), jobs.len());
+        assert_eq!(admission.prepared.selected_job_ids, admission.job_ids);
+        assert_eq!(admission.selected_jobs.len(), jobs.len());
+        assert_eq!(
+            store.mailboxes(&admission.project_id).unwrap().len(),
+            jobs.len()
+        );
     }
 
     #[test]

@@ -645,8 +645,24 @@ pub(crate) fn headless_batch_execute_selected(
                 .into(),
         );
     }
+    if requested_ids.is_some_and(HashSet::is_empty) {
+        return Err("selective remediation requested zero mailbox IDs; refusing success".into());
+    }
+    if let Some(requested_ids) = requested_ids {
+        let unknown = requested_ids
+            .iter()
+            .filter(|job_id| !app.bulk_job_ids.contains(*job_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unknown.is_empty() {
+            return Err(format!(
+                "selective remediation includes mailbox ID(s) outside the durable batch: {}",
+                unknown.join(", ")
+            ));
+        }
+    }
     app.bulk_retry_scope = BulkRetryScope::Automation;
-    app.bulk_selected_ids = app
+    let eligible_ids: HashSet<String> = app
         .bulk_job_ids
         .iter()
         .filter_map(|job_id| {
@@ -660,6 +676,20 @@ pub(crate) fn headless_batch_execute_selected(
                 .then_some(job_id.clone())
         })
         .collect();
+    if let Some(requested_ids) = requested_ids {
+        let ineligible = requested_ids
+            .iter()
+            .filter(|job_id| !eligible_ids.contains(*job_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !ineligible.is_empty() {
+            return Err(format!(
+                "selective remediation includes mailbox ID(s) that are not automation-safe in the current retry scope: {}",
+                ineligible.join(", ")
+            ));
+        }
+    }
+    app.bulk_selected_ids = eligible_ids;
     if let Some(requested_ids) = requested_ids {
         let unknown = requested_ids
             .iter()
@@ -740,6 +770,14 @@ pub(crate) fn headless_batch_execute_selected(
             "batch live execution was not admitted; refusing success: {}",
             app.bulk_message
         ));
+    }
+    let live_project_id = app.bulk_project_id.as_deref().ok_or_else(|| {
+        "batch live execution lost its durable project; refusing success".to_owned()
+    })?;
+    if live_project_id != project_id {
+        return Err(
+            "batch live promotion changed the durable project identity; refusing success".into(),
+        );
     }
     wait_for_headless_controller(&mut app)?;
     let final_mailboxes = app
