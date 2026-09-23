@@ -67,7 +67,11 @@ RUN chmod 0755 /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
 ENV MAILSWIFTSYNC_STATE_PATH=/var/lib/mailswiftsync/state.db \
     XDG_RUNTIME_DIR=/run/user/10001
 
-VOLUME ["/var/lib/mailswiftsync", "/run/user/10001"]
+# Durable state is the only declared Docker volume. Runtime credentials and
+# short-lived process files stay in the container's ephemeral filesystem; a
+# deployment should mount /run/user/10001 as tmpfs when it needs an explicit
+# volatile boundary.
+VOLUME ["/var/lib/mailswiftsync"]
 USER mailswiftsync
 WORKDIR /var/lib/mailswiftsync
 ENTRYPOINT ["/usr/local/bin/mailswiftsync"]

@@ -11,9 +11,20 @@ docker run --rm mailswiftsync:local --version
 ```
 
 Persist only the application data volume at `/var/lib/mailswiftsync`. It holds
-the SQLite ledger and should be backed up with the `backup` command. The
-runtime volume `/run/user/10001` is an optional runtime mount for short-lived
-credential files; do not replace it with a shared host directory.
+the SQLite ledger and should be backed up with the `backup` command.
+`/run/user/10001` is intentionally not a Docker volume: it contains
+short-lived credential and process files. Give it an explicit volatile tmpfs
+mount in deployments:
+
+```text
+docker run --rm \
+  --tmpfs /run/user/10001:uid=10001,gid=10001,mode=700 \
+  -v mailswiftsync-state:/var/lib/mailswiftsync \
+  mailswiftsync:local status /var/lib/mailswiftsync/state.db
+```
+
+Never replace the runtime path with a shared host directory or a persistent
+volume.
 
 Example status and backup commands:
 
