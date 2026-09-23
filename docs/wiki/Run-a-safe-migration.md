@@ -77,9 +77,12 @@ the packaged imapsync `2.314` profile: all six aggregate records, the exact
 completion marker, and an explicit error-count record are required. The
 executable version is resolved before launch and selects the streaming parser
 profile. If the version is unavailable or not explicitly supported, the
-transfer may run but its output cannot become verification evidence. Unknown
-wording, extra prose, or missing fields likewise produces incomplete evidence
-rather than success. Do not treat an incomplete summary or failed verification
-as success.
+execution journal says: **Engine [version] is not qualified for MailSwiftSync
+verification. Transfer may work, but MailSwiftSync cannot provide trusted
+migration evidence from this version. Qualified version: 2.314.** The transfer
+may run, but it is transfer-only and must not be represented to a customer as
+verified. Unknown wording, extra prose, or missing fields likewise produces
+incomplete evidence rather than success. Do not treat an incomplete summary or
+failed verification as success.
 
 For a production window, follow the [production migration runbook](Production-runbook.md), including the pilot sequence, crash/restart recovery, Attention review, and report export checklist.

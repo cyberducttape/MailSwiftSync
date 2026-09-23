@@ -128,7 +128,12 @@ MailSwiftSync does not bundle or operate a remote sync service. Install the engi
 - **Dovecot destination:** provide `doveadm` on the local controller host. Remote Dovecot execution is unavailable until a secret-safe broker is implemented; the destination administrator must permit the `imapc` source connection.
 - **Arbitrary IMAP destination:** install `imapsync` locally.
 
-- **Ubuntu/Debian:** download the current `.deb` from the official imapsync distribution, then install it with `sudo apt install ./imapsync-*.deb`.
+MailSwiftSync's trusted imapsync verification contract is qualified only for
+**imapsync 2.314**. Newer or unknown versions may transfer mail, but their
+output is fail-closed and cannot become trusted MailSwiftSync verification
+evidence. Use the exact qualified version when migration proof matters.
+
+- **Ubuntu/Debian:** download the **2.314** `.deb` from the official imapsync distribution, then install it with `sudo apt install ./imapsync-*.deb`. Do not substitute the current package when trusted verification is required.
 - **macOS:** install imapsync using the vendor distribution or your approved package-management workflow.
 - **Windows:** install the official Windows package and enter the full path to `imapsync.exe` in MailSwiftSync.
 
@@ -137,6 +142,10 @@ Verify an imapsync installation in a terminal before configuring accounts:
 ```bash
 imapsync --version
 ```
+
+Confirm that the command reports **2.314** before starting a migration. If the
+execution journal says that the engine is not qualified, treat the run as
+transfer-only and review it manually; it is not a verified migration.
 
 Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
 

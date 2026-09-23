@@ -502,6 +502,28 @@ impl Form {
         {
             self.load_keyring_password(false)?;
         }
+        // An automatic OAuth refresh reference is itself a credential source.
+        // Refresh it during preflight as well as live admission so a profile
+        // that has no ordinary credential ID can still obtain the access token
+        // required for authenticated readiness checks.
+        if auth_method_is_oauth(&self.profile.source_auth)
+            && !self
+                .profile
+                .source_oauth_refresh_credential_id
+                .trim()
+                .is_empty()
+        {
+            self.refresh_oauth_access_token(true)?;
+        }
+        if auth_method_is_oauth(&self.profile.destination_auth)
+            && !self
+                .profile
+                .destination_oauth_refresh_credential_id
+                .trim()
+                .is_empty()
+        {
+            self.refresh_oauth_access_token(false)?;
+        }
         Ok(())
     }
     /// Reload configured references immediately before live admission. The
@@ -621,15 +643,88 @@ impl Form {
         Ok(OAuthRefreshOutcome::Refreshed { expires_in })
     }
 
-    /// A process-local comparison value for the credential material used by
-    /// a dry preflight. It is deliberately never persisted or included in a
-    /// plan snapshot; it only detects a session/keyring change before live
-    /// promotion and forces a fresh dry preflight.
+    /// A process-local comparison value for credential material. It is never
+    /// persisted or included in a plan snapshot and is used only to bind the
+    /// immediate live authentication probe to the bytes it actually tested.
     pub(crate) fn credential_fingerprint(&self) -> String {
         let mut digest = Sha256::new();
         digest.update(self.source_password.as_bytes());
         digest.update([0]);
         digest.update(self.destination_password.as_bytes());
+        format!("{:x}", digest.finalize())
+    }
+
+    /// A process-local identity for the credentials approved during
+    /// preflight. Static passwords and manually supplied OAuth access tokens
+    /// use their material fingerprint. When automatic OAuth refresh is
+    /// configured, the bearer token is intentionally excluded because it is
+    /// expected to rotate; the binding instead covers the account, auth mode,
+    /// refresh keyring reference, and non-secret OAuth endpoint/client ID.
+    pub(crate) fn credential_binding_fingerprint(&self) -> String {
+        let mut digest = Sha256::new();
+        let mut update = |value: &str| {
+            digest.update(value.len().to_string().as_bytes());
+            digest.update([0]);
+            digest.update(value.as_bytes());
+            digest.update([0xff]);
+        };
+        let mut update_side = |side: &str,
+                               host: &str,
+                               user: &str,
+                               auth: &str,
+                               credential_id: &str,
+                               refresh_id: &str,
+                               password: &SecretString,
+                               source: bool| {
+            update(side);
+            update(host);
+            update(user);
+            update(auth);
+            update(credential_id);
+            if auth_method_is_oauth(auth) && !refresh_id.trim().is_empty() {
+                update("automatic-oauth-refresh");
+                update(refresh_id.trim());
+                if let Ok(Some(config)) = self.load_oauth_refresh_config(source) {
+                    update(&config.token_endpoint);
+                    update(&config.client_id);
+                } else {
+                    // The actual refresh/load path fails closed before
+                    // execution when the configured entry is unavailable.
+                    // Keep this marker deterministic for diagnostics without
+                    // including any secret material.
+                    update("oauth-refresh-config-unavailable");
+                }
+            } else {
+                update("static-credential-material");
+                update(&self.material_fingerprint(password));
+            }
+        };
+        update_side(
+            "source",
+            &self.profile.source_host,
+            &self.profile.source_user,
+            &self.profile.source_auth,
+            &self.profile.source_credential_id,
+            &self.profile.source_oauth_refresh_credential_id,
+            &self.source_password,
+            true,
+        );
+        update_side(
+            "destination",
+            &self.profile.destination_host,
+            &self.profile.destination_user,
+            &self.profile.destination_auth,
+            &self.profile.destination_credential_id,
+            &self.profile.destination_oauth_refresh_credential_id,
+            &self.destination_password,
+            false,
+        );
+        format!("{:x}", digest.finalize())
+    }
+
+    fn material_fingerprint(&self, password: &SecretString) -> String {
+        let mut digest = Sha256::new();
+        digest.update(password.as_bytes());
         format!("{:x}", digest.finalize())
     }
     pub(crate) fn validate(&self) -> Result<(), String> {

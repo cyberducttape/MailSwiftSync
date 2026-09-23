@@ -95,7 +95,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             let profile = identity
                 .map(|identity| identity.output_profile)
                 .unwrap_or(ImapsyncOutputProfile::Unknown);
-            if let Err(error) =
+            let identity_persisted = if let Err(error) =
                 persist_engine_identity_before_launch(&tx, &child_run_id, &job_id, &version)
             {
                 let _ = tx.send(Event::RunLine {
@@ -106,9 +106,25 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         index + 1
                     ),
                 });
-                ImapsyncOutputProfile::Unknown
+                false
             } else {
+                true
+            };
+            if identity_persisted && profile == ImapsyncOutputProfile::Unknown {
+                let _ = tx.send(Event::RunLine {
+                    run_id: child_run_id.clone(),
+                    job_id: job_id.clone(),
+                    text: format!(
+                        "[{}] {}",
+                        index + 1,
+                        crate::verification::unqualified_imapsync_message(&version)
+                    ),
+                });
+            }
+            if identity_persisted {
                 profile
+            } else {
+                ImapsyncOutputProfile::Unknown
             }
         } else {
             ImapsyncOutputProfile::Unknown
@@ -465,7 +481,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     "process completed".into()
                 },
                 credential_fingerprint: if job.form.dry_run {
-                    Some(job.form.credential_fingerprint())
+                    Some(job.form.credential_binding_fingerprint())
                 } else {
                     None
                 },

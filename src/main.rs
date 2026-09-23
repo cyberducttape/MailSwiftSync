@@ -763,6 +763,39 @@ mod tests {
     }
 
     #[test]
+    fn automatic_oauth_binding_ignores_rotating_access_tokens() {
+        let mut first = Form::default();
+        first.profile.source_host = "imap.example.test".into();
+        first.profile.source_user = "alice@example.test".into();
+        first.profile.source_auth = "oauth2".into();
+        first.profile.source_oauth_refresh_credential_id = "alice-refresh".into();
+        first.profile.destination_host = "imap.destination.test".into();
+        first.profile.destination_user = "alice@destination.test".into();
+        first.profile.destination_auth = "oauth2".into();
+        first.profile.destination_oauth_refresh_credential_id = "alice-destination-refresh".into();
+        first.source_password = "access-token-a".into();
+        first.destination_password = "destination-token-a".into();
+        let mut second = first.clone();
+        second.source_password = "access-token-b".into();
+        second.destination_password = "destination-token-b".into();
+
+        assert_ne!(
+            first.credential_fingerprint(),
+            second.credential_fingerprint()
+        );
+        assert_eq!(
+            first.credential_binding_fingerprint(),
+            second.credential_binding_fingerprint()
+        );
+
+        second.profile.source_oauth_refresh_credential_id = "other-refresh".into();
+        assert_ne!(
+            first.credential_binding_fingerprint(),
+            second.credential_binding_fingerprint()
+        );
+    }
+
+    #[test]
     fn remote_dovecot_plan_uses_batch_ssh_to_destination() {
         let mut form = dovecot_form();
         form.profile.dovecot_ssh_user = "migration".into();
@@ -1017,6 +1050,58 @@ mod tests {
             .unwrap_err()
             .contains("cannot contain extra_options")
         );
+        let password_headers = [
+            "source_host",
+            "source_user",
+            "source_password",
+            "destination_host",
+            "destination_user",
+            "destination_password",
+        ]
+        .map(String::from);
+        assert!(
+            bulk_import::validate_headers(&password_headers, false)
+                .unwrap_err()
+                .contains("Plaintext credential columns")
+        );
+        assert!(bulk_import::validate_headers(&password_headers, true).is_ok());
+    }
+
+    #[test]
+    fn official_bulk_template_imports_without_password_columns() {
+        let jobs = bulk_import::read_csv(
+            std::path::Path::new("docs/bulk-migrations-template.csv"),
+            &Form::default(),
+        )
+        .expect("the checked-in bulk template must be importable by default");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].label, "Example mailbox");
+        assert!(jobs[0].form.source_password.is_empty());
+        assert!(jobs[0].form.destination_password.is_empty());
+        assert_eq!(
+            jobs[0].form.profile.source_credential_id,
+            "source-keyring-id"
+        );
+        assert_eq!(
+            jobs[0].form.profile.destination_credential_id,
+            "destination-keyring-id"
+        );
+    }
+
+    #[test]
+    fn bulk_import_rejects_nonempty_plaintext_password_values_by_default() {
+        let values = HashMap::from([
+            ("source_host".into(), "old.example".into()),
+            ("source_user".into(), "old@example".into()),
+            ("source_password".into(), "secret".into()),
+            ("destination_host".into(), "new.example".into()),
+            ("destination_user".into(), "new@example".into()),
+        ]);
+        let error = match bulk_import::job_from_values(values, &Form::default(), 2, false) {
+            Ok(_) => panic!("plaintext password values must remain opt-in"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Plaintext credential values"));
     }
 
     #[test]
