@@ -103,10 +103,11 @@ IMAP server, another hosting panel):
    right thing — a source with a nonstandard folder naming scheme (anything
    outside `INBOX`/`Sent`/`Trash`/`Drafts`/`Junk`) is exactly what automap
    is least reliable for.
-4. If the source has a small, low-value quota (some budget or legacy hosts
-   do), check its advertised IMAP `QUOTA` in Preflight rather than assuming
-   headroom; MailSwiftSync surfaces a `source mailbox quota is exhausted`
-   failure explicitly rather than silently truncating a large mailbox.
+4. Treat source quota as informational for a read-only migration. A full
+   source quota does not prevent MailSwiftSync from reading existing mail and
+   MailSwiftSync never deletes source messages. Check the destination quota
+   separately: an exhausted destination quota blocks live admission, while
+   unknown or partial quota data requires an operator capacity check.
 
 ## After the runbook: what these pairings don't give you
 

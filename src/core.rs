@@ -257,6 +257,17 @@ mod tests {
         );
         assert!(caps.quota_observed);
         assert!(caps.quota_exceeded);
+        assert_eq!(
+            caps.quota_resources.get("STORAGE"),
+            Some(&capabilities::QuotaResource {
+                used: 100,
+                limit: 100
+            })
+        );
+        assert_eq!(
+            caps.quota_resources.get("MESSAGE"),
+            Some(&capabilities::QuotaResource { used: 5, limit: 10 })
+        );
     }
 
     #[test]
