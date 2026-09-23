@@ -69,8 +69,16 @@ impl App {
                 return;
             }
         };
-        let selected_indices = admission.selected_indices;
-        let jobs = admission.jobs;
+        let selected_indices = admission
+            .selected_jobs
+            .iter()
+            .map(|selected| selected.queue_index)
+            .collect::<Vec<_>>();
+        let jobs = admission
+            .selected_jobs
+            .iter()
+            .map(|selected| selected.job.clone())
+            .collect::<Vec<_>>();
         let project_id = admission.project_id;
         let job_ids = admission.job_ids;
         let prepared = admission.prepared;
