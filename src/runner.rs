@@ -206,18 +206,13 @@ fn automap_folder_kind(folder: &str) -> Option<&'static str> {
         .next()
         .unwrap_or(folder)
         .to_ascii_lowercase();
-    let kind = if name == "sent" || name.contains("sent mail") || name.contains("sent items") {
-        "sent"
-    } else if name == "trash" || name.contains("deleted") || name.contains("bin") {
-        "trash"
-    } else if name == "junk" || name == "spam" {
-        "junk"
-    } else if name == "drafts" || name == "draft" {
-        "drafts"
-    } else if name == "archive" || name == "all mail" {
-        "archive"
-    } else {
-        return None;
+    let kind = match name.as_str() {
+        "sent" | "sent mail" | "sent items" | "sent messages" => "sent",
+        "trash" | "bin" | "deleted items" | "deleted messages" | "recycle bin" => "trash",
+        "junk" | "junk email" | "spam" => "junk",
+        "draft" | "drafts" => "drafts",
+        "archive" | "all mail" => "archive",
+        _ => return None,
     };
     Some(kind)
 }
@@ -1081,7 +1076,9 @@ pub(crate) fn run_dovecot_verification(
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{persist_engine_identity_before_launch, resolve_imapsync_identity};
+    use super::{
+        automap_folder_kind, persist_engine_identity_before_launch, resolve_imapsync_identity,
+    };
     use crate::{Event, verification::ImapsyncOutputProfile};
     use std::{fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
 
@@ -1128,5 +1125,12 @@ mod tests {
 
         persist_engine_identity_before_launch(&tx, "run", "job", "imapsync 2.314").unwrap();
         receiver.join().unwrap();
+    }
+
+    #[test]
+    fn automap_does_not_classify_unrelated_folder_names_by_substring() {
+        assert_eq!(automap_folder_kind("Cabinet"), None);
+        assert_eq!(automap_folder_kind("Sent Items"), Some("sent"));
+        assert_eq!(automap_folder_kind("[Gmail]/Trash"), Some("trash"));
     }
 }
