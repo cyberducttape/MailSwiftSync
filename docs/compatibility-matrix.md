@@ -46,7 +46,9 @@ Minimum test cases for every row:
 - DNS, certificate validation, authentication, capability, namespace, and
   mailbox-list checks.
 - Empty, small, and large mailboxes; special-use folders; Unicode folder
-  names; and message-size mismatch behavior.
+  names; renamed special-use folders; sparse/high UID mailboxes after expunge;
+  literal-framed and non-UTF-8 messages; duplicate and missing Message-IDs;
+  and message-size mismatch behavior.
 - Cancellation, timeout, process crash, application restart, retry, and final
   delta behavior.
 - Aggregate evidence limits and the exact report produced for mismatches.

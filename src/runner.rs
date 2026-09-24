@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::{Read, Write},
     process::{Command, Stdio},
     sync::{
@@ -64,13 +64,24 @@ pub(crate) struct StreamResult {
 /// imapsync transfer. Engine counters remain useful as a fallback, but they
 /// cannot prove portable message identity; this adapter fetches Message-ID,
 /// INTERNALDATE, and RFC822.SIZE from both accounts and feeds the bounded
-/// records into the shared verifier.
+/// records into the shared verifier. Full RFC822 bodies are intentionally not
+/// downloaded by the default path; forensic body hashing must be opt-in.
 pub(crate) fn run_imap_message_verification(
     form: &crate::Form,
     job_id: &str,
     run_id: &str,
     cancel: &AtomicBool,
 ) -> Result<(core::MailboxEvidence, Vec<core::MessageMismatch>), String> {
+    if form.profile.justfolders
+        || form.profile.addheader
+        || !form.profile.sync_internaldates
+        || form.profile.allowsizemismatch
+    {
+        return Err(
+            "message-level verification is unavailable for this migration plan; refusing to claim exact evidence for justfolders, addheader, disabled internal-date sync, or allowed size mismatches"
+                .into(),
+        );
+    }
     let budget = crate::imap_probe::MessageFetchBudget::new(
         Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
         cancel,
@@ -103,6 +114,30 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_certificate_pin_sha256,
         &budget,
     )?;
+    if source.mailboxes.is_empty() || destination.mailboxes.is_empty() {
+        return Err(
+            "message-level verification refused: one IMAP account returned no messages; refusing to treat an empty dataset as proof"
+                .into(),
+        );
+    }
+    let folder_mapping = infer_automap_folder_mapping(
+        &source.mailboxes,
+        &destination.mailboxes,
+        form.profile.automap,
+    );
+    let expected_destination_folders = source
+        .mailboxes
+        .iter()
+        .map(|folder| {
+            folder_mapping
+                .get(folder)
+                .cloned()
+                .unwrap_or_else(|| folder.clone())
+        })
+        .collect::<HashSet<_>>();
+    if expected_destination_folders != destination.mailboxes {
+        return Err("folder verification failed: selectable mailbox inventories differ after automap resolution".into());
+    }
     let (mismatches, summary) =
         core::MessageVerification::detect_mismatches_with_content_fingerprints(
             job_id,
@@ -111,6 +146,7 @@ pub(crate) fn run_imap_message_verification(
             &destination.messages,
             &source.content_fingerprints,
             &destination.content_fingerprints,
+            &folder_mapping,
         )?;
     let source_bytes = source
         .messages
@@ -122,18 +158,8 @@ pub(crate) fn run_imap_message_verification(
         .values()
         .filter_map(|message| message.size_bytes)
         .fold(0_u64, u64::saturating_add);
-    let source_folders = source
-        .messages
-        .keys()
-        .map(|key| key.mailbox.as_str())
-        .collect::<HashSet<_>>()
-        .len() as u64;
-    let destination_folders = destination
-        .messages
-        .keys()
-        .map(|key| key.mailbox.as_str())
-        .collect::<HashSet<_>>()
-        .len() as u64;
+    let source_folders = source.mailboxes.len() as u64;
+    let destination_folders = destination.mailboxes.len() as u64;
     let evidence = core::MailboxEvidence {
         source_messages: summary.total_source,
         destination_messages: summary.total_destination,
@@ -149,6 +175,51 @@ pub(crate) fn run_imap_message_verification(
         modified_messages: summary.changed_count,
     };
     Ok((evidence, mismatches))
+}
+
+fn infer_automap_folder_mapping(
+    source: &HashSet<String>,
+    destination: &HashSet<String>,
+    automap: bool,
+) -> HashMap<String, String> {
+    if !automap {
+        return HashMap::new();
+    }
+    let mut mapping = HashMap::new();
+    for source_folder in source {
+        let Some(kind) = automap_folder_kind(source_folder) else {
+            continue;
+        };
+        if let Some(destination_folder) = destination
+            .iter()
+            .find(|folder| automap_folder_kind(folder) == Some(kind))
+        {
+            mapping.insert(source_folder.to_owned(), destination_folder.to_owned());
+        }
+    }
+    mapping
+}
+
+fn automap_folder_kind(folder: &str) -> Option<&'static str> {
+    let name = folder
+        .rsplit('/')
+        .next()
+        .unwrap_or(folder)
+        .to_ascii_lowercase();
+    let kind = if name == "sent" || name.contains("sent mail") || name.contains("sent items") {
+        "sent"
+    } else if name == "trash" || name.contains("deleted") || name.contains("bin") {
+        "trash"
+    } else if name == "junk" || name == "spam" {
+        "junk"
+    } else if name == "drafts" || name == "draft" {
+        "drafts"
+    } else if name == "archive" || name == "all mail" {
+        "archive"
+    } else {
+        return None;
+    };
+    Some(kind)
 }
 
 /// Inputs for one externally executed migration process. Keeping these

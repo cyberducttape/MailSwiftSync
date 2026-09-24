@@ -2527,7 +2527,7 @@ mod tests {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
         form.profile.source_tls = "plain".into();
-        let args = engine::imapsync_args(&form.profile, "source", "destination", true, true, 1);
+        let args = engine::imapsync_args(&form.profile, true, 1);
 
         assert!(args.iter().any(|arg| arg == "--nossl1"));
         assert!(args.iter().any(|arg| arg == "--notls1"));
@@ -2541,14 +2541,7 @@ mod tests {
         form.profile.engine = core::Engine::ImapSync;
         form.profile.source_auth = "oauth2".into();
         form.profile.destination_auth = "oauth2".into();
-        let args = engine::imapsync_args(
-            &form.profile,
-            "source-access-token",
-            "destination-access-token",
-            true,
-            true,
-            1,
-        );
+        let args = engine::imapsync_preview_args(&form.profile, true, 1);
         assert!(
             args.windows(2)
                 .any(|pair| pair == ["--authmech1", "XOAUTH2"])
@@ -2571,24 +2564,15 @@ mod tests {
     fn imapsync_argument_builder_never_materializes_runtime_credentials() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
-        let args = engine::imapsync_args(
-            &form.profile,
-            "source-secret",
-            "destination-secret",
-            false,
-            false,
-            1,
-        );
+        let args = engine::imapsync_args(&form.profile, false, 1);
         assert!(!args.iter().any(|arg| arg.contains("source-secret")));
         assert!(!args.iter().any(|arg| arg.contains("destination-secret")));
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--password1", "••••••••"])
-        );
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--password2", "••••••••"])
-        );
+        assert!(!args.iter().any(|arg| {
+            arg == "--password1"
+                || arg == "--password2"
+                || arg == "--oauthaccesstoken1"
+                || arg == "--oauthaccesstoken2"
+        }));
     }
 
     #[test]

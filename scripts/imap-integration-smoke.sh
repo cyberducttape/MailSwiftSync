@@ -229,6 +229,76 @@ Content-Type: text/plain; charset=utf-8
 This message is a disposable integration fixture.
 EOF
 
+# Keep these fixtures deliberately awkward.  They are Maildir files rather
+# than generated UTF-8 strings so Dovecot exposes the same RFC822 bytes that
+# an IMAP FETCH literal would expose to the verifier.
+literal_message="$workspace/source/mail/$user/Maildir/new/literal-framing.eml"
+printf 'From: migration-lab@example.test\r\nTo: lab@example.test\r\nSubject: literal framing\r\nMessage-ID: <mailswiftsync-literal-framing@example.test>\r\nDate: Tue, 01 Jan 2030 00:02:00 +0000\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 34\r\n\r\nfirst line\r\nFrom not an mbox separator\r\n' > "$literal_message"
+
+latin1_message="$workspace/source/mail/$user/Maildir/new/non-utf8.eml"
+printf 'From: migration-lab@example.test\r\nTo: lab@example.test\r\nSubject: non UTF-8 body\r\nMessage-ID: <mailswiftsync-non-utf8@example.test>\r\nDate: Tue, 01 Jan 2030 00:03:00 +0000\r\nContent-Type: text/plain; charset=iso-8859-1\r\n\r\ncaf\351 et cr\350me\r\n' > "$latin1_message"
+
+# The source provider calls this folder "Sent Items".  Its special-use role
+# is intentionally represented by the name, not by assuming the provider's
+# canonical "Sent" spelling.
+mkdir -p "$workspace/source/mail/$user/Maildir/.Sent Items"/{cur,new,tmp}
+special_message="$workspace/source/mail/$user/Maildir/.Sent Items/new/renamed-special-use.eml"
+cat > "$special_message" <<'EOF'
+From: migration-lab@example.test
+To: lab@example.test
+Subject: renamed special-use folder
+Message-ID: <mailswiftsync-renamed-special-use@example.test>
+Date: Tue, 01 Jan 2030 00:04:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+This message must remain attributable after folder renaming.
+EOF
+
+# Two distinct messages with the same Message-ID exercise multiplicity-aware
+# reconciliation.  Their sizes/dates differ, so a verifier must not collapse
+# them into one identity or report the second as an unrelated extra.
+for suffix in one two; do
+  duplicate_message="$workspace/source/mail/$user/Maildir/new/duplicate-$suffix.eml"
+  if [[ "$suffix" == one ]]; then
+    duplicate_subject="duplicate one"
+    duplicate_date="00:05:00"
+  else
+    duplicate_subject="duplicate two"
+    duplicate_date="00:06:00"
+  fi
+  cat > "$duplicate_message" <<EOF
+From: migration-lab@example.test
+To: lab@example.test
+Subject: $duplicate_subject
+Message-ID: <mailswiftsync-duplicate@example.test>
+Date: Tue, 01 Jan 2030 $duplicate_date +0000
+Content-Type: text/plain; charset=utf-8
+
+Duplicate fixture occurrence: $suffix.
+EOF
+done
+
+# Exercise UID gaps in the real server: create 100 messages in a separate
+# mailbox, force Dovecot to assign UIDs, then expunge the first 90.  EXISTS is
+# consequently 10 while the surviving UIDs are high (typically 91..100).
+mkdir -p "$workspace/source/mail/$user/Maildir/.Sparse"/{cur,new,tmp}
+for index in $(seq 1 100); do
+  cat > "$workspace/source/mail/$user/Maildir/.Sparse/new/sparse-$index.eml" <<EOF
+From: migration-lab@example.test
+To: lab@example.test
+Subject: sparse UID fixture $index
+Message-ID: <mailswiftsync-sparse-$index@example.test>
+Date: Tue, 01 Jan 2030 01:00:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+Sparse UID fixture message $index.
+EOF
+done
+
+# Select/expunge through Dovecot so the Maildir fixture is tested with actual
+# UID assignment rather than relying on filename order.
+doveadm -c "$workspace/source.conf" expunge -u "$user" mailbox Sparse uid 1:90
+
 binary="$(command -v mailswiftsync)"
 imapsync_path="$(command -v imapsync)"
 doveadm_path="$(command -v doveadm)"
@@ -367,11 +437,42 @@ if ! grep -R -F -l -- "Message-ID: <mailswiftsync-integration-fixture@example.te
   exit 1
 fi
 echo "PASS: destination retained the fixture Message-ID"
-if [[ "$destination_messages" -lt 2 ]] || ! grep -R -F -l -- "Message-ID: <mailswiftsync-incremental-fixture@example.test>" \
+if [[ "$destination_messages" -lt 17 ]] || ! grep -R -F -l -- "Message-ID: <mailswiftsync-incremental-fixture@example.test>" \
   "$workspace/destination/mail/$user/Maildir/cur" \
   "$workspace/destination/mail/$user/Maildir/new" >/dev/null 2>&1; then
   echo "FAIL: destination is missing the incremental fixture Message-ID" >&2
   exit 1
 fi
 echo "PASS: destination retained both initial and incremental Message-IDs"
+for message_id in \
+  mailswiftsync-literal-framing@example.test \
+  mailswiftsync-non-utf8@example.test \
+  mailswiftsync-renamed-special-use@example.test; do
+  if ! grep -R -F -l -- "Message-ID: <$message_id>" \
+    "$workspace/destination/mail/$user/Maildir" >/dev/null 2>&1; then
+    echo "FAIL: destination is missing edge-case fixture Message-ID <$message_id>" >&2
+    exit 1
+  fi
+done
+for index in 1 100; do
+  if ! grep -R -F -l -- "Message-ID: <mailswiftsync-sparse-$index@example.test>" \
+    "$workspace/destination/mail/$user/Maildir" >/dev/null 2>&1; then
+    echo "FAIL: destination is missing sparse UID fixture message $index" >&2
+    exit 1
+  fi
+done
+sparse_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-sparse-" \
+  "$workspace/destination/mail/$user/Maildir" | wc -l)"
+if [[ "$sparse_count" -ne 10 ]]; then
+  echo "FAIL: destination retained $sparse_count sparse UID messages; expected 10" >&2
+  exit 1
+fi
+echo "PASS: destination retained sparse-UID fixture endpoints"
+duplicate_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-duplicate@example.test>" \
+  "$workspace/destination/mail/$user/Maildir" | wc -l)"
+if [[ "$duplicate_count" -ne 2 ]]; then
+  echo "FAIL: destination retained $duplicate_count duplicate-ID messages; expected 2" >&2
+  exit 1
+fi
+echo "PASS: destination retained literal, non-UTF-8, renamed special-use, and duplicate-ID fixtures"
 echo "PASS: MailSwiftSync product integration copied $destination_messages message(s) through ${test_engine}"

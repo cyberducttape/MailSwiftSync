@@ -8,7 +8,7 @@ use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
@@ -78,21 +78,153 @@ fn read_imap_tagged_with_limit<S: Read>(
     buffer: &mut [u8; 4096],
     max_bytes: usize,
 ) -> Result<(), String> {
+    let mut raw_response = Vec::new();
     loop {
         let count = stream.read(buffer).map_err(|e| e.to_string())?;
         if count == 0 {
             return Err(format!("IMAP connection closed before {tag} completed"));
         }
-        response.push_str(&String::from_utf8_lossy(&buffer[..count]));
-        if response.lines().any(|line| is_tagged_response(line, tag)) {
+        raw_response.extend_from_slice(&buffer[..count]);
+        if raw_response.len() > max_bytes {
+            return Err(format!(
+                "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
+            ));
+        }
+        response.clear();
+        response.push_str(&String::from_utf8_lossy(&raw_response));
+        if tagged_response_outside_literals(&raw_response, tag) {
             return Ok(());
+        }
+    }
+}
+
+fn read_imap_tagged_with_budget<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+    max_bytes: usize,
+    budget: &MessageFetchBudget<'_>,
+) -> Result<(), String> {
+    let mut raw_response = Vec::new();
+    let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        budget.check()?;
+        if Instant::now() >= no_progress_deadline {
+            return Err(format!("IMAP response for {tag} stalled for 15 seconds"));
+        }
+        match stream.read(buffer) {
+            Ok(0) => return Err(format!("IMAP connection closed before {tag} completed")),
+            Ok(count) => {
+                no_progress_deadline = Instant::now() + Duration::from_secs(15);
+                raw_response.extend_from_slice(&buffer[..count]);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        if raw_response.len() > max_bytes {
+            return Err(format!(
+                "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
+            ));
+        }
+        response.clear();
+        response.push_str(&String::from_utf8_lossy(&raw_response));
+        if tagged_response_outside_literals(&raw_response, tag) {
+            return Ok(());
+        }
+    }
+}
+
+fn read_imap_tagged_bytes_with_budget<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    buffer: &mut [u8; 4096],
+    max_bytes: usize,
+    budget: &MessageFetchBudget<'_>,
+) -> Result<Vec<u8>, String> {
+    let mut response = Vec::new();
+    let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        budget.check()?;
+        if Instant::now() >= no_progress_deadline {
+            return Err(format!("IMAP response for {tag} stalled for 15 seconds"));
+        }
+        match stream.read(buffer) {
+            Ok(0) => return Err(format!("IMAP connection closed before {tag} completed")),
+            Ok(count) => {
+                no_progress_deadline = Instant::now() + Duration::from_secs(15);
+                response.extend_from_slice(&buffer[..count]);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
         }
         if response.len() > max_bytes {
             return Err(format!(
                 "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
             ));
         }
+        if tagged_response_outside_literals(&response, tag) {
+            return Ok(response);
+        }
     }
+}
+
+/// Locate a tagged completion line without interpreting bytes inside IMAP
+/// literals as protocol framing. Literal payloads are arbitrary octets and
+/// may contain lines that look exactly like the command tag.
+fn tagged_response_outside_literals(response: &[u8], tag: &str) -> bool {
+    let tag = tag.as_bytes();
+    let mut offset = 0;
+    while offset < response.len() {
+        let Some(relative_end) = response[offset..]
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+        else {
+            return false;
+        };
+        let line_end = offset + relative_end;
+        let line = &response[offset..line_end];
+        if line.starts_with(tag)
+            && line
+                .get(tag.len())
+                .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            return true;
+        }
+        let literal_length = line
+            .strip_suffix(b"}")
+            .and_then(|line| line.iter().rposition(|byte| *byte == b'{'))
+            .and_then(|start| std::str::from_utf8(&line[start + 1..line.len() - 1]).ok())
+            .and_then(|length| {
+                length
+                    .strip_suffix('+')
+                    .unwrap_or(length)
+                    .parse::<usize>()
+                    .ok()
+            });
+        offset = line_end + 2;
+        if let Some(length) = literal_length {
+            if response.len().saturating_sub(offset) < length {
+                return false;
+            }
+            offset += length;
+        }
+    }
+    false
 }
 
 const MAX_IMAP_LIST_LINE_BYTES: usize = 64 * 1024;
@@ -102,6 +234,11 @@ const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
+// The current verifier intentionally remains an in-memory implementation. Use
+// a conservative estimated budget so a large account fails closed instead of
+// allowing the message map and its reconciliation indexes to exhaust the
+// process. SQLite-backed streaming reconciliation can raise this safely.
+const MAX_ESTIMATED_MESSAGE_STATE_BYTES: usize = 256 * 1024 * 1024;
 
 pub(crate) struct MessageFetchBudget<'a> {
     deadline: Instant,
@@ -109,6 +246,7 @@ pub(crate) struct MessageFetchBudget<'a> {
 }
 
 pub(crate) struct FetchedAccountMessages {
+    pub(crate) mailboxes: HashSet<String>,
     pub(crate) messages: crate::core::ExtractedMessages,
     pub(crate) content_fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
 }
@@ -793,7 +931,14 @@ pub(crate) fn fetch_tls_mailbox_messages(
         .map_err(|error| format!("{host}: could not select mailbox: {error}"))?;
     let mut response = String::new();
     let mut buffer = [0; 4096];
-    read_imap_tagged_with_limit(&mut stream, "v001", &mut response, &mut buffer, 1_048_576)?;
+    read_imap_tagged_with_budget(
+        &mut stream,
+        "v001",
+        &mut response,
+        &mut buffer,
+        1_048_576,
+        budget,
+    )?;
     if !imap_command_succeeded(&response, "v001") {
         return Err(imap_command_failure(
             &response,
@@ -802,31 +947,56 @@ pub(crate) fn fetch_tls_mailbox_messages(
             host,
         ));
     }
-    let (exists, uidvalidity) = parse_selected_mailbox(&response, host, mailbox)?;
+    let (_exists, uidvalidity) = parse_selected_mailbox(&response, host, mailbox)?;
+    // EXISTS is a message count, not a UID upper bound.  UIDs can start at
+    // 100 (or contain arbitrary gaps after expunges), so UID FETCH 1:EXISTS
+    // can silently fetch nothing.  Enumerate the actual UID set first.
+    let search_tag = "v002";
+    stream
+        .write_all(format!("{search_tag} UID SEARCH ALL\r\n").as_bytes())
+        .map_err(|error| format!("{host}: could not search mailbox UIDs: {error}"))?;
+    response.clear();
+    read_imap_tagged_with_budget(
+        &mut stream,
+        search_tag,
+        &mut response,
+        &mut buffer,
+        1_048_576,
+        budget,
+    )?;
+    if !imap_command_succeeded(&response, search_tag) {
+        return Err(imap_command_failure(
+            &response,
+            search_tag,
+            "SEARCH mailbox UIDs",
+            host,
+        ));
+    }
+    let uids = parse_uid_search_response(&response, host, mailbox)?;
     let mut messages = HashMap::new();
     let mut content_fingerprints = HashMap::new();
-    let mut start = 1_u64;
-    let mut page = 0_u64;
-    while start <= exists {
+    for (page, uid_page) in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize).enumerate() {
         budget.check()?;
-        let end = start
-            .saturating_add(MESSAGE_FETCH_PAGE_SIZE.saturating_sub(1))
-            .min(exists);
-        let tag = format!("v{:03}", page + 2);
+        let tag = format!("v{:03}", page + 3);
+        let uid_set = uid_page
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         let command = format!(
-            "{tag} UID FETCH {start}:{end} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)] BODY.PEEK[])\r\n"
+            "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])\r\n"
         );
         stream
             .write_all(command.as_bytes())
             .map_err(|error| format!("{host}: could not fetch mailbox metadata: {error}"))?;
-        response.clear();
-        read_imap_tagged_with_limit(
+        let raw_response = read_imap_tagged_bytes_with_budget(
             &mut stream,
             &tag,
-            &mut response,
             &mut buffer,
             MAX_MESSAGE_FETCH_RESPONSE_BYTES,
+            budget,
         )?;
+        let response = String::from_utf8_lossy(&raw_response);
         if !imap_command_succeeded(&response, &tag) {
             return Err(imap_command_failure(
                 &response,
@@ -836,7 +1006,7 @@ pub(crate) fn fetch_tls_mailbox_messages(
             ));
         }
         let (page_messages, page_fingerprints) =
-            parse_message_fetch_response_with_fingerprints(&response, mailbox, uidvalidity)?;
+            parse_message_fetch_response_bytes(&raw_response, mailbox, uidvalidity)?;
         for (key, message) in page_messages {
             if messages.insert(key, message).is_some() {
                 return Err(format!(
@@ -848,6 +1018,13 @@ pub(crate) fn fetch_tls_mailbox_messages(
                     "{host}: mailbox {mailbox} exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
                 ));
             }
+            if estimated_message_state_bytes(&messages, &content_fingerprints)
+                > MAX_ESTIMATED_MESSAGE_STATE_BYTES
+            {
+                return Err(format!(
+                    "{host}: mailbox {mailbox} exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
+                ));
+            }
         }
         for (key, fingerprint) in page_fingerprints {
             if messages.contains_key(&key) {
@@ -857,11 +1034,38 @@ pub(crate) fn fetch_tls_mailbox_messages(
                 content_fingerprints.insert(key, fingerprint);
             }
         }
-        start = end.saturating_add(1);
-        page = page.saturating_add(1);
+    }
+    if messages.len() != uids.len() {
+        return Err(format!(
+            "{host}: mailbox {mailbox} changed or returned an incomplete FETCH response (searched {} UIDs, fetched {})",
+            uids.len(),
+            messages.len()
+        ));
     }
     let _ = stream.write_all(b"v999 LOGOUT\r\n");
     Ok((messages, content_fingerprints))
+}
+
+fn parse_uid_search_response(
+    response: &str,
+    host: &str,
+    mailbox: &str,
+) -> Result<Vec<u64>, String> {
+    let line = response
+        .lines()
+        .find(|line| line.starts_with("* SEARCH"))
+        .ok_or_else(|| format!("{host}: SEARCH {mailbox} did not return a UID list"))?;
+    let mut uids = line
+        .split_whitespace()
+        .skip(2)
+        .map(|uid| {
+            uid.parse::<u64>()
+                .map_err(|_| format!("{host}: SEARCH {mailbox} returned invalid UID {uid}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    uids.sort_unstable();
+    uids.dedup();
+    Ok(uids)
 }
 
 /// Reconcile an entire IMAP account by enumerating selectable folders first.
@@ -914,6 +1118,7 @@ pub(crate) fn fetch_tls_account_messages(
     }
     mailboxes.sort();
     mailboxes.dedup();
+    let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
     let mut all_messages = HashMap::new();
     let mut all_fingerprints = HashMap::new();
     for mailbox in mailboxes {
@@ -940,13 +1145,38 @@ pub(crate) fn fetch_tls_account_messages(
                     "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
                 ));
             }
+            if estimated_message_state_bytes(&all_messages, &all_fingerprints)
+                > MAX_ESTIMATED_MESSAGE_STATE_BYTES
+            {
+                return Err(format!(
+                    "{host}: account exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
+                ));
+            }
         }
         all_fingerprints.extend(folder_fingerprints);
     }
     Ok(FetchedAccountMessages {
+        mailboxes: mailbox_inventory,
         messages: all_messages,
         content_fingerprints: all_fingerprints,
     })
+}
+
+fn estimated_message_state_bytes(
+    messages: &crate::core::ExtractedMessages,
+    fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
+) -> usize {
+    messages
+        .iter()
+        .map(|(key, message)| {
+            512usize
+                .saturating_add(key.mailbox.len())
+                .saturating_add(key.uid.len())
+                .saturating_add(message.message_id.as_deref().map_or(0, str::len))
+                .saturating_add(message.internal_date.as_deref().map_or(0, str::len))
+                .saturating_add(fingerprints.get(key).map_or(0, String::len))
+        })
+        .fold(0usize, usize::saturating_add)
 }
 
 fn parse_selected_mailbox(
@@ -1034,6 +1264,49 @@ fn parse_message_fetch_response_with_fingerprints(
     Ok((messages, content_fingerprints))
 }
 
+fn parse_message_fetch_response_bytes(
+    response: &[u8],
+    mailbox: &str,
+    uidvalidity: Option<u64>,
+) -> Result<
+    (
+        crate::core::ExtractedMessages,
+        HashMap<crate::core::MailboxMessageKey, String>,
+    ),
+    String,
+> {
+    let starts = fetch_record_starts_bytes(response);
+    let mut messages = HashMap::new();
+    for (index, start) in starts.iter().copied().enumerate() {
+        let end = starts.get(index + 1).copied().unwrap_or(response.len());
+        let record = &response[start..end];
+        let first_line_end = record
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+            .ok_or_else(|| "IMAP FETCH record had no line terminator".to_owned())?;
+        let first_line = String::from_utf8_lossy(&record[..first_line_end]);
+        let uid = fetch_number(&first_line, "UID")
+            .ok_or_else(|| "IMAP FETCH record omitted UID".to_owned())?
+            .to_string();
+        let key = match uidvalidity {
+            Some(value) => {
+                crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
+            }
+            None => crate::core::MailboxMessageKey::new(mailbox, uid.clone()),
+        };
+        messages.insert(
+            key,
+            crate::core::ExtractedMessage {
+                message_id: fetch_message_id_bytes(record).filter(|value| !value.is_empty()),
+                uid: Some(uid),
+                size_bytes: fetch_number(&first_line, "RFC822.SIZE"),
+                internal_date: fetch_quoted(&first_line, "INTERNALDATE"),
+            },
+        );
+    }
+    Ok((messages, HashMap::new()))
+}
+
 /// Locate untagged FETCH record boundaries while skipping every IMAP literal.
 /// A raw message body is arbitrary octets and can itself contain lines that
 /// look like `* n FETCH`; treating those bytes as protocol framing would
@@ -1064,10 +1337,39 @@ fn fetch_record_starts(response: &str) -> Vec<usize> {
     starts
 }
 
+fn fetch_record_starts_bytes(response: &[u8]) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    while offset < response.len() {
+        let Some(relative_end) = response[offset..]
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+        else {
+            break;
+        };
+        let line_end = offset + relative_end;
+        let line = &response[offset..line_end];
+        if line.starts_with(b"* ") && line.windows(7).any(|part| part == b" FETCH ") {
+            starts.push(offset);
+        }
+        offset = line_end + 2;
+        if let Some(literal_size) = imap_literal_size_bytes(line) {
+            offset = offset.saturating_add(literal_size);
+        }
+    }
+    starts
+}
+
 fn imap_literal_size(line: &str) -> Option<usize> {
     let close = line.strip_suffix('}')?;
     let open = close.rfind('{')?;
     close[open + 1..].parse::<usize>().ok()
+}
+
+fn imap_literal_size_bytes(line: &[u8]) -> Option<usize> {
+    let line = line.strip_suffix(b"}")?;
+    let start = line.iter().rposition(|byte| *byte == b'{')?;
+    std::str::from_utf8(&line[start + 1..]).ok()?.parse().ok()
 }
 
 fn fetch_content_fingerprint(record: &str) -> Option<String> {
@@ -1131,6 +1433,37 @@ fn fetch_message_id(record: &str) -> Option<String> {
     })
 }
 
+fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
+    let marker = b"BODY[HEADER.FIELDS (MESSAGE-ID)]";
+    let marker_start = record
+        .windows(marker.len())
+        .position(|part| part == marker)?
+        + marker.len();
+    let literal = record[marker_start..].strip_prefix(b" ")?;
+    let literal_end = literal.windows(3).position(|part| part == b"}\r\n")?;
+    let size = std::str::from_utf8(&literal[1..literal_end])
+        .ok()?
+        .parse::<usize>()
+        .ok()?;
+    let body_start = marker_start
+        + record[marker_start..]
+            .windows(2)
+            .position(|part| part == b"\r\n")?
+        + 2;
+    let body = record.get(body_start..body_start + size)?;
+    String::from_utf8_lossy(body).lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim().eq_ignore_ascii_case("message-id").then(|| {
+            value
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_owned()
+        })
+    })
+}
+
 pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
     !form.dry_run
         && form.engine() == core::Engine::ImapSync
@@ -1144,6 +1477,7 @@ mod tests {
         MessageFetchBudget, authenticated_list_command, parse_list_mailbox_name,
         parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
         read_imap_list_response, read_imap_list_response_with_mailboxes,
+        tagged_response_outside_literals,
     };
     use std::io::{self, Cursor, Read};
     use std::sync::atomic::AtomicBool;
@@ -1174,6 +1508,28 @@ mod tests {
             authenticated_list_command(false),
             b"a005 LIST \"\" \"*\"\r\n"
         );
+    }
+
+    #[test]
+    fn tagged_reader_ignores_command_tag_inside_literal_payload() {
+        let payload = "message text\r\nv002 OK this is body text\r\nand it is still literal payload bytes\r\n";
+        let response = format!(
+            "* 1 FETCH (UID 100 BODY[] {{{}}}\r\n{} )\r\nv002 OK FETCH completed\r\n",
+            payload.len(),
+            payload
+        );
+        assert!(tagged_response_outside_literals(
+            response.as_bytes(),
+            "v002"
+        ));
+
+        let without_completion = response
+            .strip_suffix("v002 OK FETCH completed\r\n")
+            .unwrap();
+        assert!(!tagged_response_outside_literals(
+            without_completion.as_bytes(),
+            "v002"
+        ));
     }
 
     #[test]
@@ -1298,6 +1654,31 @@ mod tests {
     }
 
     #[test]
+    fn uid_search_parser_uses_actual_sparse_uids_not_exists_count() {
+        let response = "* SEARCH 100 104 109\r\nv002 OK SEARCH completed\r\n";
+        assert_eq!(
+            super::parse_uid_search_response(response, "imap.example", "INBOX").unwrap(),
+            vec![100, 104, 109]
+        );
+    }
+
+    #[test]
+    fn uid_search_parser_rejects_missing_or_invalid_uid_lists() {
+        assert!(
+            super::parse_uid_search_response(
+                "v002 OK SEARCH completed\r\n",
+                "imap.example",
+                "INBOX"
+            )
+            .is_err()
+        );
+        assert!(
+            super::parse_uid_search_response("* SEARCH 100 nope\r\n", "imap.example", "INBOX")
+                .is_err()
+        );
+    }
+
+    #[test]
     fn fetch_parser_hashes_bounded_full_message_literals() {
         let response = concat!(
             "* 1 FETCH (UID 9 RFC822.SIZE 5 INTERNALDATE \"01-Jan-2026 00:00:00 +0000\" ",
@@ -1315,6 +1696,20 @@ mod tests {
             fingerprints[&key],
             "36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c"
         );
+    }
+
+    #[test]
+    fn raw_fetch_parser_preserves_framing_around_invalid_literal_bytes() {
+        let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17 INTERNALDATE \"01-Jan-2026 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <raw@example.com>\r\nBODY[] {17}\r\n\xff\x00v002 OK fake\r\n)\r\nv002 OK FETCH completed\r\n";
+        let (messages, fingerprints) =
+            super::parse_message_fetch_response_bytes(response, "INBOX", Some(77)).unwrap();
+        let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "100");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[&key].message_id.as_deref(),
+            Some("<raw@example.com>")
+        );
+        assert!(fingerprints.is_empty());
     }
 
     #[test]
