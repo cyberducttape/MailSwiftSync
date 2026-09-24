@@ -105,9 +105,51 @@ impl MessageVerification {
         dest_messages: &ExtractedMessages,
         source_fingerprints: &HashMap<MailboxMessageKey, String>,
         dest_fingerprints: &HashMap<MailboxMessageKey, String>,
+        folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
-        let (mut mismatches, mut summary) =
-            Self::detect_mismatches(job_id, run_id, source_messages, dest_messages)?;
+        let (mut mismatches, mut summary) = Self::detect_mismatches_with_folder_mapping(
+            job_id,
+            run_id,
+            source_messages,
+            dest_messages,
+            folder_mapping,
+        )?;
+        // A stable content fingerprint is a valid fallback identity when
+        // Message-ID is absent. Only unique hashes are eligible, and folder
+        // placement still has to agree with the migration mapping.
+        let source_by_fingerprint = unique_fingerprint_index(source_fingerprints);
+        let dest_by_fingerprint = unique_fingerprint_index(dest_fingerprints);
+        for (fingerprint, source_key) in source_by_fingerprint {
+            let Some(dest_key) = dest_by_fingerprint.get(&fingerprint).copied() else {
+                continue;
+            };
+            if expected_destination_folder(source_key, folder_mapping) != dest_key.mailbox {
+                continue;
+            }
+            let source_present = mismatches.iter().any(|m| {
+                m.source_uid.as_deref() == Some(source_key.uid.as_str())
+                    && m.source_folder.as_deref() == Some(source_key.mailbox.as_str())
+            });
+            let dest_present = mismatches.iter().any(|m| {
+                m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
+                    && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str())
+            });
+            if !source_present || !dest_present {
+                continue;
+            }
+            mismatches.retain(|m| {
+                !((m.mismatch_type == MismatchType::Missing
+                    && m.source_uid.as_deref() == Some(source_key.uid.as_str())
+                    && m.source_folder.as_deref() == Some(source_key.mailbox.as_str()))
+                    || (m.mismatch_type == MismatchType::Extra
+                        && m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
+                        && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str())))
+            });
+            summary.metadata_matches += 1;
+            summary.probable_matches = summary.probable_matches.saturating_sub(1);
+            summary.missing_count = summary.missing_count.saturating_sub(1);
+            summary.extra_count = summary.extra_count.saturating_sub(1);
+        }
         let dest_by_message_id = index_by_message_id(dest_messages);
         let mut used_dest = HashSet::new();
         for source_key in sorted_keys(&source_messages.keys().collect()) {
@@ -125,12 +167,22 @@ impl MessageVerification {
             let Some(dest_keys) = dest_by_message_id.get(source_message_id) else {
                 continue;
             };
-            let Some(dest_key) = dest_keys.iter().copied().find(|dest_key| {
-                !used_dest.contains(dest_key)
+            let metadata_matches = |dest_key: &&&MailboxMessageKey| {
+                !used_dest.contains(*dest_key)
                     && metadata_fingerprint(&source_messages[source_key])
-                        == metadata_fingerprint(&dest_messages[dest_key])
+                        == metadata_fingerprint(&dest_messages[*dest_key])
                     && dest_fingerprints.contains_key(*dest_key)
-            }) else {
+            };
+            let same_content = |dest_key: &&&MailboxMessageKey| {
+                metadata_matches(dest_key)
+                    && dest_fingerprints.get(*dest_key) == Some(source_fingerprint)
+            };
+            let Some(dest_key) = dest_keys
+                .iter()
+                .find(same_content)
+                .or_else(|| dest_keys.iter().find(metadata_matches))
+                .copied()
+            else {
                 continue;
             };
             used_dest.insert(dest_key);
@@ -432,6 +484,24 @@ fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&Mailb
         }
     }
     index.values_mut().for_each(|uids| uids.sort());
+    index
+}
+
+fn unique_fingerprint_index(
+    fingerprints: &HashMap<MailboxMessageKey, String>,
+) -> HashMap<&String, &MailboxMessageKey> {
+    let mut index = HashMap::new();
+    let mut duplicated = HashSet::new();
+    for key in fingerprints.keys() {
+        let fingerprint = &fingerprints[key];
+        if duplicated.contains(fingerprint) {
+            continue;
+        }
+        if index.insert(fingerprint, key).is_some() {
+            index.remove(fingerprint);
+            duplicated.insert(fingerprint);
+        }
+    }
     index
 }
 
@@ -756,6 +826,7 @@ mod tests {
                 &destination,
                 &source_fingerprints,
                 &destination_fingerprints,
+                &HashMap::new(),
             )
             .unwrap();
 
@@ -767,6 +838,47 @@ mod tests {
             mismatches[0].destination_fingerprint.as_deref(),
             Some("bbbb")
         );
+    }
+
+    #[test]
+    fn duplicate_message_ids_match_content_as_a_multiset() {
+        let source_key_a = key("1");
+        let source_key_b = key("2");
+        let dest_key_a = key("99");
+        let dest_key_b = key("100");
+        let message = ExtractedMessage {
+            message_id: Some("<duplicate@example.com>".into()),
+            uid: None,
+            size_bytes: Some(100),
+            internal_date: Some("2024-01-01".into()),
+        };
+        let source = HashMap::from([
+            (source_key_a.clone(), message.clone()),
+            (source_key_b.clone(), message.clone()),
+        ]);
+        let destination = HashMap::from([
+            (dest_key_a.clone(), message.clone()),
+            (dest_key_b.clone(), message),
+        ]);
+        let source_fingerprints =
+            HashMap::from([(source_key_a, "x".into()), (source_key_b, "y".into())]);
+        let destination_fingerprints =
+            HashMap::from([(dest_key_a, "y".into()), (dest_key_b, "x".into())]);
+
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches_with_content_fingerprints(
+                "job1",
+                "run1",
+                &source,
+                &destination,
+                &source_fingerprints,
+                &destination_fingerprints,
+                &HashMap::new(),
+            )
+            .unwrap();
+        assert!(mismatches.is_empty());
+        assert_eq!(summary.metadata_matches, 2);
+        assert_eq!(summary.changed_count, 0);
     }
 
     #[test]

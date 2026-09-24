@@ -12,8 +12,8 @@ the capability inventory.
 > **Adoption-critical clarification:** A passing unit or integration test for a
 > library module does not mean that module participates in a live migration.
 > The matrix below distinguishes executable-path integration from prototype
-> coverage. Aggregate verification remains the only verification path used by
-> live runs today.
+> coverage. Live encrypted imapsync runs perform bounded metadata-level message
+> reconciliation after transfer; this is not body-content proof.
 
 ## Executive Summary
 
@@ -21,18 +21,20 @@ MailSwiftSync is suitable for controlled technical-preview deployments. The
 live system provides:
 
 1. **Aggregate verification** from engine summaries and mailbox status
-2. **Provider endpoint presets** for Gmail, Microsoft 365, Fastmail, and others
-3. **Safe recovery** from interrupted migrations with durable checkpoints
-4. **Typed controller failure handling** and bounded retries
-5. **Operator documentation** for setup and troubleshooting
+2. **Bounded metadata-level message reconciliation** for supported TLS imapsync plans
+3. **Provider endpoint presets** for Gmail, Microsoft 365, Fastmail, and others
+4. **Safe recovery** from interrupted migrations with durable checkpoints
+5. **Typed controller failure handling** and bounded retries
+6. **Operator documentation** for setup and troubleshooting
 
-The primary blockers for GA are live provider validation and wiring the
-prototype verification/guidance subsystems into the migration path.
+The primary blockers for GA are live provider validation, policy-aware
+verification for non-default migration plans, and scalable reconciliation for
+very large accounts.
 
-> **Integration status:** The modules listed as prototypes below are
-> **ENGINE IMPLEMENTED — INTEGRATION PENDING**. Their unit tests demonstrate
-> library behavior only; they are not product capabilities until a controller,
-> CLI, or UI call site consumes their outputs and end-to-end tests exercise it.
+> **Integration status:** Prototype modules remain explicitly marked below.
+> The live migration path must not claim capabilities that are only covered by
+> library tests; supported verification behavior is limited to the documented
+> TLS imapsync metadata path.
 
 ---
 
@@ -45,7 +47,8 @@ prototype verification/guidance subsystems into the migration path.
 | Multi-factor matching | ✅ Wired for TLS imapsync | Message-ID plus metadata fallback runs against independently fetched source/destination records |
 | Source/destination message extraction | ✅ Wired for TLS imapsync | Bounded authenticated IMAP LIST/SELECT/UID FETCH path; plain IMAP fails closed |
 | Missing/extra/changed detection | ✅ Wired | Durable mismatch rows commit with terminal evidence and render in the operator verification report; GUI pagination remains limited |
-| Durable aggregate evidence storage | ✅ Wired | SQLite schema v8; aggregate and supplied message counters survive reports |
+| Durable aggregate evidence storage | ✅ Wired | SQLite schema v10; aggregate and supplied message counters survive reports |
+| Plan-aware verification modes | ⚠️ Fail-closed | `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse exact message evidence until policy-aware reconciliation is implemented |
 
 ### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
 | Provider | Status | Coverage |
@@ -60,7 +63,7 @@ prototype verification/guidance subsystems into the migration path.
 |----------|--------|---------|
 | PROVIDER_SETUP.md | ✅ | Step-by-step setup for all providers |
 | OAUTH_SETUP.md | ✅ | OAuth token lifecycle and configuration |
-| provider_runbooks.rs | ⚠️ Prototype only | No CLI/UI call site; tests only |
+| provider_runbooks.rs | ✅ CLI | `mailswiftsync runbook <source-provider> <destination-provider>` |
 | provider_testing_guide.md | ✅ | How to validate providers with live accounts |
 
 ### Error Handling ⚠️ PARTIAL
@@ -196,8 +199,8 @@ new metadata verifier against real accounts.
 - ✅ TLS imapsync metadata-level message reconciliation wired into live runs; body proof remains pending
 - ⚠️ Observed provider-signal classification prototype (adaptive control not live-wired)
 - ✅ Durable controller recovery and maintenance-window supervision
-- ⚠️ Recovery dashboard/planner prototype (not UI/CLI-wired)
-- ⚠️ Provider runbook generation prototype (not UI/CLI-wired)
+- ✅ Recovery dashboard/planner CLI command (`recovery-guidance`)
+- ✅ Provider runbook generation CLI command (`runbook`)
 - ⚠️ Pre/post-migration reporting helpers (not live-wired)
 - ✅ Comprehensive setup documentation
 - ✅ OAuth token lifecycle management
@@ -272,7 +275,7 @@ Open an issue with: `[FEATURE REQUEST]` prefix
 
 - **Product:** MailSwiftSync v0.1.0-alpha
 - **Status:** Technical Preview / Early Adoption
-- **Schema Version:** 9
+- **Schema Version:** 10
 - **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; native Dovecot 2.3/2.4 CI qualification remains pending
 - **Build Date:** September 22, 2026
 
@@ -288,8 +291,8 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 4. **Follow provider-specific runbooks** — Each provider has unique requirements
 
 The system provides a durable, safety-gated migration controller suitable for
-technical-preview use. It does not yet provide body-content proof,
-provider-specific execution intelligence, or UI/CLI access to every helper
-module described in the repository.
+technical-preview use. It does not yet provide body-content proof or
+provider-specific execution intelligence; several internal helpers remain
+library-only even though runbook and recovery guidance have CLI entry points.
 
 **Next milestone:** Live validation with real provider mailboxes to reach GA 1.0 status.

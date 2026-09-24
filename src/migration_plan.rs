@@ -22,6 +22,7 @@ pub(crate) use profile::{
 };
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, thread, time::Duration};
+use zeroize::Zeroizing;
 
 pub(crate) fn decode_report_run_snapshot(
     snapshot: &str,
@@ -367,9 +368,9 @@ impl Form {
         let Some(entry) = self.oauth_refresh_keyring_entry(source)? else {
             return Ok(None);
         };
-        let stored = entry.get_password().map_err(|error| {
+        let stored = Zeroizing::new(entry.get_password().map_err(|error| {
             format!("Could not load the OAuth refresh configuration from the OS keyring: {error}")
-        })?;
+        })?);
         crate::oauth_refresh::decode_refresh_config(&stored).map(Some)
     }
 
@@ -699,6 +700,7 @@ impl Form {
     pub(crate) fn args(&self, redact: bool) -> Vec<String> {
         self.args_with_throttle_divisor(redact, 1)
     }
+    #[cfg(test)]
     pub(crate) fn args_with_throttle_divisor(
         &self,
         redact: bool,
@@ -712,14 +714,8 @@ impl Form {
         throttle_divisor: usize,
         dry_run: bool,
     ) -> Vec<String> {
-        engine::imapsync_args(
-            &self.profile,
-            self.source_password.as_str(),
-            self.destination_password.as_str(),
-            dry_run,
-            redact,
-            throttle_divisor,
-        )
+        let _ = redact;
+        engine::imapsync_preview_args(&self.profile, dry_run, throttle_divisor)
     }
     pub(crate) fn extra_options_valid(&self) -> Result<(), String> {
         engine::validate_extra_options(&self.profile.extra_options)
@@ -765,11 +761,7 @@ impl Form {
                 env,
             });
         }
-        let mut args = self.args_with_throttle_divisor(false, throttle_divisor);
-        remove_option(&mut args, "--password1");
-        remove_option(&mut args, "--password2");
-        remove_option(&mut args, "--oauthaccesstoken1");
-        remove_option(&mut args, "--oauthaccesstoken2");
+        let mut args = engine::imapsync_args(&self.profile, self.dry_run, throttle_divisor);
         let secret_dir = create_secret_directory()?;
         let source_file = secret_dir.join("source.secret");
         let destination_file = secret_dir.join("destination.secret");

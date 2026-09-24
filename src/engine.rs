@@ -1,19 +1,34 @@
 use super::Profile;
 
-/// Build the imapsync argument vector from the validated migration profile.
-/// Credential arguments are always placeholders. Runtime callers must use
-/// passfiles or token files; no ordinary argument vector may materialize a
-/// password or OAuth token.
+/// Build the runtime imapsync argument vector from the validated migration
+/// profile. Credential arguments are deliberately absent: runtime callers
+/// append only protected passfile/token-file paths after writing the secrets.
 pub(crate) fn imapsync_args(
     profile: &Profile,
-    _source_password: &str,
-    _destination_password: &str,
     dry_run: bool,
-    _redact: bool,
     throttle_divisor: usize,
 ) -> Vec<String> {
-    let p1 = "••••••••";
-    let p2 = "••••••••";
+    imapsync_args_with_placeholders(profile, dry_run, throttle_divisor, false)
+}
+
+/// Build the secret-free preview/fingerprint form of the imapsync arguments.
+/// Placeholders are included only for operator-visible preview compatibility;
+/// they are never used for process launch.
+pub(crate) fn imapsync_preview_args(
+    profile: &Profile,
+    dry_run: bool,
+    throttle_divisor: usize,
+) -> Vec<String> {
+    imapsync_args_with_placeholders(profile, dry_run, throttle_divisor, true)
+}
+
+fn imapsync_args_with_placeholders(
+    profile: &Profile,
+    dry_run: bool,
+    throttle_divisor: usize,
+    include_placeholders: bool,
+) -> Vec<String> {
+    let placeholder = include_placeholders.then_some("••••••••");
     let source_default_port = super::default_imap_port(&profile.source_tls);
     let (source_host, source_endpoint_port) =
         command_endpoint_parts(&profile.source_host, source_default_port);
@@ -39,14 +54,14 @@ pub(crate) fn imapsync_args(
         "--user1".into(),
         profile.source_user.clone(),
     ];
-    append_auth_args(&mut args, 1, &profile.source_auth, p1);
+    append_auth_args(&mut args, 1, &profile.source_auth, placeholder);
     args.extend([
         "--host2".into(),
         destination_host,
         "--user2".into(),
         profile.destination_user.clone(),
     ]);
-    append_auth_args(&mut args, 2, &profile.destination_auth, p2);
+    append_auth_args(&mut args, 2, &profile.destination_auth, placeholder);
     args.extend(["--port1".into(), source_port]);
     if profile.source_tls == "plain" {
         // Plain mode must disable both implicit SSL and imapsync's default
@@ -116,16 +131,14 @@ pub(crate) fn imapsync_args(
     args
 }
 
-fn append_auth_args(args: &mut Vec<String>, side: u8, method: &str, credential: &str) {
+fn append_auth_args(args: &mut Vec<String>, side: u8, method: &str, placeholder: Option<&str>) {
     if method == "oauth2" {
-        args.extend([
-            format!("--authmech{side}"),
-            "XOAUTH2".into(),
-            format!("--oauthaccesstoken{side}"),
-            credential.into(),
-        ]);
-    } else {
-        args.extend([format!("--password{side}"), credential.into()]);
+        args.extend([format!("--authmech{side}"), "XOAUTH2".into()]);
+        if let Some(placeholder) = placeholder {
+            args.extend([format!("--oauthaccesstoken{side}"), placeholder.into()]);
+        }
+    } else if let Some(placeholder) = placeholder {
+        args.extend([format!("--password{side}"), placeholder.into()]);
     }
 }
 
