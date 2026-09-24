@@ -975,6 +975,7 @@ pub(crate) fn fetch_tls_mailbox_messages(
     let uids = parse_uid_search_response(&response, host, mailbox)?;
     let mut messages = HashMap::new();
     let mut content_fingerprints = HashMap::new();
+    let mut estimated_state_bytes = 0usize;
     for (page, uid_page) in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize).enumerate() {
         budget.check()?;
         let tag = format!("v{:03}", page + 3);
@@ -1008,6 +1009,8 @@ pub(crate) fn fetch_tls_mailbox_messages(
         let (page_messages, page_fingerprints) =
             parse_message_fetch_response_bytes(&raw_response, mailbox, uidvalidity)?;
         for (key, message) in page_messages {
+            estimated_state_bytes = estimated_state_bytes
+                .saturating_add(estimated_message_record_bytes(&key, &message, None));
             if messages.insert(key, message).is_some() {
                 return Err(format!(
                     "{host}: mailbox {mailbox} returned a duplicate UID during message verification"
@@ -1018,9 +1021,7 @@ pub(crate) fn fetch_tls_mailbox_messages(
                     "{host}: mailbox {mailbox} exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
                 ));
             }
-            if estimated_message_state_bytes(&messages, &content_fingerprints)
-                > MAX_ESTIMATED_MESSAGE_STATE_BYTES
-            {
+            if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
                 return Err(format!(
                     "{host}: mailbox {mailbox} exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
                 ));
@@ -1121,6 +1122,7 @@ pub(crate) fn fetch_tls_account_messages(
     let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
     let mut all_messages = HashMap::new();
     let mut all_fingerprints = HashMap::new();
+    let mut estimated_state_bytes = 0usize;
     for mailbox in mailboxes {
         budget.check()?;
         let (folder_messages, folder_fingerprints) = fetch_tls_mailbox_messages(
@@ -1135,6 +1137,9 @@ pub(crate) fn fetch_tls_account_messages(
             &mailbox,
         )?;
         for (key, message) in folder_messages {
+            estimated_state_bytes = estimated_state_bytes.saturating_add(
+                estimated_message_record_bytes(&key, &message, all_fingerprints.get(&key)),
+            );
             if all_messages.insert(key, message).is_some() {
                 return Err(format!(
                     "{host}: folder inventory produced duplicate message identity"
@@ -1145,9 +1150,7 @@ pub(crate) fn fetch_tls_account_messages(
                     "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
                 ));
             }
-            if estimated_message_state_bytes(&all_messages, &all_fingerprints)
-                > MAX_ESTIMATED_MESSAGE_STATE_BYTES
-            {
+            if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
                 return Err(format!(
                     "{host}: account exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
                 ));
@@ -1162,21 +1165,17 @@ pub(crate) fn fetch_tls_account_messages(
     })
 }
 
-fn estimated_message_state_bytes(
-    messages: &crate::core::ExtractedMessages,
-    fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
+fn estimated_message_record_bytes(
+    key: &crate::core::MailboxMessageKey,
+    message: &crate::core::ExtractedMessage,
+    fingerprint: Option<&String>,
 ) -> usize {
-    messages
-        .iter()
-        .map(|(key, message)| {
-            512usize
-                .saturating_add(key.mailbox.len())
-                .saturating_add(key.uid.len())
-                .saturating_add(message.message_id.as_deref().map_or(0, str::len))
-                .saturating_add(message.internal_date.as_deref().map_or(0, str::len))
-                .saturating_add(fingerprints.get(key).map_or(0, String::len))
-        })
-        .fold(0usize, usize::saturating_add)
+    512usize
+        .saturating_add(key.mailbox.len())
+        .saturating_add(key.uid.len())
+        .saturating_add(message.message_id.as_deref().map_or(0, str::len))
+        .saturating_add(message.internal_date.as_deref().map_or(0, str::len))
+        .saturating_add(fingerprint.map_or(0, String::len))
 }
 
 fn parse_selected_mailbox(
