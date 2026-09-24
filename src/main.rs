@@ -775,6 +775,7 @@ mod tests {
         first.profile.destination_user = "alice@destination.test".into();
         first.profile.destination_auth = "oauth2".into();
         first.profile.destination_oauth_refresh_credential_id = "alice-destination-refresh".into();
+        // lgtm[rust/hard-coded-cryptographic-value]: Test fixture with non-sensitive data
         first.source_password = "access-token-a".into();
         first.destination_password = "destination-token-a".into();
         let mut second = first.clone();
