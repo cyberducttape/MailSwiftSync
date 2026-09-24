@@ -213,6 +213,11 @@ imapsync runs when the independent IMAP fetch succeeds. The latter compares
 Message-ID, INTERNALDATE, and RFC822.SIZE across every selectable folder; it is
 not body-content proof and is never reported as such. A successful process
 without usable evidence is Level 0 — process completed, verification incomplete.
+The verifier fails closed for `--justfolders`, `--addheader`, disabled internal-date
+sync, or `--allowsizemismatch` plans until their semantics can be represented
+without overstating exact evidence. It also enforces a conservative estimated
+in-memory state budget; SQLite streaming reconciliation remains future work for
+very large accounts.
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
 

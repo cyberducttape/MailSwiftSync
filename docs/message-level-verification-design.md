@@ -35,7 +35,7 @@ This feature would **differentiate MailSwiftSync** from competitors and justify 
 
 ## Problem Statement
 
-Current verification is **aggregate-only**: MailSwiftSync compares folder counts, message counts, and byte counts between source and destination. This can miss:
+The current live imapsync path now performs **metadata-level reconciliation** in addition to aggregate evidence: it compares folder placement, Message-ID when available, INTERNALDATE, and RFC822.SIZE. It does not hash message bodies. Metadata reconciliation can still miss:
 
 - **Selective message loss** — a migration that drops messages in one folder but maintains aggregate counts elsewhere
 - **Selective duplication** — messages duplicated only in certain mailboxes
@@ -432,13 +432,16 @@ New module `message_verification`:
 **Final verdict:** After remediation, metadata reconciliation is complete. A
 content-verified verdict requires the future folder-aware SHA-256 path.
 
-**Without message-level verification:** Migration accepted as "complete" despite data integrity issue.
+**Without message-level verification:** Migration can be accepted as "complete"
+despite a selective data-integrity issue. The current encrypted-imapsync path
+now supplies metadata-level verification; this design's remaining target is
+content proof and scalable staging.
 
 ---
 
 ## Questions for Implementer
 
-1. **Scope for v0.1 → 1.0?** This is high-effort. Is it a hard blocker for 1.0, or is aggregate-only acceptable with a documented "known limitation"?
+1. **Scope for v0.1 → 1.0?** This is high-effort. Is content proof a hard blocker for 1.0, or is metadata reconciliation acceptable with a documented "known limitation"?
 
 2. **Privacy boundary:** Subject truncation OK? Date/Message-ID OK to store durably? (Recommendation: yes to all, but operator-only)
 
