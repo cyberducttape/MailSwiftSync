@@ -1,7 +1,7 @@
 # MailSwiftSync Capability Manifest
 
 **Manually maintained from source call-site review and test inventory**
-**Last verified:** 2026-09-20
+**Last verified:** 2026-09-23
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
 
@@ -122,7 +122,7 @@ particular target.
 ## What's Partially Working
 
 ⚠️ **Code exists but not fully wired to pipeline:**
-- Message-level mismatch detection (algorithms work, not used operationally)
+- Content-level mismatch detection (the live path performs metadata reconciliation; body hashing is not enabled)
 - Provider-context-specific error classification (generic provider-intelligence mapping is now applied; provider-specific context remains pending)
 - Provider-specific throttling (not implemented; generic profile throttles are enforced)
 - Pre/post-migration reports (available as explicit CLI exports, not automatically generated for every live run)

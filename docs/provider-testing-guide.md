@@ -92,7 +92,9 @@ Verify all export paths work:
 - [ ] Operator JSON report contains all run metadata
 - [ ] Support bundle sanitization works (no credentials in output)
 
-**Record:** Proof digest, run manifest, evidence scope (aggregate only, no per-message detail).
+**Record:** Proof digest, run manifest, and evidence scope. For encrypted imapsync
+runs, record whether bounded metadata reconciliation completed and include the
+per-message mismatch summary; native Dovecot runs remain aggregate-level.
 
 ## Adding the Row to the Matrix
 

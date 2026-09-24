@@ -81,8 +81,8 @@ very large accounts.
 | Checkpoint persistence | ✅ | Durable run/checkpoint state is wired |
 | Resume from interruption | ✅ | Controller recovery and retry paths are wired |
 | Crash recovery | ✅ | Startup process identity/recovery paths are wired |
-| Time-to-completion estimates | ⚠️ Prototype only | `RecoveryPlanner` has no production call site |
-| Recovery guidance | ⚠️ Prototype only | Dashboard/planner types are not rendered by UI/CLI |
+| Time-to-completion estimates | ⚠️ CLI only | `RecoveryPlanner` is exposed through `recovery-guidance`; no dashboard rendering |
+| Recovery guidance | ⚠️ CLI only | Fail-closed guidance is exposed through `recovery-guidance`; no dashboard rendering |
 
 ---
 
