@@ -645,7 +645,7 @@ mod tests {
         assert_eq!(evidence.evidence_level(), "Aggregate mismatch");
         assert_eq!(
             evidence.verification_level(),
-            "Level 2 — Aggregate reconciliation"
+            "Level 2 — Aggregate reconciliation — not message-body proof"
         );
         assert!(!evidence.is_exact_match());
     }
@@ -724,7 +724,10 @@ mod tests {
         };
         assert_eq!(evidence.confidence_percent(), 85);
         assert!(evidence.is_exact_match());
-        assert_eq!(evidence.evidence_level(), "Aggregate match");
+        assert_eq!(
+            evidence.evidence_level(),
+            "Aggregate match — not message-body proof"
+        );
         assert_eq!(
             evidence.evidence_scope(),
             EvidenceScope::AggregateReconciled

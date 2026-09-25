@@ -166,7 +166,10 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
                     "unmatched_messages", "failed_messages")
         if not isinstance(evidence, dict) or any(field not in evidence for field in required):
             raise ValueError("customer-proof mailbox evidence is incomplete")
-        if evidence["scope"] != "engine-confirmed" or evidence["evidence_level"] != "Engine-confirmed exact match":
+        if evidence["scope"] != "engine-confirmed" or evidence["evidence_level"] not in {
+            "Engine-confirmed exact match",
+            "Engine-confirmed exact match — not message-body proof",
+        }:
             raise ValueError("customer-proof mailbox evidence is not engine-confirmed exact")
         if any(evidence[field] != 0 for field in ("unmatched_messages", "failed_messages")):
             raise ValueError("customer-proof contains unresolved mailbox evidence")

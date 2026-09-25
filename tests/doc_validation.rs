@@ -156,6 +156,22 @@ fn provider_testing_guide_exists() {
 }
 
 #[test]
+fn canonical_provider_facts_are_reflected_in_primary_surfaces() {
+    let facts = fs::read_to_string("docs/provider-facts.md")
+        .expect("canonical provider facts should exist");
+    assert!(facts.contains("Metadata reconciled — message bodies not compared"));
+    assert!(facts.contains("no universal 50 GB or 100 GB threshold"));
+
+    let provider_setup = fs::read_to_string("PROVIDER_SETUP.md").unwrap();
+    let readme = fs::read_to_string("README.md").unwrap();
+    assert!(provider_setup.contains("canonical\nprovider facts"));
+    assert!(provider_setup.contains("OAuth 2.0 / XOAUTH2 is the preferred and default"));
+    assert!(provider_setup.contains("no universal 50 GB or 100 GB threshold"));
+    assert!(readme.contains("Aggregate match — not message-body proof"));
+    assert!(readme.contains("Metadata reconciled — message bodies not compared"));
+}
+
+#[test]
 fn architecture_documents_message_verification() {
     let arch = fs::read_to_string("docs/architecture.md").unwrap_or_else(|_| String::new());
 

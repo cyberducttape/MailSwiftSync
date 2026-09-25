@@ -418,7 +418,7 @@ New module `message_verification`:
 **Aggregate evidence:**
 - Source: 4000 messages, 500 MB
 - Destination: 4000 messages, 500 MB
-- Verdict: "Aggregate match" ✓
+- Verdict: "Aggregate match — not message-body proof" (metadata/aggregate evidence only) ✓
 
 **Message-level verification (NEW):**
 - Extract UIDs from both sides

@@ -109,9 +109,9 @@ impl MailboxEvidence {
         }
         let exact = self.aggregate_totals_match();
         if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
-            "Engine-confirmed exact match"
+            "Engine-confirmed exact match — not message-body proof"
         } else if exact {
-            "Aggregate match"
+            "Aggregate match — not message-body proof"
         } else {
             "Aggregate mismatch"
         }
@@ -136,7 +136,7 @@ impl MailboxEvidence {
         if self.unmatched_messages.is_none() || self.failed_messages > 0 {
             "Level 0 — Process completed, verification incomplete"
         } else {
-            "Level 2 — Aggregate reconciliation"
+            "Level 2 — Aggregate reconciliation — not message-body proof"
         }
     }
 

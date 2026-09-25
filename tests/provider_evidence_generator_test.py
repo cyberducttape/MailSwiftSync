@@ -69,7 +69,7 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
             "state": status,
             "evidence": {
                 "scope": "engine-confirmed",
-                "evidence_level": "Engine-confirmed exact match",
+                "evidence_level": "Engine-confirmed exact match — not message-body proof",
                 "source_messages": messages,
                 "destination_messages": messages,
                 "source_bytes": 100,
