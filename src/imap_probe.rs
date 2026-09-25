@@ -253,6 +253,7 @@ pub(crate) struct FetchedAccountMessages {
     pub(crate) mailboxes: HashSet<String>,
     pub(crate) mailbox_details: Vec<MailboxDescriptor>,
     pub(crate) messages: crate::core::ExtractedMessages,
+    pub(crate) total_exists: u64,
     pub(crate) content_fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
     /// Folder failures collected while building the account result. A
     /// non-empty map is never returned in a successful result: account
@@ -997,6 +998,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     (
         crate::core::ExtractedMessages,
         HashMap<crate::core::MailboxMessageKey, String>,
+        u64,
     ),
     String,
 > {
@@ -1040,7 +1042,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     let mut messages = HashMap::new();
     let mut estimated_state_bytes = 0usize;
     let mut page_number = 0usize;
-    enumerate_uid_pages(
+    let searched_uids = enumerate_uid_pages(
         stream,
         host,
         mailbox,
@@ -1084,6 +1086,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
                 mailbox,
                 Some(start_uidvalidity),
             )?;
+            validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
             for (key, message) in page_messages {
                 estimated_state_bytes = estimated_state_bytes
                     .saturating_add(estimated_message_record_bytes(&key, &message, None));
@@ -1106,6 +1109,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             Ok(())
         },
     )?;
+    if searched_uids.len() as u64 != start_exists {
+        return Err(format!(
+            "{host}: folder {mailbox}: SEARCH coverage mismatch (EXISTS {start_exists}, unique UIDs {})",
+            searched_uids.len()
+        ));
+    }
 
     // Re-SELECT after the bounded scan. If the folder changed while it was
     // being read, discard the scan so a moving mailbox cannot be reported as
@@ -1144,7 +1153,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     }
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.
-    Ok((messages, HashMap::new()))
+    Ok((messages, HashMap::new(), start_exists))
 }
 
 fn fetch_mailbox_with_stability_retry<S: Read + Write>(
@@ -1156,6 +1165,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
     (
         crate::core::ExtractedMessages,
         HashMap<crate::core::MailboxMessageKey, String>,
+        u64,
     ),
     String,
 > {
@@ -1204,7 +1214,9 @@ pub(crate) fn fetch_tls_mailbox_messages(
         connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
     let (mut stream, _) =
         authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
-    fetch_mailbox_with_existing_stream(&mut stream, host, mailbox, budget)
+    let (messages, fingerprints, _) =
+        fetch_mailbox_with_existing_stream(&mut stream, host, mailbox, budget)?;
+    Ok((messages, fingerprints))
 }
 
 /// Enumerate bounded UID windows and hand each fetch-sized page to the caller.
@@ -1220,11 +1232,12 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
     mut consume_page: F,
-) -> Result<(), String>
+) -> Result<HashSet<u64>, String>
 where
     F: FnMut(&mut S, &mut [u8; 4096], &[u64]) -> Result<(), String>,
 {
     let mut window_start = 1_u64;
+    let mut searched_uids = HashSet::new();
     let mut search_number = 0usize;
     while window_start < uidnext {
         budget.check()?;
@@ -1249,12 +1262,13 @@ where
             ));
         }
         let uids = parse_uid_search_response(response, host, mailbox)?;
+        searched_uids.extend(uids.iter().copied());
         for uid_page in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize) {
             consume_page(stream, buffer, uid_page)?;
         }
         window_start = window_end.saturating_add(1);
     }
-    Ok(())
+    Ok(searched_uids)
 }
 
 fn parse_uid_search_response(
@@ -1264,7 +1278,7 @@ fn parse_uid_search_response(
 ) -> Result<Vec<u64>, String> {
     let line = response
         .lines()
-        .find(|line| line.starts_with("* SEARCH"))
+        .find(|line| is_untagged_response(line, "SEARCH"))
         .ok_or_else(|| format!("{host}: SEARCH {mailbox} did not return a UID list"))?;
     let mut uids = line
         .split_whitespace()
@@ -1277,6 +1291,31 @@ fn parse_uid_search_response(
     uids.sort_unstable();
     uids.dedup();
     Ok(uids)
+}
+
+fn validate_fetch_page_coverage(
+    messages: &crate::core::ExtractedMessages,
+    requested_uids: &[u64],
+    host: &str,
+    mailbox: &str,
+) -> Result<(), String> {
+    let parsed_uids = messages
+        .values()
+        .filter_map(|message| message.uid.as_deref())
+        .map(|uid| {
+            uid.parse::<u64>()
+                .map_err(|_| format!("{host}: folder {mailbox}: FETCH returned invalid UID {uid}"))
+        })
+        .collect::<Result<HashSet<_>, _>>()?;
+    let requested_uids = requested_uids.iter().copied().collect::<HashSet<_>>();
+    if parsed_uids != requested_uids {
+        return Err(format!(
+            "{host}: folder {mailbox}: FETCH coverage mismatch (requested {}, parsed {})",
+            requested_uids.len(),
+            parsed_uids.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Reconcile an entire IMAP account by enumerating selectable folders first.
@@ -1343,6 +1382,7 @@ pub(crate) fn fetch_tls_account_messages(
     let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
     let mut all_messages = HashMap::new();
     let mut all_fingerprints = HashMap::new();
+    let mut total_exists = 0_u64;
     let mut estimated_state_bytes = 0usize;
     let mut incomplete_folders = HashMap::new();
 
@@ -1351,7 +1391,8 @@ pub(crate) fn fetch_tls_account_messages(
     for mailbox in mailboxes {
         budget.check()?;
         match fetch_mailbox_with_stability_retry(&mut stream, host, &mailbox, budget) {
-            Ok((folder_messages, folder_fingerprints)) => {
+            Ok((folder_messages, folder_fingerprints, folder_exists)) => {
+                total_exists = total_exists.saturating_add(folder_exists);
                 for (key, message) in folder_messages {
                     estimated_state_bytes =
                         estimated_state_bytes.saturating_add(estimated_message_record_bytes(
@@ -1402,6 +1443,7 @@ pub(crate) fn fetch_tls_account_messages(
         mailboxes: mailbox_inventory,
         mailbox_details,
         messages: all_messages,
+        total_exists,
         content_fingerprints: all_fingerprints,
         incomplete_folders,
     })
@@ -1478,6 +1520,7 @@ fn parse_message_fetch_response_with_fingerprints(
 > {
     let starts = fetch_record_starts(response);
     let mut messages = HashMap::new();
+    let mut parsed_uids = HashSet::new();
     let mut content_fingerprints = HashMap::new();
     for (index, start) in starts.iter().copied().enumerate() {
         let end = starts.get(index + 1).copied().unwrap_or(response.len());
@@ -1492,6 +1535,9 @@ fn parse_message_fetch_response_with_fingerprints(
         let internal_date = fetch_quoted(first_line, "INTERNALDATE");
         let message_id = fetch_message_id(record).filter(|value| !value.is_empty());
         let uid = uid.to_string();
+        if !parsed_uids.insert(uid.clone()) {
+            return Err(format!("duplicate FETCH UID {uid}"));
+        }
         let key = match uidvalidity {
             Some(value) => {
                 crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
@@ -1523,6 +1569,7 @@ fn parse_message_fetch_metadata_response_bytes(
 ) -> Result<crate::core::ExtractedMessages, String> {
     let starts = fetch_record_starts_bytes(response);
     let mut messages = HashMap::new();
+    let mut parsed_uids = HashSet::new();
     for (index, start) in starts.iter().copied().enumerate() {
         let end = starts.get(index + 1).copied().unwrap_or(response.len());
         let record = &response[start..end];
@@ -1534,6 +1581,9 @@ fn parse_message_fetch_metadata_response_bytes(
         let uid = fetch_number(&first_line, "UID")
             .ok_or_else(|| "IMAP FETCH record omitted UID".to_owned())?
             .to_string();
+        if !parsed_uids.insert(uid.clone()) {
+            return Err(format!("duplicate FETCH UID {uid}"));
+        }
         let key = match uidvalidity {
             Some(value) => {
                 crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
@@ -1567,10 +1617,7 @@ fn fetch_record_starts(response: &str) -> Vec<usize> {
         };
         let absolute_end = offset + line_end;
         let line = &response[offset..absolute_end];
-        if (offset == 0 || bytes[offset - 1] == b'\n')
-            && line.starts_with("* ")
-            && line.contains(" FETCH (")
-        {
+        if is_fetch_record_line(line) {
             starts.push(offset);
         }
         let next_line = absolute_end + 2;
@@ -1595,7 +1642,7 @@ fn fetch_record_starts_bytes(response: &[u8]) -> Vec<usize> {
         };
         let line_end = offset + relative_end;
         let line = &response[offset..line_end];
-        if line.starts_with(b"* ") && line.windows(7).any(|part| part == b" FETCH ") {
+        if is_fetch_record_line_bytes(line) {
             starts.push(offset);
         }
         offset = line_end + 2;
@@ -1604,6 +1651,19 @@ fn fetch_record_starts_bytes(response: &[u8]) -> Vec<usize> {
         }
     }
     starts
+}
+
+fn is_fetch_record_line(line: &str) -> bool {
+    let fields = line.split_whitespace().collect::<Vec<_>>();
+    fields.len() >= 4
+        && fields[0] == "*"
+        && fields[1].parse::<u64>().is_ok()
+        && fields[2].eq_ignore_ascii_case("FETCH")
+        && fields[3].starts_with('(')
+}
+
+fn is_fetch_record_line_bytes(line: &[u8]) -> bool {
+    std::str::from_utf8(line).is_ok_and(is_fetch_record_line)
 }
 
 fn imap_literal_size(line: &str) -> Option<usize> {
@@ -1619,7 +1679,7 @@ fn imap_literal_size_bytes(line: &[u8]) -> Option<usize> {
 }
 
 fn fetch_content_fingerprint(record: &str) -> Option<String> {
-    let marker_start = record.find("BODY[]")? + "BODY[]".len();
+    let marker_start = find_ascii_case_insensitive(record, "BODY[]")? + "BODY[]".len();
     let literal = record[marker_start..].trim_start();
     if literal.starts_with("NIL") {
         return None;
@@ -1635,7 +1695,7 @@ fn fetch_content_fingerprint(record: &str) -> Option<String> {
 }
 
 fn fetch_number(line: &str, field: &str) -> Option<u64> {
-    let start = line.find(field)? + field.len();
+    let start = find_ascii_case_insensitive(line, field)? + field.len();
     let value = line[start..].trim_start();
     let end = value
         .find(|character: char| !character.is_ascii_digit())
@@ -1644,15 +1704,22 @@ fn fetch_number(line: &str, field: &str) -> Option<u64> {
 }
 
 fn fetch_quoted(line: &str, field: &str) -> Option<String> {
-    let start = line.find(field)? + field.len();
+    let start = find_ascii_case_insensitive(line, field)? + field.len();
     let value = line[start..].trim_start().strip_prefix('"')?;
     let end = value.find('"')?;
     Some(value[..end].to_owned())
 }
 
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .position(|part| part.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 fn fetch_message_id(record: &str) -> Option<String> {
     let marker = "BODY[HEADER.FIELDS (MESSAGE-ID)]";
-    let marker_start = record.find(marker)? + marker.len();
+    let marker_start = find_ascii_case_insensitive(record, marker)? + marker.len();
     let literal = record[marker_start..].trim_start();
     if literal.starts_with("NIL") {
         return None;
@@ -1683,7 +1750,7 @@ fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
     let marker = b"BODY[HEADER.FIELDS (MESSAGE-ID)]";
     let marker_start = record
         .windows(marker.len())
-        .position(|part| part == marker)?
+        .position(|part| part.eq_ignore_ascii_case(marker))?
         + marker.len();
     let literal = record[marker_start..].strip_prefix(b" ")?;
     let literal_end = literal.windows(3).position(|part| part == b"}\r\n")?;
@@ -1918,7 +1985,7 @@ mod tests {
 
     #[test]
     fn uid_search_parser_uses_actual_sparse_uids_not_exists_count() {
-        let response = "* SEARCH 100 104 109\r\nv002 OK SEARCH completed\r\n";
+        let response = "* sEaRcH 100 104 109\r\nv002 OK SEARCH completed\r\n";
         assert_eq!(
             super::parse_uid_search_response(response, "imap.example", "INBOX").unwrap(),
             vec![100, 104, 109]
@@ -1997,6 +2064,37 @@ mod tests {
             messages[&key].message_id.as_deref(),
             Some("<raw@example.com>")
         );
+    }
+
+    #[test]
+    fn metadata_fetch_parser_accepts_mixed_case_atoms() {
+        let response = b"* 1 fEtCh (uId 100 rFc822.sIzE 17 iNtErNaLDate \"01-Jan-2026 00:00:00 +0000\" bOdY[HeAdEr.FiElDs (MeSsAgE-Id)] NIL)\r\nv002 OK FETCH completed\r\n";
+        let messages = super::parse_message_fetch_metadata_response_bytes(
+            response,
+            "INBOX",
+            Some(77),
+        )
+        .unwrap();
+        assert_eq!(messages.len(), 1);
+        let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "100");
+        assert_eq!(messages[&key].size_bytes, Some(17));
+    }
+
+    #[test]
+    fn metadata_fetch_parser_rejects_duplicate_uids() {
+        let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17)\r\n* 2 FETCH (UID 100 RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n";
+        assert!(super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77))
+            .unwrap_err()
+            .contains("duplicate FETCH UID"));
+    }
+
+    #[test]
+    fn fetch_page_coverage_rejects_missing_and_unexpected_uids() {
+        let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17)\r\n* 2 FETCH (UID 101 RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n";
+        let messages = super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap();
+        assert!(super::validate_fetch_page_coverage(&messages, &[100, 102], "host", "INBOX")
+            .unwrap_err()
+            .contains("FETCH coverage mismatch"));
     }
 
     #[test]
