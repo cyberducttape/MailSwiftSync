@@ -32,6 +32,33 @@ use std::{
     time::Duration,
 };
 
+const JOB_FINISHED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) fn send_job_finished(
+    tx: &mpsc::SyncSender<Event>,
+    job_id: String,
+    child_run_id: String,
+    state: String,
+    detail: String,
+    credential_fingerprint: Option<String>,
+) -> Result<(), String> {
+    let (reply, acknowledgement) = mpsc::sync_channel(1);
+    send_reliable_event(
+        tx,
+        Event::JobFinished {
+            job_id,
+            child_run_id,
+            state,
+            detail,
+            credential_fingerprint,
+            reply,
+        },
+    )?;
+    acknowledgement
+        .recv_timeout(JOB_FINISHED_ACK_TIMEOUT)
+        .map_err(|error| format!("durable JobFinished acknowledgement was lost: {error}"))?
+}
+
 pub(crate) struct BatchWorkerContext {
     pub(crate) concurrency: usize,
     pub(crate) mode: BatchExecutionMode,
@@ -113,14 +140,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 child_run_id: child_run_id.clone(),
                 state: "Cancelled".into(),
             });
-            let _ = tx.send(Event::JobFinished {
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                state: "cancelled".into(),
-                detail: "cancelled before worker claim".into(),
-                credential_fingerprint: None,
-            });
-            if let Ok(mut terminal) = terminal_jobs.lock() {
+            if let Err(error) = send_job_finished(
+                &tx,
+                job_id.clone(),
+                child_run_id.clone(),
+                "cancelled".into(),
+                "cancelled before worker claim".into(),
+                None,
+            ) {
+                eprintln!("durable batch terminal event delivery failed: {error}");
+            } else if let Ok(mut terminal) = terminal_jobs.lock() {
                 terminal.insert(index);
             }
             continue;
@@ -199,14 +228,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         child_run_id: child_run_id.clone(),
                         state: "Failed".into(),
                     });
-                    let _ = tx.send(Event::JobFinished {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: "failed".into(),
-                        detail: classified_failure_detail(&error),
-                        credential_fingerprint: None,
-                    });
-                    if let Ok(mut terminal) = terminal_jobs.lock() {
+                    if let Err(delivery_error) = send_job_finished(
+                        &tx,
+                        job_id.clone(),
+                        child_run_id.clone(),
+                        "failed".into(),
+                        classified_failure_detail(&error),
+                        None,
+                    ) {
+                        eprintln!("durable batch terminal event delivery failed: {delivery_error}");
+                    } else if let Ok(mut terminal) = terminal_jobs.lock() {
                         terminal.insert(index);
                     }
                     break;
@@ -255,17 +286,19 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     child_run_id: child_run_id.clone(),
                     state: "Failed".into(),
                 });
-                let _ = tx.send(Event::JobFinished {
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    state: "failed".into(),
-                    // Classify the raw probe result. Prefixing it with
-                    // "authentication failed" would incorrectly mask a DNS,
-                    // TCP, TLS-disconnect, or provider-capacity failure.
-                    detail: classified_failure_detail(&error),
-                    credential_fingerprint: None,
-                });
-                if let Ok(mut terminal) = terminal_jobs.lock() {
+                // Classify the raw probe result. Prefixing it with
+                // "authentication failed" would incorrectly mask a DNS,
+                // TCP, TLS-disconnect, or provider-capacity failure.
+                if let Err(delivery_error) = send_job_finished(
+                    &tx,
+                    job_id.clone(),
+                    child_run_id.clone(),
+                    "failed".into(),
+                    classified_failure_detail(&error),
+                    None,
+                ) {
+                    eprintln!("durable batch terminal event delivery failed: {delivery_error}");
+                } else if let Ok(mut terminal) = terminal_jobs.lock() {
                     terminal.insert(index);
                 }
                 break;
@@ -312,14 +345,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         child_run_id: child_run_id.clone(),
                         state: if cancelled { "Cancelled" } else { "Failed" }.into(),
                     });
-                    let _ = tx.send(Event::JobFinished {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: if cancelled { "cancelled" } else { "failed" }.into(),
-                        detail: classified_failure_detail(&error),
-                        credential_fingerprint: None,
-                    });
-                    if let Ok(mut terminal) = terminal_jobs.lock() {
+                    if let Err(delivery_error) = send_job_finished(
+                        &tx,
+                        job_id.clone(),
+                        child_run_id.clone(),
+                        if cancelled { "cancelled" } else { "failed" }.into(),
+                        classified_failure_detail(&error),
+                        None,
+                    ) {
+                        eprintln!("durable batch terminal event delivery failed: {delivery_error}");
+                    } else if let Ok(mut terminal) = terminal_jobs.lock() {
                         terminal.insert(index);
                     }
                     break;
@@ -559,14 +594,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         child_run_id: child_run_id.clone(),
                         state: if cancelled { "Cancelled" } else { "Failed" }.into(),
                     });
-                    let _ = tx.send(Event::JobFinished {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: if cancelled { "cancelled" } else { "failed" }.into(),
-                        detail: classified_failure_detail(&error),
-                        credential_fingerprint: None,
-                    });
-                    if let Ok(mut terminal) = terminal_jobs.lock() {
+                    if let Err(delivery_error) = send_job_finished(
+                        &tx,
+                        job_id.clone(),
+                        child_run_id.clone(),
+                        if cancelled { "cancelled" } else { "failed" }.into(),
+                        classified_failure_detail(&error),
+                        None,
+                    ) {
+                        eprintln!("durable batch terminal event delivery failed: {delivery_error}");
+                    } else if let Ok(mut terminal) = terminal_jobs.lock() {
                         terminal.insert(index);
                     }
                     break;
@@ -591,22 +628,24 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 }
                 .into(),
             });
-            let _ = tx.send(Event::JobFinished {
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                state: terminal_state.into(),
-                detail: if delta_required {
+            if let Err(error) = send_job_finished(
+                &tx,
+                job_id.clone(),
+                child_run_id.clone(),
+                terminal_state.into(),
+                if delta_required {
                     "Dovecot reports that another delta pass is required".into()
                 } else {
                     "process completed".into()
                 },
-                credential_fingerprint: if job.form.dry_run {
+                if job.form.dry_run {
                     Some(job.form.credential_binding_fingerprint())
                 } else {
                     None
                 },
-            });
-            if let Ok(mut terminal) = terminal_jobs.lock() {
+            ) {
+                eprintln!("durable batch terminal event delivery failed: {error}");
+            } else if let Ok(mut terminal) = terminal_jobs.lock() {
                 terminal.insert(index);
             }
         } else if cancel.load(Ordering::Relaxed) {
@@ -615,14 +654,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 child_run_id: child_run_id.clone(),
                 state: "Cancelled".into(),
             });
-            let _ = tx.send(Event::JobFinished {
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                state: "cancelled".into(),
-                detail: "cancelled by operator".into(),
-                credential_fingerprint: None,
-            });
-            if let Ok(mut terminal) = terminal_jobs.lock() {
+            if let Err(error) = send_job_finished(
+                &tx,
+                job_id.clone(),
+                child_run_id.clone(),
+                "cancelled".into(),
+                "cancelled by operator".into(),
+                None,
+            ) {
+                eprintln!("durable batch terminal event delivery failed: {error}");
+            } else if let Ok(mut terminal) = terminal_jobs.lock() {
                 terminal.insert(index);
             }
         }

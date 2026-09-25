@@ -111,6 +111,7 @@ pub(crate) enum Event {
         state: String,
         detail: String,
         credential_fingerprint: Option<String>,
+        reply: mpsc::SyncSender<Result<(), String>>,
     },
     BatchEvidence {
         job_id: String,
