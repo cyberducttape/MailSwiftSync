@@ -70,6 +70,36 @@ pub(crate) fn message_verification_enabled(form: &crate::Form) -> bool {
         && !form.profile.allowsizemismatch
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalEvidenceSource {
+    Independent,
+    Engine,
+    Unavailable,
+}
+
+/// Select the only evidence source allowed to determine a terminal state.
+/// Live imapsync engine counters are telemetry when the plan cannot support
+/// independent metadata reconciliation; they are never certification.
+pub(crate) fn terminal_evidence_source(
+    form: &crate::Form,
+    independent_available: bool,
+    engine_available: bool,
+) -> TerminalEvidenceSource {
+    if !form.dry_run && form.engine() == core::Engine::ImapSync {
+        if message_verification_enabled(form) && independent_available {
+            TerminalEvidenceSource::Independent
+        } else {
+            TerminalEvidenceSource::Unavailable
+        }
+    } else if independent_available {
+        TerminalEvidenceSource::Independent
+    } else if engine_available {
+        TerminalEvidenceSource::Engine
+    } else {
+        TerminalEvidenceSource::Unavailable
+    }
+}
+
 /// Perform independent, folder-aware IMAP reconciliation after a successful
 /// imapsync transfer. Engine counters remain useful as a fallback, but they
 /// cannot prove portable message identity; this adapter fetches Message-ID,
@@ -1153,10 +1183,46 @@ pub(crate) fn run_dovecot_verification(
 mod tests {
     use super::{
         automap_folder_kind, infer_automap_folder_mapping, persist_engine_identity_before_launch,
-        resolve_imapsync_identity, validate_destination_folder_policy,
+        resolve_imapsync_identity, terminal_evidence_source, validate_destination_folder_policy,
+        TerminalEvidenceSource,
     };
     use crate::{Event, imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile};
     use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
+
+    fn unsuitable_live_form() -> crate::Form {
+        let mut form = crate::Form::default();
+        form.dry_run = false;
+        form.profile.engine = crate::core::Engine::ImapSync;
+        form
+    }
+
+    #[test]
+    fn single_justfolders_never_uses_engine_evidence() {
+        let mut form = unsuitable_live_form();
+        form.profile.justfolders = true;
+        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+    }
+
+    #[test]
+    fn single_addheader_never_uses_engine_evidence() {
+        let mut form = unsuitable_live_form();
+        form.profile.addheader = true;
+        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+    }
+
+    #[test]
+    fn single_internal_date_disabled_never_uses_engine_evidence() {
+        let mut form = unsuitable_live_form();
+        form.profile.sync_internaldates = false;
+        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+    }
+
+    #[test]
+    fn single_size_mismatch_allowed_never_uses_engine_evidence() {
+        let mut form = unsuitable_live_form();
+        form.profile.allowsizemismatch = true;
+        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+    }
 
     #[test]
     fn imapsync_identity_is_resolved_before_execution() {

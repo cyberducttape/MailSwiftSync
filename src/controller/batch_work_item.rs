@@ -15,7 +15,8 @@ use crate::{
     process::ProcessLaunchLimiter,
     runner::{
         ResolvedImapsyncIdentity, RunContext, persist_engine_identity_before_launch,
-        message_verification_enabled, run_dovecot_destination_preflight,
+        message_verification_enabled, terminal_evidence_source, TerminalEvidenceSource,
+        run_dovecot_destination_preflight,
         run_dovecot_verification, run_imap_message_verification, run_streaming,
     },
     verification::ImapsyncOutputProfile,
@@ -406,6 +407,11 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                 }
                             }
                         } else if !job.form.dry_run
+                            && terminal_evidence_source(
+                                &job.form,
+                                false,
+                                stream.imapsync_evidence.is_some(),
+                            ) == TerminalEvidenceSource::Engine
                             && let Some(evidence) = stream.imapsync_evidence
                         {
                             let _ = tx.send(Event::BatchEvidence {
