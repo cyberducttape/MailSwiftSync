@@ -212,41 +212,32 @@ impl MessageVerification {
     /// folder mapping. An absent mapping entry means the source folder is
     /// expected to retain its name. Provider-specific label semantics belong
     /// in the mapping supplied by the caller, not in this generic verifier.
-    pub fn detect_mismatches_with_folder_mapping(
+    /// Reconciliation Pass 1: Message-ID + exact metadata matching.
+    /// Returns (mismatches created, source keys matched, dest keys matched).
+    fn pass_1_message_id_exact_metadata(
         job_id: &str,
         run_id: &str,
         source_messages: &ExtractedMessages,
         dest_messages: &ExtractedMessages,
         folder_mapping: &HashMap<String, String>,
-    ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        source_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
+        dest_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
+    ) -> (Vec<MessageMismatch>, HashSet<MailboxMessageKey>, HashSet<MailboxMessageKey>) {
         let mut mismatches = Vec::new();
-        let mut metadata_matches = 0_u64;
-        let mut probable_matches = 0_u64;
-        // UIDs are mailbox-local diagnostic metadata. Borrow them from the
-        // input maps instead of cloning every UID into a second set.
-        let mut unmatched_source: HashSet<&MailboxMessageKey> = source_messages.keys().collect();
-        let mut unmatched_dest: HashSet<&MailboxMessageKey> = dest_messages.keys().collect();
+        let mut matched_source = HashSet::new();
+        let mut matched_dest = HashSet::new();
 
-        let source_by_message_id = index_by_message_id(source_messages);
-        let dest_by_message_id = index_by_message_id(dest_messages);
-
-        // Message-ID remains the strongest portable identity. Match unique
-        // IDs even when date/size differ so a legitimate metadata rewrite is
-        // reported as changed rather than as missing + extra.
-        let mut message_ids = source_by_message_id
+        let mut message_ids: Vec<_> = source_by_message_id
             .keys()
             .filter(|id| dest_by_message_id.contains_key(*id))
             .copied()
-            .collect::<Vec<_>>();
+            .collect();
         message_ids.sort_unstable();
+
         for message_id in message_ids {
-            let source_uids = &source_by_message_id[&message_id];
-            let dest_uids = &dest_by_message_id[&message_id];
-            // A repeated Message-ID identifies a group, not an ordering.
-            // Reconcile the group's metadata multiset first so UID/mailbox
-            // ordering cannot turn preserved duplicates into false changes.
-            // The expected destination folder is part of this key; a matching
-            // message in another folder must never count as a match.
+            let source_uids = &source_by_message_id[message_id];
+            let dest_uids = &dest_by_message_id[message_id];
+
             let mut destination_by_metadata =
                 HashMap::<(String, MetadataFingerprint<'_>), VecDeque<&MailboxMessageKey>>::new();
             for dest_key in dest_uids {
@@ -257,6 +248,7 @@ impl MessageVerification {
                         .push_back(*dest_key);
                 }
             }
+
             for source_key in source_uids {
                 let source_msg = &source_messages[source_key];
                 let Some(fingerprint) = metadata_fingerprint(source_msg) else {
@@ -267,19 +259,15 @@ impl MessageVerification {
                     .get_mut(&(expected_folder, fingerprint))
                     .and_then(VecDeque::pop_front)
                 {
-                    unmatched_source.remove(source_key);
-                    unmatched_dest.remove(dest_key);
-                    metadata_matches += 1;
+                    matched_source.insert((*source_key).clone());
+                    matched_dest.insert((*dest_key).clone());
                 }
             }
 
-            // The remaining common multiplicity shares only Message-ID.
-            // Pair it deterministically for diagnostics and classify it as
-            // changed; source or destination excess remains for the explicit
-            // missing/duplicate passes below.
+            // Handle metadata-mismatched but ID-matched pairs
             let mut destination_by_folder = HashMap::<String, VecDeque<&MailboxMessageKey>>::new();
             for dest_key in dest_uids {
-                if unmatched_dest.contains(dest_key) {
+                if !matched_dest.contains(dest_key) {
                     destination_by_folder
                         .entry(dest_key.mailbox.clone())
                         .or_default()
@@ -287,7 +275,7 @@ impl MessageVerification {
                 }
             }
             for source_key in source_uids {
-                if !unmatched_source.contains(source_key) {
+                if matched_source.contains(source_key) {
                     continue;
                 }
                 let expected_folder = expected_destination_folder(source_key, folder_mapping);
@@ -299,8 +287,8 @@ impl MessageVerification {
                 };
                 let source_msg = &source_messages[source_key];
                 let dest_msg = &dest_messages[dest_key];
-                unmatched_source.remove(source_key);
-                unmatched_dest.remove(dest_key);
+                matched_source.insert((*source_key).clone());
+                matched_dest.insert((*dest_key).clone());
                 mismatches.push(make_mismatch(
                     job_id,
                     run_id,
@@ -313,186 +301,211 @@ impl MessageVerification {
             }
         }
 
-        // A matching identity in an unexpected folder is a placement error,
-        // not a successful cross-folder match. Prefer metadata equality when
-        // pairing duplicate Message-IDs, then retain the full folder context
-        // in the mismatch record for operator remediation.
-        let mut wrong_folder_pairs = Vec::new();
-        for (message_id, source_uids) in &source_by_message_id {
+        (mismatches, matched_source, matched_dest)
+    }
+
+    /// Reconciliation Pass 2: Wrong-folder detection for Message-ID matches.
+    /// Finds messages with identical Message-ID and metadata but in unexpected folders.
+    fn pass_2_wrong_folder_detection(
+        job_id: &str,
+        run_id: &str,
+        source_messages: &ExtractedMessages,
+        dest_messages: &ExtractedMessages,
+        folder_mapping: &HashMap<String, String>,
+        unmatched_source: &HashSet<MailboxMessageKey>,
+        unmatched_dest: &HashSet<MailboxMessageKey>,
+        source_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
+        dest_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
+    ) -> (Vec<MessageMismatch>, HashSet<MailboxMessageKey>, HashSet<MailboxMessageKey>) {
+        let mut mismatches = Vec::new();
+        let mut matched_source = HashSet::new();
+        let mut matched_dest = HashSet::new();
+
+        for (message_id, source_uids) in source_by_message_id {
             let Some(dest_uids) = dest_by_message_id.get(message_id) else {
                 continue;
             };
 
-            // Index the remaining destination collision group by metadata and
-            // folder. Pairing then consumes one indexed candidate instead of
-            // scanning the whole destination group for every source record.
-            let mut destinations_by_metadata_and_folder = HashMap::<
-                Option<MetadataFingerprint<'_>>,
-                HashMap<String, VecDeque<&MailboxMessageKey>>,
-            >::new();
-            let mut available_destination_folders =
-                HashMap::<Option<MetadataFingerprint<'_>>, BTreeSet<String>>::new();
-            let mut all_destinations_by_folder =
-                HashMap::<String, VecDeque<&MailboxMessageKey>>::new();
-            let mut all_available_destination_folders = BTreeSet::new();
+            // Build index of remaining unmatched destinations by folder and metadata
+            let mut dest_by_folder_metadata: HashMap<(String, Option<MetadataFingerprint>), Vec<&MailboxMessageKey>> = HashMap::new();
             for dest_key in dest_uids {
                 if !unmatched_dest.contains(dest_key) {
                     continue;
                 }
                 let metadata = metadata_fingerprint(&dest_messages[dest_key]);
-                destinations_by_metadata_and_folder
-                    .entry(metadata)
+                dest_by_folder_metadata
+                    .entry((dest_key.mailbox.clone(), metadata))
                     .or_default()
-                    .entry(dest_key.mailbox.clone())
-                    .or_default()
-                    .push_back(*dest_key);
-                available_destination_folders
-                    .entry(metadata)
-                    .or_default()
-                    .insert(dest_key.mailbox.clone());
-                all_destinations_by_folder
-                    .entry(dest_key.mailbox.clone())
-                    .or_default()
-                    .push_back(*dest_key);
-                all_available_destination_folders.insert(dest_key.mailbox.clone());
+                    .push(dest_key);
             }
-            let mut reserved_destinations = HashSet::new();
+
+            // For each unmatched source with this Message-ID, try to find it in a wrong folder
             for source_key in source_uids {
                 if !unmatched_source.contains(source_key) {
                     continue;
                 }
                 let expected_folder = expected_destination_folder(source_key, folder_mapping);
                 let source_metadata = metadata_fingerprint(&source_messages[source_key]);
-                let mut destination = available_destination_folders
-                    .get(&source_metadata)
-                    .and_then(|folders| {
-                        folders
-                            .iter()
-                            .find(|folder| folder.as_str() != expected_folder)
-                            .cloned()
-                    })
-                    .and_then(|folder| {
-                        let queues =
-                            destinations_by_metadata_and_folder.get_mut(&source_metadata)?;
-                        let queue = queues.get_mut(&folder)?;
-                        let destination = queue.pop_front();
-                        if queue.is_empty() {
-                            queues.remove(&folder);
-                            if let Some(folders) =
-                                available_destination_folders.get_mut(&source_metadata)
-                            {
-                                folders.remove(&folder);
-                            }
-                        }
-                        destination
-                    });
-                if let Some(dest_key) = destination {
-                    reserved_destinations.insert(dest_key);
-                } else {
-                    // Preserve the legacy fallback: if no metadata-equivalent
-                    // candidate exists, pair with any remaining destination in
-                    // a different folder. The folder index avoids scanning
-                    // every destination record, and reservations prevent a
-                    // candidate consumed by the exact path from being reused.
-                    let folder = all_available_destination_folders
-                        .iter()
-                        .find(|folder| folder.as_str() != expected_folder)
-                        .cloned();
-                    destination = folder.and_then(|folder| {
-                        let queue = all_destinations_by_folder.get_mut(&folder)?;
-                        while queue
-                            .front()
-                            .is_some_and(|candidate| reserved_destinations.contains(candidate))
-                        {
-                            queue.pop_front();
-                        }
-                        let destination = queue.pop_front();
-                        if queue.is_empty() {
-                            all_destinations_by_folder.remove(&folder);
-                            all_available_destination_folders.remove(&folder);
-                        }
-                        destination
-                    });
-                    if let Some(dest_key) = destination {
-                        reserved_destinations.insert(dest_key);
+
+                // Try to find in any wrong folder with matching metadata
+                for ((folder, metadata), candidates) in dest_by_folder_metadata.iter_mut() {
+                    if folder == &expected_folder || metadata != &source_metadata {
+                        continue;
+                    }
+                    if let Some(dest_key) = candidates.pop() {
+                        matched_source.insert((*source_key).clone());
+                        matched_dest.insert((*dest_key).clone());
+                        mismatches.push(make_mismatch(
+                            job_id,
+                            run_id,
+                            MismatchType::PresentWrongFolder,
+                            Some(source_key),
+                            Some(dest_key),
+                            Some(&source_messages[source_key]),
+                            Some(&dest_messages[dest_key]),
+                        ));
+                        break;
                     }
                 }
-                if let Some(dest_key) = destination {
-                    wrong_folder_pairs.push((*source_key, dest_key));
-                }
             }
-        }
-        for (source_key, dest_key) in wrong_folder_pairs {
-            if !unmatched_source.remove(source_key) || !unmatched_dest.remove(dest_key) {
-                continue;
-            }
-            mismatches.push(make_mismatch(
-                job_id,
-                run_id,
-                MismatchType::PresentWrongFolder,
-                Some(source_key),
-                Some(dest_key),
-                Some(&source_messages[source_key]),
-                Some(&dest_messages[dest_key]),
-            ));
         }
 
-        // Internal date + size is a useful fallback only when unique on both
-        // sides. Ambiguous fingerprints are left unresolved rather than
-        // silently pairing unrelated messages.
+        (mismatches, matched_source, matched_dest)
+    }
+
+    /// Reconciliation Pass 3: Fingerprint fallback for unmatched messages.
+    /// Only processes messages not matched in Passes 1-2.
+    fn pass_3_fingerprint_fallback(
+        source_messages: &ExtractedMessages,
+        dest_messages: &ExtractedMessages,
+        unmatched_source: &HashSet<MailboxMessageKey>,
+        unmatched_dest: &HashSet<MailboxMessageKey>,
+        folder_mapping: &HashMap<String, String>,
+    ) -> (u64, HashSet<MailboxMessageKey>, HashSet<MailboxMessageKey>) {
+        let mut probable_matches = 0_u64;
+        let mut matched_source = HashSet::new();
+        let mut matched_dest = HashSet::new();
+
+        let unmatched_refs: HashSet<_> = unmatched_source.iter().collect();
+        let unmatched_dest_refs: HashSet<_> = unmatched_dest.iter().collect();
+
         let source_by_fingerprint =
-            index_by_fingerprint(source_messages, &unmatched_source, folder_mapping, true);
+            index_by_fingerprint(source_messages, &unmatched_refs, folder_mapping, true);
         let dest_by_fingerprint =
-            index_by_fingerprint(dest_messages, &unmatched_dest, folder_mapping, false);
-        let mut fingerprints = source_by_fingerprint
+            index_by_fingerprint(dest_messages, &unmatched_dest_refs, folder_mapping, false);
+
+        let mut fingerprints: Vec<_> = source_by_fingerprint
             .keys()
-            .filter(|fingerprint| dest_by_fingerprint.contains_key(*fingerprint))
+            .filter(|fp| dest_by_fingerprint.contains_key(fp))
             .cloned()
-            .collect::<Vec<_>>();
+            .collect();
         fingerprints.sort();
+
         for fingerprint in fingerprints {
             let source_uids = &source_by_fingerprint[&fingerprint];
             let dest_uids = &dest_by_fingerprint[&fingerprint];
             if source_uids.len() == 1 && dest_uids.len() == 1 {
-                unmatched_source.remove(source_uids[0]);
-                unmatched_dest.remove(dest_uids[0]);
-                // Date + size is only a candidate identity. It is useful for
-                // reconciliation, but it is not proof that the messages are
-                // the same and must never contribute to metadata_matches.
+                matched_source.insert((*source_uids[0]).clone());
+                matched_dest.insert((*dest_uids[0]).clone());
                 probable_matches += 1;
             }
         }
 
-        // Report only destination occurrences beyond the source multiplicity.
-        let mut duplicate_dest_uids = dest_by_message_id
-            .iter()
-            .filter(|(message_id, dest_uids)| {
-                source_by_message_id
-                    .get(*message_id)
-                    .is_some_and(|source_uids| dest_uids.len() > source_uids.len())
-            })
-            .flat_map(|(_, uids)| uids.iter())
-            .filter(|uid| unmatched_dest.contains(*uid))
-            .copied()
-            .collect::<Vec<_>>();
-        duplicate_dest_uids.sort();
-        for dest_uid in duplicate_dest_uids {
-            let dest_msg = &dest_messages[dest_uid];
-            unmatched_dest.remove(dest_uid);
-            mismatches.push(make_mismatch(
+        (probable_matches, matched_source, matched_dest)
+    }
+
+    pub fn detect_mismatches_with_folder_mapping(
+        job_id: &str,
+        run_id: &str,
+        source_messages: &ExtractedMessages,
+        dest_messages: &ExtractedMessages,
+        folder_mapping: &HashMap<String, String>,
+    ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        let mut all_mismatches = Vec::new();
+        let mut total_metadata_matches = 0_u64;
+        let mut total_probable_matches = 0_u64;
+
+        let source_by_message_id = index_by_message_id(source_messages);
+        let dest_by_message_id = index_by_message_id(dest_messages);
+
+        // Pass 1: Message-ID + exact metadata matching
+        let (pass1_mismatches, pass1_matched_src, pass1_matched_dst) =
+            Self::pass_1_message_id_exact_metadata(
                 job_id,
                 run_id,
-                MismatchType::Duplicated,
-                None,
-                Some(dest_uid),
-                None,
-                Some(dest_msg),
-            ));
+                source_messages,
+                dest_messages,
+                folder_mapping,
+                &source_by_message_id,
+                &dest_by_message_id,
+            );
+        all_mismatches.extend(pass1_mismatches.iter().cloned());
+        total_metadata_matches = pass1_matched_src
+            .iter()
+            .filter(|k| {
+                all_mismatches.iter().all(|m| {
+                    m.source_uid.as_ref() != Some(&k.uid)
+                        || m.source_folder.as_ref() != Some(&k.mailbox)
+                })
+            })
+            .count() as u64;
+
+        // Build unmatched sets for Pass 2
+        let mut unmatched_source: HashSet<MailboxMessageKey> = source_messages
+            .keys()
+            .filter(|k| !pass1_matched_src.contains(k))
+            .cloned()
+            .collect();
+        let mut unmatched_dest: HashSet<MailboxMessageKey> = dest_messages
+            .keys()
+            .filter(|k| !pass1_matched_dst.contains(k))
+            .cloned()
+            .collect();
+
+        // Pass 2: Wrong-folder detection for Message-ID matches
+        let (pass2_mismatches, pass2_matched_src, pass2_matched_dst) =
+            Self::pass_2_wrong_folder_detection(
+                job_id,
+                run_id,
+                source_messages,
+                dest_messages,
+                folder_mapping,
+                &unmatched_source,
+                &unmatched_dest,
+                &source_by_message_id,
+                &dest_by_message_id,
+            );
+        all_mismatches.extend(pass2_mismatches);
+        for key in &pass2_matched_src {
+            unmatched_source.remove(key);
+        }
+        for key in &pass2_matched_dst {
+            unmatched_dest.remove(key);
         }
 
-        for source_uid in sorted_keys(&unmatched_source) {
+        // Pass 3: Fingerprint fallback for unmatched messages
+        let (pass3_probable, pass3_matched_src, pass3_matched_dst) =
+            Self::pass_3_fingerprint_fallback(
+                source_messages,
+                dest_messages,
+                &unmatched_source,
+                &unmatched_dest,
+                folder_mapping,
+            );
+        total_probable_matches = pass3_probable;
+        for key in pass3_matched_src {
+            unmatched_source.remove(&key);
+        }
+        for key in pass3_matched_dst {
+            unmatched_dest.remove(&key);
+        }
+
+        // Report remaining unmatched messages
+        let mut unmatched_source_vec: Vec<_> = unmatched_source.iter().collect();
+        unmatched_source_vec.sort();
+        for source_uid in unmatched_source_vec {
             let source_msg = &source_messages[source_uid];
-            mismatches.push(make_mismatch(
+            all_mismatches.push(make_mismatch(
                 job_id,
                 run_id,
                 MismatchType::Missing,
@@ -502,9 +515,39 @@ impl MessageVerification {
                 None,
             ));
         }
-        for dest_uid in sorted_keys(&unmatched_dest) {
+
+        // Report duplicates and extra destination messages
+        let mut duplicate_dest_uids: Vec<_> = dest_by_message_id
+            .iter()
+            .filter(|(message_id, dest_uids)| {
+                source_by_message_id
+                    .get(*message_id)
+                    .is_some_and(|source_uids| dest_uids.len() > source_uids.len())
+            })
+            .flat_map(|(_, uids)| uids.iter())
+            .filter(|uid| unmatched_dest.contains(*uid))
+            .cloned()
+            .collect();
+        duplicate_dest_uids.sort();
+        for dest_uid in duplicate_dest_uids {
+            let dest_msg = &dest_messages[&dest_uid];
+            unmatched_dest.remove(&dest_uid);
+            all_mismatches.push(make_mismatch(
+                job_id,
+                run_id,
+                MismatchType::Duplicated,
+                None,
+                Some(&dest_uid),
+                None,
+                Some(dest_msg),
+            ));
+        }
+
+        let mut unmatched_dest_vec: Vec<_> = unmatched_dest.iter().collect();
+        unmatched_dest_vec.sort();
+        for dest_uid in unmatched_dest_vec {
             let dest_msg = &dest_messages[dest_uid];
-            mismatches.push(make_mismatch(
+            all_mismatches.push(make_mismatch(
                 job_id,
                 run_id,
                 MismatchType::Extra,
@@ -515,25 +558,25 @@ impl MessageVerification {
             ));
         }
 
-        // Generate summary
+        // Generate summary by counting mismatch types
         let summary = VerificationSummary {
             total_source: source_messages.len() as u64,
             total_destination: dest_messages.len() as u64,
-            metadata_matches,
-            probable_matches,
-            missing_count: mismatches
+            metadata_matches: total_metadata_matches,
+            probable_matches: total_probable_matches,
+            missing_count: all_mismatches
                 .iter()
                 .filter(|m| m.mismatch_type == MismatchType::Missing)
                 .count() as u64,
-            extra_count: mismatches
+            extra_count: all_mismatches
                 .iter()
                 .filter(|m| m.mismatch_type == MismatchType::Extra)
                 .count() as u64,
-            duplicated_count: mismatches
+            duplicated_count: all_mismatches
                 .iter()
                 .filter(|m| m.mismatch_type == MismatchType::Duplicated)
                 .count() as u64,
-            changed_count: mismatches
+            changed_count: all_mismatches
                 .iter()
                 .filter(|m| {
                     matches!(
@@ -544,7 +587,7 @@ impl MessageVerification {
                 .count() as u64,
         };
 
-        Ok((mismatches, summary))
+        Ok((all_mismatches, summary))
     }
 }
 
