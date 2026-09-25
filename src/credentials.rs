@@ -510,7 +510,8 @@ pub fn restrict_open_file_permissions(file: &fs::File) -> std::io::Result<()> {
 /// Unix callers get descriptor-based no-follow validation so the result is
 /// not based on a pathname that can later resolve through a symlink. The
 /// directory must belong to the effective user and must not be writable by
-/// group or other users.
+/// group or other users. Existing directories may retain readable mode bits;
+/// sensitive files inside them are separately required to be owner-only.
 #[cfg(unix)]
 pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};

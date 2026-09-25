@@ -80,7 +80,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
         mailbox
             .evidence
             .as_ref()
-            .is_some_and(|(_, value, _)| value.unmatched_messages.is_none())
+            .is_some_and(|(_, value, _)| value.unresolved_count().is_none())
     });
     let mut message_counts = snapshot.mailboxes.iter().filter_map(|mailbox| {
         mailbox.evidence.as_ref().map(|(_, value, _)| {
@@ -90,7 +90,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "missing": value.missing_messages,
                 "extra": value.extra_messages,
                 "modified": value.modified_messages,
-                "unmatched": value.unmatched_messages,
+                "unmatched": value.unresolved_count(),
                 "failed": value.failed_messages,
             })
         })
@@ -120,8 +120,10 @@ pub(crate) fn export_from_store_with_options_and_identity(
                     Some(serde_json::json!({
                         "run_id": run_id,
                         "scope": value.evidence_scope().label(),
-                        "verification_level": value.verification_level(),
-                        "evidence_level": value.evidence_level(),
+                        "verification_method": value.verification_method().as_str(),
+                        "verification_outcome": value.verification_outcome().as_str(),
+                        "verification_level": value.verification_outcome().display_label(),
+                        "evidence_level": value.verification_outcome().display_label(),
                         "reason": value.verification_reason(),
                         "evidence_digest": evidence_digest(&run_id, &plan_snapshot, &value),
                         "source_folders": value.source_folders,
@@ -130,7 +132,13 @@ pub(crate) fn export_from_store_with_options_and_identity(
                         "destination_messages": value.destination_messages,
                         "source_bytes": value.source_bytes,
                         "destination_bytes": value.destination_bytes,
-                        "unmatched_messages": value.unmatched_messages,
+                        "unmatched_messages": value.unresolved_count(),
+                        "unresolved_count": value.unresolved_count(),
+                        "missing_count": value.missing_count(),
+                        "extra_count": value.extra_count(),
+                        "modified_count": value.modified_count(),
+                        "probable_count": value.probable_count(),
+                        "metadata_matched_count": value.metadata_matched_count(),
                         "failed_messages": value.failed_messages,
                         "missing_messages": value.missing_messages,
                         "extra_messages": value.extra_messages,

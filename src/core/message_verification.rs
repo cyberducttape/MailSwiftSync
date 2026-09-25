@@ -1,6 +1,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use super::message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
+use super::{
+    evidence::VerificationOutcome,
+    message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey},
+};
 
 /// Mismatch classifications currently supported by the executable verifier.
 ///
@@ -94,6 +97,25 @@ impl MessageVerification {
         )
     }
 
+    /// Metadata-only reconciliation used by the live IMAP adapter. Content
+    /// verification has a separate API so callers cannot accidentally claim
+    /// body-hash evidence while supplying empty fingerprint maps.
+    pub fn detect_mismatches_with_metadata(
+        job_id: &str,
+        run_id: &str,
+        source_messages: &ExtractedMessages,
+        dest_messages: &ExtractedMessages,
+        folder_mapping: &HashMap<String, String>,
+    ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        Self::detect_mismatches_with_folder_mapping(
+            job_id,
+            run_id,
+            source_messages,
+            dest_messages,
+            folder_mapping,
+        )
+    }
+
     /// Reconcile metadata first, then classify same-identity messages whose
     /// independently fetched RFC822 bytes differ. Content hashes are only
     /// authoritative when both sides supplied a bounded SHA-256 fingerprint;
@@ -135,6 +157,23 @@ impl MessageVerification {
                     && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str())
             });
             if !source_present || !dest_present {
+                continue;
+            }
+            // A content match cannot erase a stronger semantic mismatch such
+            // as a same-ID metadata change or a wrong-folder result. Only the
+            // Missing+Extra pair created by identity uncertainty is eligible
+            // for resolution by a unique content fingerprint.
+            let has_other_mismatch = mismatches.iter().any(|m| {
+                let source_matches = m.source_uid.as_deref() == Some(source_key.uid.as_str())
+                    && m.source_folder.as_deref() == Some(source_key.mailbox.as_str());
+                let destination_matches =
+                    m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
+                        && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str());
+                source_matches
+                    && destination_matches
+                    && !matches!(m.mismatch_type, MismatchType::Missing | MismatchType::Extra)
+            });
+            if has_other_mismatch {
                 continue;
             }
             mismatches.retain(|m| {
@@ -878,6 +917,26 @@ impl EvidenceLevel {
 }
 
 impl VerificationSummary {
+    /// Convert the in-memory reconciliation result to the same semantic
+    /// outcome persisted in `MailboxEvidence` and consumed by reports/UI.
+    pub fn verification_outcome(&self) -> VerificationOutcome {
+        if self.missing_count > 0 {
+            VerificationOutcome::Missing
+        } else if self.changed_count > 0 {
+            VerificationOutcome::Changed
+        } else if self.duplicated_count > 0 || self.extra_count > 0 {
+            VerificationOutcome::Unexpected
+        } else if self.probable_matches > 0 {
+            VerificationOutcome::ProbableMatch
+        } else if self.metadata_matches == self.total_source
+            && self.metadata_matches == self.total_destination
+        {
+            VerificationOutcome::ExactMetadataMatch
+        } else {
+            VerificationOutcome::Ambiguous
+        }
+    }
+
     /// Return whether all extracted records reconcile by metadata alone.
     /// This must not be presented as content verification.
     pub fn is_perfect_metadata_match(&self) -> bool {
@@ -1062,6 +1121,49 @@ mod tests {
             mismatches[0].destination_fingerprint.as_deref(),
             Some("bbbb")
         );
+    }
+
+    #[test]
+    fn content_match_does_not_erase_existing_metadata_mismatch() {
+        let source_key = key("1");
+        let dest_key = key("99");
+        let source = HashMap::from([(
+            source_key.clone(),
+            ExtractedMessage {
+                message_id: Some("<same@example.com>".into()),
+                uid: Some("1".into()),
+                size_bytes: Some(100),
+                internal_date: Some("2024-01-01".into()),
+            },
+        )]);
+        let destination = HashMap::from([(
+            dest_key.clone(),
+            ExtractedMessage {
+                message_id: Some("<same@example.com>".into()),
+                uid: Some("99".into()),
+                size_bytes: Some(200),
+                internal_date: Some("2024-01-01".into()),
+            },
+        )]);
+        let source_fingerprints = HashMap::from([(source_key, "same-body".into())]);
+        let destination_fingerprints = HashMap::from([(dest_key, "same-body".into())]);
+
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches_with_content_fingerprints(
+                "job1",
+                "run1",
+                &source,
+                &destination,
+                &source_fingerprints,
+                &destination_fingerprints,
+                &HashMap::new(),
+            )
+            .unwrap();
+
+        assert_eq!(summary.metadata_matches, 0);
+        assert_eq!(summary.changed_count, 1);
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].mismatch_type, MismatchType::MessageIdOnly);
     }
 
     #[test]

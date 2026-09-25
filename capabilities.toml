@@ -1,0 +1,75 @@
+# Authoritative capability status for documentation and release review.
+schema_version = 1
+last_reviewed = "2026-09-24"
+
+[capabilities.aggregate_evidence]
+code = "implemented"
+controller = "wired"
+ui = "wired"
+generic_lab = "passed"
+gmail_live = false
+m365_live = false
+production_supported = false
+
+[capabilities.message_level_metadata_reconciliation]
+code = "implemented"
+controller = "wired"
+ui = "partial"
+generic_lab = "passed"
+gmail_live = false
+m365_live = false
+production_supported = false
+
+[capabilities.message_body_proof]
+code = "prototype"
+controller = "not_wired"
+ui = "not_claimed"
+generic_lab = "not_run"
+gmail_live = false
+m365_live = false
+production_supported = false
+
+[capabilities.provider_oauth_refresh]
+code = "implemented"
+controller = "wired"
+ui = "partial"
+generic_lab = "passed"
+gmail_live = false
+m365_live = false
+production_supported = false
+
+[capabilities.provider_live_validation]
+code = "available"
+controller = "wired"
+ui = "partial"
+generic_lab = "passed"
+gmail_live = false
+m365_live = false
+production_supported = false
+
+[capabilities.provider_runbooks]
+code = "implemented"
+controller = "wired"
+ui = "not_wired"
+generic_lab = "passed"
+gmail_live = false
+m365_live = false
+production_supported = false
+
+[capabilities.recovery_guidance]
+code = "implemented"
+controller = "wired"
+ui = "not_wired"
+generic_lab = "passed"
+gmail_live = false
+m365_live = false
+production_supported = false
+
+[capabilities.uidvalidity_delta_checkpoints]
+code = "planned"
+controller = "not_wired"
+ui = "not_claimed"
+generic_lab = "not_run"
+gmail_live = false
+m365_live = false
+production_supported = false

@@ -234,6 +234,7 @@ const MAX_IMAP_LIST_MAILBOXES: usize = 100_000;
 const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
+const MESSAGE_UID_SEARCH_WINDOW_SIZE: u64 = 10_000;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
 // The current verifier intentionally remains an in-memory implementation. This
 // estimate covers fetched records, not the full peak of both account maps and
@@ -241,6 +242,7 @@ const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
 // not a process-wide memory guarantee. SQLite-backed streaming reconciliation
 // is required before very large MSP migrations can be production-supported.
 const MAX_ESTIMATED_MESSAGE_STATE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_MAILBOX_STABILITY_ATTEMPTS: usize = 2;
 
 pub(crate) struct MessageFetchBudget<'a> {
     deadline: Instant,
@@ -249,11 +251,20 @@ pub(crate) struct MessageFetchBudget<'a> {
 
 pub(crate) struct FetchedAccountMessages {
     pub(crate) mailboxes: HashSet<String>,
+    pub(crate) mailbox_details: Vec<MailboxDescriptor>,
     pub(crate) messages: crate::core::ExtractedMessages,
     pub(crate) content_fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
     /// Folders that failed verification (incomplete verification result).
     /// Maps folder name to error message for diagnostics.
     pub(crate) incomplete_folders: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MailboxDescriptor {
+    pub(crate) wire_name: String,
+    pub(crate) delimiter: Option<String>,
+    pub(crate) special_use: Vec<String>,
+    pub(crate) selectable: bool,
 }
 
 impl<'a> MessageFetchBudget<'a> {
@@ -303,6 +314,23 @@ fn read_imap_list_response_with_mailboxes<S: Read>(
     buffer: &mut [u8; 4096],
     mailboxes: &mut Vec<String>,
 ) -> Result<ListInventorySummary, String> {
+    let mut details = Vec::new();
+    let summary = read_imap_list_response_inner(stream, tag, buffer, Some(&mut details))?;
+    mailboxes.extend(
+        details
+            .into_iter()
+            .filter(|mailbox| mailbox.selectable)
+            .map(|mailbox| mailbox.wire_name),
+    );
+    Ok(summary)
+}
+
+fn read_imap_list_response_with_details<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    buffer: &mut [u8; 4096],
+    mailboxes: &mut Vec<MailboxDescriptor>,
+) -> Result<ListInventorySummary, String> {
     read_imap_list_response_inner(stream, tag, buffer, Some(mailboxes))
 }
 
@@ -310,13 +338,15 @@ fn read_imap_list_response_inner<S: Read>(
     stream: &mut S,
     tag: &str,
     buffer: &mut [u8; 4096],
-    mut mailboxes: Option<&mut Vec<String>>,
+    mut mailbox_details: Option<&mut Vec<MailboxDescriptor>>,
 ) -> Result<ListInventorySummary, String> {
     let mut line = Vec::new();
     let started = Instant::now();
     let mut last_read = Instant::now();
     let mut literal_remaining = 0_usize;
     let mut literal_separator_remaining = 0_u8;
+    let mut literal_header: Option<String> = None;
+    let mut literal_value = Vec::new();
     let mut summary = ListInventorySummary::default();
     const MAX_INTER_READ_STALL: Duration = Duration::from_secs(15);
     let deadline = started + MAX_IMAP_LIST_DURATION;
@@ -337,9 +367,19 @@ fn read_imap_list_response_inner<S: Read>(
         while offset < count {
             if literal_remaining > 0 {
                 let consumed = literal_remaining.min(count - offset);
+                literal_value.extend_from_slice(&buffer[offset..offset + consumed]);
                 literal_remaining -= consumed;
                 offset += consumed;
                 if literal_remaining == 0 {
+                    if let Some(header) = literal_header.take() {
+                        record_list_entry(
+                            &header,
+                            Some(&literal_value),
+                            &mut summary,
+                            &mut mailbox_details,
+                        )?;
+                    }
+                    literal_value.clear();
                     literal_separator_remaining = 2;
                 }
                 continue;
@@ -361,31 +401,9 @@ fn read_imap_list_response_inner<S: Read>(
             }
             let text = String::from_utf8_lossy(&line);
             let text = text.trim_end_matches(['\r', '\n']);
-            if is_untagged_response(text, "LIST") {
-                summary.mailbox_count = summary.mailbox_count.saturating_add(1);
-                if summary.mailbox_count > MAX_IMAP_LIST_MAILBOXES {
-                    return Err(format!(
-                        "IMAP LIST response exceeded the {MAX_IMAP_LIST_MAILBOXES}-mailbox limit"
-                    ));
-                }
-                if crate::imap_protocol::list_has_attribute(text, r"\ALL")
-                    || crate::imap_protocol::list_has_attribute(text, r"\ARCHIVE")
-                    || crate::imap_protocol::list_has_attribute(text, r"\DRAFTS")
-                    || crate::imap_protocol::list_has_attribute(text, r"\FLAGGED")
-                    || crate::imap_protocol::list_has_attribute(text, r"\JUNK")
-                    || crate::imap_protocol::list_has_attribute(text, r"\SENT")
-                    || crate::imap_protocol::list_has_attribute(text, r"\TRASH")
-                {
-                    summary.special_use_mailboxes = summary.special_use_mailboxes.saturating_add(1);
-                }
-                if !crate::imap_protocol::list_has_attribute(text, r"\NOSELECT")
-                    && let Some(mailboxes) = mailboxes.as_deref_mut()
-                    && let Some(mailbox) = parse_list_mailbox_name(text)
-                {
-                    mailboxes.push(mailbox);
-                    summary.selectable_mailbox_count =
-                        summary.selectable_mailbox_count.saturating_add(1);
-                }
+            let literal_size = list_literal_size(text);
+            if is_untagged_response(text, "LIST") && literal_size.is_none() {
+                record_list_entry(text, None, &mut summary, &mut mailbox_details)?;
             }
             if is_tagged_response(text, tag) {
                 let status = text.split_whitespace().nth(1);
@@ -411,6 +429,10 @@ fn read_imap_list_response_inner<S: Read>(
                 if literal_size > MAX_IMAP_LIST_LITERAL_BYTES {
                     return Err("IMAP LIST literal exceeded 1 MiB".into());
                 }
+                if is_untagged_response(text, "LIST") {
+                    literal_header = Some(text.to_owned());
+                    literal_value.clear();
+                }
                 literal_remaining = literal_size;
             }
             line.clear();
@@ -419,9 +441,50 @@ fn read_imap_list_response_inner<S: Read>(
 }
 
 /// Parse the final mailbox-name atom from a normal, non-literal LIST record.
-/// Literal mailbox names are intentionally not guessed: the caller receives
-/// the inventory count but message verification fails closed if a provider
-/// requires literal decoding that this bounded parser cannot retain.
+/// Literal names are handled by `record_list_entry` after the bounded literal
+/// bytes have been collected; this function deliberately handles only the
+/// quoted/atom form.
+fn record_list_entry(
+    line: &str,
+    literal_name: Option<&[u8]>,
+    summary: &mut ListInventorySummary,
+    mailbox_details: &mut Option<&mut Vec<MailboxDescriptor>>,
+) -> Result<(), String> {
+    if !is_untagged_response(line, "LIST") {
+        return Ok(());
+    }
+    summary.mailbox_count = summary.mailbox_count.saturating_add(1);
+    if summary.mailbox_count > MAX_IMAP_LIST_MAILBOXES {
+        return Err(format!(
+            "IMAP LIST response exceeded the {MAX_IMAP_LIST_MAILBOXES}-mailbox limit"
+        ));
+    }
+    let special_use = list_special_use(line);
+    if !special_use.is_empty() {
+        summary.special_use_mailboxes = summary.special_use_mailboxes.saturating_add(1);
+    }
+    let selectable = !crate::imap_protocol::list_has_attribute(line, r"\NOSELECT");
+    if selectable {
+        summary.selectable_mailbox_count = summary.selectable_mailbox_count.saturating_add(1);
+    }
+    if let Some(details) = mailbox_details.as_deref_mut() {
+        let wire_name = match literal_name {
+            Some(bytes) => String::from_utf8(bytes.to_vec())
+                .map_err(|_| "IMAP LIST mailbox literal was not valid UTF-8".to_owned())?,
+            None => parse_list_mailbox_name(line).ok_or_else(|| {
+                "IMAP LIST mailbox name was missing or malformed".to_owned()
+            })?,
+        };
+        details.push(MailboxDescriptor {
+            wire_name,
+            delimiter: parse_list_delimiter(line),
+            special_use,
+            selectable,
+        });
+    }
+    Ok(())
+}
+
 fn parse_list_mailbox_name(line: &str) -> Option<String> {
     let mut tokens = Vec::new();
     let mut chars = line.split_whitespace().peekable();
@@ -446,6 +509,30 @@ fn parse_list_mailbox_name(line: &str) -> Option<String> {
         .last()
         .filter(|value| !value.starts_with('{'))
         .cloned()
+}
+
+fn parse_list_delimiter(line: &str) -> Option<String> {
+    let mut tokens = line.split_whitespace();
+    tokens.next()?;
+    tokens.next()?;
+    let delimiter = tokens.next()?.trim_matches('"');
+    (!delimiter.is_empty()).then(|| delimiter.to_owned())
+}
+
+fn list_special_use(line: &str) -> Vec<String> {
+    [
+        (r"\ALL", "all"),
+        (r"\ARCHIVE", "archive"),
+        (r"\DRAFTS", "drafts"),
+        (r"\JUNK", "junk"),
+        (r"\SENT", "sent"),
+        (r"\TRASH", "trash"),
+    ]
+    .into_iter()
+    .filter_map(|(attribute, kind)| {
+        crate::imap_protocol::list_has_attribute(line, attribute).then(|| kind.to_owned())
+    })
+    .collect()
 }
 
 /// A socket read timeout is only a progress hint; it is not the same as the
@@ -940,86 +1027,152 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             host,
         ));
     }
-    let (_exists, uidvalidity) = parse_selected_mailbox(&response, host, mailbox)?;
-    let search_tag = "v002";
+    let (start_exists, start_uidvalidity, uidnext) =
+        parse_selected_mailbox(&response, host, mailbox)?;
+    let start_uidvalidity = start_uidvalidity.ok_or_else(|| {
+        format!(
+            "{host}: SELECT {mailbox} did not return UIDVALIDITY; mutation detection is unavailable"
+        )
+    })?;
+    let uidnext = uidnext.ok_or_else(|| {
+        format!("{host}: SELECT {mailbox} did not return UIDNEXT; bounded UID enumeration is unavailable")
+    })?;
+    let mut messages = HashMap::new();
+    let mut estimated_state_bytes = 0usize;
+    let mut page_number = 0usize;
+    enumerate_uid_pages(
+        stream,
+        host,
+        mailbox,
+        uidnext,
+        &mut response,
+        &mut buffer,
+        budget,
+        |stream, buffer, uid_page| {
+            budget.check()?;
+            let tag = format!("v{:03}", page_number + 3);
+            page_number = page_number.saturating_add(1);
+            let uid_set = uid_page
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let command = format!(
+                "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])\r\n"
+            );
+            stream
+                .write_all(command.as_bytes())
+                .map_err(|error| format!("{host}: could not fetch mailbox metadata: {error}"))?;
+            let raw_response = read_imap_tagged_bytes_with_budget(
+                stream,
+                &tag,
+                buffer,
+                MAX_MESSAGE_FETCH_RESPONSE_BYTES,
+                budget,
+            )?;
+            let response = String::from_utf8_lossy(&raw_response);
+            if !imap_command_succeeded(&response, &tag) {
+                return Err(imap_command_failure(
+                    &response,
+                    &tag,
+                    "FETCH mailbox metadata",
+                    host,
+                ));
+            }
+            let page_messages = parse_message_fetch_metadata_response_bytes(
+                &raw_response,
+                mailbox,
+                Some(start_uidvalidity),
+            )?;
+            for (key, message) in page_messages {
+                estimated_state_bytes = estimated_state_bytes
+                    .saturating_add(estimated_message_record_bytes(&key, &message, None));
+                if messages.insert(key, message).is_some() {
+                    return Err(format!(
+                        "{host}: folder {mailbox}: duplicate message identity"
+                    ));
+                }
+                if messages.len() > MAX_MESSAGE_FETCH_RECORDS {
+                    return Err(format!(
+                        "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
+                    ));
+                }
+                if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
+                    return Err(format!(
+                        "{host}: folder {mailbox}: message data exceeds memory budget"
+                    ));
+                }
+            }
+            Ok(())
+        },
+    )?;
+
+    // Re-SELECT after the bounded scan. If the folder changed while it was
+    // being read, discard the scan so a moving mailbox cannot be reported as
+    // missing, extra, or modified mail. The account-level caller retries this
+    // folder once before marking verification incomplete.
+    let end_tag = format!("v{:03}", page_number + 3);
     stream
-        .write_all(format!("{search_tag} UID SEARCH ALL\r\n").as_bytes())
-        .map_err(|error| format!("{host}: could not search mailbox UIDs: {error}"))?;
+        .write_all(format!("{end_tag} SELECT {quoted_mailbox}\r\n").as_bytes())
+        .map_err(|error| format!("{host}: could not re-select mailbox: {error}"))?;
     response.clear();
     read_imap_tagged_with_budget(
         stream,
-        search_tag,
+        &end_tag,
         &mut response,
         &mut buffer,
         1_048_576,
         budget,
     )?;
-    if !imap_command_succeeded(&response, search_tag) {
+    if !imap_command_succeeded(&response, &end_tag) {
         return Err(imap_command_failure(
             &response,
-            search_tag,
-            "SEARCH mailbox UIDs",
+            &end_tag,
+            "re-select mailbox for mutation check",
             host,
         ));
     }
-    let uids = parse_uid_search_response(&response, host, mailbox)?;
-    let mut messages = HashMap::new();
-    let mut content_fingerprints = HashMap::new();
-    let mut estimated_state_bytes = 0usize;
-    for (page, uid_page) in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize).enumerate() {
-        budget.check()?;
-        let tag = format!("v{:03}", page + 3);
-        let uid_set = uid_page
-            .iter()
-            .map(u64::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let command = format!(
-            "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])\r\n"
-        );
-        stream
-            .write_all(command.as_bytes())
-            .map_err(|error| format!("{host}: could not fetch mailbox metadata: {error}"))?;
-        let raw_response = read_imap_tagged_bytes_with_budget(
-            stream,
-            &tag,
-            &mut buffer,
-            MAX_MESSAGE_FETCH_RESPONSE_BYTES,
-            budget,
-        )?;
-        let response = String::from_utf8_lossy(&raw_response);
-        if !imap_command_succeeded(&response, &tag) {
-            return Err(imap_command_failure(
-                &response,
-                &tag,
-                "FETCH mailbox metadata",
-                host,
-            ));
-        }
-        let (page_messages, page_fingerprints) =
-            parse_message_fetch_response_bytes(&raw_response, mailbox, uidvalidity)?;
-        for (key, message) in page_messages {
-            estimated_state_bytes = estimated_state_bytes
-                .saturating_add(estimated_message_record_bytes(&key, &message, None));
-            if messages.insert(key, message).is_some() {
-                return Err(format!(
-                    "{host}: folder {mailbox}: duplicate message identity"
-                ));
-            }
-            if messages.len() > MAX_MESSAGE_FETCH_RECORDS {
-                return Err(format!(
-                    "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
-                ));
-            }
-            if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
-                return Err(format!(
-                    "{host}: folder {mailbox}: message data exceeds memory budget"
-                ));
-            }
-        }
-        content_fingerprints.extend(page_fingerprints);
+    let (end_exists, end_uidvalidity, end_uidnext) =
+        parse_selected_mailbox(&response, host, mailbox)?;
+    if end_uidvalidity != Some(start_uidvalidity)
+        || end_uidnext != Some(uidnext)
+        || end_exists != start_exists
+    {
+        return Err(format!(
+            "{host}: mailbox {mailbox} changed during verification (UIDVALIDITY {start_uidvalidity:?}->{end_uidvalidity:?}, UIDNEXT {uidnext}->{end_uidnext:?}, message count {start_exists}->{end_exists}); retry required"
+        ));
     }
-    Ok((messages, content_fingerprints))
+    // This path is metadata-only by design. BODY[] hashing belongs to the
+    // separate content-verification adapter and is not populated here.
+    Ok((messages, HashMap::new()))
+}
+
+fn fetch_mailbox_with_stability_retry<S: Read + Write>(
+    stream: &mut S,
+    host: &str,
+    mailbox: &str,
+    budget: &MessageFetchBudget<'_>,
+) -> Result<
+    (
+        crate::core::ExtractedMessages,
+        HashMap<crate::core::MailboxMessageKey, String>,
+    ),
+    String,
+> {
+    let mut last_error = None;
+    for attempt in 0..MAX_MAILBOX_STABILITY_ATTEMPTS {
+        match fetch_mailbox_with_existing_stream(stream, host, mailbox, budget) {
+            Ok(result) => return Ok(result),
+            Err(error) if error.contains("changed during verification") => {
+                last_error = Some(error);
+                if attempt + 1 < MAX_MAILBOX_STABILITY_ATTEMPTS {
+                    continue;
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| format!("{host}: mailbox {mailbox} stability check failed")))
 }
 
 pub(crate) fn fetch_tls_mailbox_messages(
@@ -1051,6 +1204,63 @@ pub(crate) fn fetch_tls_mailbox_messages(
     let (mut stream, _) =
         authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
     fetch_mailbox_with_existing_stream(&mut stream, host, mailbox, budget)
+}
+
+/// Enumerate bounded UID windows and hand each fetch-sized page to the caller.
+/// No response contains the entire mailbox UID set, and no all-mailbox UID
+/// vector is retained between windows.
+fn enumerate_uid_pages<S: Read + Write, F>(
+    stream: &mut S,
+    host: &str,
+    mailbox: &str,
+    uidnext: u64,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+    budget: &MessageFetchBudget<'_>,
+    mut consume_page: F,
+) -> Result<(), String>
+where
+    F: FnMut(&mut S, &mut [u8; 4096], &[u64]) -> Result<(), String>,
+{
+    let mut window_start = 1_u64;
+    let mut search_number = 0usize;
+    while window_start < uidnext {
+        budget.check()?;
+        let window_end = window_start
+            .saturating_add(MESSAGE_UID_SEARCH_WINDOW_SIZE - 1)
+            .min(uidnext.saturating_sub(1));
+        let search_tag = format!("s{:03}", search_number + 2);
+        search_number = search_number.saturating_add(1);
+        stream
+            .write_all(
+                format!("{search_tag} UID SEARCH UID {window_start}:{window_end}\r\n")
+                    .as_bytes(),
+            )
+            .map_err(|error| format!("{host}: could not search mailbox UIDs: {error}"))?;
+        response.clear();
+        read_imap_tagged_with_budget(
+            stream,
+            &search_tag,
+            response,
+            buffer,
+            1_048_576,
+            budget,
+        )?;
+        if !imap_command_succeeded(response, &search_tag) {
+            return Err(imap_command_failure(
+                response,
+                &search_tag,
+                "SEARCH mailbox UID window",
+                host,
+            ));
+        }
+        let uids = parse_uid_search_response(response, host, mailbox)?;
+        for uid_page in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize) {
+            consume_page(stream, buffer, uid_page)?;
+        }
+        window_start = window_end.saturating_add(1);
+    }
+    Ok(())
 }
 
 fn parse_uid_search_response(
@@ -1108,9 +1318,18 @@ pub(crate) fn fetch_tls_account_messages(
         )))
         .map_err(|error| format!("{host}: could not enumerate folders: {error}"))?;
     let mut buffer = [0; 4096];
-    let mut mailboxes = Vec::new();
-    let summary =
-        read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)?;
+    let mut mailbox_details = Vec::new();
+    let summary = read_imap_list_response_with_details(
+        &mut stream,
+        "a005",
+        &mut buffer,
+        &mut mailbox_details,
+    )?;
+    let mut mailboxes = mailbox_details
+        .iter()
+        .filter(|mailbox| mailbox.selectable)
+        .map(|mailbox| mailbox.wire_name.clone())
+        .collect::<Vec<_>>();
     if summary.mailbox_count == 0 || mailboxes.is_empty() {
         let _ = stream.write_all(b"a999 LOGOUT\r\n");
         return Err(format!(
@@ -1135,11 +1354,15 @@ pub(crate) fn fetch_tls_account_messages(
     // This avoids opening 200 separate TLS connections for a 200-folder account.
     for mailbox in mailboxes {
         budget.check()?;
-        match fetch_mailbox_with_existing_stream(&mut stream, host, &mailbox, budget) {
+        match fetch_mailbox_with_stability_retry(&mut stream, host, &mailbox, budget) {
             Ok((folder_messages, folder_fingerprints)) => {
                 for (key, message) in folder_messages {
                     estimated_state_bytes = estimated_state_bytes.saturating_add(
-                        estimated_message_record_bytes(&key, &message, all_fingerprints.get(&key)),
+                        estimated_message_record_bytes(
+                            &key,
+                            &message,
+                            folder_fingerprints.get(&key).or_else(|| all_fingerprints.get(&key)),
+                        ),
                     );
                     if all_messages.insert(key, message).is_some() {
                         let _ = stream.write_all(b"a999 LOGOUT\r\n");
@@ -1170,8 +1393,17 @@ pub(crate) fn fetch_tls_account_messages(
         }
     }
     let _ = stream.write_all(b"a999 LOGOUT\r\n");
+    if !incomplete_folders.is_empty() {
+        let mut folders = incomplete_folders.keys().cloned().collect::<Vec<_>>();
+        folders.sort();
+        return Err(format!(
+            "{host}: verification did not obtain stable metadata for folders: {}",
+            folders.join(", ")
+        ));
+    }
     Ok(FetchedAccountMessages {
         mailboxes: mailbox_inventory,
+        mailbox_details,
         messages: all_messages,
         content_fingerprints: all_fingerprints,
         incomplete_folders,
@@ -1195,9 +1427,10 @@ fn parse_selected_mailbox(
     response: &str,
     host: &str,
     mailbox: &str,
-) -> Result<(u64, Option<u64>), String> {
+) -> Result<(u64, Option<u64>, Option<u64>), String> {
     let mut exists = None;
     let mut uidvalidity = None;
+    let mut uidnext = None;
     for line in response.lines() {
         let fields = line.split_whitespace().collect::<Vec<_>>();
         if fields.len() >= 3 && fields[0] == "*" && fields[2].eq_ignore_ascii_case("EXISTS") {
@@ -1211,11 +1444,19 @@ fn parse_selected_mailbox(
         {
             uidvalidity = value.trim_matches(['[', ']']).parse::<u64>().ok();
         }
+        if let Some(index) = fields.iter().position(|field| {
+            field
+                .trim_matches(['[', ']'])
+                .eq_ignore_ascii_case("UIDNEXT")
+        }) && let Some(value) = fields.get(index + 1)
+        {
+            uidnext = value.trim_matches(['[', ']']).parse::<u64>().ok();
+        }
     }
     let exists = exists.ok_or_else(|| {
         format!("{host}: SELECT {mailbox} did not return an untagged EXISTS count")
     })?;
-    Ok((exists, uidvalidity))
+    Ok((exists, uidvalidity, uidnext))
 }
 
 #[allow(dead_code)]
@@ -1276,17 +1517,13 @@ fn parse_message_fetch_response_with_fingerprints(
     Ok((messages, content_fingerprints))
 }
 
-fn parse_message_fetch_response_bytes(
+/// Parse the live verifier's metadata-only FETCH response. Body fingerprints
+/// intentionally use a separate parser/API and are not produced here.
+fn parse_message_fetch_metadata_response_bytes(
     response: &[u8],
     mailbox: &str,
     uidvalidity: Option<u64>,
-) -> Result<
-    (
-        crate::core::ExtractedMessages,
-        HashMap<crate::core::MailboxMessageKey, String>,
-    ),
-    String,
-> {
+) -> Result<crate::core::ExtractedMessages, String> {
     let starts = fetch_record_starts_bytes(response);
     let mut messages = HashMap::new();
     for (index, start) in starts.iter().copied().enumerate() {
@@ -1316,7 +1553,7 @@ fn parse_message_fetch_response_bytes(
             },
         );
     }
-    Ok((messages, HashMap::new()))
+    Ok(messages)
 }
 
 /// Locate untagged FETCH record boundaries while skipping every IMAP literal.
@@ -1648,6 +1885,22 @@ mod tests {
     }
 
     #[test]
+    fn list_parser_decodes_literal_mailbox_names() {
+        let response = b"* LIST (\\HasNoChildren) \"/\" {10}\r\nSent Items\r\na005 OK LIST completed\r\n";
+        let mut stream = Cursor::new(response);
+        let mut buffer = [0_u8; 4096];
+        let mut mailboxes = Vec::new();
+        super::read_imap_list_response_with_mailboxes(
+            &mut stream,
+            "a005",
+            &mut buffer,
+            &mut mailboxes,
+        )
+        .unwrap();
+        assert_eq!(mailboxes, ["Sent Items"]);
+    }
+
+    #[test]
     fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
         let response = "* 1 FETCH (UID 5 RFC822.SIZE 100 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <a@example.com>\r\n\r\n)\r\n\
                        * 2 FETCH (UID 9 RFC822.SIZE 200 INTERNALDATE \"02-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] NIL)\r\n\
@@ -1675,6 +1928,24 @@ mod tests {
     }
 
     #[test]
+    fn estimated_record_bytes_include_body_fingerprint_storage() {
+        let key = crate::core::MailboxMessageKey::new("INBOX", "900001");
+        let message = crate::core::ExtractedMessage {
+            message_id: Some("<message@example.com>".into()),
+            uid: Some("900001".into()),
+            size_bytes: Some(42),
+            internal_date: Some("01-Jan-2026 00:00:00 +0000".into()),
+        };
+        let without_fingerprint = super::estimated_message_record_bytes(&key, &message, None);
+        let with_fingerprint = super::estimated_message_record_bytes(
+            &key,
+            &message,
+            Some(&"a".repeat(64)),
+        );
+        assert_eq!(with_fingerprint - without_fingerprint, 64);
+    }
+
+    #[test]
     fn uid_search_parser_rejects_missing_or_invalid_uid_lists() {
         assert!(
             super::parse_uid_search_response(
@@ -1687,6 +1958,15 @@ mod tests {
         assert!(
             super::parse_uid_search_response("* SEARCH 100 nope\r\n", "imap.example", "INBOX")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn selected_mailbox_extracts_uidnext_for_bounded_enumeration() {
+        let response = "* 2 EXISTS\r\n* OK [UIDVALIDITY 77] ready\r\n* OK [UIDNEXT 900001] next\r\na001 OK SELECT completed\r\n";
+        assert_eq!(
+            super::parse_selected_mailbox(response, "imap.example", "INBOX").unwrap(),
+            (2, Some(77), Some(900001))
         );
     }
 
@@ -1713,15 +1993,18 @@ mod tests {
     #[test]
     fn raw_fetch_parser_preserves_framing_around_invalid_literal_bytes() {
         let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17 INTERNALDATE \"01-Jan-2026 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <raw@example.com>\r\nBODY[] {17}\r\n\xff\x00v002 OK fake\r\n)\r\nv002 OK FETCH completed\r\n";
-        let (messages, fingerprints) =
-            super::parse_message_fetch_response_bytes(response, "INBOX", Some(77)).unwrap();
+        let messages = super::parse_message_fetch_metadata_response_bytes(
+            response,
+            "INBOX",
+            Some(77),
+        )
+        .unwrap();
         let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "100");
         assert_eq!(messages.len(), 1);
         assert_eq!(
             messages[&key].message_id.as_deref(),
             Some("<raw@example.com>")
         );
-        assert!(fingerprints.is_empty());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # MailSwiftSync Production Readiness Status
 
-**Last Updated:** September 20, 2026  
+**Last Updated:** September 24, 2026
 **Test Coverage:** See the CI-generated test summary artifact for the current
 target-specific test inventory and execution result.
 **Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
@@ -293,6 +293,7 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 The system provides a durable, safety-gated migration controller suitable for
 technical-preview use. It does not yet provide body-content proof or
 provider-specific execution intelligence; several internal helpers remain
-library-only even though runbook and recovery guidance have CLI entry points.
+available through CLI entry points even though runbook and recovery guidance
+are not yet surfaced in the GUI workflow.
 
 **Next milestone:** Live validation with real provider mailboxes to reach GA 1.0 status.

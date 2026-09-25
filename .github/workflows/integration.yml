@@ -13,7 +13,7 @@ permissions:
 jobs:
   packaged-imapsync-transfer:
     name: Packaged imapsync product integration
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -65,7 +65,7 @@ jobs:
 
   native-dovecot-transfer:
     name: Native Dovecot engine integration
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

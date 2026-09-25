@@ -1,7 +1,7 @@
 # MailSwiftSync Capability Manifest
 
-**Manually maintained from source call-site review and test inventory**
-**Last verified:** 2026-09-23
+**Status source:** [`capabilities.toml`](capabilities.toml)
+**Last verified:** 2026-09-24
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
 
@@ -171,9 +171,9 @@ particular target.
    - Not tested end-to-end with actual IMAP session
    - Awaits real provider validation
 
-4. **Operator guidance exists but isn't surfaced**
-   - Runbooks written but not exposed in UI/CLI
-   - Recovery guidance defined but not presented during interruption
+4. **Operator guidance is CLI-only**
+   - Runbooks are exposed through `runbook`, but not embedded in the GUI workflow
+   - Recovery guidance is exposed through `recovery-guidance`, but not presented automatically during interruption
    - Pre-migration risk assessment exists but not integrated into workflow
 
 ---
@@ -225,10 +225,8 @@ To reach GA 1.0, the following work is required:
 
 ## How to Update This Manifest
 
-This manifest should be regenerated monthly from:
-1. Code analysis (grep for implemented features)
-2. Test inventory (cargo test --list)
-3. Integration verification (features actually wired to pipeline)
-4. Live provider testing (as credentials become available)
+Update [`capabilities.toml`](capabilities.toml) first. This manifest is
+explanatory prose; its status vocabulary must agree with the machine-readable
+file and release notes must not introduce a separate capability status table.
 
 **Never make unsupported claims.** If a feature is unit-tested but not integrated, say so. If it's integrated but not live-tested, say so.

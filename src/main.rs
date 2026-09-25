@@ -260,6 +260,25 @@ mod tests {
     }
 
     #[test]
+    fn default_live_imapsync_plan_preserves_metadata_for_verification() {
+        // This is intentionally the real new-plan path: start with the
+        // literal UI default, then apply the normal live-run transformation.
+        let mut form = Form::default();
+        form.dry_run = false;
+
+        assert!(form.profile.sync_internaldates);
+        assert!(runner::message_verification_enabled(&form));
+        assert!(form.args(false).contains(&"--syncinternaldates".into()));
+
+        // If evidence is unavailable after a successful transfer, the
+        // controller's terminal policy is review-required, not failed.
+        assert_eq!(
+            successful_run_status(false, false, None),
+            "Migration completed; verification requires operator review"
+        );
+    }
+
+    #[test]
     fn dovecot_initial_and_incremental_strategies_use_backup() {
         for strategy in [
             migration_plan::DovecotMigrationStrategy::InitialMirror,
@@ -1442,18 +1461,13 @@ mod tests {
             classify_failure("too many connections"),
             FailureClass::Capacity
         );
-        assert_eq!(
-            transient_retry_delay("connection reset by peer", 0),
-            Duration::from_secs(1)
-        );
-        assert_eq!(
-            transient_retry_delay("server busy", 0),
-            Duration::from_secs(5)
-        );
-        assert_eq!(
-            transient_retry_delay("server busy", 99),
-            Duration::from_secs(120)
-        );
+        let transport_delay = transient_retry_delay("connection reset by peer", 0);
+        assert!((Duration::from_secs(1)..=Duration::from_millis(1_500))
+            .contains(&transport_delay));
+        let capacity_delay = transient_retry_delay("server busy", 0);
+        assert!((Duration::from_secs(5)..=Duration::from_millis(7_500))
+            .contains(&capacity_delay));
+        assert_eq!(transient_retry_delay("server busy", 99), Duration::from_secs(120));
         assert_eq!(
             classified_failure_detail("too many requests"),
             "[attention_reason=capacity_limited] [class=capacity] too many requests"

@@ -52,12 +52,27 @@ fn security_md_exists_and_complete() {
 
 #[test]
 fn capability_manifest_is_current() {
+    let capabilities = fs::read_to_string("capabilities.toml")
+        .expect("machine-readable capability status should exist");
+    let capabilities: toml::Value = toml::from_str(&capabilities)
+        .expect("machine-readable capability status should be valid TOML");
+    assert_eq!(capabilities["schema_version"].as_integer(), Some(1));
+    assert_eq!(
+        capabilities["capabilities"]["message_level_metadata_reconciliation"]["controller"]
+            .as_str(),
+        Some("wired")
+    );
+    assert_eq!(
+        capabilities["capabilities"]["uidvalidity_delta_checkpoints"]["code"].as_str(),
+        Some("planned")
+    );
+
     let manifest = fs::read_to_string("CAPABILITY_MANIFEST.md")
         .expect("Could not read CAPABILITY_MANIFEST.md");
 
     assert!(
-        manifest.contains("Manually maintained from source call-site review"),
-        "Capability manifest should identify its maintenance basis"
+        manifest.contains("capabilities.toml"),
+        "Capability manifest should identify its machine-readable status source"
     );
     assert!(
         manifest.contains("Message-level mismatch detection"),
@@ -162,7 +177,9 @@ fn canonical_provider_facts_are_reflected_in_primary_surfaces() {
     assert!(facts.contains("Metadata reconciled — message bodies not compared"));
     assert!(facts.contains("no universal 50 GB or 100 GB threshold"));
 
-    let provider_setup = fs::read_to_string("PROVIDER_SETUP.md").unwrap();
+    let provider_setup = fs::read_to_string("PROVIDER_SETUP.md")
+        .unwrap()
+        .replace("\r\n", "\n");
     let readme = fs::read_to_string("README.md").unwrap();
     assert!(provider_setup.contains("canonical\nprovider facts"));
     assert!(provider_setup.contains("OAuth 2.0 / XOAUTH2 is the preferred and default"));
@@ -181,7 +198,12 @@ fn architecture_documents_message_verification() {
 
 #[test]
 fn no_references_to_unreleased_versions() {
-    let files = vec!["README.md", "CHANGELOG.md", "CAPABILITY_MANIFEST.md"];
+    let files = vec![
+        "README.md",
+        "CHANGELOG.md",
+        "CAPABILITY_MANIFEST.md",
+        "capabilities.toml",
+    ];
 
     for file in files {
         let content = fs::read_to_string(file).unwrap_or_else(|_| String::new());

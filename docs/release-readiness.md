@@ -40,8 +40,9 @@ and require the corresponding integration run.
   an operator acknowledgement.
 - Endpoint parsing rejects malformed explicit ports instead of treating them as
   hostnames.
-- Persistent profile and state directories fail closed when owner-only
-  permissions cannot be applied.
+- Persistent profile and state directories fail closed when ownership or
+  non-writable-by-other-users permissions cannot be established; sensitive
+  files inside them remain owner-only.
 - Host-native packaging uses locked dependencies, deterministic tar metadata,
   checksum verification, and GitHub build-provenance attestations.
 - Windows engine children are attached to a Job Object configured with
