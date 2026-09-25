@@ -283,4 +283,4 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 
 ## Current dependency audit
 
-CI runs `cargo audit`. The current dependency graph has no reported vulnerabilities; RustSec reports only the unmaintained transitive crates `paste` and `ttf-parser`, which come from the desktop GUI stack and remain tracked for upstream replacement.
+CI runs `cargo audit`, and the scheduled dependency workflow runs both `cargo audit` and `cargo deny check advisories bans licenses sources` weekly. The current dependency graph has no reported vulnerabilities; RustSec reports only the unmaintained transitive crates `paste` and `ttf-parser`, which come from the desktop GUI stack and remain tracked for upstream replacement. Those maintenance findings are not suppressed by the policy.
