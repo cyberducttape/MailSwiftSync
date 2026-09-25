@@ -488,25 +488,7 @@ fn record_list_entry(
 }
 
 fn parse_list_mailbox_name(line: &str) -> Option<String> {
-    let mut tokens = Vec::new();
-    let mut chars = line.split_whitespace().peekable();
-    while let Some(token) = chars.next() {
-        if token.starts_with('"') {
-            let mut value = token.to_owned();
-            while !value.ends_with('"') {
-                value.push(' ');
-                value.push_str(chars.next()?);
-            }
-            let value = value
-                .strip_prefix('"')?
-                .strip_suffix('"')?
-                .replace("\\\\", "\\")
-                .replace("\\\"", "\"");
-            tokens.push(value);
-        } else {
-            tokens.push(token.to_owned());
-        }
-    }
+    let tokens = parse_list_tokens(line)?;
     tokens
         .last()
         .filter(|value| !value.starts_with('{'))
@@ -514,11 +496,70 @@ fn parse_list_mailbox_name(line: &str) -> Option<String> {
 }
 
 fn parse_list_delimiter(line: &str) -> Option<String> {
-    let mut tokens = line.split_whitespace();
-    tokens.next()?;
-    tokens.next()?;
-    let delimiter = tokens.next()?.trim_matches('"');
+    let tokens = parse_list_tokens(line)?;
+    let mut index = 2;
+    if tokens.get(index)?.starts_with('(') {
+        while !tokens.get(index)?.ends_with(')') {
+            index += 1;
+        }
+        index += 1;
+    }
+    let delimiter = tokens.get(index)?;
     (!delimiter.is_empty()).then(|| delimiter.to_owned())
+}
+
+/// Tokenize the bounded, non-literal portion of an IMAP LIST response.
+/// Quoted strings may contain whitespace and an escaped quote; deciding that
+/// a quote terminates the token based only on `ends_with('"')` is incorrect.
+fn parse_list_tokens(line: &str) -> Option<Vec<String>> {
+    let bytes = line.as_bytes();
+    let mut tokens = Vec::new();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        while bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
+            offset += 1;
+        }
+        if offset == bytes.len() {
+            break;
+        }
+        if bytes[offset] == b'"' {
+            offset += 1;
+            let mut value = String::new();
+            let mut closed = false;
+            while offset < bytes.len() {
+                match bytes[offset] {
+                    b'\\' => {
+                        offset += 1;
+                        value.push(char::from(*bytes.get(offset)?));
+                        offset += 1;
+                    }
+                    b'"' => {
+                        offset += 1;
+                        closed = true;
+                        break;
+                    }
+                    byte => {
+                        value.push(char::from(byte));
+                        offset += 1;
+                    }
+                }
+            }
+            if !closed {
+                return None;
+            }
+            tokens.push(value);
+        } else {
+            let start = offset;
+            while bytes
+                .get(offset)
+                .is_some_and(|byte| !byte.is_ascii_whitespace())
+            {
+                offset += 1;
+            }
+            tokens.push(std::str::from_utf8(&bytes[start..offset]).ok()?.to_owned());
+        }
+    }
+    Some(tokens)
 }
 
 fn list_special_use(line: &str) -> Vec<String> {
@@ -1793,10 +1834,10 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageFetchBudget, authenticated_list_command, parse_list_mailbox_name,
-        parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
-        read_imap_list_response, read_imap_list_response_with_mailboxes,
-        tagged_response_outside_literals,
+        MessageFetchBudget, authenticated_list_command, parse_list_delimiter,
+        parse_list_mailbox_name, parse_message_fetch_response,
+        parse_message_fetch_response_with_fingerprints, read_imap_list_response,
+        read_imap_list_response_with_mailboxes, tagged_response_outside_literals,
     };
     use std::io::{self, Cursor, Read};
     use std::sync::atomic::AtomicBool;
@@ -1931,6 +1972,18 @@ mod tests {
         assert_eq!(
             parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "a\\b\"c""#),
             Some("a\\b\"c".into())
+        );
+        assert_eq!(
+            parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "a\"b folder""#),
+            Some("a\"b folder".into())
+        );
+    }
+
+    #[test]
+    fn list_parser_extracts_delimiter_after_attributes() {
+        assert_eq!(
+            parse_list_delimiter(r#"* LIST (\HasNoChildren \Sent) "/" "Sent Items""#),
+            Some("/".into())
         );
     }
 
