@@ -7,7 +7,10 @@ use std::collections::HashSet;
 /// separate from event transport makes the GUI and headless controllers use
 /// the same terminal-state rules.
 pub(crate) fn batch_run_status(state: &str) -> &'static str {
-    if matches!(state, "ready" | "completed" | "attention" | "delta_required") {
+    if matches!(
+        state,
+        "ready" | "completed" | "attention" | "delta_required"
+    ) {
         "completed"
     } else if state == "cancelled" {
         "cancelled"
@@ -24,10 +27,12 @@ pub(crate) fn batch_mailbox_state(state: &str, evidence: Option<&core::MailboxEv
         return state.to_owned();
     }
     evidence.map_or_else(
-        || if state == "completed" {
-            "attention".into()
-        } else {
-            state.to_owned()
+        || {
+            if state == "completed" {
+                "attention".into()
+            } else {
+                state.to_owned()
+            }
         },
         |value| {
             if value.is_exact_match() && state != "delta_required" {
@@ -250,8 +255,8 @@ mod tests {
         batch_start_decision, selected_batch_indices, suggested_batch_project_name,
     };
     use crate::core::{MailboxEvidence, VerificationMethod};
-    use crate::runner::{TerminalEvidenceSource, terminal_evidence_source};
     use crate::migration_plan::Form;
+    use crate::runner::{TerminalEvidenceSource, terminal_evidence_source};
     use std::collections::HashSet;
 
     fn unsuitable_live_form() -> crate::Form {
@@ -265,28 +270,40 @@ mod tests {
     fn batch_justfolders_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.justfolders = true;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     #[test]
     fn batch_addheader_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.addheader = true;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     #[test]
     fn batch_internal_date_disabled_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.sync_internaldates = false;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     #[test]
     fn batch_size_mismatch_allowed_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.allowsizemismatch = true;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     fn job(state: &str) -> BulkJob {
