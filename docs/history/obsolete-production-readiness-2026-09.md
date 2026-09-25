@@ -1,5 +1,11 @@
 # MailSwiftSync Production Readiness - Implementation Guide
 
+> **Historical archive — not current status.** This snapshot is retained for
+> audit history only. Do not use it to determine product capabilities or
+> release readiness. See [`CAPABILITY_MANIFEST.md`](../../CAPABILITY_MANIFEST.md),
+> [`PRODUCTION_STATUS.md`](../../PRODUCTION_STATUS.md), and the current
+> [`release-readiness.md`](../release-readiness.md).
+
 ## Overview
 This document tracks the implementation status of critical production readiness fixes identified in the September 2026 audit.
 
@@ -221,8 +227,7 @@ Required for:
 ---
 
 ## Related Documents
-- [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) - Detailed step-by-step guide
-- Memory: [`performance_and_evidence_defects.md`](.claude/projects/.../memory/performance_and_evidence_defects.md)
+- Current release criteria: [`release-readiness.md`](../release-readiness.md)
 - Tests: `src/core/message_verification.rs` (lines 788-1200)
 
 ---

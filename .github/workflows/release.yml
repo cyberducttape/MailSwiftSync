@@ -19,6 +19,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
+      - name: Verify documentation claims against capability manifest
+        run: python3 scripts/verify-capability-claims.py
       - run: bash -n scripts/*.sh
       - run: scripts/verify-release-version.sh "${GITHUB_REF_NAME}"
       - run: scripts/verify-compatibility-matrix.sh --release docs/compatibility-matrix.md
