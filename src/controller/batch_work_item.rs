@@ -135,11 +135,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
     let live = mode.is_live();
     while let Ok((index, job_id, child_run_id, checkpoint, mut job)) = job_rx.recv() {
         if cancel.load(Ordering::Relaxed) {
-            let _ = tx.send(Event::JobState {
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                state: "Cancelled".into(),
-            });
+            let _ = send_reliable_event(
+                &tx,
+                Event::JobState {
+                    job_id: job_id.clone(),
+                    child_run_id: child_run_id.clone(),
+                    state: "Cancelled".into(),
+                },
+            );
             if let Err(error) = send_job_finished(
                 &tx,
                 job_id.clone(),
@@ -223,11 +226,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             index + 1
                         ),
                     });
-                    let _ = tx.send(Event::JobState {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: "Failed".into(),
-                    });
+                    let _ = send_reliable_event(
+                        &tx,
+                        Event::JobState {
+                            job_id: job_id.clone(),
+                            child_run_id: child_run_id.clone(),
+                            state: "Failed".into(),
+                        },
+                    );
                     if let Err(delivery_error) = send_job_finished(
                         &tx,
                         job_id.clone(),
@@ -254,11 +260,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             classify_failure(&error).label()
                         ),
                     });
-                    let _ = tx.send(Event::JobState {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: "Retrying".into(),
-                    });
+                    let _ = send_reliable_event(
+                        &tx,
+                        Event::JobState {
+                            job_id: job_id.clone(),
+                            child_run_id: child_run_id.clone(),
+                            state: "Retrying".into(),
+                        },
+                    );
                     let delay = transient_retry_delay(&error, attempt);
                     let started = std::time::Instant::now();
                     while started.elapsed() < delay {
@@ -281,11 +290,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         index + 1
                     ),
                 });
-                let _ = tx.send(Event::JobState {
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    state: "Failed".into(),
-                });
+                let _ = send_reliable_event(
+                    &tx,
+                    Event::JobState {
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        state: "Failed".into(),
+                    },
+                );
                 // Classify the raw probe result. Prefixing it with
                 // "authentication failed" would incorrectly mask a DNS,
                 // TCP, TLS-disconnect, or provider-capacity failure.
@@ -340,11 +352,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         job_id: job_id.clone(),
                         text: format!("[{}] {}", index + 1, error),
                     });
-                    let _ = tx.send(Event::JobState {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: if cancelled { "Cancelled" } else { "Failed" }.into(),
-                    });
+                    let _ = send_reliable_event(
+                        &tx,
+                        Event::JobState {
+                            job_id: job_id.clone(),
+                            child_run_id: child_run_id.clone(),
+                            state: if cancelled { "Cancelled" } else { "Failed" }.into(),
+                        },
+                    );
                     if let Err(delivery_error) = send_job_finished(
                         &tx,
                         job_id.clone(),
@@ -361,22 +376,28 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 }
                 claimed = true;
             }
-            let _ = tx.send(Event::JobState {
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                state: "Running".into(),
-            });
+            let _ = send_reliable_event(
+                &tx,
+                Event::JobState {
+                    job_id: job_id.clone(),
+                    child_run_id: child_run_id.clone(),
+                    state: "Running".into(),
+                },
+            );
             if attempt > 0 {
                 let _ = tx.send(Event::RunLine {
                     run_id: child_run_id.clone(),
                     job_id: job_id.clone(),
                     text: format!("[{}] retry attempt {attempt}/{retry_count}", index + 1),
                 });
-                let _ = tx.send(Event::JobState {
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    state: "Running".into(),
-                });
+                let _ = send_reliable_event(
+                    &tx,
+                    Event::JobState {
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        state: "Running".into(),
+                    },
+                );
             }
             let prepared = job
                 .form
@@ -558,11 +579,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             classify_failure(&error).label()
                         ),
                     });
-                    let _ = tx.send(Event::JobState {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: "Retrying".into(),
-                    });
+                    let _ = send_reliable_event(
+                        &tx,
+                        Event::JobState {
+                            job_id: job_id.clone(),
+                            child_run_id: child_run_id.clone(),
+                            state: "Retrying".into(),
+                        },
+                    );
                     let delay = transient_retry_delay(&error, attempt);
                     let started = std::time::Instant::now();
                     while started.elapsed() < delay {
@@ -589,11 +613,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             classify_failure(&error).label()
                         ),
                     });
-                    let _ = tx.send(Event::JobState {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: if cancelled { "Cancelled" } else { "Failed" }.into(),
-                    });
+                    let _ = send_reliable_event(
+                        &tx,
+                        Event::JobState {
+                            job_id: job_id.clone(),
+                            child_run_id: child_run_id.clone(),
+                            state: if cancelled { "Cancelled" } else { "Failed" }.into(),
+                        },
+                    );
                     if let Err(delivery_error) = send_job_finished(
                         &tx,
                         job_id.clone(),
@@ -618,16 +645,19 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             } else {
                 "completed"
             };
-            let _ = tx.send(Event::JobState {
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                state: if delta_required {
-                    "DeltaRequired"
-                } else {
-                    "Completed"
-                }
-                .into(),
-            });
+            let _ = send_reliable_event(
+                &tx,
+                Event::JobState {
+                    job_id: job_id.clone(),
+                    child_run_id: child_run_id.clone(),
+                    state: if delta_required {
+                        "DeltaRequired"
+                    } else {
+                        "Completed"
+                    }
+                    .into(),
+                },
+            );
             if let Err(error) = send_job_finished(
                 &tx,
                 job_id.clone(),
@@ -649,11 +679,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 terminal.insert(index);
             }
         } else if cancel.load(Ordering::Relaxed) {
-            let _ = tx.send(Event::JobState {
-                job_id: job_id.clone(),
-                child_run_id: child_run_id.clone(),
-                state: "Cancelled".into(),
-            });
+            let _ = send_reliable_event(
+                &tx,
+                Event::JobState {
+                    job_id: job_id.clone(),
+                    child_run_id: child_run_id.clone(),
+                    state: "Cancelled".into(),
+                },
+            );
             if let Err(error) = send_job_finished(
                 &tx,
                 job_id.clone(),
