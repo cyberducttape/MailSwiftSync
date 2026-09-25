@@ -1681,7 +1681,10 @@ fn imap_literal_size_bytes(line: &[u8]) -> Option<usize> {
 fn fetch_content_fingerprint(record: &str) -> Option<String> {
     let marker_start = find_ascii_case_insensitive(record, "BODY[]")? + "BODY[]".len();
     let literal = record[marker_start..].trim_start();
-    if literal.starts_with("NIL") {
+    if literal
+        .get(..3)
+        .is_some_and(|value| value.eq_ignore_ascii_case("NIL"))
+    {
         return None;
     }
     let open = literal.find('{')?;
@@ -1721,7 +1724,10 @@ fn fetch_message_id(record: &str) -> Option<String> {
     let marker = "BODY[HEADER.FIELDS (MESSAGE-ID)]";
     let marker_start = find_ascii_case_insensitive(record, marker)? + marker.len();
     let literal = record[marker_start..].trim_start();
-    if literal.starts_with("NIL") {
+    if literal
+        .get(..3)
+        .is_some_and(|value| value.eq_ignore_ascii_case("NIL"))
+    {
         return None;
     }
     let literal_size_end = literal.find("}\r\n")?;
@@ -2069,12 +2075,9 @@ mod tests {
     #[test]
     fn metadata_fetch_parser_accepts_mixed_case_atoms() {
         let response = b"* 1 fEtCh (uId 100 rFc822.sIzE 17 iNtErNaLDate \"01-Jan-2026 00:00:00 +0000\" bOdY[HeAdEr.FiElDs (MeSsAgE-Id)] NIL)\r\nv002 OK FETCH completed\r\n";
-        let messages = super::parse_message_fetch_metadata_response_bytes(
-            response,
-            "INBOX",
-            Some(77),
-        )
-        .unwrap();
+        let messages =
+            super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77))
+                .unwrap();
         assert_eq!(messages.len(), 1);
         let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "100");
         assert_eq!(messages[&key].size_bytes, Some(17));
@@ -2083,18 +2086,24 @@ mod tests {
     #[test]
     fn metadata_fetch_parser_rejects_duplicate_uids() {
         let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17)\r\n* 2 FETCH (UID 100 RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n";
-        assert!(super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77))
-            .unwrap_err()
-            .contains("duplicate FETCH UID"));
+        assert!(
+            super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77))
+                .unwrap_err()
+                .contains("duplicate FETCH UID")
+        );
     }
 
     #[test]
     fn fetch_page_coverage_rejects_missing_and_unexpected_uids() {
         let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17)\r\n* 2 FETCH (UID 101 RFC822.SIZE 17)\r\nv002 OK FETCH completed\r\n";
-        let messages = super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap();
-        assert!(super::validate_fetch_page_coverage(&messages, &[100, 102], "host", "INBOX")
-            .unwrap_err()
-            .contains("FETCH coverage mismatch"));
+        let messages =
+            super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77))
+                .unwrap();
+        assert!(
+            super::validate_fetch_page_coverage(&messages, &[100, 102], "host", "INBOX")
+                .unwrap_err()
+                .contains("FETCH coverage mismatch")
+        );
     }
 
     #[test]

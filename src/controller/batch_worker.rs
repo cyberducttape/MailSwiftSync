@@ -1,5 +1,5 @@
 use super::batch::BatchExecutionMode;
-use super::batch_work_item::{BatchWorkerContext, process_batch_work_items};
+use super::batch_work_item::{BatchWorkerContext, process_batch_work_items, send_job_finished};
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
@@ -203,15 +203,13 @@ pub(crate) fn spawn_batch_worker(
                     child_run_id: child_run_id.clone(),
                     state: "Attention".into(),
                 });
-                if let Err(error) = send_reliable_event(
+                if let Err(error) = send_job_finished(
                     &tx,
-                    Event::JobFinished {
-                        job_id,
-                        child_run_id,
-                        state: "attention".into(),
-                        detail: "worker stopped unexpectedly".into(),
-                        credential_fingerprint: None,
-                    },
+                    job_id,
+                    child_run_id,
+                    "attention".into(),
+                    "worker stopped unexpectedly".into(),
+                    None,
                 ) {
                     eprintln!("reliable batch terminal event delivery failed: {error}");
                 }

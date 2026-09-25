@@ -616,23 +616,29 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         // reader threads have already joined, so waiting here cannot block a
         // child pipe; it ensures a saturated event queue cannot silently
         // erase the fact that diagnostics were omitted.
-        let _ = tx.send(Event::RunLine {
-            run_id: run_id.to_owned(),
-            job_id: job_id.to_owned(),
-            text: format!(
-                "{prefix}[diagnostics] {dropped} output line(s) omitted because the operator event queue was full"
-            ),
-        });
+        let _ = send_reliable_event(
+            tx,
+            Event::RunLine {
+                run_id: run_id.to_owned(),
+                job_id: job_id.to_owned(),
+                text: format!(
+                    "{prefix}[diagnostics] {dropped} output line(s) omitted because the operator event queue was full"
+                ),
+            },
+        );
     }
     let failed_diagnostic_writes = failed_diagnostic_writes.load(Ordering::Relaxed);
     if failed_diagnostic_writes > 0 {
-        let _ = tx.send(Event::RunLine {
-            run_id: run_id.to_owned(),
-            job_id: job_id.to_owned(),
-            text: format!(
-                "{prefix}[diagnostics] Diagnostic log unavailable; {failed_diagnostic_writes} line(s) were not persisted"
-            ),
-        });
+        let _ = send_reliable_event(
+            tx,
+            Event::RunLine {
+                run_id: run_id.to_owned(),
+                job_id: job_id.to_owned(),
+                text: format!(
+                    "{prefix}[diagnostics] Diagnostic log unavailable; {failed_diagnostic_writes} line(s) were not persisted"
+                ),
+            },
+        );
     }
     // The process identity is only valid for this attempt. Clear it before
     // returning so a transient retry (or a crash during its backoff) cannot

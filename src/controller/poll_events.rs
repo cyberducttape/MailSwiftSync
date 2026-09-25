@@ -240,6 +240,7 @@ impl App {
                         state,
                         detail,
                         credential_fingerprint,
+                        reply,
                     } => {
                         // Diagnostics are accepted only while a child is
                         // active/queued. Flush them before the terminal
@@ -270,6 +271,7 @@ impl App {
                                         state,
                                         detail,
                                         credential_fingerprint,
+                                        reply,
                                     });
                                     break;
                                 }
@@ -300,6 +302,10 @@ impl App {
                                 },
                             );
                             let completion_persisted = result.is_ok();
+                            let reply_result = result
+                                .as_ref()
+                                .map(|_| ())
+                                .map_err(|error| error.to_string());
                             // Durable state is authoritative. Do not show a
                             // terminal child state in the editable queue until
                             // the run/mailbox transaction has committed.
@@ -328,9 +334,11 @@ impl App {
                                     state,
                                     detail,
                                     credential_fingerprint,
+                                    reply,
                                 });
                                 break;
                             } else {
+                                let _ = reply.send(reply_result);
                                 if self.durability_recovery_pending {
                                     *recovered_durability = true;
                                 }
@@ -351,6 +359,9 @@ impl App {
                                 *saved = Some(fingerprint);
                             }
                         } else {
+                            let _ = reply
+                                .send(Err("ignored batch completion event for unknown child run"
+                                    .to_owned()));
                             durability_errors.push(format!(
                                 "ignored batch completion event for unknown child run {child_run_id}"
                             ));
