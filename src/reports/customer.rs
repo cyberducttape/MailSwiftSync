@@ -304,6 +304,7 @@ mod tests {
                     (
                         "run".into(),
                         core::MailboxEvidence {
+                            verification_method: core::VerificationMethod::AggregateEngine,
                             source_messages: 1,
                             destination_messages: 1,
                             source_bytes: 1,

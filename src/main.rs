@@ -353,6 +353,7 @@ mod tests {
     #[test]
     fn evidence_digest_binds_run_plan_and_evidence_values() {
         let evidence = core::MailboxEvidence {
+            verification_method: core::VerificationMethod::AggregateEngine,
             source_messages: 10,
             destination_messages: 10,
             source_bytes: 100,

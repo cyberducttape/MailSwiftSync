@@ -249,7 +249,7 @@ mod tests {
         BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
         batch_start_decision, selected_batch_indices, suggested_batch_project_name,
     };
-    use crate::core::MailboxEvidence;
+    use crate::core::{MailboxEvidence, VerificationMethod};
     use crate::migration_plan::Form;
     use std::collections::HashSet;
 
@@ -324,6 +324,7 @@ mod tests {
             "delta_required"
         );
         let exact_evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,

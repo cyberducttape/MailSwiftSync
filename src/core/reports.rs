@@ -76,27 +76,28 @@ impl StateStore {
 
         let mut evidence = HashMap::new();
         let mut evidence_statement = tx.prepare(
-            "SELECT eh.job_id,eh.run_id,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 ORDER BY eh.id ASC",
+            "SELECT eh.job_id,eh.run_id,eh.verification_method,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 ORDER BY eh.id ASC",
         )?;
         for row in evidence_statement.query_map([project_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 MailboxEvidence {
-                    source_messages: row.get(2)?,
-                    destination_messages: row.get(3)?,
-                    source_bytes: row.get(4)?,
-                    destination_bytes: row.get(5)?,
-                    unmatched_messages: row.get(6)?,
-                    failed_messages: row.get(7)?,
-                    source_folders: row.get(8)?,
-                    destination_folders: row.get(9)?,
-                    authoritative: row.get::<_, i64>(10)? != 0,
-                    missing_messages: row.get(11)?,
-                    extra_messages: row.get(12)?,
-                    modified_messages: row.get(13)?,
+                    verification_method: VerificationMethod::parse(&row.get::<_, String>(2)?).unwrap_or(VerificationMethod::AggregateEngine),
+                    source_messages: row.get(3)?,
+                    destination_messages: row.get(4)?,
+                    source_bytes: row.get(5)?,
+                    destination_bytes: row.get(6)?,
+                    unmatched_messages: row.get(7)?,
+                    failed_messages: row.get(8)?,
+                    source_folders: row.get(9)?,
+                    destination_folders: row.get(10)?,
+                    authoritative: row.get::<_, i64>(11)? != 0,
+                    missing_messages: row.get(12)?,
+                    extra_messages: row.get(13)?,
+                    modified_messages: row.get(14)?,
                 },
                 row.get::<_, String>(1)?,
-                row.get::<_, Option<String>>(14)?,
+                row.get::<_, Option<String>>(15)?,
             ))
         })? {
             let (job_id, value, run_id, plan_snapshot) = row?;
@@ -165,7 +166,7 @@ impl StateStore {
     ) -> rusqlite::Result<Vec<ReportMailboxSnapshot>> {
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare(
-            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,eh.run_id,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence_history eh ON eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=j.id) WHERE j.project_id=?1 ORDER BY j.rowid LIMIT ?2 OFFSET ?3",
+            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,eh.run_id,eh.verification_method,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence_history eh ON eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=j.id) WHERE j.project_id=?1 ORDER BY j.rowid LIMIT ?2 OFFSET ?3",
         )?;
         let rows = statement
             .query_map(rusqlite::params![project_id, limit, offset], |row| {
@@ -187,18 +188,19 @@ impl StateStore {
                         Ok::<_, rusqlite::Error>((
                             run_id,
                             MailboxEvidence {
-                                source_messages: row.get(10)?,
-                                destination_messages: row.get(11)?,
-                                source_bytes: row.get(12)?,
-                                destination_bytes: row.get(13)?,
-                                unmatched_messages: row.get(14)?,
-                                failed_messages: row.get(15)?,
-                                source_folders: row.get(16)?,
-                                destination_folders: row.get(17)?,
-                                authoritative: row.get::<_, i64>(18)? != 0,
-                                missing_messages: row.get(19)?,
-                                extra_messages: row.get(20)?,
-                                modified_messages: row.get(21)?,
+                                verification_method: VerificationMethod::parse(&row.get::<_, String>(10)?).unwrap_or(VerificationMethod::AggregateEngine),
+                                source_messages: row.get(11)?,
+                                destination_messages: row.get(12)?,
+                                source_bytes: row.get(13)?,
+                                destination_bytes: row.get(14)?,
+                                unmatched_messages: row.get(15)?,
+                                failed_messages: row.get(16)?,
+                                source_folders: row.get(17)?,
+                                destination_folders: row.get(18)?,
+                                authoritative: row.get::<_, i64>(19)? != 0,
+                                missing_messages: row.get(20)?,
+                                extra_messages: row.get(21)?,
+                                modified_messages: row.get(22)?,
                             },
                             None,
                         ))
