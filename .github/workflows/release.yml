@@ -239,8 +239,42 @@ jobs:
       - name: Run packaged engine-side destination storage-fault fixture
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:release-integration /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
 
+  native-runtime-tests:
+    name: Release native runtime tests (${{ matrix.os }})
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+      - name: Assert the tested revision is the release tag SHA
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+        with:
+          components: rustfmt, clippy
+      - name: Initialize MSVC build environment
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Select the MSVC linker explicitly
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
+          if (-not (Test-Path $linker)) { throw "Could not locate the x64 MSVC linker at $linker" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run native test suite
+        env:
+          RUST_BACKTRACE: full
+        shell: bash
+        run: cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture
+
   publish:
-    needs: [build, sbom, verify, packaged-integration]
+    needs: [build, sbom, verify, packaged-integration, native-runtime-tests]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
