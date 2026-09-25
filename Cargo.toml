@@ -25,7 +25,7 @@ rusqlite = { version = "0.32", features = ["backup", "bundled"] }
 uuid = { version = "1", features = ["v4"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 libc = "0.2"
 fs2 = "0.4"
 crossbeam-channel = "0.5"
