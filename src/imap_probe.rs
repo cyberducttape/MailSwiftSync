@@ -251,6 +251,9 @@ pub(crate) struct FetchedAccountMessages {
     pub(crate) mailboxes: HashSet<String>,
     pub(crate) messages: crate::core::ExtractedMessages,
     pub(crate) content_fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
+    /// Folders that failed verification (incomplete verification result).
+    /// Maps folder name to error message for diagnostics.
+    pub(crate) incomplete_folders: HashMap<String, String>,
 }
 
 impl<'a> MessageFetchBudget<'a> {
@@ -1126,6 +1129,7 @@ pub(crate) fn fetch_tls_account_messages(
     let mut all_messages = HashMap::new();
     let mut all_fingerprints = HashMap::new();
     let mut estimated_state_bytes = 0usize;
+    let mut incomplete_folders = HashMap::new();
 
     // Process all folders using the same authenticated connection (performance optimization).
     // This avoids opening 200 separate TLS connections for a 200-folder account.
@@ -1159,10 +1163,9 @@ pub(crate) fn fetch_tls_account_messages(
                 all_fingerprints.extend(folder_fingerprints);
             }
             Err(error) => {
-                // Log and continue instead of failing the entire verification.
-                // TODO: Track incomplete_folders in evidence for reporting.
-                eprintln!("{host}: skipping folder {mailbox}: {error}");
-                continue;
+                // Track incomplete folder for evidence reporting instead of failing entire verification.
+                // This allows partial verification results when some folders fail (network issues, quota, etc).
+                incomplete_folders.insert(mailbox, error);
             }
         }
     }
@@ -1171,6 +1174,7 @@ pub(crate) fn fetch_tls_account_messages(
         mailboxes: mailbox_inventory,
         messages: all_messages,
         content_fingerprints: all_fingerprints,
+        incomplete_folders,
     })
 }
 

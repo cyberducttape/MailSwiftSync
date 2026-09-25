@@ -591,6 +591,95 @@ impl MessageVerification {
     }
 }
 
+/// Validate that reconciliation accounting is consistent and complete.
+/// This catches bugs where messages are counted incorrectly or reconciled multiple times.
+pub fn validate_verification_summary(
+    source_messages: &ExtractedMessages,
+    dest_messages: &ExtractedMessages,
+    mismatches: &[MessageMismatch],
+    summary: &VerificationSummary,
+) -> Result<(), String> {
+    // Every source message should appear exactly once in mismatches or as a match.
+    let mut source_accounted = 0u64;
+    for (_key, _msg) in source_messages {
+        let in_mismatches = mismatches
+            .iter()
+            .filter(|m| {
+                m.source_uid.is_some()
+                    && m.source_folder.is_some()
+                    && (m.mismatch_type == MismatchType::Missing
+                        || m.mismatch_type == MismatchType::MessageIdOnly
+                        || m.mismatch_type == MismatchType::PresentWrongFolder)
+            })
+            .count();
+        if in_mismatches > 0 {
+            source_accounted += 1;
+        } else {
+            // This source message is not in mismatches, so it must be a metadata_match
+            source_accounted += 1;
+        }
+    }
+
+    if source_accounted != source_messages.len() as u64 {
+        return Err(format!(
+            "source message accounting mismatch: {} expected, {} accounted",
+            source_messages.len(),
+            source_accounted
+        ));
+    }
+
+    // Verify that the summary's message counts add up.
+    let accounted_source = summary.metadata_matches
+        + summary.probable_matches
+        + summary.missing_count
+        + mismatches
+            .iter()
+            .filter(|m| {
+                m.mismatch_type == MismatchType::MessageIdOnly
+                    || m.mismatch_type == MismatchType::PresentWrongFolder
+            })
+            .count() as u64;
+
+    if accounted_source != source_messages.len() as u64 {
+        return Err(format!(
+            "source summary incomplete: {} total, {} accounted (matches={}, probable={}, missing={}, changed={})",
+            source_messages.len(),
+            accounted_source,
+            summary.metadata_matches,
+            summary.probable_matches,
+            summary.missing_count,
+            mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::MessageIdOnly
+                    || m.mismatch_type == MismatchType::PresentWrongFolder)
+                .count()
+        ));
+    }
+
+    // Similarly verify destination accounting.
+    let accounted_dest = summary.metadata_matches
+        + summary.probable_matches
+        + summary.extra_count
+        + summary.duplicated_count
+        + mismatches
+            .iter()
+            .filter(|m| {
+                m.mismatch_type == MismatchType::MessageIdOnly
+                    || m.mismatch_type == MismatchType::PresentWrongFolder
+            })
+            .count() as u64;
+
+    if accounted_dest != dest_messages.len() as u64 {
+        return Err(format!(
+            "destination summary incomplete: {} total, {} accounted",
+            dest_messages.len(),
+            accounted_dest
+        ));
+    }
+
+    Ok(())
+}
+
 fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&MailboxMessageKey>> {
     let mut index = HashMap::new();
     for (uid, message) in messages {
