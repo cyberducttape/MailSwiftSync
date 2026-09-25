@@ -91,7 +91,10 @@ fn mismatch_source_key(
     mismatch: &MessageMismatch,
     messages: &ExtractedMessages,
 ) -> Option<MailboxMessageKey> {
-    let (uid, folder) = mismatch.source_uid.as_ref().zip(mismatch.source_folder.as_ref())?;
+    let (uid, folder) = mismatch
+        .source_uid
+        .as_ref()
+        .zip(mismatch.source_folder.as_ref())?;
     messages
         .keys()
         .find(|key| key.uid == *uid && key.mailbox == *folder)
@@ -102,7 +105,10 @@ fn mismatch_destination_key(
     mismatch: &MessageMismatch,
     messages: &ExtractedMessages,
 ) -> Option<MailboxMessageKey> {
-    let (uid, folder) = mismatch.dest_uid.as_ref().zip(mismatch.destination_folder.as_ref())?;
+    let (uid, folder) = mismatch
+        .dest_uid
+        .as_ref()
+        .zip(mismatch.destination_folder.as_ref())?;
     messages
         .keys()
         .find(|key| key.uid == *uid && key.mailbox == *folder)
@@ -203,9 +209,8 @@ impl MessageVerification {
             let has_other_mismatch = mismatches.iter().any(|m| {
                 let source_matches = m.source_uid.as_deref() == Some(source_key.uid.as_str())
                     && m.source_folder.as_deref() == Some(source_key.mailbox.as_str());
-                let destination_matches =
-                    m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
-                        && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str());
+                let destination_matches = m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
+                    && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str());
                 source_matches
                     && destination_matches
                     && !matches!(m.mismatch_type, MismatchType::Missing | MismatchType::Extra)
@@ -298,7 +303,11 @@ impl MessageVerification {
         folder_mapping: &HashMap<String, String>,
         source_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
         dest_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
-    ) -> (Vec<MessageMismatch>, HashSet<MailboxMessageKey>, HashSet<MailboxMessageKey>) {
+    ) -> (
+        Vec<MessageMismatch>,
+        HashSet<MailboxMessageKey>,
+        HashSet<MailboxMessageKey>,
+    ) {
         let mut mismatches = Vec::new();
         let mut matched_source = HashSet::new();
         let mut matched_dest = HashSet::new();
@@ -392,7 +401,11 @@ impl MessageVerification {
         unmatched_dest: &HashSet<MailboxMessageKey>,
         source_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
         dest_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
-    ) -> (Vec<MessageMismatch>, HashSet<MailboxMessageKey>, HashSet<MailboxMessageKey>) {
+    ) -> (
+        Vec<MessageMismatch>,
+        HashSet<MailboxMessageKey>,
+        HashSet<MailboxMessageKey>,
+    ) {
         let mut mismatches = Vec::new();
         let mut matched_source = HashSet::new();
         let mut matched_dest = HashSet::new();
@@ -807,12 +820,18 @@ pub fn validate_verification_summary(
     for mismatch in mismatches {
         if let Some(key) = mismatch_source_key(mismatch, source_messages) {
             if !seen_source.insert(key.clone()) {
-                return Err(format!("source mismatch identity {:?} appears more than once", key));
+                return Err(format!(
+                    "source mismatch identity {:?} appears more than once",
+                    key
+                ));
             }
         }
         if let Some(key) = mismatch_destination_key(mismatch, dest_messages) {
             if !seen_destination.insert(key.clone()) {
-                return Err(format!("destination mismatch identity {:?} appears more than once", key));
+                return Err(format!(
+                    "destination mismatch identity {:?} appears more than once",
+                    key
+                ));
             }
         }
     }
@@ -1442,8 +1461,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(mismatches[0].mismatch_type, MismatchType::PresentWrongFolder);
-        assert_eq!(mismatches[0].destination_folder.as_deref(), Some("A-Folder"));
+        assert_eq!(
+            mismatches[0].mismatch_type,
+            MismatchType::PresentWrongFolder
+        );
+        assert_eq!(
+            mismatches[0].destination_folder.as_deref(),
+            Some("A-Folder")
+        );
         assert_eq!(mismatches[0].dest_uid.as_deref(), Some("8"));
     }
 
@@ -1549,14 +1574,9 @@ mod tests {
             changed_count: 0,
         };
 
-        let error = validate_verification_summary(
-            &source,
-            &destination,
-            &[],
-            &summary,
-            &membership,
-        )
-        .unwrap_err();
+        let error =
+            validate_verification_summary(&source, &destination, &[], &summary, &membership)
+                .unwrap_err();
         assert!(error.contains("unclassified") || error.contains("classifications"));
 
         let missing_membership = VerificationMembership {

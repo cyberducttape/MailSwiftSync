@@ -41,7 +41,6 @@ pub struct VerificationEvidence {
 
 pub type MailboxEvidence = VerificationEvidence;
 
-
 /// Verification adapter that produced the persisted evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerificationMethod {
@@ -280,11 +279,21 @@ impl VerificationEvidence {
         match self.verification_outcome() {
             VerificationOutcome::Failed => Some("engine reported migration errors"),
             VerificationOutcome::Incomplete => Some("verification evidence is incomplete"),
-            VerificationOutcome::Missing => Some("message-level reconciliation found missing messages"),
-            VerificationOutcome::Changed => Some("message-level reconciliation found changed messages"),
-            VerificationOutcome::Unexpected => Some("message-level reconciliation found unexpected messages"),
-            VerificationOutcome::ProbableMatch => Some("message identity remains probable rather than exact"),
-            VerificationOutcome::Ambiguous => Some("message identity could not be resolved unambiguously"),
+            VerificationOutcome::Missing => {
+                Some("message-level reconciliation found missing messages")
+            }
+            VerificationOutcome::Changed => {
+                Some("message-level reconciliation found changed messages")
+            }
+            VerificationOutcome::Unexpected => {
+                Some("message-level reconciliation found unexpected messages")
+            }
+            VerificationOutcome::ProbableMatch => {
+                Some("message identity remains probable rather than exact")
+            }
+            VerificationOutcome::Ambiguous => {
+                Some("message identity could not be resolved unambiguously")
+            }
             VerificationOutcome::ExactMetadataMatch => None,
         }
     }
@@ -358,7 +367,10 @@ mod tests {
         assert_eq!(evidence.missing_count(), 1);
         assert_eq!(evidence.extra_count(), 0);
         assert_eq!(evidence.modified_count(), 0);
-        assert_eq!(evidence.verification_reason(), Some("message-level reconciliation found missing messages"));
+        assert_eq!(
+            evidence.verification_reason(),
+            Some("message-level reconciliation found missing messages")
+        );
     }
 
     #[test]

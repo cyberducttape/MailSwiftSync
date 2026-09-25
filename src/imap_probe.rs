@@ -472,9 +472,8 @@ fn record_list_entry(
         let wire_name = match literal_name {
             Some(bytes) => String::from_utf8(bytes.to_vec())
                 .map_err(|_| "IMAP LIST mailbox literal was not valid UTF-8".to_owned())?,
-            None => parse_list_mailbox_name(line).ok_or_else(|| {
-                "IMAP LIST mailbox name was missing or malformed".to_owned()
-            })?,
+            None => parse_list_mailbox_name(line)
+                .ok_or_else(|| "IMAP LIST mailbox name was missing or malformed".to_owned())?,
         };
         details.push(MailboxDescriptor {
             wire_name,
@@ -1234,19 +1233,11 @@ where
         search_number = search_number.saturating_add(1);
         stream
             .write_all(
-                format!("{search_tag} UID SEARCH UID {window_start}:{window_end}\r\n")
-                    .as_bytes(),
+                format!("{search_tag} UID SEARCH UID {window_start}:{window_end}\r\n").as_bytes(),
             )
             .map_err(|error| format!("{host}: could not search mailbox UIDs: {error}"))?;
         response.clear();
-        read_imap_tagged_with_budget(
-            stream,
-            &search_tag,
-            response,
-            buffer,
-            1_048_576,
-            budget,
-        )?;
+        read_imap_tagged_with_budget(stream, &search_tag, response, buffer, 1_048_576, budget)?;
         if !imap_command_succeeded(response, &search_tag) {
             return Err(imap_command_failure(
                 response,
@@ -1360,13 +1351,14 @@ pub(crate) fn fetch_tls_account_messages(
         match fetch_mailbox_with_stability_retry(&mut stream, host, &mailbox, budget) {
             Ok((folder_messages, folder_fingerprints)) => {
                 for (key, message) in folder_messages {
-                    estimated_state_bytes = estimated_state_bytes.saturating_add(
-                        estimated_message_record_bytes(
+                    estimated_state_bytes =
+                        estimated_state_bytes.saturating_add(estimated_message_record_bytes(
                             &key,
                             &message,
-                            folder_fingerprints.get(&key).or_else(|| all_fingerprints.get(&key)),
-                        ),
-                    );
+                            folder_fingerprints
+                                .get(&key)
+                                .or_else(|| all_fingerprints.get(&key)),
+                        ));
                     if all_messages.insert(key, message).is_some() {
                         let _ = stream.write_all(b"a999 LOGOUT\r\n");
                         return Err(format!(
@@ -1889,7 +1881,8 @@ mod tests {
 
     #[test]
     fn list_parser_decodes_literal_mailbox_names() {
-        let response = b"* LIST (\\HasNoChildren) \"/\" {10}\r\nSent Items\r\na005 OK LIST completed\r\n";
+        let response =
+            b"* LIST (\\HasNoChildren) \"/\" {10}\r\nSent Items\r\na005 OK LIST completed\r\n";
         let mut stream = Cursor::new(response);
         let mut buffer = [0_u8; 4096];
         let mut mailboxes = Vec::new();
@@ -1940,11 +1933,8 @@ mod tests {
             internal_date: Some("01-Jan-2026 00:00:00 +0000".into()),
         };
         let without_fingerprint = super::estimated_message_record_bytes(&key, &message, None);
-        let with_fingerprint = super::estimated_message_record_bytes(
-            &key,
-            &message,
-            Some(&"a".repeat(64)),
-        );
+        let with_fingerprint =
+            super::estimated_message_record_bytes(&key, &message, Some(&"a".repeat(64)));
         assert_eq!(with_fingerprint - without_fingerprint, 64);
     }
 
@@ -1996,12 +1986,9 @@ mod tests {
     #[test]
     fn raw_fetch_parser_preserves_framing_around_invalid_literal_bytes() {
         let response = b"* 1 FETCH (UID 100 RFC822.SIZE 17 INTERNALDATE \"01-Jan-2026 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <raw@example.com>\r\nBODY[] {17}\r\n\xff\x00v002 OK fake\r\n)\r\nv002 OK FETCH completed\r\n";
-        let messages = super::parse_message_fetch_metadata_response_bytes(
-            response,
-            "INBOX",
-            Some(77),
-        )
-        .unwrap();
+        let messages =
+            super::parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77))
+                .unwrap();
         let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "100");
         assert_eq!(messages.len(), 1);
         assert_eq!(

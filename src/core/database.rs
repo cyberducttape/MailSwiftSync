@@ -402,11 +402,17 @@ impl StateStore {
                 [],
             )?;
         }
-        if !columns.iter().any(|column| column == "verification_outcome") {
+        if !columns
+            .iter()
+            .any(|column| column == "verification_outcome")
+        {
             tx.execute("ALTER TABLE evidence ADD COLUMN verification_outcome TEXT NOT NULL DEFAULT 'incomplete'", [])?;
         }
         if !columns.iter().any(|column| column == "probable_messages") {
-            tx.execute("ALTER TABLE evidence ADD COLUMN probable_messages INTEGER NOT NULL DEFAULT 0", [])?;
+            tx.execute(
+                "ALTER TABLE evidence ADD COLUMN probable_messages INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
         }
         let job_columns = tx
             .prepare("PRAGMA table_info(mailbox_jobs)")?
@@ -522,16 +528,25 @@ impl StateStore {
             .prepare("PRAGMA table_info(evidence_history)")?
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        if !history_columns.iter().any(|column| column == "verification_method") {
+        if !history_columns
+            .iter()
+            .any(|column| column == "verification_method")
+        {
             tx.execute(
                 "ALTER TABLE evidence_history ADD COLUMN verification_method TEXT NOT NULL DEFAULT 'aggregate_engine'",
                 [],
             )?;
         }
-        if !history_columns.iter().any(|column| column == "verification_outcome") {
+        if !history_columns
+            .iter()
+            .any(|column| column == "verification_outcome")
+        {
             tx.execute("ALTER TABLE evidence_history ADD COLUMN verification_outcome TEXT NOT NULL DEFAULT 'incomplete'", [])?;
         }
-        if !history_columns.iter().any(|column| column == "probable_messages") {
+        if !history_columns
+            .iter()
+            .any(|column| column == "probable_messages")
+        {
             tx.execute("ALTER TABLE evidence_history ADD COLUMN probable_messages INTEGER NOT NULL DEFAULT 0", [])?;
         }
         if !history_columns

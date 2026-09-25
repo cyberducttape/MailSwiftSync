@@ -82,7 +82,8 @@ impl StateStore {
             Ok((
                 row.get::<_, String>(0)?,
                 MailboxEvidence {
-                    verification_method: VerificationMethod::parse(&row.get::<_, String>(2)?).unwrap_or(VerificationMethod::AggregateEngine),
+                    verification_method: VerificationMethod::parse(&row.get::<_, String>(2)?)
+                        .unwrap_or(VerificationMethod::AggregateEngine),
                     verification_outcome: VerificationOutcome::parse(&row.get::<_, String>(3)?),
                     source_messages: row.get(4)?,
                     destination_messages: row.get(5)?,
@@ -190,8 +191,13 @@ impl StateStore {
                         Ok::<_, rusqlite::Error>((
                             run_id,
                             MailboxEvidence {
-                                verification_method: VerificationMethod::parse(&row.get::<_, String>(10)?).unwrap_or(VerificationMethod::AggregateEngine),
-                                verification_outcome: VerificationOutcome::parse(&row.get::<_, String>(11)?),
+                                verification_method: VerificationMethod::parse(
+                                    &row.get::<_, String>(10)?,
+                                )
+                                .unwrap_or(VerificationMethod::AggregateEngine),
+                                verification_outcome: VerificationOutcome::parse(
+                                    &row.get::<_, String>(11)?,
+                                ),
                                 source_messages: row.get(12)?,
                                 destination_messages: row.get(13)?,
                                 source_bytes: row.get(14)?,
