@@ -5,6 +5,7 @@ use crate::{
         RunContext, persist_engine_identity_before_launch, probe_engine_version,
         resolve_imapsync_identity, run_dovecot_destination_preflight, run_dovecot_verification,
         message_verification_enabled, run_imap_message_verification, run_streaming,
+        terminal_evidence_source, TerminalEvidenceSource,
         send_reliable_event,
     },
     verification::ImapsyncOutputProfile,
@@ -188,7 +189,8 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     Ok(stream)
                 });
             }
-            if (dry_run || engine != core::Engine::ImapSync)
+            if terminal_evidence_source(&form, false, result.as_ref().ok().and_then(|stream| stream.imapsync_evidence.as_ref()).is_some())
+                    == TerminalEvidenceSource::Engine
                 && let Ok(stream) = &result
                 && let Some(evidence) = stream.imapsync_evidence.clone()
             {
