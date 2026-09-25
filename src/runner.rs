@@ -150,9 +150,11 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_certificate_pin_sha256,
         &budget,
     )?;
-    if source.mailboxes.is_empty() || destination.mailboxes.is_empty() {
+    if (source.total_exists > 0 && source.messages.is_empty())
+        || (destination.total_exists > 0 && destination.messages.is_empty())
+    {
         return Err(
-            "message-level verification refused: one IMAP account returned no messages; refusing to treat an empty dataset as proof"
+            "message-level verification refused: IMAP FETCH extraction was empty despite non-empty EXISTS evidence"
                 .into(),
         );
     }
