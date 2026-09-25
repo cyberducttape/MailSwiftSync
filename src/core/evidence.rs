@@ -4,6 +4,10 @@ use super::{AttentionReason, MailboxJob, Project, RunSummary};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxEvidence {
+    /// Explicitly records which adapter produced this evidence. This is not
+    /// inferred from the result counts because a metadata mismatch is not a
+    /// body hash.
+    pub verification_method: VerificationMethod,
     pub source_messages: u64,
     pub destination_messages: u64,
     pub source_bytes: u64,
@@ -43,6 +47,16 @@ impl VerificationMethod {
             Self::BodyHash => "body_hash",
             Self::NativeDovecot => "native_dovecot",
         }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "aggregate_engine" => Self::AggregateEngine,
+            "metadata_reconciliation" => Self::MetadataReconciliation,
+            "body_hash" => Self::BodyHash,
+            "native_dovecot" => Self::NativeDovecot,
+            _ => return None,
+        })
     }
 }
 
@@ -162,17 +176,8 @@ impl MailboxEvidence {
         }
     }
 
-    /// The adapter is inferred from the evidence shape for compatibility with
-    /// existing ledgers. Message-level counts are produced by reconciliation;
-    /// authoritative aggregate counters are produced by the engine.
     pub fn verification_method(&self) -> VerificationMethod {
-        if self.authoritative {
-            VerificationMethod::AggregateEngine
-        } else if self.has_message_level_mismatch() {
-            VerificationMethod::BodyHash
-        } else {
-            VerificationMethod::AggregateEngine
-        }
+        self.verification_method
     }
 
     /// Canonical classification consumed by all report and UI layers.
@@ -284,10 +289,11 @@ impl MailboxEvidence {
 
 #[cfg(test)]
 mod tests {
-    use super::{MailboxEvidence, VerificationOutcome};
+    use super::{MailboxEvidence, VerificationMethod, VerificationOutcome};
 
     fn missing_evidence() -> MailboxEvidence {
         MailboxEvidence {
+            verification_method: VerificationMethod::MetadataReconciliation,
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -316,5 +322,16 @@ mod tests {
         assert_eq!(evidence.extra_count(), 0);
         assert_eq!(evidence.modified_count(), 0);
         assert_eq!(evidence.verification_reason(), Some("message-level reconciliation found missing messages"));
+    }
+
+    #[test]
+    fn metadata_mismatch_does_not_claim_body_hash_verification() {
+        let mut evidence = missing_evidence();
+        evidence.modified_messages = 1;
+
+        assert_eq!(
+            evidence.verification_method(),
+            VerificationMethod::MetadataReconciliation
+        );
     }
 }

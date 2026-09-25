@@ -169,6 +169,7 @@ pub(crate) fn run_imap_message_verification(
     let source_folders = source.mailboxes.len() as u64;
     let destination_folders = destination.mailboxes.len() as u64;
     let evidence = core::MailboxEvidence {
+        verification_method: core::VerificationMethod::MetadataReconciliation,
         source_messages: summary.total_source,
         destination_messages: summary.total_destination,
         source_bytes,

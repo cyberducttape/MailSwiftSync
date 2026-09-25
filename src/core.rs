@@ -50,7 +50,7 @@ pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
 pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
-    ReportRunSnapshot, VerificationAcceptance,
+    ReportRunSnapshot, VerificationAcceptance, VerificationMethod,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
@@ -60,7 +60,7 @@ pub use models::{
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 10;
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 pub(crate) use policy::{
     attention_reason_for, normalized_destination_identity, valid_dovecot_checkpoint,
@@ -303,6 +303,7 @@ mod tests {
             .add_mailbox(&project.id, "a@example", "a@example")
             .unwrap();
         let e = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 8,
             destination_messages: 8,
             source_bytes: 10,
@@ -343,6 +344,7 @@ mod tests {
             .add_mailbox(&project.id, "a@example", "a@example")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -374,6 +376,7 @@ mod tests {
         let run_id = "message-detail-run";
         db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 0,
             source_bytes: 42,
@@ -628,6 +631,7 @@ mod tests {
     #[test]
     fn folder_mismatch_cannot_claim_full_confidence() {
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 10,
             destination_messages: 10,
             source_bytes: 100,
@@ -653,6 +657,7 @@ mod tests {
     #[test]
     fn balanced_aggregate_totals_cannot_hide_message_level_mismatches() {
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 10_000,
             destination_messages: 10_000,
             source_bytes: 50_000_000,
@@ -672,6 +677,7 @@ mod tests {
         assert!(!evidence.is_exact_match());
 
         let modified = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 1,
@@ -685,6 +691,7 @@ mod tests {
     #[test]
     fn empty_mailbox_with_failures_is_not_verified() {
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 0,
             destination_messages: 0,
             source_bytes: 0,
@@ -709,6 +716,7 @@ mod tests {
     #[test]
     fn aggregate_match_has_bounded_but_nonmisleading_score() {
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 12,
             destination_messages: 12,
             source_bytes: 100,
@@ -897,6 +905,7 @@ mod tests {
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -946,6 +955,7 @@ mod tests {
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -1022,6 +1032,7 @@ mod tests {
         db.insert_run_for_test(&project.id, Some(&job), "run-project-complete", "test")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -1376,6 +1387,7 @@ mod tests {
         db.begin_run(&project.id, &job, "run-evidence", "imapsync")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 3,
             destination_messages: 3,
             source_bytes: 300,
@@ -1432,6 +1444,7 @@ mod tests {
         db.begin_run(&project.id, &job, "run-difference", "imapsync")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -1489,6 +1502,7 @@ mod tests {
         db.begin_run(&project.id, &job, "run-evidence-one", "imapsync")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -1831,6 +1845,7 @@ mod tests {
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -2046,6 +2061,7 @@ mod tests {
         db.record_evidence(
             &job,
             &MailboxEvidence {
+                verification_method: VerificationMethod::AggregateEngine,
                 source_messages: 10,
                 destination_messages: 9,
                 source_bytes: 100,
@@ -3462,6 +3478,7 @@ destination_port = "000"
             .add_mailbox(&project.id, "source", "destination")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 1,
@@ -3495,6 +3512,7 @@ destination_port = "000"
         db.begin_run(&project.id, &jobs[0], "evidence-run-one", "test")
             .unwrap();
         let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 1,
