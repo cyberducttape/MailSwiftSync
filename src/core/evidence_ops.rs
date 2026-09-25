@@ -179,6 +179,24 @@ impl StateStore {
         if changed != 1 {
             return Err(rusqlite::Error::QueryReturnedNoRows);
         }
+        let (total, verified): (i64, i64) = tx.query_row(
+            "SELECT COUNT(*), SUM(CASE WHEN state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END) FROM mailbox_jobs WHERE project_id=?1",
+            [project_id],
+            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?;
+        if phase == Phase::Verification.as_str() && total > 0 && total == verified {
+            let completed = tx.execute(
+                "UPDATE projects SET phase='complete' WHERE id=?1 AND phase='verification'",
+                [project_id],
+            )?;
+            if completed != 1 {
+                return Err(rusqlite::Error::QueryReturnedNoRows);
+            }
+            tx.execute(
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'phase_changed','complete')",
+                [project_id],
+            )?;
+        }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'verification_exception_accepted',?2)",
             params![project_id, bounded_event_detail(&format!("{job_id}: accepted by {operator}: {reason}"))],
