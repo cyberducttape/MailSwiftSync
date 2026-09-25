@@ -4,8 +4,8 @@
 //! authenticating for each folder. The session tracks the currently selected
 //! mailbox to minimize redundant SELECT commands.
 
-use std::io::{Read, Write};
 use crate::imap_probe::MessageFetchBudget;
+use std::io::{Read, Write};
 
 /// A reusable IMAP session with state tracking for connection reuse.
 pub struct ImapSession<S: Read + Write> {

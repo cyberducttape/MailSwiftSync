@@ -1462,12 +1462,13 @@ mod tests {
             FailureClass::Capacity
         );
         let transport_delay = transient_retry_delay("connection reset by peer", 0);
-        assert!((Duration::from_secs(1)..=Duration::from_millis(1_500))
-            .contains(&transport_delay));
+        assert!((Duration::from_secs(1)..=Duration::from_millis(1_500)).contains(&transport_delay));
         let capacity_delay = transient_retry_delay("server busy", 0);
-        assert!((Duration::from_secs(5)..=Duration::from_millis(7_500))
-            .contains(&capacity_delay));
-        assert_eq!(transient_retry_delay("server busy", 99), Duration::from_secs(120));
+        assert!((Duration::from_secs(5)..=Duration::from_millis(7_500)).contains(&capacity_delay));
+        assert_eq!(
+            transient_retry_delay("server busy", 99),
+            Duration::from_secs(120)
+        );
         assert_eq!(
             classified_failure_detail("too many requests"),
             "[attention_reason=capacity_limited] [class=capacity] too many requests"
