@@ -305,6 +305,7 @@ mod tests {
                         "run".into(),
                         core::MailboxEvidence {
                             verification_method: core::VerificationMethod::AggregateEngine,
+                            verification_outcome: None,
                             source_messages: 1,
                             destination_messages: 1,
                             source_bytes: 1,
@@ -317,6 +318,7 @@ mod tests {
                             missing_messages: 0,
                             extra_messages: 0,
                             modified_messages: 0,
+                            probable_messages: 0,
                         },
                         Some("plan".into()),
                     )

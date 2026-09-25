@@ -8,6 +8,10 @@ pub struct MailboxEvidence {
     /// inferred from the result counts because a metadata mismatch is not a
     /// body hash.
     pub verification_method: VerificationMethod,
+    /// The verifier's authoritative classification. `None` is retained only
+    /// for in-memory compatibility fixtures; durable writes always materialize
+    /// the computed value.
+    pub verification_outcome: Option<VerificationOutcome>,
     pub source_messages: u64,
     pub destination_messages: u64,
     pub source_bytes: u64,
@@ -28,6 +32,8 @@ pub struct MailboxEvidence {
     /// Message-level verification: count of messages with the same portable
     /// identity but different available content/metadata.
     pub modified_messages: u64,
+    /// Metadata pairings that remain candidates rather than exact identities.
+    pub probable_messages: u64,
 }
 
 /// Verification adapter that produced the persisted evidence.
@@ -100,6 +106,20 @@ impl VerificationOutcome {
             Self::Failed => "Verification failed",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "exact_metadata_match" => Self::ExactMetadataMatch,
+            "probable_match" => Self::ProbableMatch,
+            "ambiguous" => Self::Ambiguous,
+            "missing" => Self::Missing,
+            "changed" => Self::Changed,
+            "unexpected" => Self::Unexpected,
+            "incomplete" => Self::Incomplete,
+            "failed" => Self::Failed,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +185,7 @@ impl MailboxEvidence {
     fn has_verification_exception(&self) -> bool {
         self.failed_messages > 0
             || self.unmatched_messages.is_some_and(|count| count > 0)
+            || self.probable_messages > 0
             || self.has_message_level_mismatch()
     }
 
@@ -182,6 +203,9 @@ impl MailboxEvidence {
 
     /// Canonical classification consumed by all report and UI layers.
     pub fn verification_outcome(&self) -> VerificationOutcome {
+        if let Some(outcome) = self.verification_outcome {
+            return outcome;
+        }
         if self.failed_messages > 0 {
             VerificationOutcome::Failed
         } else if self.unmatched_messages.is_none() {
@@ -192,6 +216,8 @@ impl MailboxEvidence {
             VerificationOutcome::Changed
         } else if self.extra_messages > 0 {
             VerificationOutcome::Unexpected
+        } else if self.probable_messages > 0 {
+            VerificationOutcome::ProbableMatch
         } else if self.unmatched_messages.is_some_and(|count| count > 0) {
             VerificationOutcome::Ambiguous
         } else if self.aggregate_totals_match() {
@@ -218,19 +244,20 @@ impl MailboxEvidence {
     }
 
     pub fn probable_count(&self) -> u64 {
-        0
+        self.probable_messages
     }
 
     pub fn metadata_matched_count(&self) -> u64 {
         self.source_messages
             .saturating_sub(self.unmatched_messages.unwrap_or(0))
+            .saturating_sub(self.probable_messages)
     }
 
     pub fn evidence_level(&self) -> &'static str {
         if self.failed_messages > 0 || self.unmatched_messages.is_none_or(|count| count > 0) {
             return "Incomplete evidence";
         }
-        if self.has_message_level_mismatch() {
+        if self.has_message_level_mismatch() || self.probable_messages > 0 {
             return "Message-level mismatch";
         }
         let exact = self.aggregate_totals_match();
@@ -283,7 +310,9 @@ impl MailboxEvidence {
     }
 
     pub fn is_exact_match(&self) -> bool {
-        self.aggregate_totals_match() && !self.has_verification_exception()
+        self.verification_outcome() == VerificationOutcome::ExactMetadataMatch
+            && self.aggregate_totals_match()
+            && !self.has_verification_exception()
     }
 }
 
@@ -294,6 +323,7 @@ mod tests {
     fn missing_evidence() -> MailboxEvidence {
         MailboxEvidence {
             verification_method: VerificationMethod::MetadataReconciliation,
+            verification_outcome: None,
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -306,6 +336,7 @@ mod tests {
             missing_messages: 1,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         }
     }
 
@@ -333,5 +364,26 @@ mod tests {
             evidence.verification_method(),
             VerificationMethod::MetadataReconciliation
         );
+    }
+
+    #[test]
+    fn probable_matches_cannot_be_promoted_to_exact() {
+        let mut evidence = missing_evidence();
+        evidence.verification_outcome = None;
+        evidence.source_messages = 100;
+        evidence.destination_messages = 100;
+        evidence.source_bytes = 1_000;
+        evidence.destination_bytes = 1_000;
+        evidence.unmatched_messages = Some(0);
+        evidence.missing_messages = 0;
+        evidence.extra_messages = 0;
+        evidence.modified_messages = 0;
+        evidence.probable_messages = 1;
+
+        assert_eq!(
+            evidence.verification_outcome(),
+            VerificationOutcome::ProbableMatch
+        );
+        assert!(!evidence.is_exact_match());
     }
 }

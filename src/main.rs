@@ -354,6 +354,7 @@ mod tests {
     fn evidence_digest_binds_run_plan_and_evidence_values() {
         let evidence = core::MailboxEvidence {
             verification_method: core::VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 10,
             destination_messages: 10,
             source_bytes: 100,
@@ -366,6 +367,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         let first = evidence_digest("run-one", "snapshot-one", &evidence);
         assert_eq!(first, evidence_digest("run-one", "snapshot-one", &evidence));

@@ -138,6 +138,7 @@ impl ImapsyncEvidenceAccumulator {
         }
         Some(core::MailboxEvidence {
             verification_method: core::VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: self.source_messages?,
             destination_messages: self.destination_messages?,
             source_bytes: self.source_bytes?,
@@ -153,6 +154,7 @@ impl ImapsyncEvidenceAccumulator {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         })
     }
 }
@@ -248,6 +250,7 @@ pub(crate) fn dovecot_evidence_from_accumulators(
         .filter(|_| !source.overflowed && !destination.overflowed)
         .map(|_| core::MailboxEvidence {
             verification_method: core::VerificationMethod::NativeDovecot,
+            verification_outcome: None,
             source_messages: source.messages,
             destination_messages: destination.messages,
             source_bytes: source.bytes,
@@ -260,6 +263,7 @@ pub(crate) fn dovecot_evidence_from_accumulators(
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         })
 }
 
