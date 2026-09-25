@@ -14,6 +14,7 @@ mod engine;
 mod headless;
 mod imap_probe;
 mod imap_protocol;
+mod imap_session;
 mod maintenance_window;
 mod migrate_audit;
 mod migration_plan;
