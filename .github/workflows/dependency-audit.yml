@@ -1,0 +1,26 @@
+name: Scheduled dependency audit
+
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Cargo audit and policy checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.18.3 --locked
+      - name: Audit RustSec advisories
+        run: cargo audit --locked
+      - name: Enforce dependency policy
+        run: cargo deny check advisories bans licenses sources
