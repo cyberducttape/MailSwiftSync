@@ -48,6 +48,7 @@ mod state;
 mod verification_details;
 pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
+#[allow(unused_imports)]
 pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
     ReportRunSnapshot, VerificationAcceptance, VerificationEvidence, VerificationMethod,
@@ -400,7 +401,10 @@ mod tests {
 
         let loaded = db.evidence(&job).unwrap().unwrap();
         assert_eq!(loaded.probable_count(), 1);
-        assert_eq!(loaded.verification_outcome(), VerificationOutcome::ProbableMatch);
+        assert_eq!(
+            loaded.verification_outcome(),
+            VerificationOutcome::ProbableMatch
+        );
         assert!(!loaded.is_exact_match());
     }
 

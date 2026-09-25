@@ -5,7 +5,7 @@ use crate::{
     bulk_import::BulkJob,
     core,
     process::ProcessLaunchLimiter,
-    runner::{ResolvedImapsyncIdentity, resolve_imapsync_identity},
+    runner::{ResolvedImapsyncIdentity, resolve_imapsync_identity, send_reliable_event},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -203,25 +203,35 @@ pub(crate) fn spawn_batch_worker(
                     child_run_id: child_run_id.clone(),
                     state: "Attention".into(),
                 });
-                let _ = tx.send(Event::JobFinished {
-                    job_id,
-                    child_run_id,
-                    state: "attention".into(),
-                    detail: "worker stopped unexpectedly".into(),
-                    credential_fingerprint: None,
-                });
+                if let Err(error) = send_reliable_event(
+                    &tx,
+                    Event::JobFinished {
+                        job_id,
+                        child_run_id,
+                        state: "attention".into(),
+                        detail: "worker stopped unexpectedly".into(),
+                        credential_fingerprint: None,
+                    },
+                ) {
+                    eprintln!("reliable batch terminal event delivery failed: {error}");
+                }
             }
             let _ = tx.send(Event::Line(
                     "A batch worker stopped unexpectedly; unresolved jobs require review before retrying."
                         .into(),
                 ));
         }
-        let _ = tx.send(Event::Finished(if cancel.load(Ordering::Relaxed) {
-            Err("batch cancelled".into())
-        } else if failed.load(Ordering::Relaxed) {
-            Err("one or more batch jobs failed".into())
-        } else {
-            Ok(StreamOutcome::Completed)
-        }));
+        if let Err(error) = send_reliable_event(
+            &tx,
+            Event::Finished(if cancel.load(Ordering::Relaxed) {
+                Err("batch cancelled".into())
+            } else if failed.load(Ordering::Relaxed) {
+                Err("one or more batch jobs failed".into())
+            } else {
+                Ok(StreamOutcome::Completed)
+            }),
+        ) {
+            eprintln!("reliable batch terminal event delivery failed: {error}");
+        }
     });
 }

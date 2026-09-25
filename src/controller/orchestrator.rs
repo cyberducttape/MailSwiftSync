@@ -2,11 +2,10 @@ use crate::{
     Event, core,
     credentials::{CleanupGuard, SecretString},
     runner::{
-        RunContext, persist_engine_identity_before_launch, probe_engine_version,
-        resolve_imapsync_identity, run_dovecot_destination_preflight, run_dovecot_verification,
-        message_verification_enabled, run_imap_message_verification, run_streaming,
-        terminal_evidence_source, TerminalEvidenceSource,
-        send_reliable_event,
+        RunContext, TerminalEvidenceSource, message_verification_enabled,
+        persist_engine_identity_before_launch, probe_engine_version, resolve_imapsync_identity,
+        run_dovecot_destination_preflight, run_dovecot_verification, run_imap_message_verification,
+        run_streaming, send_reliable_event, terminal_evidence_source,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -146,13 +145,18 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                         &run_id,
                         &job_id,
                     )
-                    .map(|evidence| {
-                        let _ = send_reliable_event(&tx, Event::Evidence(evidence));
-                        stream
+                    .and_then(|evidence| {
+                        send_reliable_event(&tx, Event::Evidence(evidence)).map(|_| stream)
                     })
                     .map_err(|error| {
-                        let _ = send_reliable_event(&tx, Event::VerificationFailed(error.clone()));
-                        format!("migration completed; Dovecot verification failed: {error}")
+                        let detail =
+                            format!("migration completed; Dovecot verification failed: {error}");
+                        match send_reliable_event(&tx, Event::VerificationFailed(detail.clone())) {
+                            Ok(()) => detail,
+                            Err(delivery_error) => format!(
+                                "{detail}; verification event delivery failed: {delivery_error}"
+                            ),
+                        }
                     })
                 });
             }
@@ -164,23 +168,23 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 result = result.and_then(|stream| {
                     match run_imap_message_verification(&form, &job_id, &run_id, &cancel) {
                         Ok((evidence, mismatches)) => {
-                            let _ = send_reliable_event(
+                            send_reliable_event(
                                 &tx,
                                 Event::MessageMismatches {
                                     run_id: run_id.clone(),
                                     job_id: job_id.clone(),
                                     mismatches,
                                 },
-                            );
-                            let _ = send_reliable_event(&tx, Event::Evidence(evidence));
+                            )?;
+                            send_reliable_event(&tx, Event::Evidence(evidence))?;
                         }
                         Err(error) => {
-                            let _ = send_reliable_event(
+                            send_reliable_event(
                                 &tx,
                                 Event::VerificationFailed(format!(
                                     "message-level IMAP verification unavailable: {error}"
                                 )),
-                            );
+                            )?;
                             // The transfer already succeeded. Missing
                             // post-transfer evidence is durable operator
                             // review, not a failed migration.
@@ -189,22 +193,37 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     Ok(stream)
                 });
             }
-            if terminal_evidence_source(&form, false, result.as_ref().ok().and_then(|stream| stream.imapsync_evidence.as_ref()).is_some())
-                    == TerminalEvidenceSource::Engine
+            if terminal_evidence_source(
+                &form,
+                false,
+                result
+                    .as_ref()
+                    .ok()
+                    .and_then(|stream| stream.imapsync_evidence.as_ref())
+                    .is_some(),
+            ) == TerminalEvidenceSource::Engine
                 && let Ok(stream) = &result
                 && let Some(evidence) = stream.imapsync_evidence.clone()
             {
-                let _ = send_reliable_event(&tx, Event::Evidence(evidence));
+                if let Err(error) = send_reliable_event(&tx, Event::Evidence(evidence)) {
+                    result = Err(format!("terminal evidence delivery failed: {error}"));
+                }
             }
-            let _ = send_reliable_event(&tx, Event::Finished(result.map(|stream| stream.outcome)));
+            if let Err(error) =
+                send_reliable_event(&tx, Event::Finished(result.map(|stream| stream.outcome)))
+            {
+                eprintln!("reliable terminal event delivery failed: {error}");
+            }
         }));
         if worker_result.is_err() {
-            let _ = send_reliable_event(
+            if let Err(error) = send_reliable_event(
                 &tx,
                 Event::Finished(Err(
                     "single-run worker panicked; migration requires operator review".into(),
                 )),
-            );
+            ) {
+                eprintln!("reliable panic-recovery event delivery failed: {error}");
+            }
         }
     });
 }
