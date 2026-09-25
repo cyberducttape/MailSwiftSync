@@ -870,13 +870,15 @@ struct ProcessRegistrationGuard<'a> {
 
 impl Drop for ProcessRegistrationGuard<'_> {
     fn drop(&mut self) {
-        let _ = send_reliable_event(
+        if let Err(error) = send_reliable_event(
             self.tx,
             crate::Event::ProcessEnded {
                 run_id: self.run_id.clone(),
                 job_id: self.job_id.clone(),
             },
-        );
+        ) {
+            eprintln!("reliable process-end event delivery failed: {error}");
+        }
     }
 }
 
@@ -1182,11 +1184,13 @@ pub(crate) fn run_dovecot_verification(
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        automap_folder_kind, infer_automap_folder_mapping, persist_engine_identity_before_launch,
-        resolve_imapsync_identity, terminal_evidence_source, validate_destination_folder_policy,
-        TerminalEvidenceSource,
+        TerminalEvidenceSource, automap_folder_kind, infer_automap_folder_mapping,
+        persist_engine_identity_before_launch, resolve_imapsync_identity, terminal_evidence_source,
+        validate_destination_folder_policy,
     };
-    use crate::{Event, imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile};
+    use crate::{
+        Event, StreamOutcome, imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile,
+    };
     use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
 
     fn unsuitable_live_form() -> crate::Form {
@@ -1197,31 +1201,52 @@ mod tests {
     }
 
     #[test]
+    fn reliable_event_delivery_reports_disconnected_controller() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        drop(rx);
+        let result = super::send_reliable_event(&tx, Event::Finished(Ok(StreamOutcome::Completed)));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("disconnected"));
+    }
+
+    #[test]
     fn single_justfolders_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.justfolders = true;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     #[test]
     fn single_addheader_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.addheader = true;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     #[test]
     fn single_internal_date_disabled_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.sync_internaldates = false;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     #[test]
     fn single_size_mismatch_allowed_never_uses_engine_evidence() {
         let mut form = unsuitable_live_form();
         form.profile.allowsizemismatch = true;
-        assert_eq!(terminal_evidence_source(&form, false, true), TerminalEvidenceSource::Unavailable);
+        assert_eq!(
+            terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
     }
 
     #[test]

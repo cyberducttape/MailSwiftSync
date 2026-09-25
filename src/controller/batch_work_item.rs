@@ -14,10 +14,10 @@ use crate::{
     imap_probe::fresh_dual_imaps_authentication,
     process::ProcessLaunchLimiter,
     runner::{
-        ResolvedImapsyncIdentity, RunContext, persist_engine_identity_before_launch,
-        message_verification_enabled, terminal_evidence_source, TerminalEvidenceSource,
-        run_dovecot_destination_preflight,
+        ResolvedImapsyncIdentity, RunContext, TerminalEvidenceSource, message_verification_enabled,
+        persist_engine_identity_before_launch, run_dovecot_destination_preflight,
         run_dovecot_verification, run_imap_message_verification, run_streaming,
+        send_reliable_event, terminal_evidence_source,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -388,12 +388,13 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                 &cancel,
                             ) {
                                 Ok((evidence, mismatches)) => {
-                                    let _ = tx.send(Event::BatchEvidence {
+                                    send_reliable_event(&tx, Event::BatchEvidence {
                                         job_id: job_id.clone(),
                                         child_run_id: child_run_id.clone(),
                                         evidence,
                                         mismatches,
-                                    });
+                                    })
+                                    .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
                                 }
                                 Err(error) => {
                                     let _ = tx.send(Event::RunLine {
@@ -414,12 +415,13 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             ) == TerminalEvidenceSource::Engine
                             && let Some(evidence) = stream.imapsync_evidence
                         {
-                            let _ = tx.send(Event::BatchEvidence {
+                            send_reliable_event(&tx, Event::BatchEvidence {
                                 job_id: job_id.clone(),
                                 child_run_id: child_run_id.clone(),
                                 evidence,
                                 mismatches: Vec::new(),
-                            });
+                            })
+                            .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
                         }
                         Ok(stream.outcome)
                     });
@@ -473,14 +475,20 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                 &child_run_id,
                                 &job_id,
                             )
-                            .map(|evidence| {
-                                let _ = tx.send(Event::BatchEvidence {
-                                    job_id: job_id.clone(),
-                                    child_run_id: child_run_id.clone(),
-                                    evidence,
-                                    mismatches: Vec::new(),
-                                });
-                                outcome
+                            .and_then(|evidence| {
+                                send_reliable_event(
+                                    &tx,
+                                    Event::BatchEvidence {
+                                        job_id: job_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        evidence,
+                                        mismatches: Vec::new(),
+                                    },
+                                )
+                                .map(|_| outcome)
+                                .map_err(|error| {
+                                    format!("batch verification evidence delivery failed: {error}")
+                                })
                             })
                         })
                     } else {
