@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use super::{
     evidence::VerificationOutcome,
@@ -397,13 +397,23 @@ impl MessageVerification {
         let mut matched_source = HashSet::new();
         let mut matched_dest = HashSet::new();
 
-        for (message_id, source_uids) in source_by_message_id {
+        let mut message_ids = source_by_message_id
+            .keys()
+            .filter(|message_id| dest_by_message_id.contains_key(*message_id))
+            .copied()
+            .collect::<Vec<_>>();
+        message_ids.sort_unstable();
+        for message_id in message_ids {
+            let source_uids = &source_by_message_id[message_id];
             let Some(dest_uids) = dest_by_message_id.get(message_id) else {
                 continue;
             };
 
             // Build index of remaining unmatched destinations by folder and metadata
-            let mut dest_by_folder_metadata: HashMap<(String, Option<MetadataFingerprint>), Vec<&MailboxMessageKey>> = HashMap::new();
+            let mut dest_by_folder_metadata: BTreeMap<
+                (String, Option<MetadataFingerprint>),
+                Vec<&MailboxMessageKey>,
+            > = BTreeMap::new();
             for dest_key in dest_uids {
                 if !unmatched_dest.contains(dest_key) {
                     continue;
@@ -1407,6 +1417,34 @@ mod tests {
             MismatchType::PresentWrongFolder.as_str(),
             "message_present_wrong_folder"
         );
+    }
+
+    #[test]
+    fn wrong_folder_candidate_selection_is_deterministic() {
+        let message = ExtractedMessage {
+            message_id: Some("<deterministic@example.com>".to_owned()),
+            uid: Some("1".to_owned()),
+            size_bytes: Some(1_000),
+            internal_date: Some("2024-01-01".to_owned()),
+        };
+        let source = HashMap::from([(MailboxMessageKey::new("INBOX", "1"), message.clone())]);
+        let destination = HashMap::from([
+            (MailboxMessageKey::new("Z-Folder", "9"), message.clone()),
+            (MailboxMessageKey::new("A-Folder", "8"), message),
+        ]);
+
+        let (mismatches, _) = MessageVerification::detect_mismatches_with_folder_mapping(
+            "job1",
+            "run-deterministic-folder",
+            &source,
+            &destination,
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(mismatches[0].mismatch_type, MismatchType::PresentWrongFolder);
+        assert_eq!(mismatches[0].destination_folder.as_deref(), Some("A-Folder"));
+        assert_eq!(mismatches[0].dest_uid.as_deref(), Some("8"));
     }
 
     #[test]
