@@ -72,6 +72,43 @@ pub struct MessageMismatch {
     pub destination_fingerprint: Option<String>,
 }
 
+/// Identity ownership produced by reconciliation. Every input key must occur
+/// in exactly one source or destination classification.
+#[derive(Debug, Clone, Default)]
+pub struct VerificationMembership {
+    pub matched_source: HashSet<MailboxMessageKey>,
+    pub matched_destination: HashSet<MailboxMessageKey>,
+    pub probable_source: HashSet<MailboxMessageKey>,
+    pub probable_destination: HashSet<MailboxMessageKey>,
+    pub missing_source: HashSet<MailboxMessageKey>,
+    pub extra_destination: HashSet<MailboxMessageKey>,
+    pub duplicated_destination: HashSet<MailboxMessageKey>,
+    pub changed_source: HashSet<MailboxMessageKey>,
+    pub changed_destination: HashSet<MailboxMessageKey>,
+}
+
+fn mismatch_source_key(
+    mismatch: &MessageMismatch,
+    messages: &ExtractedMessages,
+) -> Option<MailboxMessageKey> {
+    let (uid, folder) = mismatch.source_uid.as_ref().zip(mismatch.source_folder.as_ref())?;
+    messages
+        .keys()
+        .find(|key| key.uid == *uid && key.mailbox == *folder)
+        .cloned()
+}
+
+fn mismatch_destination_key(
+    mismatch: &MessageMismatch,
+    messages: &ExtractedMessages,
+) -> Option<MailboxMessageKey> {
+    let (uid, folder) = mismatch.dest_uid.as_ref().zip(mismatch.destination_folder.as_ref())?;
+    messages
+        .keys()
+        .find(|key| key.uid == *uid && key.mailbox == *folder)
+        .cloned()
+}
+
 /// Core message verification engine.
 pub struct MessageVerification;
 
@@ -532,6 +569,8 @@ impl MessageVerification {
                 folder_mapping,
             );
         total_probable_matches = pass3_probable;
+        let probable_source = pass3_matched_src.clone();
+        let probable_destination = pass3_matched_dst.clone();
         for key in pass3_matched_src {
             unmatched_source.remove(&key);
         }
@@ -626,6 +665,63 @@ impl MessageVerification {
                 .count() as u64,
         };
 
+        let changed_source = all_mismatches
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.mismatch_type,
+                    MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
+                )
+            })
+            .filter_map(|m| mismatch_source_key(m, source_messages))
+            .collect::<HashSet<_>>();
+        let changed_destination = all_mismatches
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.mismatch_type,
+                    MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
+                )
+            })
+            .filter_map(|m| mismatch_destination_key(m, dest_messages))
+            .collect::<HashSet<_>>();
+        let membership = VerificationMembership {
+            matched_source: pass1_matched_src
+                .difference(&changed_source)
+                .cloned()
+                .collect(),
+            matched_destination: pass1_matched_dst
+                .difference(&changed_destination)
+                .cloned()
+                .collect(),
+            probable_source,
+            probable_destination,
+            missing_source: all_mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::Missing)
+                .filter_map(|m| mismatch_source_key(m, source_messages))
+                .collect(),
+            extra_destination: all_mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::Extra)
+                .filter_map(|m| mismatch_destination_key(m, dest_messages))
+                .collect(),
+            duplicated_destination: all_mismatches
+                .iter()
+                .filter(|m| m.mismatch_type == MismatchType::Duplicated)
+                .filter_map(|m| mismatch_destination_key(m, dest_messages))
+                .collect(),
+            changed_source,
+            changed_destination,
+        };
+        validate_verification_summary(
+            source_messages,
+            dest_messages,
+            &all_mismatches,
+            &summary,
+            &membership,
+        )?;
+
         Ok((all_mismatches, summary))
     }
 }
@@ -637,85 +733,80 @@ pub fn validate_verification_summary(
     dest_messages: &ExtractedMessages,
     mismatches: &[MessageMismatch],
     summary: &VerificationSummary,
+    membership: &VerificationMembership,
 ) -> Result<(), String> {
-    // Every source message should appear exactly once in mismatches or as a match.
-    let mut source_accounted = 0u64;
-    for (_key, _msg) in source_messages {
-        let in_mismatches = mismatches
-            .iter()
-            .filter(|m| {
-                m.source_uid.is_some()
-                    && m.source_folder.is_some()
-                    && (m.mismatch_type == MismatchType::Missing
-                        || m.mismatch_type == MismatchType::MessageIdOnly
-                        || m.mismatch_type == MismatchType::PresentWrongFolder)
-            })
-            .count();
-        if in_mismatches > 0 {
-            source_accounted += 1;
-        } else {
-            // This source message is not in mismatches, so it must be a metadata_match
-            source_accounted += 1;
+    fn check_partition(
+        side: &str,
+        input: &ExtractedMessages,
+        partitions: &[(&str, &HashSet<MailboxMessageKey>)],
+    ) -> Result<(), String> {
+        let mut owners = HashMap::<MailboxMessageKey, Vec<&str>>::new();
+        for (name, keys) in partitions {
+            for key in *keys {
+                owners.entry(key.clone()).or_default().push(name);
+            }
+        }
+        for key in input.keys() {
+            match owners.get(key).map(Vec::as_slice) {
+                Some([_]) => {}
+                Some(owners) => {
+                    return Err(format!(
+                        "{side} message {:?} belongs to {} classifications: {}",
+                        key,
+                        owners.len(),
+                        owners.join(", ")
+                    ));
+                }
+                None => return Err(format!("{side} message {:?} is unclassified", key)),
+            }
+        }
+        if owners.len() != input.len() {
+            return Err(format!(
+                "{side} classification contains {} keys for {} input messages",
+                owners.len(),
+                input.len()
+            ));
+        }
+        Ok(())
+    }
+
+    check_partition(
+        "source",
+        source_messages,
+        &[
+            ("matched", &membership.matched_source),
+            ("probable", &membership.probable_source),
+            ("missing", &membership.missing_source),
+            ("changed", &membership.changed_source),
+        ],
+    )?;
+    check_partition(
+        "destination",
+        dest_messages,
+        &[
+            ("matched", &membership.matched_destination),
+            ("probable", &membership.probable_destination),
+            ("extra", &membership.extra_destination),
+            ("duplicated", &membership.duplicated_destination),
+            ("changed", &membership.changed_destination),
+        ],
+    )?;
+
+    let mut seen_source = HashSet::new();
+    let mut seen_destination = HashSet::new();
+    for mismatch in mismatches {
+        if let Some(key) = mismatch_source_key(mismatch, source_messages) {
+            if !seen_source.insert(key.clone()) {
+                return Err(format!("source mismatch identity {:?} appears more than once", key));
+            }
+        }
+        if let Some(key) = mismatch_destination_key(mismatch, dest_messages) {
+            if !seen_destination.insert(key.clone()) {
+                return Err(format!("destination mismatch identity {:?} appears more than once", key));
+            }
         }
     }
-
-    if source_accounted != source_messages.len() as u64 {
-        return Err(format!(
-            "source message accounting mismatch: {} expected, {} accounted",
-            source_messages.len(),
-            source_accounted
-        ));
-    }
-
-    // Verify that the summary's message counts add up.
-    let accounted_source = summary.metadata_matches
-        + summary.probable_matches
-        + summary.missing_count
-        + mismatches
-            .iter()
-            .filter(|m| {
-                m.mismatch_type == MismatchType::MessageIdOnly
-                    || m.mismatch_type == MismatchType::PresentWrongFolder
-            })
-            .count() as u64;
-
-    if accounted_source != source_messages.len() as u64 {
-        return Err(format!(
-            "source summary incomplete: {} total, {} accounted (matches={}, probable={}, missing={}, changed={})",
-            source_messages.len(),
-            accounted_source,
-            summary.metadata_matches,
-            summary.probable_matches,
-            summary.missing_count,
-            mismatches
-                .iter()
-                .filter(|m| m.mismatch_type == MismatchType::MessageIdOnly
-                    || m.mismatch_type == MismatchType::PresentWrongFolder)
-                .count()
-        ));
-    }
-
-    // Similarly verify destination accounting.
-    let accounted_dest = summary.metadata_matches
-        + summary.probable_matches
-        + summary.extra_count
-        + summary.duplicated_count
-        + mismatches
-            .iter()
-            .filter(|m| {
-                m.mismatch_type == MismatchType::MessageIdOnly
-                    || m.mismatch_type == MismatchType::PresentWrongFolder
-            })
-            .count() as u64;
-
-    if accounted_dest != dest_messages.len() as u64 {
-        return Err(format!(
-            "destination summary incomplete: {} total, {} accounted",
-            dest_messages.len(),
-            accounted_dest
-        ));
-    }
-
+    let _ = summary;
     Ok(())
 }
 
@@ -1389,6 +1480,61 @@ mod tests {
 
         assert!(summary.is_perfect_metadata_match());
         assert_eq!(summary.metadata_matches, 1);
+    }
+
+    #[test]
+    fn validation_rejects_duplicate_classification_and_omitted_identity() {
+        let empty_message = || ExtractedMessage {
+            message_id: None,
+            uid: None,
+            size_bytes: None,
+            internal_date: None,
+        };
+        let source = HashMap::from([(key("1"), empty_message()), (key("2"), empty_message())]);
+        let destination = source.clone();
+        let first = key("1");
+        let membership = VerificationMembership {
+            matched_source: HashSet::from([first.clone()]),
+            matched_destination: HashSet::from([first.clone()]),
+            probable_source: HashSet::from([first.clone()]),
+            probable_destination: HashSet::from([first]),
+            ..Default::default()
+        };
+        let summary = VerificationSummary {
+            total_source: 2,
+            total_destination: 2,
+            metadata_matches: 1,
+            probable_matches: 1,
+            missing_count: 0,
+            extra_count: 0,
+            duplicated_count: 0,
+            changed_count: 0,
+        };
+
+        let error = validate_verification_summary(
+            &source,
+            &destination,
+            &[],
+            &summary,
+            &membership,
+        )
+        .unwrap_err();
+        assert!(error.contains("belongs to 2 classifications"));
+
+        let missing_membership = VerificationMembership {
+            matched_source: HashSet::from([key("1")]),
+            matched_destination: HashSet::from([key("1"), key("2")]),
+            ..Default::default()
+        };
+        let error = validate_verification_summary(
+            &source,
+            &destination,
+            &[],
+            &summary,
+            &missing_membership,
+        )
+        .unwrap_err();
+        assert!(error.contains("source message") && error.contains("unclassified"));
     }
 
     #[test]
