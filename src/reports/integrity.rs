@@ -8,8 +8,10 @@ pub(crate) fn evidence_digest(
     evidence: &core::MailboxEvidence,
 ) -> String {
     let canonical = format!(
-        "run_id={run_id}\nplan_snapshot_sha256={}\nsource_folders={}\ndestination_folders={}\nsource_messages={}\ndestination_messages={}\nsource_bytes={}\ndestination_bytes={}\nunmatched_messages={}\nfailed_messages={}\nauthoritative={}\nmissing_messages={}\nextra_messages={}\nmodified_messages={}\n",
+        "run_id={run_id}\nplan_snapshot_sha256={}\nverification_method={}\nverification_outcome={}\nsource_folders={}\ndestination_folders={}\nsource_messages={}\ndestination_messages={}\nsource_bytes={}\ndestination_bytes={}\nunresolved_count={}\nfailed_messages={}\nauthoritative={}\nmissing_count={}\nextra_count={}\nmodified_count={}\nprobable_count={}\nmetadata_matched_count={}\n",
         snapshot_sha256(plan_snapshot),
+        evidence.verification_method().as_str(),
+        evidence.verification_outcome().as_str(),
         evidence.source_folders,
         evidence.destination_folders,
         evidence.source_messages,
@@ -17,13 +19,15 @@ pub(crate) fn evidence_digest(
         evidence.source_bytes,
         evidence.destination_bytes,
         evidence
-            .unmatched_messages
+            .unresolved_count()
             .map_or_else(|| "unknown".to_owned(), |count| count.to_string()),
         evidence.failed_messages,
         evidence.authoritative,
-        evidence.missing_messages,
-        evidence.extra_messages,
-        evidence.modified_messages,
+        evidence.missing_count(),
+        evidence.extra_count(),
+        evidence.modified_count(),
+        evidence.probable_count(),
+        evidence.metadata_matched_count(),
     );
     snapshot_sha256(&canonical)
 }

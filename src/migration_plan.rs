@@ -144,6 +144,7 @@ impl Default for Form {
                 dovecot_execution: default_dovecot_execution(),
                 migration_timeout_hours: default_migration_timeout_hours(),
                 automap: true,
+                sync_internaldates: true,
                 ..Default::default()
             },
             source_password: SecretString::default(),
@@ -563,6 +564,29 @@ impl Form {
             if !matches!(method, "" | "password" | "oauth2") {
                 return Err(format!(
                     "{label} must be password or OAuth 2.0 access token."
+                ));
+            }
+        }
+        for (label, host, method) in [
+            (
+                "Source",
+                self.profile.source_host.as_str(),
+                self.profile.source_auth.as_str(),
+            ),
+            (
+                "Destination",
+                self.profile.destination_host.as_str(),
+                self.profile.destination_auth.as_str(),
+            ),
+        ] {
+            let host = host.to_ascii_lowercase();
+            if (host == "outlook.office365.com"
+                || host.ends_with(".outlook.office365.com")
+                || host.contains("exchange.microsoft.com"))
+                && method != "oauth2"
+            {
+                return Err(format!(
+                    "{label} Microsoft 365 IMAP requires OAuth 2.0 / Modern Authentication; Basic Authentication and app passwords are not supported"
                 ));
             }
         }
@@ -1240,6 +1264,30 @@ mod tests {
         assert!(!clone.dry_run);
         assert!(clone.source_password.is_empty());
         assert!(clone.destination_password.is_empty());
+    }
+
+    #[test]
+    fn profile_rust_default_matches_serde_runtime_defaults() {
+        let profile = crate::migration_plan::profile::Profile::default();
+        assert_eq!(profile.batch_concurrency, 2);
+        assert!(profile.automap);
+        assert!(profile.sync_internaldates);
+        assert_eq!(profile.source_tls, "imaps");
+        assert_eq!(profile.destination_tls, "imaps");
+        assert_eq!(profile.source_auth, "password");
+        assert_eq!(profile.destination_auth, "password");
+    }
+
+    #[test]
+    fn microsoft_365_imap_rejects_password_authentication() {
+        let mut form = Form::default();
+        form.profile.source_host = "outlook.office365.com".into();
+        form.profile.source_user = "user@example.com".into();
+        form.profile.destination_host = "imap.example.com".into();
+        form.profile.destination_user = "user@example.com".into();
+        form.profile.source_auth = "password".into();
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("requires OAuth 2.0 / Modern Authentication"));
     }
 
     #[test]

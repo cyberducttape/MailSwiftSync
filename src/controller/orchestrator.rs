@@ -4,7 +4,8 @@ use crate::{
     runner::{
         RunContext, persist_engine_identity_before_launch, probe_engine_version,
         resolve_imapsync_identity, run_dovecot_destination_preflight, run_dovecot_verification,
-        run_imap_message_verification, run_streaming, send_reliable_event,
+        message_verification_enabled, run_imap_message_verification, run_streaming,
+        send_reliable_event,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -154,10 +155,14 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     })
                 });
             }
-            if result.is_ok() && !dry_run && engine == core::Engine::ImapSync {
+            if result.is_ok()
+                && !dry_run
+                && engine == core::Engine::ImapSync
+                && message_verification_enabled(&form)
+            {
                 result = result.and_then(|stream| {
-                    run_imap_message_verification(&form, &job_id, &run_id, &cancel)
-                        .map(|(evidence, mismatches)| {
+                    match run_imap_message_verification(&form, &job_id, &run_id, &cancel) {
+                        Ok((evidence, mismatches)) => {
                             let _ = send_reliable_event(
                                 &tx,
                                 Event::MessageMismatches {
@@ -167,19 +172,20 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                                 },
                             );
                             let _ = send_reliable_event(&tx, Event::Evidence(evidence));
-                            stream
-                        })
-                        .map_err(|error| {
+                        }
+                        Err(error) => {
                             let _ = send_reliable_event(
                                 &tx,
                                 Event::VerificationFailed(format!(
-                                    "message-level IMAP verification failed: {error}"
+                                    "message-level IMAP verification unavailable: {error}"
                                 )),
                             );
-                            format!(
-                                "migration completed; message-level verification failed: {error}"
-                            )
-                        })
+                            // The transfer already succeeded. Missing
+                            // post-transfer evidence is durable operator
+                            // review, not a failed migration.
+                        }
+                    }
+                    Ok(stream)
                 });
             }
             if (dry_run || engine != core::Engine::ImapSync)

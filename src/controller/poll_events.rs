@@ -396,7 +396,7 @@ impl App {
                         }
                     }
                     Event::Evidence(evidence) => {
-                        let evidence_level = evidence.evidence_level();
+                        let evidence_level = evidence.verification_outcome().as_str();
                         // Hold evidence until Finished so its history, run
                         // status, mailbox state, and terminal event commit
                         // together. In particular, this permits the

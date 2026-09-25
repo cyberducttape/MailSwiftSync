@@ -26,6 +26,68 @@ pub struct MailboxEvidence {
     pub modified_messages: u64,
 }
 
+/// Verification adapter that produced the persisted evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VerificationMethod {
+    AggregateEngine,
+    MetadataReconciliation,
+    BodyHash,
+    NativeDovecot,
+}
+
+impl VerificationMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AggregateEngine => "aggregate_engine",
+            Self::MetadataReconciliation => "metadata_reconciliation",
+            Self::BodyHash => "body_hash",
+            Self::NativeDovecot => "native_dovecot",
+        }
+    }
+}
+
+/// Canonical persisted/reporting outcome. The ordering in
+/// `MailboxEvidence::verification_outcome` is the single severity policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VerificationOutcome {
+    ExactMetadataMatch,
+    ProbableMatch,
+    Ambiguous,
+    Missing,
+    Changed,
+    Unexpected,
+    Incomplete,
+    Failed,
+}
+
+impl VerificationOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ExactMetadataMatch => "exact_metadata_match",
+            Self::ProbableMatch => "probable_match",
+            Self::Ambiguous => "ambiguous",
+            Self::Missing => "missing",
+            Self::Changed => "changed",
+            Self::Unexpected => "unexpected",
+            Self::Incomplete => "incomplete",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::ExactMetadataMatch => "Exact metadata match — message bodies not compared",
+            Self::ProbableMatch => "Probable metadata match — message bodies not compared",
+            Self::Ambiguous => "Ambiguous metadata result — message bodies not compared",
+            Self::Missing => "Missing messages detected",
+            Self::Changed => "Changed messages detected",
+            Self::Unexpected => "Unexpected messages detected",
+            Self::Incomplete => "Verification evidence incomplete",
+            Self::Failed => "Verification failed",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationAcceptance {
     pub job_id: String,
@@ -100,6 +162,65 @@ impl MailboxEvidence {
         }
     }
 
+    /// The adapter is inferred from the evidence shape for compatibility with
+    /// existing ledgers. Message-level counts are produced by reconciliation;
+    /// authoritative aggregate counters are produced by the engine.
+    pub fn verification_method(&self) -> VerificationMethod {
+        if self.authoritative {
+            VerificationMethod::AggregateEngine
+        } else if self.has_message_level_mismatch() {
+            VerificationMethod::BodyHash
+        } else {
+            VerificationMethod::AggregateEngine
+        }
+    }
+
+    /// Canonical classification consumed by all report and UI layers.
+    pub fn verification_outcome(&self) -> VerificationOutcome {
+        if self.failed_messages > 0 {
+            VerificationOutcome::Failed
+        } else if self.unmatched_messages.is_none() {
+            VerificationOutcome::Incomplete
+        } else if self.missing_messages > 0 {
+            VerificationOutcome::Missing
+        } else if self.modified_messages > 0 {
+            VerificationOutcome::Changed
+        } else if self.extra_messages > 0 {
+            VerificationOutcome::Unexpected
+        } else if self.unmatched_messages.is_some_and(|count| count > 0) {
+            VerificationOutcome::Ambiguous
+        } else if self.aggregate_totals_match() {
+            VerificationOutcome::ExactMetadataMatch
+        } else {
+            VerificationOutcome::Incomplete
+        }
+    }
+
+    pub fn unresolved_count(&self) -> Option<u64> {
+        self.unmatched_messages
+    }
+
+    pub fn missing_count(&self) -> u64 {
+        self.missing_messages
+    }
+
+    pub fn extra_count(&self) -> u64 {
+        self.extra_messages
+    }
+
+    pub fn modified_count(&self) -> u64 {
+        self.modified_messages
+    }
+
+    pub fn probable_count(&self) -> u64 {
+        0
+    }
+
+    pub fn metadata_matched_count(&self) -> u64 {
+        self.source_messages
+            .saturating_sub(self.unmatched_messages.unwrap_or(0))
+    }
+
     pub fn evidence_level(&self) -> &'static str {
         if self.failed_messages > 0 || self.unmatched_messages.is_none_or(|count| count > 0) {
             return "Incomplete evidence";
@@ -118,14 +239,15 @@ impl MailboxEvidence {
     }
 
     pub fn verification_reason(&self) -> Option<&'static str> {
-        if self.unmatched_messages.is_none() {
-            Some("imapsync completion proof absent")
-        } else if self.failed_messages > 0 {
-            Some("engine reported migration errors")
-        } else if self.has_message_level_mismatch() {
-            Some("message-level reconciliation found differences")
-        } else {
-            None
+        match self.verification_outcome() {
+            VerificationOutcome::Failed => Some("engine reported migration errors"),
+            VerificationOutcome::Incomplete => Some("verification evidence is incomplete"),
+            VerificationOutcome::Missing => Some("message-level reconciliation found missing messages"),
+            VerificationOutcome::Changed => Some("message-level reconciliation found changed messages"),
+            VerificationOutcome::Unexpected => Some("message-level reconciliation found unexpected messages"),
+            VerificationOutcome::ProbableMatch => Some("message identity remains probable rather than exact"),
+            VerificationOutcome::Ambiguous => Some("message identity could not be resolved unambiguously"),
+            VerificationOutcome::ExactMetadataMatch => None,
         }
     }
 
@@ -133,6 +255,9 @@ impl MailboxEvidence {
     /// adapters currently provide aggregate reconciliation; message identity
     /// sampling and full reconciliation are deliberately not inferred.
     pub fn verification_level(&self) -> &'static str {
+        // Compatibility wording for older callers. New reports and UI use
+        // `verification_outcome` directly so this legacy aggregate label
+        // cannot affect customer semantics.
         if self.unmatched_messages.is_none() || self.failed_messages > 0 {
             "Level 0 — Process completed, verification incomplete"
         } else {
@@ -154,5 +279,42 @@ impl MailboxEvidence {
 
     pub fn is_exact_match(&self) -> bool {
         self.aggregate_totals_match() && !self.has_verification_exception()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MailboxEvidence, VerificationOutcome};
+
+    fn missing_evidence() -> MailboxEvidence {
+        MailboxEvidence {
+            source_messages: 10,
+            destination_messages: 9,
+            source_bytes: 100,
+            destination_bytes: 90,
+            unmatched_messages: Some(1),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 1,
+            extra_messages: 0,
+            modified_messages: 0,
+        }
+    }
+
+    #[test]
+    fn missing_message_classification_is_canonical() {
+        let evidence = missing_evidence();
+        assert_eq!(
+            evidence.verification_outcome(),
+            VerificationOutcome::Missing
+        );
+        assert_eq!(evidence.verification_outcome().as_str(), "missing");
+        assert_eq!(evidence.unresolved_count(), Some(1));
+        assert_eq!(evidence.missing_count(), 1);
+        assert_eq!(evidence.extra_count(), 0);
+        assert_eq!(evidence.modified_count(), 0);
+        assert_eq!(evidence.verification_reason(), Some("message-level reconciliation found missing messages"));
     }
 }

@@ -1,7 +1,7 @@
 //! Failure taxonomy and retry policy for migration controller outcomes.
 
 use crate::core;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// External success may advance the durable lifecycle only after the
 /// terminal result has been committed and no durability fault remains.
@@ -99,6 +99,22 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
         return FailureClass::Capacity;
     }
     match crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error) {
+        crate::core::provider_intelligence::ProviderErrorType::AuthenticationExpired => {
+            return FailureClass::Authentication;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::TlsError
+        | crate::core::provider_intelligence::ProviderErrorType::DnsError
+        | crate::core::provider_intelligence::ProviderErrorType::TransportError => {
+            return FailureClass::Transport;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::ImapTaggedNo
+        | crate::core::provider_intelligence::ProviderErrorType::ImapBad
+        | crate::core::provider_intelligence::ProviderErrorType::EngineExit => {
+            return FailureClass::Transport;
+        }
+        crate::core::provider_intelligence::ProviderErrorType::VerificationError => {
+            return FailureClass::Verification;
+        }
         crate::core::provider_intelligence::ProviderErrorType::RateLimited
         | crate::core::provider_intelligence::ProviderErrorType::ConnectionCapacity => {
             return FailureClass::Capacity;
@@ -272,13 +288,27 @@ pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count:
 }
 
 pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
-    let base_seconds = if classify_failure(error) == FailureClass::Capacity {
-        5
+    let base_millis = if classify_failure(error) == FailureClass::Capacity {
+        5_000_u64
     } else {
-        1
+        1_000_u64
     };
     let multiplier = 1_u64 << attempt.min(5);
-    Duration::from_secs((base_seconds * multiplier).min(120))
+    let exponential = base_millis.saturating_mul(multiplier).min(120_000);
+    // Add per-attempt entropy so concurrent workers do not wake on the same
+    // deterministic boundary. This is deliberately bounded and local; it is
+    // a collision-avoidance jitter, not a claim that provider capacity reset.
+    let entropy = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.subsec_nanos() as u64)
+        ^ std::process::id() as u64
+        ^ attempt as u64;
+    let jitter = if exponential >= 120_000 {
+        0
+    } else {
+        entropy % (exponential / 2 + 1)
+    };
+    Duration::from_millis(exponential.saturating_add(jitter).min(120_000))
 }
 
 pub(crate) fn classified_failure_detail(error: &str) -> String {

@@ -60,6 +60,16 @@ pub(crate) struct StreamResult {
     pub(crate) imapsync_evidence: Option<core::MailboxEvidence>,
 }
 
+/// Whether this plan carries the metadata needed for exact message-level
+/// verification. A disabled capability is a review condition, not a failed
+/// transfer.
+pub(crate) fn message_verification_enabled(form: &crate::Form) -> bool {
+    !form.profile.justfolders
+        && !form.profile.addheader
+        && form.profile.sync_internaldates
+        && !form.profile.allowsizemismatch
+}
+
 /// Perform independent, folder-aware IMAP reconciliation after a successful
 /// imapsync transfer. Engine counters remain useful as a fallback, but they
 /// cannot prove portable message identity; this adapter fetches Message-ID,
@@ -72,11 +82,7 @@ pub(crate) fn run_imap_message_verification(
     run_id: &str,
     cancel: &AtomicBool,
 ) -> Result<(core::MailboxEvidence, Vec<core::MessageMismatch>), String> {
-    if form.profile.justfolders
-        || form.profile.addheader
-        || !form.profile.sync_internaldates
-        || form.profile.allowsizemismatch
-    {
+    if !message_verification_enabled(form) {
         return Err(
             "message-level verification is unavailable for this migration plan; refusing to claim exact evidence for justfolders, addheader, disabled internal-date sync, or allowed size mismatches"
                 .into(),
@@ -121,10 +127,10 @@ pub(crate) fn run_imap_message_verification(
         );
     }
     let folder_mapping = infer_automap_folder_mapping(
-        &source.mailboxes,
-        &destination.mailboxes,
+        &source.mailbox_details,
+        &destination.mailbox_details,
         form.profile.automap,
-    );
+    )?;
     let expected_destination_folders = source
         .mailboxes
         .iter()
@@ -135,19 +141,21 @@ pub(crate) fn run_imap_message_verification(
                 .unwrap_or_else(|| folder.clone())
         })
         .collect::<HashSet<_>>();
-    if expected_destination_folders != destination.mailboxes {
-        return Err("folder verification failed: selectable mailbox inventories differ after automap resolution".into());
-    }
-    let (mismatches, summary) =
-        core::MessageVerification::detect_mismatches_with_content_fingerprints(
-            job_id,
-            run_id,
-            &source.messages,
-            &destination.messages,
-            &source.content_fingerprints,
-            &destination.content_fingerprints,
-            &folder_mapping,
-        )?;
+    validate_destination_folder_policy(
+        &expected_destination_folders,
+        &destination.mailboxes,
+        form.profile.delete2,
+    )?;
+    // The live adapter currently fetches metadata only. Keep it on the
+    // metadata-verifier API until BODY[] hashing is explicitly enabled; an
+    // empty fingerprint map must never look like a content-verification run.
+    let (mismatches, summary) = core::MessageVerification::detect_mismatches_with_metadata(
+        job_id,
+        run_id,
+        &source.messages,
+        &destination.messages,
+        &folder_mapping,
+    )?;
     let source_bytes = source
         .messages
         .values()
@@ -165,7 +173,15 @@ pub(crate) fn run_imap_message_verification(
         destination_messages: summary.total_destination,
         source_bytes,
         destination_bytes,
-        unmatched_messages: Some(summary.probable_matches),
+        // `unmatched_messages` is a literal unresolved count. Probable
+        // metadata pairings are candidates, not unresolved messages.
+        unmatched_messages: Some(
+            summary
+                .missing_count
+                .saturating_add(summary.extra_count)
+                .saturating_add(summary.duplicated_count)
+                .saturating_add(summary.changed_count),
+        ),
         failed_messages: 0,
         source_folders,
         destination_folders,
@@ -177,27 +193,83 @@ pub(crate) fn run_imap_message_verification(
     Ok((evidence, mismatches))
 }
 
+fn validate_destination_folder_policy(
+    required: &HashSet<String>,
+    actual: &HashSet<String>,
+    strict: bool,
+) -> Result<(), String> {
+    let mut missing = required.difference(actual).cloned().collect::<Vec<_>>();
+    missing.sort();
+    if !missing.is_empty() {
+        return Err(format!(
+            "folder verification failed: required mapped destination folders are missing: {}",
+            missing.join(", ")
+        ));
+    }
+    if strict && required != actual {
+        let mut unexpected = actual.difference(required).cloned().collect::<Vec<_>>();
+        unexpected.sort();
+        return Err(format!(
+            "strict folder verification failed: destination contains unexpected selectable folders: {}",
+            unexpected.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 fn infer_automap_folder_mapping(
-    source: &HashSet<String>,
-    destination: &HashSet<String>,
+    source: &[crate::imap_probe::MailboxDescriptor],
+    destination: &[crate::imap_probe::MailboxDescriptor],
     automap: bool,
-) -> HashMap<String, String> {
+) -> Result<HashMap<String, String>, String> {
     if !automap {
-        return HashMap::new();
+        return Ok(HashMap::new());
     }
     let mut mapping = HashMap::new();
     for source_folder in source {
-        let Some(kind) = automap_folder_kind(source_folder) else {
+        if !source_folder.selectable {
+            continue;
+        }
+        let kind = source_folder
+            .special_use
+            .first()
+            .map(String::as_str)
+            .or_else(|| automap_folder_kind(&source_folder.wire_name));
+        let Some(kind) = kind else {
             continue;
         };
-        if let Some(destination_folder) = destination
+        let mut candidates = destination
             .iter()
-            .find(|folder| automap_folder_kind(folder) == Some(kind))
-        {
-            mapping.insert(source_folder.to_owned(), destination_folder.to_owned());
+            .filter(|folder| {
+                folder.selectable
+                    && (folder.special_use.iter().any(|value| value == kind)
+                        || (folder.special_use.is_empty()
+                            && automap_folder_kind(&folder.wire_name) == Some(kind)))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.wire_name.cmp(&right.wire_name));
+        match candidates.as_slice() {
+            [] => {}
+            [destination_folder] => {
+                mapping.insert(
+                    source_folder.wire_name.clone(),
+                    destination_folder.wire_name.clone(),
+                );
+            }
+            _ => {
+                let names = candidates
+                    .iter()
+                    .map(|folder| folder.wire_name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "ambiguous automap for {kind} folder {}: candidates {names}; resolve the folder mapping before migration",
+                    source_folder.wire_name
+                ));
+            }
         }
     }
-    mapping
+    Ok(mapping)
 }
 
 fn automap_folder_kind(folder: &str) -> Option<&'static str> {
@@ -1077,10 +1149,11 @@ pub(crate) fn run_dovecot_verification(
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        automap_folder_kind, persist_engine_identity_before_launch, resolve_imapsync_identity,
+        automap_folder_kind, infer_automap_folder_mapping, persist_engine_identity_before_launch,
+        resolve_imapsync_identity, validate_destination_folder_policy,
     };
-    use crate::{Event, verification::ImapsyncOutputProfile};
-    use std::{fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
+    use crate::{Event, imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile};
+    use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
 
     #[test]
     fn imapsync_identity_is_resolved_before_execution() {
@@ -1102,6 +1175,33 @@ mod tests {
         let identity = resolve_imapsync_identity("/path/that/does/not/exist/imapsync");
         assert_eq!(identity.version, "unknown");
         assert_eq!(identity.output_profile, ImapsyncOutputProfile::Unknown);
+    }
+
+    #[test]
+    fn automap_rejects_ambiguous_special_use_candidates() {
+        let source = vec![MailboxDescriptor {
+            wire_name: "Sent".into(),
+            delimiter: Some("/".into()),
+            special_use: vec!["sent".into()],
+            selectable: true,
+        }];
+        let destination = vec![
+            MailboxDescriptor {
+                wire_name: "Sent".into(),
+                delimiter: Some("/".into()),
+                special_use: vec!["sent".into()],
+                selectable: true,
+            },
+            MailboxDescriptor {
+                wire_name: "Sent Items".into(),
+                delimiter: Some("/".into()),
+                special_use: vec!["sent".into()],
+                selectable: true,
+            },
+        ];
+        let error = infer_automap_folder_mapping(&source, &destination, true).unwrap_err();
+        assert!(error.contains("ambiguous automap"));
+        assert!(error.contains("Sent Items"));
     }
 
     #[test]
@@ -1132,5 +1232,36 @@ mod tests {
         assert_eq!(automap_folder_kind("Cabinet"), None);
         assert_eq!(automap_folder_kind("Sent Items"), Some("sent"));
         assert_eq!(automap_folder_kind("[Gmail]/Trash"), Some("trash"));
+    }
+
+    #[test]
+    fn merge_folder_policy_allows_destination_only_folders() {
+        let required = HashSet::from(["INBOX".to_owned(), "Sent".to_owned()]);
+        let actual = HashSet::from([
+            "INBOX".to_owned(),
+            "Sent".to_owned(),
+            "Provider/System".to_owned(),
+        ]);
+
+        assert!(validate_destination_folder_policy(&required, &actual, false).is_ok());
+    }
+
+    #[test]
+    fn folder_policy_rejects_missing_required_folders() {
+        let required = HashSet::from(["INBOX".to_owned(), "Sent".to_owned()]);
+        let actual = HashSet::from(["INBOX".to_owned()]);
+
+        let error = validate_destination_folder_policy(&required, &actual, false).unwrap_err();
+        assert!(error.contains("Sent"));
+    }
+
+    #[test]
+    fn strict_folder_policy_rejects_destination_only_folders() {
+        let required = HashSet::from(["INBOX".to_owned()]);
+        let actual = HashSet::from(["INBOX".to_owned(), "Provider/System".to_owned()]);
+
+        let error = validate_destination_folder_policy(&required, &actual, true).unwrap_err();
+        assert!(error.contains("unexpected selectable folders"));
+        assert!(error.contains("Provider/System"));
     }
 }

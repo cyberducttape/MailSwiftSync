@@ -55,6 +55,7 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) automap: bool,
     pub(crate) addheader: bool,
     pub(crate) justfolders: bool,
+    #[serde(default = "default_sync_internaldates")]
     pub(crate) sync_internaldates: bool,
     pub(crate) useuid: bool,
     pub(crate) usecache: bool,
@@ -121,7 +122,7 @@ impl DovecotMigrationStrategy {
     }
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Profile {
     pub(crate) name: String,
     pub(crate) source_host: String,
@@ -186,6 +187,7 @@ pub(crate) struct Profile {
     pub(crate) automap: bool,
     pub(crate) addheader: bool,
     pub(crate) justfolders: bool,
+    #[serde(default = "default_sync_internaldates")]
     pub(crate) sync_internaldates: bool,
     pub(crate) useuid: bool,
     pub(crate) usecache: bool,
@@ -196,6 +198,58 @@ pub(crate) struct Profile {
     pub(crate) dovecot_strategy: DovecotMigrationStrategy,
     pub(crate) delete2: bool,
     pub(crate) extra_options: String,
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            source_host: String::new(),
+            source_port: String::new(),
+            source_tls: default_source_tls(),
+            source_ca_bundle: String::new(),
+            source_certificate_pin_sha256: String::new(),
+            allow_insecure_source_transport: false,
+            source_user: String::new(),
+            source_auth: default_auth_method(),
+            source_credential_id: String::new(),
+            source_oauth_refresh_credential_id: String::new(),
+            destination_host: String::new(),
+            destination_user: String::new(),
+            destination_auth: default_auth_method(),
+            destination_credential_id: String::new(),
+            destination_oauth_refresh_credential_id: String::new(),
+            destination_port: String::new(),
+            destination_tls: default_destination_tls(),
+            destination_ca_bundle: String::new(),
+            destination_certificate_pin_sha256: String::new(),
+            imapsync_path: "imapsync".into(),
+            engine: core::Engine::default(),
+            doveadm_path: default_doveadm_path(),
+            ssh_path: default_ssh_path(),
+            dovecot_execution: default_dovecot_execution(),
+            dovecot_ssh_user: String::new(),
+            dovecot_config: String::new(),
+            batch_concurrency: default_batch_concurrency(),
+            batch_retry_count: 0,
+            max_messages_per_second: 0,
+            max_bytes_per_second: 0,
+            migration_timeout_hours: default_migration_timeout_hours(),
+            allow_remote_password_in_argv: false,
+            automap: true,
+            addheader: false,
+            justfolders: false,
+            sync_internaldates: default_sync_internaldates(),
+            useuid: false,
+            usecache: false,
+            fastio1: false,
+            fastio2: false,
+            allowsizemismatch: false,
+            dovecot_strategy: DovecotMigrationStrategy::default(),
+            delete2: false,
+            extra_options: String::new(),
+        }
+    }
 }
 
 pub(crate) fn default_doveadm_path() -> String {
@@ -224,6 +278,10 @@ pub(crate) fn auth_method_is_oauth(method: &str) -> bool {
 }
 pub(crate) fn default_destination_tls() -> String {
     "imaps".into()
+}
+
+pub(crate) fn default_sync_internaldates() -> bool {
+    true
 }
 
 pub(crate) fn completeness(profile: &Profile) -> (usize, usize) {

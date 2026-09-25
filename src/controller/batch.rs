@@ -7,7 +7,7 @@ use std::collections::HashSet;
 /// separate from event transport makes the GUI and headless controllers use
 /// the same terminal-state rules.
 pub(crate) fn batch_run_status(state: &str) -> &'static str {
-    if matches!(state, "ready" | "completed" | "delta_required") {
+    if matches!(state, "ready" | "completed" | "attention" | "delta_required") {
         "completed"
     } else if state == "cancelled" {
         "cancelled"
@@ -24,7 +24,11 @@ pub(crate) fn batch_mailbox_state(state: &str, evidence: Option<&core::MailboxEv
         return state.to_owned();
     }
     evidence.map_or_else(
-        || state.to_owned(),
+        || if state == "completed" {
+            "attention".into()
+        } else {
+            state.to_owned()
+        },
         |value| {
             if value.is_exact_match() && state != "delta_required" {
                 "verified".into()
@@ -292,6 +296,12 @@ mod tests {
     }
 
     #[test]
+    fn successful_live_transfer_without_evidence_requires_review() {
+        assert_eq!(batch_run_status("completed"), "completed");
+        assert_eq!(batch_mailbox_state("completed", None), "attention");
+    }
+
+    #[test]
     fn queue_summary_unresolved_excludes_imported_and_ready_rows() {
         let jobs = [
             job("imported"),
@@ -307,7 +317,7 @@ mod tests {
         assert_eq!(batch_run_status("ready"), "completed");
         assert_eq!(batch_run_status("delta_required"), "completed");
         assert_eq!(batch_run_status("cancelled"), "cancelled");
-        assert_eq!(batch_run_status("attention"), "failed");
+        assert_eq!(batch_run_status("attention"), "completed");
         assert_eq!(batch_mailbox_state("ready", None), "ready");
         assert_eq!(
             batch_mailbox_state("delta_required", None),

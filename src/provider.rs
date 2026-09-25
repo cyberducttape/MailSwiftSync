@@ -57,7 +57,7 @@ impl ProviderPreset {
                 port: "993",
                 tls: "imaps",
                 auth: "oauth2",
-                note: "IMAP access and OAuth scope must be enabled by the Google Workspace administrator.",
+                note: "OAuth is preferred; Workspace administrators may use delegated gmail.imap_admin access. MailSwiftSync does not perform consent, so configure the tenant/client flow separately.",
             },
             Self::Microsoft365 => ProviderDefaults {
                 host: "outlook.office365.com",
@@ -71,7 +71,7 @@ impl ProviderPreset {
                 port: "993",
                 tls: "imaps",
                 auth: "password",
-                note: "Fastmail commonly requires an app password; confirm the account's IMAP policy before preflight.",
+                note: "Use a Fastmail app password, not the primary account password; create it in Fastmail security settings before preflight.",
             },
             Self::ZohoMail => ProviderDefaults {
                 host: "imap.zoho.com",

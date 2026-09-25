@@ -8,6 +8,22 @@ use std::time::Duration;
 /// prototype until the controller consumes its classifications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderErrorType {
+    /// A structured transport-layer failure emitted by an adapter.
+    TransportError,
+    /// TLS negotiation or certificate validation failed.
+    TlsError,
+    /// DNS or name resolution failed.
+    DnsError,
+    /// IMAP returned a tagged NO response.
+    ImapTaggedNo,
+    /// IMAP returned a tagged BAD response.
+    ImapBad,
+    /// Credentials expired and must be refreshed or replaced.
+    AuthenticationExpired,
+    /// The migration engine exited unsuccessfully.
+    EngineExit,
+    /// Verification produced an unusable or contradictory result.
+    VerificationError,
     /// Provider rate limit hit; retry with exponential backoff.
     RateLimited,
     /// Provider rejected a connection because of concurrent capacity.
@@ -32,7 +48,8 @@ impl ProviderErrorType {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::RateLimited
+            Self::TransportError
+                | Self::RateLimited
                 | Self::ConnectionCapacity
                 | Self::TemporaryProviderFailure
                 | Self::Network
@@ -43,6 +60,7 @@ impl ProviderErrorType {
     #[allow(dead_code)]
     pub fn suggested_retry_delay(&self) -> Option<Duration> {
         match self {
+            Self::TransportError => Some(Duration::from_secs(10)),
             Self::RateLimited => Some(Duration::from_secs(60)),
             Self::ConnectionCapacity => Some(Duration::from_secs(30)),
             Self::TemporaryProviderFailure => Some(Duration::from_secs(5)),
@@ -59,6 +77,34 @@ impl ProviderErrorClassifier {
     /// Classify an error based on message content and provider context.
     pub fn classify(provider: &str, error_msg: &str) -> ProviderErrorType {
         let lower = error_msg.to_lowercase();
+
+        // Adapters should emit these stable tags at the source. Keep the
+        // textual classifier as a compatibility fallback for legacy engine
+        // and IMAP diagnostics.
+        if lower.contains("[error=tls]") {
+            return ProviderErrorType::TlsError;
+        }
+        if lower.contains("[error=dns]") {
+            return ProviderErrorType::DnsError;
+        }
+        if lower.contains("[error=transport]") {
+            return ProviderErrorType::TransportError;
+        }
+        if lower.contains("[imap=tagged-no]") {
+            return ProviderErrorType::ImapTaggedNo;
+        }
+        if lower.contains("[imap=bad]") {
+            return ProviderErrorType::ImapBad;
+        }
+        if lower.contains("[auth=expired]") {
+            return ProviderErrorType::AuthenticationExpired;
+        }
+        if lower.contains("[error=engine-exit]") {
+            return ProviderErrorType::EngineExit;
+        }
+        if lower.contains("[error=verification]") {
+            return ProviderErrorType::VerificationError;
+        }
 
         // Quota failures are not rate limits. They require capacity/action,
         // not exponential backoff, so classify them before generic signals.
@@ -224,6 +270,22 @@ mod tests {
         assert_eq!(
             ProviderErrorClassifier::classify("generic", "connection closed by server"),
             ProviderErrorType::Network
+        );
+    }
+
+    #[test]
+    fn structured_adapter_signals_precede_text_heuristics() {
+        assert_eq!(
+            ProviderErrorClassifier::classify("gmail", "[error=tls] server busy"),
+            ProviderErrorType::TlsError
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("o365", "[auth=expired] authentication failed"),
+            ProviderErrorType::AuthenticationExpired
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "[imap=bad] invalid command"),
+            ProviderErrorType::ImapBad
         );
     }
 }

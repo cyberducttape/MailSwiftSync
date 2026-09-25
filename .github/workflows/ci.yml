@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -98,7 +98,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -160,7 +160,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -178,7 +178,6 @@ jobs:
           if (-not (Test-Path $linker)) { throw "Could not locate the x64 MSVC linker at $linker" }
           "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run native test suite
-        if: matrix.os != 'macos-latest'
         env:
           RUST_BACKTRACE: full
         shell: bash
@@ -209,34 +208,9 @@ jobs:
             tail -n 160 native-test.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Run macOS core tests
-        if: matrix.os == 'macos-latest'
-        env:
-          RUST_BACKTRACE: full
-        run: cargo test --locked --all-targets --all-features core::tests -- --test-threads=1 --nocapture
-      - name: Run macOS process tests
-        if: matrix.os == 'macos-latest'
-        env:
-          RUST_BACKTRACE: full
-        run: cargo test --locked --all-targets --all-features process::tests -- --test-threads=1 --nocapture
-      - name: Run macOS controller tests
-        if: matrix.os == 'macos-latest'
-        env:
-          RUST_BACKTRACE: full
-        shell: bash
-        run: |
-          set +e
-          cargo test --locked --all-targets --all-features 'tests::' -- --test-threads=1 --nocapture 2>&1 | tee macos-controller-tests.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            failed_tests=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' macos-controller-tests.log | paste -sd ', ' -)
-            echo "::error title=macOS controller test failure::${failed_tests:-Cargo test failed; inspect the job log}"
-          fi
-          exit "$status"
-
   container-build:
     name: Build headless container
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

@@ -71,7 +71,7 @@ pub(crate) fn build_project_report(
                 markdown_escape(recommended_action),
                 markdown_escape(&acceptance_summary),
                 markdown_escape(&evidence_run_id),
-                evidence.evidence_level(),
+                evidence.verification_outcome().display_label(),
                 markdown_escape(&evidence_digest(
                     &evidence_run_id,
                     &plan_snapshot,
@@ -79,7 +79,7 @@ pub(crate) fn build_project_report(
                 )),
                 evidence.source_messages,
                 evidence.destination_messages,
-                optional_count(evidence.unmatched_messages),
+                optional_count(evidence.unresolved_count()),
                 evidence.failed_messages,
             ));
         } else {
@@ -155,8 +155,10 @@ pub(crate) fn build_project_json(
                         "evidence": {
                             "run_id": evidence_run_id,
                             "scope": evidence.evidence_scope().label(),
-                            "verification_level": evidence.verification_level(),
-                            "evidence_level": evidence.evidence_level(),
+                            "verification_method": evidence.verification_method().as_str(),
+                            "verification_outcome": evidence.verification_outcome().as_str(),
+                            "verification_level": evidence.verification_outcome().display_label(),
+                            "evidence_level": evidence.verification_outcome().display_label(),
                             "reason": evidence.verification_reason(),
                             "authoritative": evidence.authoritative,
                             "evidence_digest": digest,
@@ -166,7 +168,13 @@ pub(crate) fn build_project_json(
                             "destination_messages": evidence.destination_messages,
                             "source_bytes": evidence.source_bytes,
                             "destination_bytes": evidence.destination_bytes,
-                            "unmatched_messages": evidence.unmatched_messages,
+                            "unmatched_messages": evidence.unresolved_count(),
+                            "unresolved_count": evidence.unresolved_count(),
+                            "missing_count": evidence.missing_count(),
+                            "extra_count": evidence.extra_count(),
+                            "modified_count": evidence.modified_count(),
+                            "probable_count": evidence.probable_count(),
+                            "metadata_matched_count": evidence.metadata_matched_count(),
                             "failed_messages": evidence.failed_messages,
                         }
                     }))
@@ -288,7 +296,7 @@ pub(crate) fn build_verification_report(
         markdown_escape(&run.started_at),
         markdown_escape(run.finished_at.as_deref().unwrap_or("in progress")),
         markdown_escape(&mailbox.job.state),
-        evidence.evidence_level(),
+        evidence.verification_outcome().display_label(),
         match evidence.evidence_scope() {
             core::EvidenceScope::EngineConfirmed => "engine-confirmed summary",
             core::EvidenceScope::AggregateReconciled => "aggregate mailbox totals",
@@ -301,7 +309,7 @@ pub(crate) fn build_verification_report(
         evidence.destination_messages,
         evidence.source_bytes,
         evidence.destination_bytes,
-        optional_count(evidence.unmatched_messages),
+        optional_count(evidence.unresolved_count()),
         evidence.failed_messages,
     );
     report.push_str("\n## Message-level mismatch details\n\n");

@@ -77,6 +77,7 @@ Stable today:
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
 - Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
+- Metadata-level message mismatch reports with durable missing, extra, and modified counts; these are not body-content proof.
 - Native Dovecot execution is implemented and wired, but remains experimental
   until its integration fixture and recovery scenarios pass in CI.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
@@ -96,7 +97,7 @@ Experimental or planned:
   provider's own tooling).
 - Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
 - A scheduler/API that can survive the desktop closing, and content-level verification for live batches. (`supervise` provides a foreground, maintenance-window-aware batch controller; encrypted imapsync runs now perform bounded Message-ID/size/date reconciliation; see below.)
-- UIDVALIDITY-aware delta checkpoints and message-level mismatch reports.
+- UIDVALIDITY-aware delta checkpoints and per-message checkpoint persistence.
 - Published large-scale migration case studies and compatibility matrix.
 
 The current tested scope and explicit gaps are tracked in the
@@ -216,8 +217,10 @@ without usable evidence is Level 0 — process completed, verification incomplet
 The verifier fails closed for `--justfolders`, `--addheader`, disabled internal-date
 sync, or `--allowsizemismatch` plans until their semantics can be represented
 without overstating exact evidence. It also enforces a conservative estimated
-in-memory state budget; SQLite streaming reconciliation remains future work for
-very large accounts.
+bounded UID-window enumeration; it no longer materializes a mailbox-wide
+`UID SEARCH ALL` response. The reconciliation records themselves remain
+in-memory and are still subject to the conservative estimated state budget;
+SQLite streaming reconciliation remains future work for very large accounts.
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
 

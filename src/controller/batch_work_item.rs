@@ -15,8 +15,8 @@ use crate::{
     process::ProcessLaunchLimiter,
     runner::{
         ResolvedImapsyncIdentity, RunContext, persist_engine_identity_before_launch,
-        run_dovecot_destination_preflight, run_dovecot_verification, run_imap_message_verification,
-        run_streaming,
+        message_verification_enabled, run_dovecot_destination_preflight,
+        run_dovecot_verification, run_imap_message_verification, run_streaming,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -378,24 +378,33 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     .and_then(|stream| {
                         if !job.form.dry_run
                             && job.form.engine() == core::Engine::ImapSync
+                            && message_verification_enabled(&job.form)
                         {
-                            let (evidence, mismatches) = run_imap_message_verification(
+                            match run_imap_message_verification(
                                 &job.form,
                                 &job_id,
                                 &child_run_id,
                                 &cancel,
-                            )
-                            .map_err(|error| {
-                                format!(
-                                    "migration completed; message-level verification failed: {error}"
-                                )
-                            })?;
-                            let _ = tx.send(Event::BatchEvidence {
-                                job_id: job_id.clone(),
-                                child_run_id: child_run_id.clone(),
-                                evidence,
-                                mismatches,
-                            });
+                            ) {
+                                Ok((evidence, mismatches)) => {
+                                    let _ = tx.send(Event::BatchEvidence {
+                                        job_id: job_id.clone(),
+                                        child_run_id: child_run_id.clone(),
+                                        evidence,
+                                        mismatches,
+                                    });
+                                }
+                                Err(error) => {
+                                    let _ = tx.send(Event::RunLine {
+                                        run_id: child_run_id.clone(),
+                                        job_id: job_id.clone(),
+                                        text: format!(
+                                            "[{}] message-level verification unavailable; transfer succeeded and requires review: {error}",
+                                            index + 1
+                                        ),
+                                    });
+                                }
+                            }
                         } else if !job.form.dry_run
                             && let Some(evidence) = stream.imapsync_evidence
                         {
