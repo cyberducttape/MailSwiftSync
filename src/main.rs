@@ -267,6 +267,11 @@ mod tests {
             dry_run: false,
             ..Default::default()
         };
+        // Exact independent verification requires an immutable mapping from
+        // the engine; --automap is intentionally fail-closed until that
+        // mapping is retained as part of the run plan.
+        let mut form = form;
+        form.profile.automap = false;
 
         assert!(form.profile.sync_internaldates);
         assert!(runner::message_verification_enabled(&form));
