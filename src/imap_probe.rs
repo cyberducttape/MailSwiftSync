@@ -234,10 +234,11 @@ const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
-// The current verifier intentionally remains an in-memory implementation. Use
-// a conservative estimated budget so a large account fails closed instead of
-// allowing the message map and its reconciliation indexes to exhaust the
-// process. SQLite-backed streaming reconciliation can raise this safely.
+// The current verifier intentionally remains an in-memory implementation. This
+// estimate covers fetched records, not the full peak of both account maps and
+// every reconciliation index. It is therefore a fail-closed admission guard,
+// not a process-wide memory guarantee. SQLite-backed streaming reconciliation
+// is required before very large MSP migrations can be production-supported.
 const MAX_ESTIMATED_MESSAGE_STATE_BYTES: usize = 256 * 1024 * 1024;
 
 pub(crate) struct MessageFetchBudget<'a> {

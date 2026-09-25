@@ -20,7 +20,12 @@ hashing and durable per-message staging remain production trust work.
 
 **Current Limitation:** MailSwiftSync can now verify portable metadata for the
 same message population on encrypted imapsync runs, but it does not yet prove
-that the message bodies are byte-for-byte identical.
+that the message bodies are byte-for-byte identical. The live verifier also
+materializes both account message maps and several reconciliation indexes. Its
+one-million-record cap and estimated 256 MiB state budget are fail-closed
+admission guards, not peak-memory guarantees. SQLite-backed streaming
+reconciliation is a production blocker for very large MSP migrations, not a
+mere optimization.
 
 **Impact When Implemented:** Enables operators to report:
 - ✅ 19,998 metadata matches (not content verified)

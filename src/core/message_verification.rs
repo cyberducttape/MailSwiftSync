@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use super::message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 
@@ -277,24 +277,26 @@ impl MessageVerification {
             // Pair it deterministically for diagnostics and classify it as
             // changed; source or destination excess remains for the explicit
             // missing/duplicate passes below.
-            let remaining_source = source_uids
-                .iter()
-                .copied()
-                .filter(|key| unmatched_source.contains(key))
-                .collect::<Vec<_>>();
-            let remaining_dest = dest_uids
-                .iter()
-                .copied()
-                .filter(|key| {
-                    source_uids.iter().any(|source_key| {
-                        unmatched_source.contains(source_key)
-                            && expected_destination_folder(source_key, folder_mapping)
-                                == key.mailbox
-                    })
-                })
-                .filter(|key| unmatched_dest.contains(key))
-                .collect::<Vec<_>>();
-            for (source_key, dest_key) in remaining_source.iter().zip(remaining_dest.iter()) {
+            let mut destination_by_folder = HashMap::<String, VecDeque<&MailboxMessageKey>>::new();
+            for dest_key in dest_uids {
+                if unmatched_dest.contains(dest_key) {
+                    destination_by_folder
+                        .entry(dest_key.mailbox.clone())
+                        .or_default()
+                        .push_back(*dest_key);
+                }
+            }
+            for source_key in source_uids {
+                if !unmatched_source.contains(source_key) {
+                    continue;
+                }
+                let expected_folder = expected_destination_folder(source_key, folder_mapping);
+                let Some(dest_key) = destination_by_folder
+                    .get_mut(&expected_folder)
+                    .and_then(VecDeque::pop_front)
+                else {
+                    continue;
+                };
                 let source_msg = &source_messages[source_key];
                 let dest_msg = &dest_messages[dest_key];
                 unmatched_source.remove(source_key);
@@ -320,28 +322,103 @@ impl MessageVerification {
             let Some(dest_uids) = dest_by_message_id.get(message_id) else {
                 continue;
             };
+
+            // Index the remaining destination collision group by metadata and
+            // folder. Pairing then consumes one indexed candidate instead of
+            // scanning the whole destination group for every source record.
+            let mut destinations_by_metadata_and_folder = HashMap::<
+                Option<MetadataFingerprint<'_>>,
+                HashMap<String, VecDeque<&MailboxMessageKey>>,
+            >::new();
+            let mut available_destination_folders =
+                HashMap::<Option<MetadataFingerprint<'_>>, BTreeSet<String>>::new();
+            let mut all_destinations_by_folder =
+                HashMap::<String, VecDeque<&MailboxMessageKey>>::new();
+            let mut all_available_destination_folders = BTreeSet::new();
+            for dest_key in dest_uids {
+                if !unmatched_dest.contains(dest_key) {
+                    continue;
+                }
+                let metadata = metadata_fingerprint(&dest_messages[dest_key]);
+                destinations_by_metadata_and_folder
+                    .entry(metadata)
+                    .or_default()
+                    .entry(dest_key.mailbox.clone())
+                    .or_default()
+                    .push_back(*dest_key);
+                available_destination_folders
+                    .entry(metadata)
+                    .or_default()
+                    .insert(dest_key.mailbox.clone());
+                all_destinations_by_folder
+                    .entry(dest_key.mailbox.clone())
+                    .or_default()
+                    .push_back(*dest_key);
+                all_available_destination_folders.insert(dest_key.mailbox.clone());
+            }
+            let mut reserved_destinations = HashSet::new();
             for source_key in source_uids {
                 if !unmatched_source.contains(source_key) {
                     continue;
                 }
                 let expected_folder = expected_destination_folder(source_key, folder_mapping);
-                let destination = dest_uids
-                    .iter()
-                    .filter(|dest_key| {
-                        unmatched_dest.contains(*dest_key) && dest_key.mailbox != expected_folder
+                let source_metadata = metadata_fingerprint(&source_messages[source_key]);
+                let mut destination = available_destination_folders
+                    .get(&source_metadata)
+                    .and_then(|folders| {
+                        folders
+                            .iter()
+                            .find(|folder| folder.as_str() != expected_folder)
+                            .cloned()
                     })
-                    .find(|dest_key| {
-                        metadata_fingerprint(&source_messages[source_key])
-                            == metadata_fingerprint(&dest_messages[dest_key])
-                    })
-                    .or_else(|| {
-                        dest_uids.iter().find(|dest_key| {
-                            unmatched_dest.contains(*dest_key)
-                                && dest_key.mailbox != expected_folder
-                        })
+                    .and_then(|folder| {
+                        let queues =
+                            destinations_by_metadata_and_folder.get_mut(&source_metadata)?;
+                        let queue = queues.get_mut(&folder)?;
+                        let destination = queue.pop_front();
+                        if queue.is_empty() {
+                            queues.remove(&folder);
+                            if let Some(folders) =
+                                available_destination_folders.get_mut(&source_metadata)
+                            {
+                                folders.remove(&folder);
+                            }
+                        }
+                        destination
                     });
                 if let Some(dest_key) = destination {
-                    wrong_folder_pairs.push((*source_key, *dest_key));
+                    reserved_destinations.insert(dest_key);
+                } else {
+                    // Preserve the legacy fallback: if no metadata-equivalent
+                    // candidate exists, pair with any remaining destination in
+                    // a different folder. The folder index avoids scanning
+                    // every destination record, and reservations prevent a
+                    // candidate consumed by the exact path from being reused.
+                    let folder = all_available_destination_folders
+                        .iter()
+                        .find(|folder| folder.as_str() != expected_folder)
+                        .cloned();
+                    destination = folder.and_then(|folder| {
+                        let queue = all_destinations_by_folder.get_mut(&folder)?;
+                        while queue
+                            .front()
+                            .is_some_and(|candidate| reserved_destinations.contains(candidate))
+                        {
+                            queue.pop_front();
+                        }
+                        let destination = queue.pop_front();
+                        if queue.is_empty() {
+                            all_destinations_by_folder.remove(&folder);
+                            all_available_destination_folders.remove(&folder);
+                        }
+                        destination
+                    });
+                    if let Some(dest_key) = destination {
+                        reserved_destinations.insert(dest_key);
+                    }
+                }
+                if let Some(dest_key) = destination {
+                    wrong_folder_pairs.push((*source_key, dest_key));
                 }
             }
         }

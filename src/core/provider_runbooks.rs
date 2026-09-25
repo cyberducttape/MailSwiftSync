@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 /// Provider-specific runbook for safe migration execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderRunbook {
+    /// Version of the provider-authentication and operational guidance used to
+    /// generate this runbook. Update when provider policy assumptions change.
+    pub guidance_version: String,
     pub provider: String,
     pub pre_migration_checklist: Vec<RunbookStep>,
     pub during_migration_monitoring: Vec<RunbookStep>,
@@ -10,6 +13,10 @@ pub struct ProviderRunbook {
     pub known_issues: Vec<KnownIssue>,
     pub support_contact: String,
 }
+
+/// Version the compiled provider guidance so generated runbooks are auditable
+/// when provider authentication policies change.
+pub const PROVIDER_GUIDANCE_VERSION: &str = "2026-09";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunbookStep {
@@ -58,34 +65,41 @@ impl RunbookGenerator {
 
     fn gmail_to_o365() -> ProviderRunbook {
         ProviderRunbook {
+            guidance_version: PROVIDER_GUIDANCE_VERSION.to_string(),
             provider: "Gmail → Microsoft 365".to_string(),
             pre_migration_checklist: vec![
                 RunbookStep {
                     step_number: 1,
-                    action: "Enable IMAP in Gmail account settings (Settings > Forwarding and POP/IMAP > Enable IMAP)".to_string(),
-                    why: "Gmail requires explicit IMAP enablement; default is POP3 only".to_string(),
-                    success_indicator: "IMAP shows as enabled in account settings".to_string(),
+                    action: "Confirm Gmail IMAP access is permitted by the account or Google Workspace administrator".to_string(),
+                    why: "Gmail IMAP availability and administration controls vary by account and Workspace policy; this runbook does not assume a timeless settings path".to_string(),
+                    success_indicator: "The account's documented Gmail IMAP setting or Workspace control permits IMAP".to_string(),
                 },
                 RunbookStep {
                     step_number: 2,
-                    action: "Create app-specific password for the Gmail account (if 2FA enabled)".to_string(),
-                    why: "Gmail blocks standard password auth when 2FA is active; app passwords bypass this".to_string(),
-                    success_indicator: "App password generated and stored securely".to_string(),
+                    action: "Configure Gmail OAuth 2.0 / XOAUTH2 credentials and an IMAP-scoped token".to_string(),
+                    why: "OAuth is the preferred and default Gmail authentication path; Google Workspace third-party mail clients must use OAuth".to_string(),
+                    success_indicator: "A current IMAP-scoped access token or configured refresh token is available".to_string(),
                 },
                 RunbookStep {
                     step_number: 3,
-                    action: "Verify destination O365 mailbox has 100GB+ available quota".to_string(),
-                    why: "O365 default quota is 50GB; Gmail accounts often exceed this".to_string(),
-                    success_indicator: "Get-Mailbox shows available quota > 100GB".to_string(),
+                    action: "If OAuth is unavailable, create a Gmail app password only when Google offers it and account policy permits password IMAP".to_string(),
+                    why: "App passwords are a conditional fallback, not a replacement for Workspace OAuth, and a regular account password must not be used".to_string(),
+                    success_indicator: "The eligible app password is stored securely, or OAuth remains configured as the authentication method".to_string(),
                 },
                 RunbookStep {
                     step_number: 4,
+                    action: "Verify destination Microsoft 365 quota and usage, including operational headroom".to_string(),
+                    why: "Exchange Online capacity depends on the plan, mailbox type, licensing, archive configuration, and tenant settings; no universal quota threshold is safe".to_string(),
+                    success_indicator: "Discovered destination capacity exceeds source usage plus documented migration headroom".to_string(),
+                },
+                RunbookStep {
+                    step_number: 5,
                     action: "Disable auto-reply and message forwarding on destination mailbox".to_string(),
                     why: "Prevents mail loops during sync verification period".to_string(),
                     success_indicator: "Auto-reply and forwarding confirmed disabled".to_string(),
                 },
                 RunbookStep {
-                    step_number: 5,
+                    step_number: 6,
                     action: "Create mail forwarding rule from source Gmail to destination O365 (optional, for new mail)".to_string(),
                     why: "Ensures new mail arrives at destination during migration window".to_string(),
                     success_indicator: "Gmail forwarding rule created and working".to_string(),
@@ -108,7 +122,7 @@ impl RunbookGenerator {
                     step_number: 3,
                     action: "Check destination mailbox quota every 30 minutes for large migrations".to_string(),
                     why: "Prevents quota-full interruptions mid-migration".to_string(),
-                    success_indicator: "Quota remains > 20GB free throughout migration".to_string(),
+                    success_indicator: "Observed free capacity remains above the projected remaining transfer and operational headroom".to_string(),
                 },
             ],
             post_migration_verification: vec![
@@ -143,25 +157,26 @@ impl RunbookGenerator {
                     affected_versions: "All versions; inherent O365 API limitation".to_string(),
                 },
             ],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues".to_string(),
+            support_contact: "GitHub Issues: https://github.com/cyberducttape/MailSwiftSync/issues".to_string(),
         }
     }
 
     fn gmail_to_fastmail() -> ProviderRunbook {
         ProviderRunbook {
+            guidance_version: PROVIDER_GUIDANCE_VERSION.to_string(),
             provider: "Gmail → Fastmail".to_string(),
             pre_migration_checklist: vec![
                 RunbookStep {
                     step_number: 1,
-                    action: "Enable IMAP in Gmail settings".to_string(),
-                    why: "Required for IMAP access".to_string(),
-                    success_indicator: "IMAP enabled in Gmail".to_string(),
+                    action: "Confirm Gmail IMAP access is permitted by the account or Google Workspace administrator".to_string(),
+                    why: "Gmail IMAP availability depends on the account and Workspace policy".to_string(),
+                    success_indicator: "The account's documented Gmail IMAP setting or Workspace control permits IMAP".to_string(),
                 },
                 RunbookStep {
                     step_number: 2,
-                    action: "Generate Gmail app-specific password if 2FA is enabled".to_string(),
-                    why: "Gmail blocks standard passwords with 2FA".to_string(),
-                    success_indicator: "App password created".to_string(),
+                    action: "Configure Gmail OAuth 2.0 / XOAUTH2 credentials and an IMAP-scoped token; use an app password only as an eligible fallback".to_string(),
+                    why: "OAuth is preferred and required for Google Workspace third-party mail clients; regular account passwords are not supported".to_string(),
+                    success_indicator: "OAuth token is ready, or an eligible app password is stored securely".to_string(),
                 },
                 RunbookStep {
                     step_number: 3,
@@ -188,13 +203,14 @@ impl RunbookGenerator {
                 workaround: "Reduce batch size and increase delay".to_string(),
                 affected_versions: "All".to_string(),
             }],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+            support_contact: "GitHub Issues: https://github.com/cyberducttape/MailSwiftSync/issues"
                 .to_string(),
         }
     }
 
     fn o365_to_gmail() -> ProviderRunbook {
         ProviderRunbook {
+            guidance_version: PROVIDER_GUIDANCE_VERSION.to_string(),
             provider: "Microsoft 365 → Gmail".to_string(),
             pre_migration_checklist: vec![
                 RunbookStep {
@@ -206,16 +222,16 @@ impl RunbookGenerator {
                 },
                 RunbookStep {
                     step_number: 2,
-                    action: "Enable Gmail to accept IMAP connections (IMAP settings in Gmail)"
+                    action: "Confirm Gmail IMAP access is permitted by the account or Google Workspace administrator"
                         .to_string(),
-                    why: "Gmail requires explicit IMAP enablement".to_string(),
-                    success_indicator: "IMAP enabled in Gmail account settings".to_string(),
+                    why: "Gmail IMAP availability depends on the account and Workspace policy".to_string(),
+                    success_indicator: "The account's documented Gmail IMAP setting or Workspace control permits IMAP".to_string(),
                 },
                 RunbookStep {
                     step_number: 3,
-                    action: "Create Gmail app-specific password if destination has 2FA".to_string(),
-                    why: "Gmail blocks standard passwords with 2FA enabled".to_string(),
-                    success_indicator: "App password created and working".to_string(),
+                    action: "Configure Gmail OAuth 2.0 / XOAUTH2 credentials and an IMAP-scoped token; use an app password only as an eligible fallback".to_string(),
+                    why: "OAuth is preferred and required for Google Workspace third-party mail clients; regular account passwords are not supported".to_string(),
+                    success_indicator: "OAuth token is ready, or an eligible app password is stored securely".to_string(),
                 },
             ],
             during_migration_monitoring: vec![RunbookStep {
@@ -231,13 +247,14 @@ impl RunbookGenerator {
                 success_indicator: "Verification report passes".to_string(),
             }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+            support_contact: "GitHub Issues: https://github.com/cyberducttape/MailSwiftSync/issues"
                 .to_string(),
         }
     }
 
     fn o365_to_fastmail() -> ProviderRunbook {
         ProviderRunbook {
+            guidance_version: PROVIDER_GUIDANCE_VERSION.to_string(),
             provider: "Microsoft 365 → Fastmail".to_string(),
             pre_migration_checklist: vec![RunbookStep {
                 step_number: 1,
@@ -258,13 +275,14 @@ impl RunbookGenerator {
                 success_indicator: "Verification passes".to_string(),
             }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+            support_contact: "GitHub Issues: https://github.com/cyberducttape/MailSwiftSync/issues"
                 .to_string(),
         }
     }
 
     fn fastmail_to_gmail() -> ProviderRunbook {
         ProviderRunbook {
+            guidance_version: PROVIDER_GUIDANCE_VERSION.to_string(),
             provider: "Fastmail → Gmail".to_string(),
             pre_migration_checklist: vec![RunbookStep {
                 step_number: 1,
@@ -280,13 +298,14 @@ impl RunbookGenerator {
                 success_indicator: "Verification passes".to_string(),
             }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+            support_contact: "GitHub Issues: https://github.com/cyberducttape/MailSwiftSync/issues"
                 .to_string(),
         }
     }
 
     fn fastmail_to_o365() -> ProviderRunbook {
         ProviderRunbook {
+            guidance_version: PROVIDER_GUIDANCE_VERSION.to_string(),
             provider: "Fastmail → Microsoft 365".to_string(),
             pre_migration_checklist: vec![RunbookStep {
                 step_number: 1,
@@ -307,13 +326,14 @@ impl RunbookGenerator {
                 success_indicator: "Report shows success".to_string(),
             }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+            support_contact: "GitHub Issues: https://github.com/cyberducttape/MailSwiftSync/issues"
                 .to_string(),
         }
     }
 
     fn generic_imap() -> ProviderRunbook {
         ProviderRunbook {
+            guidance_version: PROVIDER_GUIDANCE_VERSION.to_string(),
             provider: "Generic IMAP".to_string(),
             pre_migration_checklist: vec![
                 RunbookStep {
@@ -342,7 +362,7 @@ impl RunbookGenerator {
                 success_indicator: "Verification report passes".to_string(),
             }],
             known_issues: vec![],
-            support_contact: "GitHub Issues: https://github.com/itchyitchy123/MailSwiftSync/issues"
+            support_contact: "GitHub Issues: https://github.com/cyberducttape/MailSwiftSync/issues"
                 .to_string(),
         }
     }
@@ -386,5 +406,36 @@ mod tests {
             assert!(!step.why.is_empty());
             assert!(!step.success_indicator.is_empty());
         }
+    }
+
+    #[test]
+    fn gmail_guidance_is_versioned_and_oauth_first() {
+        let runbook = RunbookGenerator::generate("Gmail", "O365");
+        assert_eq!(runbook.guidance_version, PROVIDER_GUIDANCE_VERSION);
+
+        let guidance = runbook
+            .pre_migration_checklist
+            .iter()
+            .map(|step| format!("{} {}", step.action, step.why))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(guidance.contains("OAuth"));
+        assert!(guidance.contains("conditional fallback"));
+        assert!(guidance.contains("regular account password must not be used"));
+        assert!(!guidance.contains("default is POP3 only"));
+    }
+
+    #[test]
+    fn microsoft_quota_guidance_is_plan_aware() {
+        let runbook = RunbookGenerator::generate("Gmail", "Microsoft 365");
+        let quota_step = &runbook.pre_migration_checklist[3];
+        assert!(quota_step.action.contains("quota and usage"));
+        assert!(
+            quota_step
+                .success_indicator
+                .contains("source usage plus documented migration headroom")
+        );
+        assert!(!quota_step.action.contains("100GB"));
+        assert!(!quota_step.why.contains("default is 50GB"));
     }
 }

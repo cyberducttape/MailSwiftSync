@@ -28,20 +28,30 @@ certificate or negotiate the same protocol details.
 ## Gmail / Google Workspace
 
 ### Prerequisites
-- Gmail account with 2-Step Verification enabled (recommended)
+- Google Account with Gmail IMAP access permitted by the account or Workspace administrator
+- OAuth 2.0 credentials and an IMAP-scoped token (preferred; see [OAUTH_SETUP.md](OAUTH_SETUP.md))
 - Access to Google Account settings
 - Destination mailbox ready to receive migration
 
-### Step 1: Enable IMAP in Gmail
+### Step 1: Confirm Gmail IMAP access
 
-1. Go to [Gmail Settings](https://mail.google.com/mail/u/0/#settings/general)
-2. Scroll to "IMAP Access"
-3. Select "Enable IMAP"
-4. Click "Save Changes"
+Confirm that IMAP access is permitted for the account. For Google Workspace,
+the administrator may control this centrally; for accounts that expose a Gmail
+IMAP setting, review it in [Gmail Settings](https://mail.google.com/mail/u/0/#settings/general).
+Follow Google's current account or Workspace instructions if the setting is not
+shown.
 
-### Step 2: Generate App Password
+### Step 2: Choose Gmail authentication
 
-If you have 2-Step Verification enabled:
+OAuth 2.0 / XOAUTH2 is the preferred and default authentication path for Gmail,
+especially for Google Workspace. Workspace accounts must use OAuth for
+third-party mail-client connections; do not enter the user's normal Google
+account password. Follow [OAUTH_SETUP.md](OAUTH_SETUP.md) to obtain the
+refresh token and configure automatic refresh where supported.
+
+As a fallback, an app password may be used only when Google makes app
+passwords available for that account and the account's policy permits password
+IMAP access. App passwords require 2-Step Verification:
 
 1. Go to [Google Account Security](https://myaccount.google.com/security)
 2. Click "App passwords" (under "Signing in to Google")
@@ -50,9 +60,8 @@ If you have 2-Step Verification enabled:
 5. **Copy this password immediately** — you won't see it again
 6. Use this password in MailSwiftSync instead of your account password
 
-If 2-Step Verification is not enabled:
-- You can use your regular Gmail password
-- **Not recommended for security reasons**
+If the "App passwords" option is unavailable, use OAuth. Do not substitute a
+regular Gmail or Google Workspace password.
 
 ### Step 3: Configure MailSwiftSync
 
@@ -64,8 +73,11 @@ IMAP Host: imap.gmail.com
 IMAP Port: 993
 Security: TLS/SSL
 Username: your.email@gmail.com
-Password: [16-character app password from Step 2]
+Password: [app password from Step 2, only when using the fallback]
 ```
+
+For OAuth, configure the account with the access-token workflow described in
+`OAUTH_SETUP.md` instead of entering a password.
 
 ### Step 4: Verify Connection
 
@@ -162,18 +174,28 @@ Run a preflight check in MailSwiftSync:
 
 ### Step 5: Check Destination Quota
 
-Before migration, ensure destination has sufficient quota:
+Before migration, compare the source usage with the destination's discovered
+quota and leave operational headroom for indexing, new mail, and provider
+rounding. Exchange Online capacity is plan-, license-, mailbox-, archive-, and
+tenant-dependent; there is no universal 50 GB or 100 GB threshold. A 4 GB
+source does not need a 100 GB destination, while a source larger than the
+destination's licensed capacity must be remediated before migration.
 
 ```powershell
 # In Exchange Online PowerShell:
-Get-Mailbox -Identity destination@tenant.onmicrosoft.com | Select UsageLocation, ProhibitSendQuota, ProhibitSendReceiveQuota
+Get-Mailbox -Identity destination@tenant.onmicrosoft.com |
+  Select DisplayName,RecipientTypeDetails,ProhibitSendQuota,ProhibitSendReceiveQuota,RecoverableItemsQuota
+Get-MailboxStatistics -Identity destination@tenant.onmicrosoft.com |
+  Select TotalItemSize,TotalDeletedItemSize
 ```
 
-If quota is low (< 100GB), increase it:
+Use the reported source usage and destination limits to calculate a
+documented headroom target. Do not apply a fixed `Set-Mailbox` value: mailbox
+quota changes may be unavailable or inappropriate for the assigned plan and
+tenant policy. If capacity is insufficient, work with the tenant administrator
+to assign the required license/mailbox configuration or reduce the migration
+scope before starting.
 
-```powershell
-Set-Mailbox -Identity destination@tenant.onmicrosoft.com -ProhibitSendQuota 100GB -ProhibitSendReceiveQuota 100GB
-```
 
 ### Known Issues & Workarounds
 
@@ -325,8 +347,8 @@ with small migrations first.
 
 ## Security Best Practices
 
-1. **Always use app-specific passwords** if your provider supports them
-2. **Enable 2-Step Verification** on source and destination accounts
+1. **Use OAuth where the provider requires or recommends it**
+2. **Use app-specific passwords only** where the provider offers them and the account policy permits them
 3. **Use TLS/SSL** (port 993) instead of plain STARTTLS when possible
 4. **Don't share credentials** — create dedicated app passwords for MailSwiftSync
 5. **Secure your MailSwiftSync state directory** — it contains migration state and evidence. OAuth refresh configuration and active access tokens are handled through the OS keyring and short-lived private runtime files, not the SQLite state database.
@@ -340,7 +362,7 @@ If you encounter issues:
 
 1. Run `mailswiftsync support-bundle [state.db]` to create a diagnostic bundle
 2. The bundle includes sanitized logs (credentials removed)
-3. Open an issue at https://github.com/itchyitchy123/MailSwiftSync/issues with the bundle
+3. Open an issue at https://github.com/cyberducttape/MailSwiftSync/issues with the bundle
 
 For provider-specific questions:
 - Gmail: Check https://support.google.com/mail/answer/7190
