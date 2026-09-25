@@ -156,7 +156,7 @@ particular target.
 1. **Message-level verification is metadata reconciliation, not content proof**
    - Wired after successful TLS imapsync transfers for the full selectable-folder inventory
    - Uses Message-ID, INTERNALDATE, and RFC822.SIZE; it does not hash message bodies
-   - Bounded fetch pages and account/message limits fail closed rather than silently producing partial evidence
+   - Bounded fetch pages, account/message limits, and any unstable folder fail closed; partial account evidence is not emitted
    - The one-million-record and estimated 256 MiB limits are admission guards, not peak-memory guarantees; SQLite-backed streaming reconciliation is a production blocker for very large MSP migrations
    - Mismatch rows are durably committed with terminal evidence and rendered in the operator verification report; per-message checkpoint persistence remains future work
 

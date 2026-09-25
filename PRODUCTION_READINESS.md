@@ -13,7 +13,7 @@ This document tracks the implementation status of critical production readiness 
 
 **IMAP Performance**:
 3. ✅ Connection Reuse (1bb5a98) - 7-10x speedup, single connection per account
-4. ✅ Per-folder Error Tracking (5f8fd96) - Partial results instead of hard fail
+4. ✅ Per-folder Error Tracking (5f8fd96) - All-or-nothing account verification with folder diagnostics
 
 **Operator Experience**:
 5. ✅ Documentation Clarity (39698d2) - Clear messaging about scope
@@ -25,15 +25,15 @@ This document tracks the implementation status of critical production readiness 
    - ✅ Implemented connection reuse in fetch_tls_account_messages()
    - ✅ Created helper fetch_mailbox_with_existing_stream()
    - ✅ Eliminated 200 separate TLS connections → 1 connection
-   - ✅ Per-folder error handling (skip failed folders, continue)
+   - ✅ Per-folder error diagnostics with fail-closed account verification
    - Impact: 7-10x performance improvement (20+ min → 2-3 min for 200 folders)
    - All 444 tests pass
 
 ### ✅ COMPLETED (Final Set)
 4. **Phase 3: Per-folder Error Tracking** (Commit 5f8fd96)
-   - ✅ Added incomplete_folders field to track failed folders
-   - ✅ Error tracking and diagnostics for failed mailboxes
-   - ✅ Partial verification better than hard fail
+   - ✅ Added bounded failed-folder diagnostics for fail-closed account verification
+   - ✅ Error tracking identifies every failed mailbox before rejecting the account result
+   - ✅ Any unstable folder invalidates account evidence; diagnostics identify the affected folders
 
 5. **Validation Layer: Evidence Accounting** (Commit 5f8fd96)
    - ✅ validate_verification_summary() function
@@ -97,12 +97,12 @@ Next: Integrate into fetch_tls_account_messages()
 1. ✅ Moved connection/auth outside folder loop
 2. ✅ Created helper: `fetch_mailbox_with_existing_stream()`
 3. ✅ Refactored fetch_tls_account_messages() to reuse connection
-4. ✅ Per-folder error handling with continue semantics
+4. ✅ Per-folder error collection with fail-closed account semantics
 
 **Testing**:
 - ✅ All 444 tests pass
 - ✅ No regressions detected
-- ✅ Per-folder errors now caught and logged (continue to next folder)
+- ✅ Per-folder errors are collected and reported; partial account evidence is never emitted
 
 #### Phase 3: Per-Folder Error Handling
 **Files**: `src/imap_probe.rs`, `src/core/evidence.rs`
@@ -110,8 +110,8 @@ Next: Integrate into fetch_tls_account_messages()
 **Key Changes**:
 1. Catch errors from failed folders
 2. Continue with remaining folders
-3. Add `incomplete_folders` field to evidence
-4. Report which folders failed verification
+3. Collect failed folder names and causes for one bounded diagnostic error
+4. Reject the account result when any folder fails; never emit partial evidence
 
 #### Phase 4: UID Streaming (Future)
 **Files**: `src/imap_probe.rs`
@@ -180,7 +180,7 @@ Required for:
 ### Unit Tests
 - [ ] ImapSession tag generation
 - [ ] ImapSession mailbox state tracking
-- [ ] Per-folder error handling
+- [x] Per-folder error handling and fail-closed account rejection
 - [ ] Validation function catches duplicates
 
 ### Integration Tests
@@ -243,8 +243,7 @@ Required for:
 **What's New**:
 - Dovecot verification now completes in <3 minutes (was 20+ minutes)
 - Accounts with 1M+ messages now supported
-- Partial verification possible (skip failed folders, verify rest)
-- Production deployments safe with incomplete_folders tracking
+- Folder verification is all-or-nothing; failed-folder diagnostics are retained only in the operator error path
 
 ---
 

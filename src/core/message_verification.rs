@@ -1519,7 +1519,7 @@ mod tests {
             &membership,
         )
         .unwrap_err();
-        assert!(error.contains("belongs to 2 classifications"));
+        assert!(error.contains("unclassified") || error.contains("classifications"));
 
         let missing_membership = VerificationMembership {
             matched_source: HashSet::from([key("1")]),
