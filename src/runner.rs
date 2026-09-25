@@ -1194,8 +1194,10 @@ mod tests {
     use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
 
     fn unsuitable_live_form() -> crate::Form {
-        let mut form = crate::Form::default();
-        form.dry_run = false;
+        let mut form = crate::Form {
+            dry_run: false,
+            ..Default::default()
+        };
         form.profile.engine = crate::core::Engine::ImapSync;
         form
     }

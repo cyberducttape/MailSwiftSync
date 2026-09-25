@@ -204,10 +204,9 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             ) == TerminalEvidenceSource::Engine
                 && let Ok(stream) = &result
                 && let Some(evidence) = stream.imapsync_evidence.clone()
+                && let Err(error) = send_reliable_event(&tx, Event::Evidence(evidence))
             {
-                if let Err(error) = send_reliable_event(&tx, Event::Evidence(evidence)) {
-                    result = Err(format!("terminal evidence delivery failed: {error}"));
-                }
+                result = Err(format!("terminal evidence delivery failed: {error}"));
             }
             if let Err(error) =
                 send_reliable_event(&tx, Event::Finished(result.map(|stream| stream.outcome)))
@@ -215,15 +214,15 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 eprintln!("reliable terminal event delivery failed: {error}");
             }
         }));
-        if worker_result.is_err() {
-            if let Err(error) = send_reliable_event(
+        if worker_result.is_err()
+            && let Err(error) = send_reliable_event(
                 &tx,
                 Event::Finished(Err(
                     "single-run worker panicked; migration requires operator review".into(),
                 )),
-            ) {
-                eprintln!("reliable panic-recovery event delivery failed: {error}");
-            }
+            )
+        {
+            eprintln!("reliable panic-recovery event delivery failed: {error}");
         }
     });
 }

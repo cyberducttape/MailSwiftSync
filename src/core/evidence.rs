@@ -176,6 +176,7 @@ impl EvidenceScope {
     }
 }
 
+#[allow(dead_code)]
 impl VerificationEvidence {
     fn aggregate_totals_match(&self) -> bool {
         self.source_messages == self.destination_messages

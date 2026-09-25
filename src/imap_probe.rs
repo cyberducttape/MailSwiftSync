@@ -3,7 +3,6 @@ use crate::credentials::SecretString;
 use crate::imap_protocol::{
     advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
 };
-use crate::imap_session::ImapSession;
 use crate::oauth::{read_auth_continuation, read_auth_result};
 use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -249,6 +248,7 @@ pub(crate) struct MessageFetchBudget<'a> {
     cancel: &'a AtomicBool,
 }
 
+#[allow(dead_code)]
 pub(crate) struct FetchedAccountMessages {
     pub(crate) mailboxes: HashSet<String>,
     pub(crate) mailbox_details: Vec<MailboxDescriptor>,
@@ -309,6 +309,7 @@ fn read_imap_list_response<S: Read>(
     read_imap_list_response_inner(stream, tag, buffer, None)
 }
 
+#[allow(dead_code)]
 fn read_imap_list_response_with_mailboxes<S: Read>(
     stream: &mut S,
     tag: &str,
@@ -529,9 +530,8 @@ fn list_special_use(line: &str) -> Vec<String> {
         (r"\TRASH", "trash"),
     ]
     .into_iter()
-    .filter_map(|(attribute, kind)| {
-        crate::imap_protocol::list_has_attribute(line, attribute).then(|| kind.to_owned())
-    })
+    .filter(|(attribute, _)| crate::imap_protocol::list_has_attribute(line, attribute))
+    .map(|(_, kind)| kind.to_owned())
     .collect()
 }
 
@@ -1175,6 +1175,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
     Err(last_error.unwrap_or_else(|| format!("{host}: mailbox {mailbox} stability check failed")))
 }
 
+#[allow(clippy::too_many_arguments, dead_code)]
 pub(crate) fn fetch_tls_mailbox_messages(
     host: &str,
     user: &str,
@@ -1209,6 +1210,7 @@ pub(crate) fn fetch_tls_mailbox_messages(
 /// Enumerate bounded UID windows and hand each fetch-sized page to the caller.
 /// No response contains the entire mailbox UID set, and no all-mailbox UID
 /// vector is retained between windows.
+#[allow(clippy::too_many_arguments)]
 fn enumerate_uid_pages<S: Read + Write, F>(
     stream: &mut S,
     host: &str,
