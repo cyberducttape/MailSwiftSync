@@ -66,6 +66,10 @@ pub(crate) struct StreamResult {
 pub(crate) fn message_verification_enabled(form: &crate::Form) -> bool {
     !form.profile.justfolders
         && !form.profile.addheader
+        // imapsync owns --automap semantics. Until its preflight mapping is
+        // captured and bound to the run, the verifier must not recreate that
+        // decision from SPECIAL-USE/name heuristics after the transfer.
+        && !form.profile.automap
         && form.profile.sync_internaldates
         && !form.profile.allowsizemismatch
 }
@@ -114,7 +118,7 @@ pub(crate) fn run_imap_message_verification(
 ) -> Result<(core::MailboxEvidence, Vec<core::MessageMismatch>), String> {
     if !message_verification_enabled(form) {
         return Err(
-            "message-level verification is unavailable for this migration plan; refusing to claim exact evidence for justfolders, addheader, disabled internal-date sync, or allowed size mismatches"
+            "message-level verification is unavailable for this migration plan; refusing to claim exact evidence for automap without an immutable engine mapping, justfolders, addheader, disabled internal-date sync, or allowed size mismatches"
                 .into(),
         );
     }
@@ -1255,6 +1259,17 @@ mod tests {
         form.profile.allowsizemismatch = true;
         assert_eq!(
             terminal_evidence_source(&form, false, true),
+            TerminalEvidenceSource::Unavailable
+        );
+    }
+
+    #[test]
+    fn automap_never_claims_independent_message_verification_without_engine_mapping() {
+        let form = unsuitable_live_form();
+        assert!(form.profile.automap);
+        assert!(!super::message_verification_enabled(&form));
+        assert_eq!(
+            terminal_evidence_source(&form, true, false),
             TerminalEvidenceSource::Unavailable
         );
     }
