@@ -170,6 +170,7 @@ pub(crate) fn run_imap_message_verification(
     let destination_folders = destination.mailboxes.len() as u64;
     let evidence = core::MailboxEvidence {
         verification_method: core::VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(summary.verification_outcome()),
         source_messages: summary.total_source,
         destination_messages: summary.total_destination,
         source_bytes,
@@ -190,6 +191,7 @@ pub(crate) fn run_imap_message_verification(
         missing_messages: summary.missing_count,
         extra_messages: summary.extra_count.saturating_add(summary.duplicated_count),
         modified_messages: summary.changed_count,
+        probable_messages: summary.probable_matches,
     };
     Ok((evidence, mismatches))
 }

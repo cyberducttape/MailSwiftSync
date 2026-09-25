@@ -50,7 +50,7 @@ pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
 pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
-    ReportRunSnapshot, VerificationAcceptance, VerificationMethod,
+    ReportRunSnapshot, VerificationAcceptance, VerificationMethod, VerificationOutcome,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
@@ -60,7 +60,7 @@ pub use models::{
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 pub(crate) use policy::{
     attention_reason_for, normalized_destination_identity, valid_dovecot_checkpoint,
@@ -304,6 +304,7 @@ mod tests {
             .unwrap();
         let e = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 8,
             destination_messages: 8,
             source_bytes: 10,
@@ -316,6 +317,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         db.record_evidence(&job, &e).unwrap();
         assert_eq!(
@@ -345,6 +347,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: Some(VerificationOutcome::Missing),
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -357,11 +360,47 @@ mod tests {
             missing_messages: 3,
             extra_messages: 2,
             modified_messages: 1,
+            probable_messages: 0,
         };
 
         db.record_evidence(&job, &evidence).unwrap();
 
         assert_eq!(db.evidence(&job).unwrap(), Some(evidence));
+    }
+
+    #[test]
+    fn probable_message_evidence_round_trips_without_becoming_exact() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("probable-counts", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "a@example", "a@example")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(VerificationOutcome::ProbableMatch),
+            source_messages: 100,
+            destination_messages: 100,
+            source_bytes: 1_000,
+            destination_bytes: 1_000,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 1,
+        };
+
+        db.record_evidence(&job, &evidence).unwrap();
+
+        let loaded = db.evidence(&job).unwrap().unwrap();
+        assert_eq!(loaded.probable_count(), 1);
+        assert_eq!(loaded.verification_outcome(), VerificationOutcome::ProbableMatch);
+        assert!(!loaded.is_exact_match());
     }
 
     #[test]
@@ -377,6 +416,7 @@ mod tests {
         db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 1,
             destination_messages: 0,
             source_bytes: 42,
@@ -389,6 +429,7 @@ mod tests {
             missing_messages: 1,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         let mismatch = MessageMismatch {
             id: "message-detail-mismatch".into(),
@@ -632,6 +673,7 @@ mod tests {
     fn folder_mismatch_cannot_claim_full_confidence() {
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 10,
             destination_messages: 10,
             source_bytes: 100,
@@ -644,6 +686,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         assert_eq!(evidence.confidence_percent(), 0);
         assert_eq!(evidence.evidence_level(), "Aggregate mismatch");
@@ -658,6 +701,7 @@ mod tests {
     fn balanced_aggregate_totals_cannot_hide_message_level_mismatches() {
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 10_000,
             destination_messages: 10_000,
             source_bytes: 50_000_000,
@@ -670,6 +714,7 @@ mod tests {
             missing_messages: 1,
             extra_messages: 1,
             modified_messages: 0,
+            probable_messages: 0,
         };
 
         assert_eq!(evidence.evidence_level(), "Message-level mismatch");
@@ -678,6 +723,7 @@ mod tests {
 
         let modified = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 1,
@@ -692,6 +738,7 @@ mod tests {
     fn empty_mailbox_with_failures_is_not_verified() {
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 0,
             destination_messages: 0,
             source_bytes: 0,
@@ -704,6 +751,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         assert_eq!(evidence.confidence_percent(), 0);
         assert_eq!(evidence.evidence_level(), "Incomplete evidence");
@@ -717,6 +765,7 @@ mod tests {
     fn aggregate_match_has_bounded_but_nonmisleading_score() {
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 12,
             destination_messages: 12,
             source_bytes: 100,
@@ -729,6 +778,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         assert_eq!(evidence.confidence_percent(), 85);
         assert!(evidence.is_exact_match());
@@ -906,6 +956,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -918,6 +969,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         db.begin_run(&project.id, &job, "run-with-evidence", "test")
             .unwrap();
@@ -956,6 +1008,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -968,6 +1021,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         db.begin_run(&project.id, &job, "run-old-evidence", "imapsync")
             .unwrap();
@@ -1033,6 +1087,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -1045,6 +1100,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         db.finish_run_for_mailbox_with_evidence(
             &project.id,
@@ -1388,6 +1444,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
             source_messages: 3,
             destination_messages: 3,
             source_bytes: 300,
@@ -1400,6 +1457,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         db.register_process(&ActiveProcess {
             run_id: "run-evidence".into(),
@@ -1445,6 +1503,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -1457,6 +1516,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         assert!(
             db.finish_run_for_mailbox_with_evidence(
@@ -1503,6 +1563,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 10,
@@ -1515,6 +1576,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         db.finish_run_for_mailbox_with_evidence(
             &project.id,
@@ -1846,6 +1908,7 @@ mod tests {
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 10,
             destination_messages: 9,
             source_bytes: 100,
@@ -1858,6 +1921,7 @@ mod tests {
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         db.begin_run(&project.id, &job, "exception-run", "imapsync")
             .unwrap();
@@ -2062,6 +2126,7 @@ mod tests {
             &job,
             &MailboxEvidence {
                 verification_method: VerificationMethod::AggregateEngine,
+                verification_outcome: None,
                 source_messages: 10,
                 destination_messages: 9,
                 source_bytes: 100,
@@ -2074,6 +2139,7 @@ mod tests {
                 missing_messages: 3,
                 extra_messages: 2,
                 modified_messages: 1,
+                probable_messages: 0,
             },
         )
         .unwrap();
@@ -3479,6 +3545,7 @@ destination_port = "000"
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 1,
@@ -3491,6 +3558,7 @@ destination_port = "000"
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
         assert!(
             db.record_evidence_for_run(&job, "missing", &evidence)
@@ -3513,6 +3581,7 @@ destination_port = "000"
             .unwrap();
         let evidence = MailboxEvidence {
             verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: None,
             source_messages: 1,
             destination_messages: 1,
             source_bytes: 1,
@@ -3525,6 +3594,7 @@ destination_port = "000"
             missing_messages: 0,
             extra_messages: 0,
             modified_messages: 0,
+            probable_messages: 0,
         };
 
         assert!(
