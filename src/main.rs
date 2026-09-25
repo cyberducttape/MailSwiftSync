@@ -263,8 +263,10 @@ mod tests {
     fn default_live_imapsync_plan_preserves_metadata_for_verification() {
         // This is intentionally the real new-plan path: start with the
         // literal UI default, then apply the normal live-run transformation.
-        let mut form = Form::default();
-        form.dry_run = false;
+        let form = Form {
+            dry_run: false,
+            ..Default::default()
+        };
 
         assert!(form.profile.sync_internaldates);
         assert!(runner::message_verification_enabled(&form));

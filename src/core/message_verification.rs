@@ -391,6 +391,7 @@ impl MessageVerification {
 
     /// Reconciliation Pass 2: Wrong-folder detection for Message-ID matches.
     /// Finds messages with identical Message-ID and metadata but in unexpected folders.
+    #[allow(clippy::too_many_arguments)]
     fn pass_2_wrong_folder_detection(
         job_id: &str,
         run_id: &str,
@@ -513,6 +514,7 @@ impl MessageVerification {
         (probable_matches, matched_source, matched_dest)
     }
 
+    #[allow(unused_assignments, clippy::collapsible_if, clippy::needless_borrow)]
     pub fn detect_mismatches_with_folder_mapping(
         job_id: &str,
         run_id: &str,
@@ -751,6 +753,7 @@ impl MessageVerification {
 
 /// Validate that reconciliation accounting is consistent and complete.
 /// This catches bugs where messages are counted incorrectly or reconciled multiple times.
+#[allow(clippy::collapsible_if)]
 pub fn validate_verification_summary(
     source_messages: &ExtractedMessages,
     dest_messages: &ExtractedMessages,
