@@ -10,7 +10,7 @@ keywords = ["imap", "email", "migration", "dovecot", "imapsync"]
 categories = ["command-line-utilities", "gui", "network-programming"]
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 eframe = "0.35"
 egui_extras = "0.35"
 rfd = "0.15"
