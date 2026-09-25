@@ -50,7 +50,8 @@ pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
 pub use evidence::{
     EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
-    ReportRunSnapshot, VerificationAcceptance, VerificationMethod, VerificationOutcome,
+    ReportRunSnapshot, VerificationAcceptance, VerificationEvidence, VerificationMethod,
+    VerificationOutcome,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};

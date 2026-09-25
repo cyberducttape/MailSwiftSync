@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use super::{AttentionReason, MailboxJob, Project, RunSummary};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MailboxEvidence {
+/// Canonical durable verification record consumed by persistence, lifecycle
+/// policy, reports, UI, and integrity signing. `MailboxEvidence` remains a
+/// compatibility alias for older callers.
+pub struct VerificationEvidence {
     /// Explicitly records which adapter produced this evidence. This is not
     /// inferred from the result counts because a metadata mismatch is not a
     /// body hash.
@@ -35,6 +38,9 @@ pub struct MailboxEvidence {
     /// Metadata pairings that remain candidates rather than exact identities.
     pub probable_messages: u64,
 }
+
+pub type MailboxEvidence = VerificationEvidence;
+
 
 /// Verification adapter that produced the persisted evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,7 +177,7 @@ impl EvidenceScope {
     }
 }
 
-impl MailboxEvidence {
+impl VerificationEvidence {
     fn aggregate_totals_match(&self) -> bool {
         self.source_messages == self.destination_messages
             && self.source_bytes == self.destination_bytes
