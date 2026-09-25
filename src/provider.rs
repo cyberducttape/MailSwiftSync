@@ -35,11 +35,11 @@ impl ProviderPreset {
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::GenericImap => "Generic IMAP",
-            Self::GoogleWorkspace => "Google Workspace",
-            Self::Microsoft365 => "Microsoft 365",
-            Self::Fastmail => "Fastmail",
-            Self::ZohoMail => "Zoho Mail",
+            Self::GenericImap => "Generic IMAP preset",
+            Self::GoogleWorkspace => "Google Workspace preset",
+            Self::Microsoft365 => "Microsoft 365 preset",
+            Self::Fastmail => "Fastmail preset",
+            Self::ZohoMail => "Zoho Mail preset",
         }
     }
 
@@ -101,5 +101,7 @@ mod tests {
         );
         assert_eq!(ProviderPreset::Fastmail.defaults().port, "993");
         assert_eq!(ProviderPreset::ALL.len(), 5);
+        assert!(ProviderPreset::GoogleWorkspace.label().ends_with(" preset"));
+        assert!(ProviderPreset::Microsoft365.label().ends_with(" preset"));
     }
 }

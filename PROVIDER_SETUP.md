@@ -2,6 +2,10 @@
 
 MailSwiftSync uses IMAP for all migrations. This guide walks through the setup required for each major provider.
 
+Provider authentication and capacity facts are maintained in the [canonical
+provider facts](docs/provider-facts.md); update that source and the validation
+test when provider policy changes.
+
 ## Folder-mapping boundary
 
 For imapsync migrations, MailSwiftSync currently relies on imapsync's standard

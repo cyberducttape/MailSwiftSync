@@ -205,13 +205,13 @@ The desktop runner does not persist passwords or OAuth access tokens. For imapsy
 
 ## Verification
 
-Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches can be accepted as `Aggregate match`, but they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
+Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches are labeled `Aggregate match — not message-body proof`; they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
 
-Current live verification reaches **Level 2 — Aggregate reconciliation** for
+Current live verification reaches **Level 2 — Aggregate reconciliation — not message-body proof** for
 native Dovecot runs and **metadata-level message reconciliation** for encrypted
 imapsync runs when the independent IMAP fetch succeeds. The latter compares
 Message-ID, INTERNALDATE, and RFC822.SIZE across every selectable folder; it is
-not body-content proof and is never reported as such. A successful process
+not body-content proof and is surfaced as `Metadata reconciled — message bodies not compared`, never as full message verification. A successful process
 without usable evidence is Level 0 — process completed, verification incomplete.
 The verifier fails closed for `--justfolders`, `--addheader`, disabled internal-date
 sync, or `--allowsizemismatch` plans until their semantics can be represented

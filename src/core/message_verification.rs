@@ -728,6 +728,21 @@ impl EvidenceLevel {
             Self::Unexpected => "unexpected",
         }
     }
+
+    /// Explicit operator-facing wording. The stable machine value from
+    /// `as_str` remains available for reports and integrations, but human
+    /// labels must never imply that message bodies were compared.
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::MetadataMatched => "Metadata reconciled — message bodies not compared",
+            Self::StrongMetadataMatch => "Strong metadata match — message bodies not compared",
+            Self::ProbableMatch => "Probable metadata match — message bodies not compared",
+            Self::Ambiguous => "Ambiguous metadata result — message bodies not compared",
+            Self::Missing => "Missing messages detected",
+            Self::Changed => "Changed messages detected",
+            Self::Unexpected => "Unexpected messages detected",
+        }
+    }
 }
 
 impl VerificationSummary {

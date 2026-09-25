@@ -80,9 +80,9 @@ impl DiagnosticLogger {
             });
             self.prune()?;
         }
-        let state = state
-            .as_mut()
-            .expect("diagnostic log state was just initialized");
+        let Some(state) = state.as_mut() else {
+            return Err("diagnostic log state was not initialized".to_owned());
+        };
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
