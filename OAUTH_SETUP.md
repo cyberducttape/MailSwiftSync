@@ -358,7 +358,7 @@ For OAuth-specific issues:
 1. Check provider's OAuth documentation
 2. Verify token in provider's security settings (not revoked)
 3. Check MailSwiftSync logs in the support bundle
-4. Open an issue with sanitized logs at https://github.com/itchyitchy123/MailSwiftSync/issues
+4. Open an issue with sanitized logs at https://github.com/cyberducttape/MailSwiftSync/issues
 
 For provider-specific OAuth help:
 - Gmail: https://developers.google.com/identity/protocols/oauth2

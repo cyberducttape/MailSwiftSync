@@ -2,7 +2,7 @@
 
 > A local-first mailbox migration control plane: plan, execute, verify, and audit bulk migrations with the best available engine.
 
-[![CI](https://github.com/itchyitchy123/MailSwiftSync/actions/workflows/ci.yml/badge.svg)](https://github.com/itchyitchy123/MailSwiftSync/actions/workflows/ci.yml)
+[![CI](https://github.com/cyberducttape/MailSwiftSync/actions/workflows/ci.yml/badge.svg)](https://github.com/cyberducttape/MailSwiftSync/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
 
@@ -153,7 +153,7 @@ MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its a
 
 ### 2. Download or build MailSwiftSync
 
-For released binaries, see [GitHub Releases](https://github.com/itchyitchy123/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Release tags use the `v0.1.0-alpha`, `v0.1.0-beta.1`, or `v0.1.0` scheme and are blocked when they do not match Cargo's package version.
+For released binaries, see [GitHub Releases](https://github.com/cyberducttape/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Release tags use the `v0.1.0-alpha`, `v0.1.0-beta.1`, or `v0.1.0` scheme and are blocked when they do not match Cargo's package version.
 
 For contributors or users building from source:
 

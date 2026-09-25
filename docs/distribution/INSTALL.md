@@ -55,7 +55,7 @@ is installed, also verify the build provenance attached to the manifest:
 
 ```bash
 gh attestation verify mailswiftsync-release-manifest.txt \
-  --repo itchyitchy123/MailSwiftSync
+  --repo cyberducttape/MailSwiftSync
 ```
 
 Run the attestation command from the directory containing the downloaded

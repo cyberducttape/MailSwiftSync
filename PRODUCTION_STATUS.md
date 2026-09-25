@@ -255,7 +255,7 @@ new metadata verifier against real accounts.
 ## Support & Feedback
 
 ### Reporting Issues
-Open an issue at: https://github.com/itchyitchy123/MailSwiftSync/issues
+Open an issue at: https://github.com/cyberducttape/MailSwiftSync/issues
 
 Include:
 - Operator-facing error message (if applicable)

@@ -2,7 +2,26 @@
 
 ## Development
 
-Use stable Rust and validate changes before opening a pull request:
+Use stable Rust and validate changes before opening a pull request. The
+canonical local gate is:
+
+```bash
+make check
+make test
+```
+
+For the disposable product lab and the release-quality subset, use:
+
+```bash
+make integration
+make release-check
+```
+
+The integration target requires the packaged IMAP lab prerequisites. The
+release target also requires `cargo-audit`; signing, SBOM publication, and
+cross-platform builds remain CI/release-environment responsibilities.
+
+The underlying commands are:
 
 ```bash
 cargo fmt --check

@@ -157,6 +157,7 @@ particular target.
    - Wired after successful TLS imapsync transfers for the full selectable-folder inventory
    - Uses Message-ID, INTERNALDATE, and RFC822.SIZE; it does not hash message bodies
    - Bounded fetch pages and account/message limits fail closed rather than silently producing partial evidence
+   - The one-million-record and estimated 256 MiB limits are admission guards, not peak-memory guarantees; SQLite-backed streaming reconciliation is a production blocker for very large MSP migrations
    - Mismatch rows are durably committed with terminal evidence and rendered in the operator verification report; per-message checkpoint persistence remains future work
 
 2. **Provider throttling is not enforced**
@@ -187,7 +188,8 @@ particular target.
 
 **Not yet ready for:**
 - Unattended migrations (no adaptive throttling or recovery approval)
-- Large-scale deployments without a qualified provider pilot (message metadata verification is bounded and requires live-provider validation)
+- Large-scale deployments without a qualified provider pilot (message metadata verification is bounded, materializes multiple in-memory indexes, and requires live-provider validation)
+- Very large MSP migrations before SQLite-backed streaming reconciliation is implemented
 - Critical customer mailboxes (lacking live provider validation)
 - Automated migrations (recovery guidance not surfaced)
 
@@ -213,6 +215,7 @@ To reach GA 1.0, the following work is required:
 - [ ] Provider-specific error classification in retry logic
 
 **Medium-term (v1.0 GA):**
+- [ ] Implement SQLite-backed streaming reconciliation; this is a production blocker for very large MSP migrations
 - [ ] Performance benchmarks with 100k+ message mailboxes
 - [ ] Provider edge case testing
 - [ ] Production support runbooks
