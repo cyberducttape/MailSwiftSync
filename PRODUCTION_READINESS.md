@@ -5,7 +5,7 @@ This document tracks the implementation status of critical production readiness 
 
 ## Status Summary
 
-### ✅ PRODUCTION-READY (All Major Work Complete)
+### ⚠️ PRE-PRODUCTION (Major Work Remains)
 
 **Evidence Model & Correctness**:
 1. ✅ Evidence Model Refactoring (71073c1) - Fixed accounting inconsistencies
@@ -240,14 +240,15 @@ Required for:
 - IMAP Phase 4: UID streaming (3-5 days, performance optimization)
 - Release engineering: Code signing (3-5 days/platform, enterprise requirement)
 
-**What's New**:
+**Current boundaries**:
 - Dovecot verification now completes in <3 minutes (was 20+ minutes)
-- Accounts with 1M+ messages now supported
+- Very large-account verification remains bounded by in-memory materialization and an estimated state budget; this is not a peak-memory guarantee
+- SQLite-backed extraction staging and streaming reconciliation are still required before very large MSP workloads can be production-qualified
 - Folder verification is all-or-nothing; failed-folder diagnostics are retained only in the operator error path
 
 ---
 
 Last updated: 2026-09-24
-**Status: PRODUCTION-READY ✅**
-All core requirements met for typical deployments.
-Enterprise code-signing can follow after launch.
+**Status: PRE-PRODUCTION ⚠️**
+This document is an implementation status record, not a production-capability claim.
+Large-account scalability, provider qualification, and other release-readiness gates remain outstanding.
