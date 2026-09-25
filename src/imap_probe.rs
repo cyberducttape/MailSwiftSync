@@ -254,8 +254,9 @@ pub(crate) struct FetchedAccountMessages {
     pub(crate) mailbox_details: Vec<MailboxDescriptor>,
     pub(crate) messages: crate::core::ExtractedMessages,
     pub(crate) content_fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
-    /// Folders that failed verification (incomplete verification result).
-    /// Maps folder name to error message for diagnostics.
+    /// Folder failures collected while building the account result. A
+    /// non-empty map is never returned in a successful result: account
+    /// verification is all-or-nothing and callers receive the error instead.
     pub(crate) incomplete_folders: HashMap<String, String>,
 }
 
@@ -1287,7 +1288,9 @@ fn parse_uid_search_response(
 
 /// Reconcile an entire IMAP account by enumerating selectable folders first.
 /// Opens a single authenticated connection and reuses it for all folders.
-/// Per-folder failures return early; incomplete folders are reported via evidence.
+/// Any per-folder failure invalidates the complete account result. Failed
+/// folder names are collected only to produce one bounded diagnostic error;
+/// successful results therefore always contain every selectable folder.
 /// The folder count and every message record remain bounded by the LIST/FETCH limits.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fetch_tls_account_messages(
@@ -1386,8 +1389,8 @@ pub(crate) fn fetch_tls_account_messages(
                 all_fingerprints.extend(folder_fingerprints);
             }
             Err(error) => {
-                // Track incomplete folder for evidence reporting instead of failing entire verification.
-                // This allows partial verification results when some folders fail (network issues, quota, etc).
+                // Retain the folder-specific cause so the all-or-nothing
+                // account failure identifies every unstable folder.
                 incomplete_folders.insert(mailbox, error);
             }
         }
