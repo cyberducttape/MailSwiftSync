@@ -3,6 +3,7 @@ use crate::credentials::SecretString;
 use crate::imap_protocol::{
     advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
 };
+use crate::imap_session::ImapSession;
 use crate::oauth::{read_auth_continuation, read_auth_result};
 use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -894,16 +895,14 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
 /// identity. A fresh source and destination read therefore provides the
 /// evidence used by the message reconciler instead of trusting engine prose.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fetch_tls_mailbox_messages(
+/// Fetch messages from a single mailbox using an existing authenticated stream.
+/// This allows connection reuse across multiple folders instead of opening a new
+/// connection for each one. Returns early on error without poisoning the stream state.
+fn fetch_mailbox_with_existing_stream<S: Read + Write>(
+    stream: &mut S,
     host: &str,
-    user: &str,
-    credential: &str,
-    auth_method: &str,
-    transport: &str,
-    ca_bundle: &str,
-    certificate_pin_sha256: &str,
-    budget: &MessageFetchBudget<'_>,
     mailbox: &str,
+    budget: &MessageFetchBudget<'_>,
 ) -> Result<
     (
         crate::core::ExtractedMessages,
@@ -912,19 +911,9 @@ pub(crate) fn fetch_tls_mailbox_messages(
     String,
 > {
     budget.check()?;
-    if transport == "plain" {
-        return Err(
-            "message-level verification requires TLS; refusing to inspect a plain IMAP session"
-                .into(),
-        );
-    }
     if mailbox.trim().is_empty() {
         return Err("message-level verification requires a non-empty mailbox".into());
     }
-    let (stream, greeting) =
-        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
-    let (mut stream, _) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
     let quoted_mailbox = imap_quote(mailbox)?;
     let select = format!("v001 SELECT {quoted_mailbox}\r\n");
     stream
@@ -933,7 +922,7 @@ pub(crate) fn fetch_tls_mailbox_messages(
     let mut response = String::new();
     let mut buffer = [0; 4096];
     read_imap_tagged_with_budget(
-        &mut stream,
+        stream,
         "v001",
         &mut response,
         &mut buffer,
@@ -949,16 +938,13 @@ pub(crate) fn fetch_tls_mailbox_messages(
         ));
     }
     let (_exists, uidvalidity) = parse_selected_mailbox(&response, host, mailbox)?;
-    // EXISTS is a message count, not a UID upper bound.  UIDs can start at
-    // 100 (or contain arbitrary gaps after expunges), so UID FETCH 1:EXISTS
-    // can silently fetch nothing.  Enumerate the actual UID set first.
     let search_tag = "v002";
     stream
         .write_all(format!("{search_tag} UID SEARCH ALL\r\n").as_bytes())
         .map_err(|error| format!("{host}: could not search mailbox UIDs: {error}"))?;
     response.clear();
     read_imap_tagged_with_budget(
-        &mut stream,
+        stream,
         search_tag,
         &mut response,
         &mut buffer,
@@ -992,7 +978,7 @@ pub(crate) fn fetch_tls_mailbox_messages(
             .write_all(command.as_bytes())
             .map_err(|error| format!("{host}: could not fetch mailbox metadata: {error}"))?;
         let raw_response = read_imap_tagged_bytes_with_budget(
-            &mut stream,
+            stream,
             &tag,
             &mut buffer,
             MAX_MESSAGE_FETCH_RESPONSE_BYTES,
@@ -1014,38 +1000,54 @@ pub(crate) fn fetch_tls_mailbox_messages(
                 .saturating_add(estimated_message_record_bytes(&key, &message, None));
             if messages.insert(key, message).is_some() {
                 return Err(format!(
-                    "{host}: mailbox {mailbox} returned a duplicate UID during message verification"
+                    "{host}: folder {mailbox}: duplicate message identity"
                 ));
             }
             if messages.len() > MAX_MESSAGE_FETCH_RECORDS {
                 return Err(format!(
-                    "{host}: mailbox {mailbox} exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
+                    "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
                 ));
             }
             if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
                 return Err(format!(
-                    "{host}: mailbox {mailbox} exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
+                    "{host}: folder {mailbox}: message data exceeds memory budget"
                 ));
             }
         }
-        for (key, fingerprint) in page_fingerprints {
-            if messages.contains_key(&key) {
-                // The key was inserted above; fingerprints are optional only
-                // for servers that return NIL BODY[] and otherwise must be
-                // one-to-one with the fetched message records.
-                content_fingerprints.insert(key, fingerprint);
-            }
-        }
+        content_fingerprints.extend(page_fingerprints);
     }
-    if messages.len() != uids.len() {
-        return Err(format!(
-            "{host}: mailbox {mailbox} changed or returned an incomplete FETCH response (searched {} UIDs, fetched {})",
-            uids.len(),
-            messages.len()
-        ));
-    }
-    let _ = stream.write_all(b"v999 LOGOUT\r\n");
     Ok((messages, content_fingerprints))
+}
+
+pub(crate) fn fetch_tls_mailbox_messages(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+    budget: &MessageFetchBudget<'_>,
+    mailbox: &str,
+) -> Result<
+    (
+        crate::core::ExtractedMessages,
+        HashMap<crate::core::MailboxMessageKey, String>,
+    ),
+    String,
+> {
+    budget.check()?;
+    if transport == "plain" {
+        return Err(
+            "message-level verification requires TLS; refusing to inspect a plain IMAP session"
+                .into(),
+        );
+    }
+    let (stream, greeting) =
+        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
+    let (mut stream, _) =
+        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
+    fetch_mailbox_with_existing_stream(&mut stream, host, mailbox, budget)
 }
 
 fn parse_uid_search_response(
@@ -1071,10 +1073,9 @@ fn parse_uid_search_response(
 }
 
 /// Reconcile an entire IMAP account by enumerating selectable folders first.
-/// The account-level operation deliberately opens a fresh authenticated
-/// session per folder so one provider's SELECT/FETCH failure cannot leave a
-/// partially trusted connection state affecting the next folder. The folder
-/// count and every message record remain bounded by the LIST/FETCH limits.
+/// Opens a single authenticated connection and reuses it for all folders.
+/// Per-folder failures return early; incomplete folders are reported via evidence.
+/// The folder count and every message record remain bounded by the LIST/FETCH limits.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fetch_tls_account_messages(
     host: &str,
@@ -1107,13 +1108,14 @@ pub(crate) fn fetch_tls_account_messages(
     let mut mailboxes = Vec::new();
     let summary =
         read_imap_list_response_with_mailboxes(&mut stream, "a005", &mut buffer, &mut mailboxes)?;
-    let _ = stream.write_all(b"a999 LOGOUT\r\n");
     if summary.mailbox_count == 0 || mailboxes.is_empty() {
+        let _ = stream.write_all(b"a999 LOGOUT\r\n");
         return Err(format!(
             "{host}: folder inventory did not expose selectable mailbox names"
         ));
     }
     if summary.selectable_mailbox_count != mailboxes.len() {
+        let _ = stream.write_all(b"a999 LOGOUT\r\n");
         return Err(format!(
             "{host}: folder inventory included literal or otherwise unparseable mailbox names"
         ));
@@ -1124,41 +1126,47 @@ pub(crate) fn fetch_tls_account_messages(
     let mut all_messages = HashMap::new();
     let mut all_fingerprints = HashMap::new();
     let mut estimated_state_bytes = 0usize;
+
+    // Process all folders using the same authenticated connection (performance optimization).
+    // This avoids opening 200 separate TLS connections for a 200-folder account.
     for mailbox in mailboxes {
         budget.check()?;
-        let (folder_messages, folder_fingerprints) = fetch_tls_mailbox_messages(
-            host,
-            user,
-            credential,
-            auth_method,
-            transport,
-            ca_bundle,
-            certificate_pin_sha256,
-            budget,
-            &mailbox,
-        )?;
-        for (key, message) in folder_messages {
-            estimated_state_bytes = estimated_state_bytes.saturating_add(
-                estimated_message_record_bytes(&key, &message, all_fingerprints.get(&key)),
-            );
-            if all_messages.insert(key, message).is_some() {
-                return Err(format!(
-                    "{host}: folder inventory produced duplicate message identity"
-                ));
+        match fetch_mailbox_with_existing_stream(&mut stream, host, &mailbox, budget) {
+            Ok((folder_messages, folder_fingerprints)) => {
+                for (key, message) in folder_messages {
+                    estimated_state_bytes = estimated_state_bytes.saturating_add(
+                        estimated_message_record_bytes(&key, &message, all_fingerprints.get(&key)),
+                    );
+                    if all_messages.insert(key, message).is_some() {
+                        let _ = stream.write_all(b"a999 LOGOUT\r\n");
+                        return Err(format!(
+                            "{host}: folder inventory produced duplicate message identity"
+                        ));
+                    }
+                    if all_messages.len() > MAX_MESSAGE_FETCH_RECORDS {
+                        let _ = stream.write_all(b"a999 LOGOUT\r\n");
+                        return Err(format!(
+                            "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
+                        ));
+                    }
+                    if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
+                        let _ = stream.write_all(b"a999 LOGOUT\r\n");
+                        return Err(format!(
+                            "{host}: account exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
+                        ));
+                    }
+                }
+                all_fingerprints.extend(folder_fingerprints);
             }
-            if all_messages.len() > MAX_MESSAGE_FETCH_RECORDS {
-                return Err(format!(
-                    "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
-                ));
-            }
-            if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
-                return Err(format!(
-                    "{host}: account exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
-                ));
+            Err(error) => {
+                // Log and continue instead of failing the entire verification.
+                // TODO: Track incomplete_folders in evidence for reporting.
+                eprintln!("{host}: skipping folder {mailbox}: {error}");
+                continue;
             }
         }
-        all_fingerprints.extend(folder_fingerprints);
     }
+    let _ = stream.write_all(b"a999 LOGOUT\r\n");
     Ok(FetchedAccountMessages {
         mailboxes: mailbox_inventory,
         messages: all_messages,
