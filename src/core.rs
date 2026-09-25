@@ -1936,6 +1936,12 @@ mod tests {
             None,
         )
         .unwrap();
+        db.transition(&project.id, Phase::Preflight).unwrap();
+        db.transition(&project.id, Phase::Pilot).unwrap();
+        db.transition(&project.id, Phase::Seed).unwrap();
+        db.transition(&project.id, Phase::CatchUp).unwrap();
+        db.transition(&project.id, Phase::FinalDelta).unwrap();
+        db.transition(&project.id, Phase::Verification).unwrap();
         assert!(!db.all_mailboxes_verified(&project.id).unwrap());
         db.accept_verification_difference(
             &project.id,
@@ -1952,13 +1958,6 @@ mod tests {
         assert_eq!(acceptance.run_id, "exception-run");
         assert_eq!(acceptance.operator, "operator@example");
         assert!(db.all_mailboxes_verified(&project.id).unwrap());
-        db.transition(&project.id, Phase::Preflight).unwrap();
-        db.transition(&project.id, Phase::Pilot).unwrap();
-        db.transition(&project.id, Phase::Seed).unwrap();
-        db.transition(&project.id, Phase::CatchUp).unwrap();
-        db.transition(&project.id, Phase::FinalDelta).unwrap();
-        db.transition(&project.id, Phase::Verification).unwrap();
-        db.transition(&project.id, Phase::Complete).unwrap();
         assert_eq!(
             db.project(&project.id).unwrap().unwrap().phase,
             Phase::Complete
