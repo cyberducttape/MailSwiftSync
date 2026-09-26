@@ -233,7 +233,7 @@ and require the corresponding integration run.
 - Explicit Dovecot-native and imapsync engine paths.
 - Dry-run default and explicit confirmation before destination changes.
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
-- CSV/XLS/XLSX validation queue with bounded 1–16 worker concurrency.
+- CSV/XLSX validation queue with bounded 1–16 worker concurrency. Legacy XLS is rejected because Calamine materializes it before application resource checks.
 - Bounded transient retries for validation; authentication and configuration failures stop without retry loops.
 - Live batch waves with mailbox-specific child runs, claim-before-launch, selective retry scopes, transactional plan checks, and per-mailbox aggregate/engine-dependent evidence.
 - Aggregate source/destination folder, message, and virtual-size evidence.

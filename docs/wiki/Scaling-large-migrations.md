@@ -24,7 +24,7 @@ cannot interfere with each other, on the same host or different ones.
 
 1. Split the source mailbox list into shards (by row count, by customer, by
    destination namespace — whatever divides your batch spreadsheet
-   cleanly). Each shard becomes its own CSV/XLS/XLSX import.
+   cleanly). Each shard becomes its own CSV or XLSX import.
 2. Give each shard its own state path:
 
    ```bash

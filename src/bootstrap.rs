@@ -353,7 +353,7 @@ impl App {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
             } else {
-                "Import a CSV, XLS, or XLSX file to build a reviewable queue.".into()
+                "Import a CSV or XLSX file to build a reviewable queue. Legacy XLS import is disabled because its parser cannot be memory-bounded safely.".into()
             },
             advanced_open: false,
             // Do not interrupt first launch with a configuration dialog. The
