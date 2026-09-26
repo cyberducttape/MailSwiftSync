@@ -883,7 +883,10 @@ impl Form {
     ) -> Result<String, String> {
         let canonical_extra_options = engine::canonical_extra_options(&self.profile.extra_options)?;
         let digest = Sha256::digest(canonical_extra_options.join("\u{1f}").as_bytes());
-        let extra_options_sha256 = digest.iter().map(|byte| format!("{:02x}", byte)).collect::<String>();
+        let extra_options_sha256 = digest
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<String>();
         let profile = &self.profile;
         let execution_executable = match self.engine() {
             core::Engine::Dovecot if self.local_doveadm() => &profile.doveadm_path,

@@ -14,7 +14,6 @@ mod engine;
 mod headless;
 mod imap_probe;
 mod imap_protocol;
-mod imap_session;
 mod maintenance_window;
 mod migrate_audit;
 mod migration_plan;
@@ -139,9 +138,9 @@ use ui::job_state_badge;
 use ui::recommended_next_action;
 use ui::{
     AppearancePreferences, ThemeColors, ThemeKind, WorkspaceRefreshOptions, WorkspaceSnapshot,
-    WorkspaceView, display_job_state, markdown_escape, needs_operator_review,
-    preferred_project_id, project_health_state_counts, push_visible_output,
-    successful_run_severity, successful_run_status, truncate_utf8,
+    WorkspaceView, display_job_state, markdown_escape, needs_operator_review, preferred_project_id,
+    project_health_state_counts, push_visible_output, successful_run_severity,
+    successful_run_status, truncate_utf8,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
