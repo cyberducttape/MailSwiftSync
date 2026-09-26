@@ -18,15 +18,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
+validate_member_path() {
+  local member="$1"
+  case "$member" in
+    ""|/*|../*|*/../*|*/..|..|*\\*)
+      echo "FAIL: unsafe archive member path: $member" >&2
+      exit 1
+      ;;
+  esac
+}
+
 case "$archive" in
   *.tar.gz)
-    tar -xzf "$archive" -C "$workspace"
+    while IFS= read -r member; do
+      validate_member_path "$member"
+    done < <(tar -tzf "$archive")
+    tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$workspace"
     ;;
   *.zip)
     if ! command -v unzip >/dev/null 2>&1; then
       echo "FAIL: unzip is required to validate $archive" >&2
       exit 1
     fi
+    while IFS= read -r member; do
+      validate_member_path "$member"
+    done < <(unzip -Z1 "$archive")
     unzip -q "$archive" -d "$workspace"
     ;;
   *)

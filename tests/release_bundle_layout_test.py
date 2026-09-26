@@ -2,6 +2,7 @@
 """Verify that every release archive format has one consistent bundle root."""
 
 from pathlib import Path
+import io
 import subprocess
 import tarfile
 import tempfile
@@ -100,5 +101,18 @@ with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temp
             if entry.is_file():
                 archive.write(entry, (Path("bundle") / entry.relative_to(bundle)).as_posix())
     run_verifier(nested_archive, False)
+
+    traversal_zip = workspace / "traversal.zip"
+    with zipfile.ZipFile(traversal_zip, "w") as archive:
+        archive.writestr("../release-verifier-escape.txt", "must not extract\n")
+    run_verifier(traversal_zip, False)
+
+    traversal_tar = workspace / "traversal.tar.gz"
+    with tarfile.open(traversal_tar, "w:gz") as archive:
+        entry = tarfile.TarInfo("../release-verifier-escape.txt")
+        payload = b"must not extract\n"
+        entry.size = len(payload)
+        archive.addfile(entry, fileobj=io.BytesIO(payload))
+    run_verifier(traversal_tar, False)
 
 print("PASS: release archive layouts are consistent across tar.gz and ZIP formats")
