@@ -1871,6 +1871,7 @@ pub(crate) fn fetch_tls_account_messages(
     let mut all_messages = HashMap::new();
     let mut total_exists = 0_u64;
     let mut incomplete_folders = HashMap::new();
+    let mut incomplete_folder_count = 0_usize;
 
     // Process all folders using the same authenticated connection (performance optimization).
     // This avoids opening 200 separate TLS connections for a 200-folder account.
@@ -1897,9 +1898,14 @@ pub(crate) fn fetch_tls_account_messages(
             }
             Err(error) => {
                 // Retain the folder-specific cause so the all-or-nothing
-                // account failure identifies every unstable folder.
+                // account failure identifies unstable folders. Keep only a
+                // bounded sample: the total count preserves completeness of
+                // the operator signal without retaining unbounded error text.
                 let fatal_session_error = is_fatal_session_error(&error);
-                incomplete_folders.insert(mailbox, error);
+                incomplete_folder_count = incomplete_folder_count.saturating_add(1);
+                if incomplete_folders.len() < MAX_FOLDER_FAILURE_DETAILS {
+                    incomplete_folders.insert(mailbox, error);
+                }
                 if fatal_session_error {
                     break;
                 }
@@ -1908,7 +1914,11 @@ pub(crate) fn fetch_tls_account_messages(
     }
     let _ = stream.write_all(b"a999 LOGOUT\r\n");
     if !incomplete_folders.is_empty() {
-        return Err(format_folder_failures(host, &incomplete_folders));
+        return Err(format_folder_failures(
+            host,
+            &incomplete_folders,
+            incomplete_folder_count,
+        ));
     }
     Ok(FetchedAccountMessages {
         mailboxes: mailbox_inventory,
@@ -1934,15 +1944,15 @@ fn is_fatal_session_error(error: &str) -> bool {
     .any(|marker| error.contains(marker))
 }
 
-fn format_folder_failures(host: &str, failures: &HashMap<String, String>) -> String {
-    const MAX_DETAILS: usize = 16;
+const MAX_FOLDER_FAILURE_DETAILS: usize = 16;
+
+fn format_folder_failures(host: &str, failures: &HashMap<String, String>, total: usize) -> String {
     const MAX_REASON_CHARS: usize = 240;
     let mut folders = failures.keys().cloned().collect::<Vec<_>>();
     folders.sort();
-    let total = folders.len();
     let details = folders
         .into_iter()
-        .take(MAX_DETAILS)
+        .take(MAX_FOLDER_FAILURE_DETAILS)
         .map(|folder| {
             let reason = failures
                 .get(&folder)
@@ -2689,7 +2699,7 @@ mod tests {
         let failures = (0..17)
             .map(|index| (format!("folder-{index:02}"), format!("failure-{index}")))
             .collect::<HashMap<_, _>>();
-        let detail = format_folder_failures("imap.example", &failures);
+        let detail = format_folder_failures("imap.example", &failures, failures.len());
         assert!(detail.contains("folder-00: failure-0"));
         assert!(detail.contains("(+1 more)"));
     }
