@@ -17,15 +17,41 @@ if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
   mkdir -p -- "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
 fi
 
-if ! command -v dovecot >/dev/null 2>&1 || ! command -v imapsync >/dev/null 2>&1 || \
-  ! command -v mailswiftsync >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || \
-  ! command -v timeout >/dev/null 2>&1; then
-  echo "SKIP: install mailswiftsync, dovecot, imapsync, openssl, and timeout to run the IMAP integration lab" >&2
-  exit 77
+required_tools=(dovecot doveadm doveconf imapsync mailswiftsync openssl timeout)
+missing_tools=()
+for tool in "${required_tools[@]}"; do
+  command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")
+done
+if ((${#missing_tools[@]} > 0)); then
+  if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+    {
+      printf 'engine=%s\nuid=%s\nPATH=%s\nmissing_tools=%s\n' \
+        "$test_engine" "$(id -u)" "$PATH" "${missing_tools[*]}"
+      for tool in "${required_tools[@]}"; do
+        printf '%s=' "$tool"
+        command -v "$tool" 2>&1 || true
+      done
+      if command -v dpkg-query >/dev/null 2>&1; then
+        dpkg-query -W -f='${binary:Package} ${Version}\n' \
+          dovecot-core dovecot-imapd imapsync 2>&1 || true
+      fi
+    } > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt"
+    chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt" 2>/dev/null || true
+  fi
+  echo "FAIL: required IMAP integration tools are missing: ${missing_tools[*]}" >&2
+  exit 1
 fi
 
 dovecot_version="$(dovecot --version 2>/dev/null || true)"
 if [[ -z "$dovecot_version" ]]; then
+  if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+    {
+      printf 'engine=%s\nuid=%s\nPATH=%s\ndovecot=' "$test_engine" "$(id -u)" "$PATH"
+      command -v dovecot 2>&1 || true
+      dpkg-query -W -f='${binary:Package} ${Version}\n' dovecot-core dovecot-imapd 2>&1 || true
+    } > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt"
+    chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt" 2>/dev/null || true
+  fi
   echo "FAIL: unable to determine the installed Dovecot version" >&2
   exit 1
 fi
