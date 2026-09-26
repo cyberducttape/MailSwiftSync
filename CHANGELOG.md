@@ -21,6 +21,8 @@ operator distribution archives.
 - Corrected Gmail qualification guidance to use the Admin console for Workspace
   user creation and distinguish Workspace OAuth, personal Gmail OAuth, and
   conditional app-password testing.
+- Replaced fixed Google and Microsoft refresh-token lifetime claims with
+  provider-linked lifecycle guidance and explicit reauthorization behavior.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 

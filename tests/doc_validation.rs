@@ -144,6 +144,20 @@ fn microsoft_oauth_docs_match_raw_refresh_token_model() {
 }
 
 #[test]
+fn oauth_lifecycle_docs_link_current_provider_guidance_without_fixed_folklore() {
+    let oauth = fs::read_to_string("OAUTH_SETUP.md").expect("OAuth setup guide should exist");
+    let lifecycle = oauth
+        .split("## OAuth Token Lifecycle")
+        .nth(1)
+        .expect("OAuth lifecycle section should exist");
+    assert!(lifecycle.contains("developers.google.com/identity/protocols/oauth2#expiration"));
+    assert!(lifecycle.contains("learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens"));
+    assert!(!lifecycle.contains("6 months of inactivity"));
+    assert!(!lifecycle.contains("1-2 years"));
+    assert!(lifecycle.contains("not a guarantee"));
+}
+
+#[test]
 fn gmail_oauth_docs_match_raw_refresh_token_model() {
     let guide = fs::read_to_string("OAUTH_SETUP.md").expect("OAuth setup guide should exist");
 
