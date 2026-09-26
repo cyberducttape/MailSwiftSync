@@ -26,6 +26,8 @@ operator distribution archives.
 - Expanded the verifier admission estimate to include reconciliation indexes and
   classification sets, so expensive in-memory structures are budgeted before
   they are constructed.
+- Transferred pass-level mismatch vectors into the final result with allocation
+  reuse, reducing transient peak memory during reconciliation merges.
 - Routed budgeted IMAP authentication and metadata commands through
   cancellation-aware, timeout-retrying writes with short socket I/O slices.
 
