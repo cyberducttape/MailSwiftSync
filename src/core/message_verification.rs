@@ -545,16 +545,19 @@ impl MessageVerification {
                 let Some(folder_candidates) = dest_by_metadata.get_mut(&source_metadata) else {
                     continue;
                 };
-                let candidate_folder = folder_candidates
-                    .range(..expected_folder.clone())
-                    .next_back()
-                    .map(|(folder, _)| folder.clone())
-                    .or_else(|| {
-                        folder_candidates
-                            .range((Excluded(expected_folder), Unbounded))
-                            .next()
-                            .map(|(folder, _)| folder.clone())
-                    });
+                let lower = folder_candidates.range(..expected_folder.clone()).next();
+                let upper = folder_candidates
+                    .range((Excluded(expected_folder), Unbounded))
+                    .next();
+                let candidate_folder = match (lower, upper) {
+                    (Some((lower, _)), Some((upper, _))) => Some(if lower <= upper {
+                        lower.clone()
+                    } else {
+                        upper.clone()
+                    }),
+                    (Some((folder, _)), None) | (None, Some((folder, _))) => Some(folder.clone()),
+                    (None, None) => None,
+                };
                 let Some(candidate_folder) = candidate_folder else {
                     continue;
                 };
