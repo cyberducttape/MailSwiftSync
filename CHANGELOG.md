@@ -15,6 +15,8 @@ operator distribution archives.
   promptly while recoverable folder errors retain bounded diagnostics.
 - Hardened release-bundle verification against absolute, traversal, and
   backslash-containing archive member paths, with tar and ZIP regression cases.
+- Release-bundle verification now rejects symlinks and special filesystem
+  entries instead of following or validating them as ordinary files.
 - Fixed headless batch completion validation to use chunked durable mailbox
   states instead of a capped full-mailbox status read, avoiding false failures
   for batches larger than the status-page limit.

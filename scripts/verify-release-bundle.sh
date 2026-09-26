@@ -51,6 +51,11 @@ case "$archive" in
     ;;
 esac
 
+if find "$workspace" \( -type l -o -type b -o -type c -o -type p \) -print -quit | grep -q .; then
+  echo "FAIL: release archive contains a non-regular filesystem entry" >&2
+  exit 1
+fi
+
 required_documents=(
   README.md
   LICENSE
