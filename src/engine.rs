@@ -164,13 +164,26 @@ pub(crate) fn validate_extra_options(extra_options: &str) -> Result<(), String> 
     canonical_extra_options(extra_options).map(|_| ())
 }
 
+const MAX_EXTRA_OPTIONS_BYTES: usize = 64 * 1024;
+const MAX_EXTRA_OPTION_TOKENS: usize = 128;
+
 /// Parse the trusted tuning field once and regenerate canonical argv tokens.
 /// The returned values are the only representation that execution may use;
 /// this prevents validation from accepting one spelling while the runner
 /// launches a different literal token sequence.
 pub(crate) fn canonical_extra_options(extra_options: &str) -> Result<Vec<String>, String> {
+    if extra_options.len() > MAX_EXTRA_OPTIONS_BYTES {
+        return Err(format!(
+            "Extra options exceed the {MAX_EXTRA_OPTIONS_BYTES}-byte limit"
+        ));
+    }
     let options = crate::command::parse_shell_words(extra_options)
         .map_err(|error| format!("Extra options: {error}"))?;
+    if options.len() > MAX_EXTRA_OPTION_TOKENS {
+        return Err(format!(
+            "Extra options contain more than {MAX_EXTRA_OPTION_TOKENS} tokens"
+        ));
+    }
     // This is deliberately an allowlist. The field is trusted application
     // configuration, but imapsync's option surface is powerful and changes
     // over time; an ever-growing denylist cannot establish a safe boundary.
