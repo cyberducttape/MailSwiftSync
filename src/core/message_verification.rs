@@ -1651,7 +1651,7 @@ fn make_mismatch(
 }
 
 /// Summary of verification results.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationSummary {
     pub total_source: u64,
     pub total_destination: u64,
@@ -2727,5 +2727,139 @@ mod tests {
         expected_types.sort_by_key(MismatchType::as_str);
         staged_types.sort_by_key(MismatchType::as_str);
         assert_eq!(staged_types, expected_types);
+    }
+
+    #[test]
+    fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
+        let message = |id: Option<&str>, uid: &str, size: u64, date: &str| ExtractedMessage {
+            message_id: id.map(str::to_owned),
+            uid: Some(uid.to_owned()),
+            size_bytes: Some(size),
+            internal_date: Some(date.to_owned()),
+        };
+        let cases = [
+            (
+                ExtractedMessages::from([
+                    (
+                        MailboxMessageKey::new("INBOX", "1"),
+                        message(Some("<duplicate>"), "1", 10, "01-Jan-2024 00:00:00 +0000"),
+                    ),
+                    (
+                        MailboxMessageKey::new("INBOX", "2"),
+                        message(Some("<duplicate>"), "2", 20, "01-Jan-2024 00:00:00 +0000"),
+                    ),
+                ]),
+                ExtractedMessages::from([
+                    (
+                        MailboxMessageKey::new("Migrated", "9"),
+                        message(Some("<duplicate>"), "9", 10, "01-Jan-2024 00:00:00 +0000"),
+                    ),
+                    (
+                        MailboxMessageKey::new("Migrated", "10"),
+                        message(Some("<duplicate>"), "10", 20, "01-Jan-2024 00:00:00 +0000"),
+                    ),
+                    (
+                        MailboxMessageKey::new("Migrated", "11"),
+                        message(Some("<duplicate>"), "11", 20, "01-Jan-2024 00:00:00 +0000"),
+                    ),
+                ]),
+                HashMap::from([(String::from("INBOX"), String::from("Migrated"))]),
+            ),
+            (
+                ExtractedMessages::from([
+                    (
+                        MailboxMessageKey::new("INBOX", "1"),
+                        message(
+                            Some("<wrong-folder>"),
+                            "1",
+                            30,
+                            "01-Jan-2024 00:00:00 +0000",
+                        ),
+                    ),
+                    (
+                        MailboxMessageKey::new("Sent", "2"),
+                        message(Some("<probable>"), "2", 40, "02-Jan-2024 00:00:00 +0000"),
+                    ),
+                ]),
+                ExtractedMessages::from([
+                    (
+                        MailboxMessageKey::new("Archive", "7"),
+                        message(
+                            Some("<wrong-folder>"),
+                            "7",
+                            30,
+                            "01-Jan-2024 00:00:00 +0000",
+                        ),
+                    ),
+                    (
+                        MailboxMessageKey::new("Sent", "8"),
+                        message(None, "8", 40, "02-Jan-2024 00:00:00 +0000"),
+                    ),
+                ]),
+                HashMap::new(),
+            ),
+            (
+                ExtractedMessages::from([(
+                    MailboxMessageKey::new("INBOX", "1"),
+                    message(Some("<changed>"), "1", 50, "03-Jan-2024 00:00:00 +0000"),
+                )]),
+                ExtractedMessages::from([(
+                    MailboxMessageKey::new("INBOX", "9"),
+                    message(Some("<changed>"), "9", 51, "03-Jan-2024 00:00:00 +0000"),
+                )]),
+                HashMap::new(),
+            ),
+        ];
+
+        for (index, (source, destination, folder_mapping)) in cases.into_iter().enumerate() {
+            let (expected_mismatches, expected_summary) =
+                MessageVerification::detect_mismatches_with_folder_mapping(
+                    "job-staged-cases",
+                    &format!("run-map-{index}"),
+                    &source,
+                    &destination,
+                    &folder_mapping,
+                )
+                .unwrap();
+            let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+            stage
+                .insert_messages(StagedMessageSide::Source, &source)
+                .unwrap();
+            stage
+                .insert_messages(StagedMessageSide::Destination, &destination)
+                .unwrap();
+            let (staged_mismatches, staged_summary) =
+                MessageVerification::detect_mismatches_from_stage(
+                    "job-staged-cases",
+                    &format!("run-stage-{index}"),
+                    &stage,
+                    &folder_mapping,
+                )
+                .unwrap();
+            assert_eq!(staged_summary, expected_summary, "case {index}");
+            let mut expected = expected_mismatches
+                .iter()
+                .map(|mismatch| {
+                    (
+                        mismatch.mismatch_type.clone(),
+                        mismatch.source_uid.clone(),
+                        mismatch.dest_uid.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut staged = staged_mismatches
+                .iter()
+                .map(|mismatch| {
+                    (
+                        mismatch.mismatch_type.clone(),
+                        mismatch.source_uid.clone(),
+                        mismatch.dest_uid.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            expected.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+            staged.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
+            assert_eq!(staged, expected, "case {index}");
+        }
     }
 }
