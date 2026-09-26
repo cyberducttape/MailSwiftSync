@@ -1,5 +1,7 @@
 use super::*;
 
+const MAX_PROJECT_LIST_ROWS: usize = 10_000;
+
 impl StateStore {
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects WHERE id=?1", [id], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
@@ -8,6 +10,7 @@ impl StateStore {
         self.connection.query_row("SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects ORDER BY created_at DESC, rowid DESC LIMIT 1", [], |r| Ok(Project { id:r.get(0)?, name:r.get(1)?, source_endpoint:r.get(2)?, destination_endpoint:r.get(3)?, phase: Phase::parse(&r.get::<_,String>(4)?)? })).optional()
     }
     pub fn recent_projects(&self, limit: usize) -> rusqlite::Result<Vec<ProjectListItem>> {
+        let limit = limit.min(MAX_PROJECT_LIST_ROWS);
         let mut statement = self.connection.prepare(
             "SELECT id,name,source_endpoint,destination_endpoint,phase FROM projects ORDER BY created_at DESC, rowid DESC LIMIT ?1",
         )?;
