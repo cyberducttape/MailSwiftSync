@@ -13,6 +13,8 @@ operator distribution archives.
 - Classified IMAP folder failures as control, session-fatal, or folder-local
   outcomes so cancellation and unusable connections stop account enumeration
   promptly while recoverable folder errors retain bounded diagnostics.
+- Hardened release-bundle verification against absolute, traversal, and
+  backslash-containing archive member paths, with tar and ZIP regression cases.
 - Fixed headless batch completion validation to use chunked durable mailbox
   states instead of a capped full-mailbox status read, avoiding false failures
   for batches larger than the status-page limit.
