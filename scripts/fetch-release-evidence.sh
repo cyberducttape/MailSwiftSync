@@ -25,6 +25,10 @@ archive="$(mktemp "${TMPDIR:-/tmp}/mailswiftsync-release-evidence.XXXXXX.tar.gz"
 cleanup() { rm -f "$archive"; }
 trap cleanup EXIT
 mkdir -p -- "$output_dir"
+if [[ -L "$output_dir" ]]; then
+  echo "FAIL: release evidence output directory must not be a symlink" >&2
+  exit 1
+fi
 
 if command -v curl >/dev/null 2>&1; then
   curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
@@ -42,15 +46,20 @@ if [[ "${actual_sha256,,}" != "${expected_sha256,,}" ]]; then
   exit 1
 fi
 
-# Reject absolute paths and parent traversal before extraction.
-if tar -tzf "$archive" | awk '
-  /^// || /(^|\/)\.\.($|\/)/ { bad=1 }
-  END { exit bad ? 0 : 1 }
-'; then
-  echo "FAIL: release evidence archive contains an unsafe path" >&2
+# Reject absolute paths, parent traversal, and backslashes before extraction.
+while IFS= read -r member; do
+  case "$member" in
+    ""|/*|../*|*/../*|*/..|..|*\\*)
+      echo "FAIL: release evidence archive contains an unsafe path: $member" >&2
+      exit 1
+      ;;
+  esac
+done < <(tar -tzf "$archive")
+if tar -tvzf "$archive" | awk '$1 ~ /^[lbcpsh]/ { bad=1 } END { exit bad ? 0 : 1 }'; then
+  echo "FAIL: release evidence archive contains a non-regular filesystem entry" >&2
   exit 1
 fi
-tar -xzf "$archive" -C "$output_dir"
+tar --no-same-owner --no-same-permissions --keep-old-files -xzf "$archive" -C "$output_dir"
 if ! find "$output_dir" -maxdepth 1 -type f -name '*.json' ! -name 'policy.json' ! -name 'schema.json' | grep -q .; then
   echo "FAIL: release evidence archive contains no evidence JSON files" >&2
   exit 1

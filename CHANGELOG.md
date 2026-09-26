@@ -17,6 +17,8 @@ operator distribution archives.
   backslash-containing archive member paths, with tar and ZIP regression cases.
 - Release-bundle verification now rejects symlinks and special filesystem
   entries instead of following or validating them as ordinary files.
+- External provider-evidence extraction now rejects unsafe or special tar
+  members and refuses to overwrite existing evidence files.
 - Fixed headless batch completion validation to use chunked durable mailbox
   states instead of a capped full-mailbox status read, avoiding false failures
   for batches larger than the status-page limit.
