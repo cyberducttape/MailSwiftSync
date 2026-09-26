@@ -33,6 +33,35 @@ fn readme_mentions_production_status() {
 }
 
 #[test]
+fn production_readiness_surfaces_have_one_conservative_source() {
+    assert!(
+        !Path::new("docs/PRODUCTION_READINESS_REPORT_2026_09_25.md").exists(),
+        "dated readiness snapshots must not remain in active documentation"
+    );
+
+    let status =
+        fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
+    assert!(
+        status.contains("controlled technical-preview deployments"),
+        "active status must retain the technical-preview boundary"
+    );
+
+    let release_readiness = fs::read_to_string("docs/release-readiness.md")
+        .expect("release-readiness criteria should exist");
+    assert!(
+        release_readiness.contains("Required before calling it production-ready"),
+        "release-readiness must retain explicit production gates"
+    );
+
+    let archived = fs::read_to_string("docs/history/PRODUCTION_READINESS_REPORT-2026-09-25.md")
+        .expect("dated readiness report should remain available as history");
+    assert!(
+        archived.contains("Historical snapshot — not current status"),
+        "archived readiness reports must be visibly labeled"
+    );
+}
+
+#[test]
 fn security_md_exists_and_complete() {
     let security = fs::read_to_string("SECURITY.md").expect("Could not read SECURITY.md");
 

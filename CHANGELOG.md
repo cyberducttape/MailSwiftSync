@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Production hardening
 
+- Archived the dated production-readiness report and made the active status
+  surfaces consistently identify the product as technical-preview only until
+  the documented provider, scale, and recovery gates are met.
 - Set the package version to `0.1.0-alpha.1` so binaries, reports, and evidence
   carry the prerelease identifier; release tags must now exactly match the
   Cargo package version.
