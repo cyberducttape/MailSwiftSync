@@ -67,6 +67,8 @@ operator distribution archives.
 - Bounded current and legacy saved-profile reads to 1 MiB before TOML parsing.
 - Bounded migration-proof reads to 32 MiB before signing or verification JSON
   parsing.
+- Bounded migration-assurance snapshot inputs to 256 MiB per file before
+  in-memory comparison.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

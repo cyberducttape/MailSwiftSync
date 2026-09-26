@@ -50,7 +50,8 @@ counts remain complete. The current comparator materializes and sorts the
 snapshots in memory, so it is intended for bounded inventories, not yet for
 multi-million-message assurance. Large-scale assurance needs an indexed,
 restartable SQLite-backed comparison path before it can be treated as a
-scale-ready capability.
+scale-ready capability. Each supplied snapshot is capped at 256 MiB before
+parsing; larger inputs must use that future staged comparison path.
 The report can be checked with `verify` and signed with `sign`. It proves
 equality of the supplied snapshots; snapshot completeness remains the
 responsibility of the collector and is stated in the report.
