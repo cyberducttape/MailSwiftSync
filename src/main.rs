@@ -970,6 +970,15 @@ mod tests {
     }
 
     #[test]
+    fn validation_bounds_extra_option_input() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.extra_options = "--debug ".repeat(10_000);
+        let error = form.validate().unwrap_err();
+        assert!(error.contains("Extra options exceed"));
+    }
+
+    #[test]
     fn validation_rejects_imap_command_control_characters() {
         let mut form = dovecot_form();
         form.profile.source_user = "user\r\nNOOP".into();
