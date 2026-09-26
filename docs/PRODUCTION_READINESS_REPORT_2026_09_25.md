@@ -60,7 +60,7 @@ MailSwiftSync has completed comprehensive production readiness verification. All
 ⚠️ Provider-specific error classification (generic wired, provider-context pending)  
 ⚠️ Provider-specific throttling (generic limits implemented)  
 ⚠️ Content-hash verification (metadata-level reconciliation active)  
-⚠️ Recovery dashboard GUI (CLI commands available)  
+⚠️ Recovery guidance (CLI commands available; GUI integration pending)  
 
 ### Not Implemented (Documented)
 ❌ Message-level checkpoint persistence  

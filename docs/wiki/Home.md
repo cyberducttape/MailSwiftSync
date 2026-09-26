@@ -27,7 +27,7 @@ MailSwiftSync is the planning, execution, verification, and audit layer around t
 
 Projects, mailbox states, run IDs, redacted events, and verification evidence are stored in a local SQLite ledger. Interrupted jobs reopen in **Attention** for review rather than being treated as successful. Imported batch queues restore their secret-free configuration after restart, but passwords are never persisted and must be entered again.
 
-Verification currently distinguishes engine-confirmed imapsync summaries from aggregate Dovecot folder/message/size totals. Aggregate totals are useful reconciliation evidence but are not message-level proof; unresolved or incomplete evidence remains pending review.
+Verification currently uses live TLS-imapsync metadata reconciliation to detect missing/extra/changed messages at the metadata level, supplemented by aggregate Dovecot folder/message/size totals. Metadata-level reconciliation is useful evidence but is not message-body proof; unresolved or incomplete evidence remains pending review.
 
 ## Guides
 
