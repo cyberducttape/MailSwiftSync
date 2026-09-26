@@ -17,7 +17,7 @@ if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
   mkdir -p -- "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
 fi
 
-required_tools=(dovecot doveadm doveconf imapsync mailswiftsync openssl timeout)
+required_tools=(dovecot doveadm doveconf imapsync mailswiftsync openssl ps timeout)
 missing_tools=()
 for tool in "${required_tools[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || missing_tools+=("$tool")

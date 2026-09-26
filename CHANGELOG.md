@@ -25,6 +25,11 @@ operator distribution archives.
   also includes the bounded verification reason instead of hiding it behind
   a generic durability message. Status fields use Dovecot's space-delimited
   field-list syntax, so 2.3 accepts the aggregate query.
+- Headless durability failures now include the latest bounded persistence
+  diagnostic, so integration failures identify the failed ledger operation.
+- The distributed Linux runtime now includes `procps`, which packaged
+  imapsync invokes for process inspection; the product integration lab fails
+  early if `ps` is missing.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.

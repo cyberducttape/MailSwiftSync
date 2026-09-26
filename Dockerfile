@@ -40,6 +40,7 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         ca-certificates \
         openssl \
+        procps \
         "dovecot-core=${DOVECOT_VERSION}" \
         "dovecot-imapd=${DOVECOT_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \

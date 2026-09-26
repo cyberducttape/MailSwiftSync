@@ -982,8 +982,16 @@ pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> 
                 )
             })
             .unwrap_or_default();
+        let durability_detail = last_durability_detail(&app.output)
+            .map(|detail| {
+                format!(
+                    "; durability detail: {}",
+                    crate::truncate_utf8(detail, 2048)
+                )
+            })
+            .unwrap_or_default();
         return Err(format!(
-            "durable terminal state was not confirmed: {}{verification_detail}",
+            "durable terminal state was not confirmed: {}{verification_detail}{durability_detail}",
             app.status.text
         ));
     }
@@ -997,9 +1005,16 @@ fn last_verification_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
         .find_map(|line| line.strip_prefix("[verification] "))
 }
 
+fn last_durability_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
+    output
+        .iter()
+        .rev()
+        .find_map(|line| line.strip_prefix("[durability] "))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::last_verification_detail;
+    use super::{last_durability_detail, last_verification_detail};
     use crate::BoundedLineBuffer;
 
     #[test]
@@ -1009,5 +1024,15 @@ mod tests {
         output.push_bounded("engine output".into(), 10, 1024);
         output.push_bounded("[verification] latest issue".into(), 10, 1024);
         assert_eq!(last_verification_detail(&output), Some("latest issue"));
+    }
+
+    #[test]
+    fn headless_failure_keeps_the_latest_durability_detail() {
+        let mut output = BoundedLineBuffer::new();
+        output.push_bounded("[durability] earlier issue".into(), 10, 1024);
+        output.push_bounded("engine output".into(), 10, 1024);
+        output.push_bounded("[durability] latest issue".into(), 10, 1024);
+
+        assert_eq!(last_durability_detail(&output), Some("latest issue"));
     }
 }
