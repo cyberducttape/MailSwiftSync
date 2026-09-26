@@ -28,14 +28,11 @@ jobs:
       - name: Verify compatibility policy for release channel
         shell: bash
         run: |
-          case "$GITHUB_REF_NAME" in
-            *-alpha|*-beta.*|*-rc.*)
-              scripts/verify-compatibility-matrix.sh --release-preview docs/compatibility-matrix.md
-              ;;
-            *)
-              scripts/verify-compatibility-matrix.sh --release docs/compatibility-matrix.md
-              ;;
-          esac
+          if [[ "$(bash scripts/release-channel.sh "$GITHUB_REF_NAME")" == preview ]]; then
+            scripts/verify-compatibility-matrix.sh --release-preview docs/compatibility-matrix.md
+          else
+            scripts/verify-compatibility-matrix.sh --release docs/compatibility-matrix.md
+          fi
       - name: Install provider evidence validator
         run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
       - name: Fetch externally retained provider evidence
@@ -55,10 +52,11 @@ jobs:
           MAILSWIFTSYNC_POLICY_FILE: ${{ github.workspace }}/tests/provider-evidence/policy.json
           MAILSWIFTSYNC_SCHEMA_FILE: ${{ github.workspace }}/tests/provider-evidence/schema.json
         run: |
-          case "$GITHUB_REF_NAME" in
-            *-alpha|*-beta.*|*-rc.*) scripts/verify-evidence-gate.sh ;;
-            *) scripts/verify-evidence-gate.sh --release ;;
-          esac
+          if [[ "$(bash scripts/release-channel.sh "$GITHUB_REF_NAME")" == preview ]]; then
+            scripts/verify-evidence-gate.sh
+          else
+            scripts/verify-evidence-gate.sh --release
+          fi
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
       - name: Install cargo-audit
