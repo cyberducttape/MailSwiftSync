@@ -21,6 +21,8 @@ operator distribution archives.
 - Shared the immutable job/run identifiers across in-memory mismatch records,
   removing two repeated heap allocations per detail row during reconciliation
   and bounded mismatch report reads.
+- Enforced the mismatch-detail budget inside each reconciliation pass, preventing
+  an individual pass from exceeding the bound before its results are merged.
 
 ### Documentation and release packaging
 
