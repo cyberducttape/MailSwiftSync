@@ -330,6 +330,7 @@ pub(crate) fn duplicate_destination(jobs: &[BulkJob]) -> Result<Option<String>, 
     Ok(None)
 }
 
+#[cfg(test)]
 pub(crate) fn matches_queue(
     stored: &[core::MailboxJob],
     desired: &[(String, String, String)],
@@ -356,12 +357,14 @@ pub(crate) fn prepare_batch_project(
     destination_endpoint: &str,
 ) -> Result<(String, Vec<String>), String> {
     if let Some(project_id) = requested_project_id {
-        match store.mailboxes(project_id) {
-            Ok(stored) if matches_queue(&stored, mailboxes) => {
-                let job_ids = stored.into_iter().map(|job| job.id).collect();
+        match store.mailbox_queue_matches(project_id, mailboxes) {
+            Ok(true) => {
+                let job_ids = store
+                    .mailbox_ids(project_id)
+                    .map_err(|error| format!("Could not read durable batch IDs: {error}"))?;
                 return Ok((project_id.to_owned(), job_ids));
             }
-            Ok(_) => {
+            Ok(false) => {
                 return Err(
                     "The existing durable batch no longer matches the admitted queue; refusing to create a replacement project. Re-import the queue as a new batch before retrying.".into(),
                 );

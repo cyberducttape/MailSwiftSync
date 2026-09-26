@@ -119,6 +119,44 @@ impl StateStore {
             .collect()
     }
 
+    /// Compare a complete imported queue without materializing its durable
+    /// profiles. Queue order is part of the batch identity, so stream the
+    /// rows in rowid order and compare each one with the admitted input.
+    pub fn mailbox_queue_matches(
+        &self,
+        project_id: &str,
+        desired: &[(String, String, String)],
+    ) -> rusqlite::Result<bool> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_mailbox,destination_mailbox,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
+        )?;
+        let mut rows = statement.query([project_id])?;
+        for (source_mailbox, destination_mailbox, config) in desired {
+            let Some(row) = rows.next()? else {
+                return Ok(false);
+            };
+            let stored_source: String = row.get(0)?;
+            let stored_destination: String = row.get(1)?;
+            let stored_config: Option<String> = row.get(2)?;
+            if stored_source != *source_mailbox
+                || stored_destination != *destination_mailbox
+                || stored_config.as_deref() != Some(config.as_str())
+            {
+                return Ok(false);
+            }
+        }
+        Ok(rows.next()?.is_none())
+    }
+
+    pub fn mailbox_ids(&self, project_id: &str) -> rusqlite::Result<Vec<String>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid")?;
+        statement
+            .query_map([project_id], |row| row.get(0))?
+            .collect()
+    }
+
     /// Load only one presentation page. Durable callers that need every row
     /// should continue using `mailboxes`; the workspace must not materialize a
     /// 100,000-row queue merely to render its historical view.

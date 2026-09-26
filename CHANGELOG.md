@@ -8,6 +8,8 @@ operator distribution archives.
 
 - Recovery schema validation now requires every runtime object to be an actual
   SQLite table, rejecting stamped ledgers that substitute views for tables.
+- Durable batch reuse now streams queue comparison and loads only mailbox IDs,
+  avoiding materialization of every persisted profile for large imported queues.
 - Live IMAP metadata verification now stages source and destination records in
   a private SQLite database and reconciles them in bounded batches, avoiding
   account-sized Rust message maps while preserving bounded mismatch evidence.
