@@ -47,6 +47,8 @@ operator distribution archives.
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
   `0.1.0-alpha.1` package version used by binaries and reports.
+- Added deterministic 10k/100k synthetic verifier coverage at 0%, 10%, and
+  100% mismatch rates to guard the indexed reconciliation path at scale.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy

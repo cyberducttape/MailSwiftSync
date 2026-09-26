@@ -1231,6 +1231,57 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_verifier_scale_covers_balanced_mismatch_rates() {
+        for &(count, mismatch_percent) in &[
+            (10_000_usize, 0_usize),
+            (10_000, 10),
+            (10_000, 100),
+            (100_000, 0),
+            (100_000, 10),
+            (100_000, 100),
+        ] {
+            let changed = count * mismatch_percent / 100;
+            let mut source = ExtractedMessages::with_capacity(count);
+            let mut destination = ExtractedMessages::with_capacity(count);
+            for index in 0..count {
+                let uid = index.to_string();
+                let message_id = format!("<synthetic-{index}@example.test>");
+                source.insert(
+                    MailboxMessageKey::new("INBOX", &uid),
+                    ExtractedMessage {
+                        message_id: Some(message_id.clone()),
+                        uid: Some(uid.clone()),
+                        size_bytes: Some(1_000),
+                        internal_date: Some("2024-01-01T00:00:00Z".to_owned()),
+                    },
+                );
+                destination.insert(
+                    MailboxMessageKey::new("INBOX", &uid),
+                    ExtractedMessage {
+                        message_id: Some(message_id),
+                        uid: Some(uid),
+                        size_bytes: Some(if index < changed { 1_001 } else { 1_000 }),
+                        internal_date: Some("2024-01-01T00:00:00Z".to_owned()),
+                    },
+                );
+            }
+
+            let (_, summary) = MessageVerification::detect_mismatches_with_folder_mapping(
+                "synthetic-job",
+                "synthetic-run",
+                &source,
+                &destination,
+                &HashMap::new(),
+            )
+            .unwrap();
+            assert_eq!(summary.total_source, count as u64);
+            assert_eq!(summary.total_destination, count as u64);
+            assert_eq!(summary.metadata_matches, (count - changed) as u64);
+            assert_eq!(summary.changed_count, changed as u64);
+        }
+    }
+
+    #[test]
     fn detects_missing_messages() {
         let mut source = HashMap::new();
         source.insert(
