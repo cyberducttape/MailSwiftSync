@@ -109,6 +109,15 @@ impl StateStore {
         if mailboxes.is_empty() {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let _total_profile_bytes = mailboxes.iter().try_fold(0usize, |total, (_, _, config)| {
+            if config.len() > MAX_PERSISTED_PROFILE_BYTES {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+            total
+                .checked_add(config.len())
+                .filter(|value| *value <= MAX_TOTAL_PERSISTED_PROFILE_BYTES)
+                .ok_or(rusqlite::Error::InvalidQuery)
+        })?;
         let mut destinations = BTreeSet::new();
         if mailboxes.iter().any(|(_, destination, config)| {
             !destinations.insert(normalized_destination_identity(destination, Some(config)))
