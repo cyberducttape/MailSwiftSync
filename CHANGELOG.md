@@ -32,6 +32,10 @@ operator distribution archives.
   to pull-request CI and release publication gates.
 - Added the capability-claim validator to the local `make check` path and
   explicitly exclude repository metadata from host-native package archives.
+- Updated dependency-audit documentation to reflect pull-request and release
+  enforcement, not only the scheduled audit.
+- Updated the cargo-deny pin to 0.20.2 so current RustSec CVSS 4.0 advisories
+  are parsed before policy checks run.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 

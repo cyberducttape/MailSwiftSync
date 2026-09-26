@@ -87,10 +87,14 @@ fn security_md_exists_and_complete() {
 
 #[test]
 fn release_and_pull_request_ci_enforce_the_dependency_policy() {
-    for workflow in [".github/workflows/ci.yml", ".github/workflows/release.yml"] {
+    for workflow in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        ".github/workflows/dependency-audit.yml",
+    ] {
         let contents = fs::read_to_string(workflow).expect("workflow should be readable");
         assert!(
-            contents.contains("cargo install cargo-deny --version 0.18.3 --locked"),
+            contents.contains("cargo install cargo-deny --version 0.20.2 --locked"),
             "{workflow} must install the pinned cargo-deny version"
         );
         assert!(

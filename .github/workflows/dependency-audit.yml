@@ -19,7 +19,7 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: Install cargo-deny
-        run: cargo install cargo-deny --version 0.18.3 --locked
+        run: cargo install cargo-deny --version 0.20.2 --locked
       - name: Audit RustSec advisories
         # cargo-audit scans the committed Cargo.lock directly; unlike Cargo,
         # cargo-audit 0.22.x has no --locked option.
