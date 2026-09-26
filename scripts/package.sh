@@ -24,6 +24,7 @@ if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
 fi
 export SOURCE_DATE_EPOCH
 tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner \
+  --exclude='.git' \
   -C "$package_dir" -czf "$archive" .
 scripts/verify-release-bundle.sh "$archive"
 if command -v sha256sum >/dev/null 2>&1; then

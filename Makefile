@@ -1,13 +1,16 @@
 .DEFAULT_GOAL := check
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: check format shell-check evidence-check compatibility clippy test build integration audit release-check
+.PHONY: check format capability-check shell-check evidence-check compatibility clippy test build integration audit release-check
 
 # Fast local equivalent of the CI source, script, and static-analysis checks.
-check: format shell-check evidence-check compatibility clippy
+check: format capability-check shell-check evidence-check compatibility clippy
 
 format:
 	cargo fmt --check
+
+capability-check:
+	python3 scripts/verify-capability-claims.py
 
 shell-check:
 	bash -n scripts/*.sh
