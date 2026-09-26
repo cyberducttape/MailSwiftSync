@@ -225,18 +225,13 @@ pub(crate) fn headless_status(
         let batch = store
             .project_has_mailbox_configs(&project.id)
             .map_err(|error| error.to_string())?;
-        let attention_reasons = store
-            .mailbox_attention_reasons(&project.id)
-            .map_err(|error| error.to_string())?;
         let mut mailboxes = Vec::new();
-        for mailbox in store
-            .mailboxes(&project.id)
+        for (mailbox, attention_reason) in store
+            .mailbox_status_page(&project.id, 0, u32::MAX)
             .map_err(|error| error.to_string())?
         {
             mailboxes.push(HeadlessMailboxStatus {
-                attention_reason: attention_reasons
-                    .get(&mailbox.id)
-                    .map(|reason| reason.as_str().to_owned()),
+                attention_reason: attention_reason.map(|reason| reason.as_str().to_owned()),
                 id: mailbox.id,
                 source_mailbox: mailbox.source_mailbox,
                 destination_mailbox: mailbox.destination_mailbox,
@@ -548,9 +543,9 @@ pub(crate) fn headless_execute_with_credentials(
         .to_owned();
     let mailbox_count = app
         .store
-        .mailboxes(&project_id)
+        .mailbox_state_counts(&project_id)
         .map_err(|error| error.to_string())?
-        .len();
+        .total;
     if mailbox_count != 1 {
         return Err(format!(
             "headless execution requires exactly one mailbox; durable project contains {mailbox_count}"
@@ -782,11 +777,11 @@ pub(crate) fn headless_batch_execute_selected(
     wait_for_headless_controller(&mut app)?;
     let final_mailboxes = app
         .store
-        .mailboxes(&project_id)
+        .mailbox_status_page(&project_id, 0, u32::MAX)
         .map_err(|error| error.to_string())?;
     let final_selected = final_mailboxes
         .iter()
-        .filter(|mailbox| app.bulk_selected_ids.contains(&mailbox.id))
+        .filter(|(mailbox, _)| app.bulk_selected_ids.contains(&mailbox.id))
         .collect::<Vec<_>>();
     if final_selected.is_empty() {
         return Err(
@@ -803,8 +798,8 @@ pub(crate) fn headless_batch_execute_selected(
     }
     let unresolved = final_selected
         .iter()
-        .filter(|mailbox| !is_verified_terminal_state(&mailbox.state))
-        .map(|mailbox| format!("{}={}", mailbox.id, mailbox.state))
+        .filter(|(mailbox, _)| !is_verified_terminal_state(&mailbox.state))
+        .map(|(mailbox, _)| format!("{}={}", mailbox.id, mailbox.state))
         .collect::<Vec<_>>();
     if !unresolved.is_empty() {
         return Err(format!(
