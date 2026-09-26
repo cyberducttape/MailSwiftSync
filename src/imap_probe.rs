@@ -236,11 +236,11 @@ const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
 const MESSAGE_UID_SEARCH_WINDOW_SIZE: u64 = 10_000;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
 // The current verifier intentionally remains an in-memory implementation. This
-// estimate covers fetched records, not the full peak of both account maps and
-// every reconciliation index. It is therefore a fail-closed admission guard,
-// not a process-wide memory guarantee. SQLite-backed streaming reconciliation
+// estimate covers fetched records only, not the full peak of both account maps
+// and every reconciliation index. It is therefore a fail-closed fetched-state
+// admission guard, not a process-wide memory guarantee. SQLite-backed streaming reconciliation
 // is required before very large MSP migrations can be production-supported.
-const MAX_ESTIMATED_MESSAGE_STATE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_ESTIMATED_FETCHED_STATE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_MAILBOX_STABILITY_ATTEMPTS: usize = 2;
 
 pub(crate) struct MessageFetchBudget<'a> {
@@ -307,7 +307,7 @@ fn read_imap_list_response<S: Read>(
     tag: &str,
     buffer: &mut [u8; 4096],
 ) -> Result<ListInventorySummary, String> {
-    read_imap_list_response_inner(stream, tag, buffer, None)
+    read_imap_list_response_inner(stream, tag, buffer, None, None)
 }
 
 #[allow(dead_code)]
@@ -318,7 +318,7 @@ fn read_imap_list_response_with_mailboxes<S: Read>(
     mailboxes: &mut Vec<String>,
 ) -> Result<ListInventorySummary, String> {
     let mut details = Vec::new();
-    let summary = read_imap_list_response_inner(stream, tag, buffer, Some(&mut details))?;
+    let summary = read_imap_list_response_inner(stream, tag, buffer, Some(&mut details), None)?;
     mailboxes.extend(
         details
             .into_iter()
@@ -333,8 +333,9 @@ fn read_imap_list_response_with_details<S: Read>(
     tag: &str,
     buffer: &mut [u8; 4096],
     mailboxes: &mut Vec<MailboxDescriptor>,
+    budget: &MessageFetchBudget<'_>,
 ) -> Result<ListInventorySummary, String> {
-    read_imap_list_response_inner(stream, tag, buffer, Some(mailboxes))
+    read_imap_list_response_inner(stream, tag, buffer, Some(mailboxes), Some(budget))
 }
 
 fn read_imap_list_response_inner<S: Read>(
@@ -342,6 +343,7 @@ fn read_imap_list_response_inner<S: Read>(
     tag: &str,
     buffer: &mut [u8; 4096],
     mut mailbox_details: Option<&mut Vec<MailboxDescriptor>>,
+    budget: Option<&MessageFetchBudget<'_>>,
 ) -> Result<ListInventorySummary, String> {
     let mut line = Vec::new();
     let started = Instant::now();
@@ -354,6 +356,9 @@ fn read_imap_list_response_inner<S: Read>(
     const MAX_INTER_READ_STALL: Duration = Duration::from_secs(15);
     let deadline = started + MAX_IMAP_LIST_DURATION;
     loop {
+        if let Some(budget) = budget {
+            budget.check()?;
+        }
         if last_read.elapsed() > MAX_INTER_READ_STALL {
             return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
         }
@@ -688,17 +693,30 @@ pub(crate) fn connect_tls_stream(
     } else {
         format!("{server_name}:{port}")
     };
-    let sockets = address
-        .to_socket_addrs()
-        .map_err(|error| format!("{host}: {error}"))?
-        .collect::<Vec<_>>();
+    let (resolved, resolver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = resolved.send(
+            address
+                .to_socket_addrs()
+                .map(|iter| iter.collect::<Vec<_>>()),
+        );
+    });
+    let sockets = resolver
+        .recv_timeout(Duration::from_secs(8))
+        .map_err(|_| format!("{host}: DNS resolution timed out"))?
+        .map_err(|error| format!("{host}: {error}"))?;
     if sockets.is_empty() {
         return Err(format!("{host}: no address found"));
     }
     let mut last_error = None;
     let mut tcp = None;
+    let connect_deadline = Instant::now() + Duration::from_secs(8);
     for socket in sockets {
-        match TcpStream::connect_timeout(&socket, Duration::from_secs(8)) {
+        let remaining = connect_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match TcpStream::connect_timeout(&socket, remaining) {
             Ok(stream) => {
                 tcp = Some(stream);
                 break;
@@ -715,6 +733,8 @@ pub(crate) fn connect_tls_stream(
         )
     })?;
     tcp.set_read_timeout(Some(Duration::from_secs(8)))
+        .map_err(|e| e.to_string())?;
+    tcp.set_write_timeout(Some(Duration::from_secs(8)))
         .map_err(|e| e.to_string())?;
     let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if !ca_bundle.trim().is_empty() {
@@ -768,6 +788,10 @@ pub(crate) fn connect_tls_stream(
             .sock
             .set_read_timeout(Some(Duration::from_secs(8)))
             .map_err(|e| format!("{host}: could not set TLS read timeout: {e}"))?;
+        stream
+            .sock
+            .set_write_timeout(Some(Duration::from_secs(8)))
+            .map_err(|e| format!("{host}: could not set TLS write timeout: {e}"))?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
         return Ok((stream, greeting));
     }
@@ -779,6 +803,10 @@ pub(crate) fn connect_tls_stream(
         .sock
         .set_read_timeout(Some(Duration::from_secs(8)))
         .map_err(|e| format!("{host}: could not set TLS read timeout: {e}"))?;
+    stream
+        .sock
+        .set_write_timeout(Some(Duration::from_secs(8)))
+        .map_err(|e| format!("{host}: could not set TLS write timeout: {e}"))?;
     let greeting = read_imap_greeting(&mut stream, host)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
     Ok((stream, greeting))
@@ -847,7 +875,10 @@ fn verify_certificate_pin(
         .and_then(|certificates| certificates.first())
         .ok_or_else(|| format!("{host}: TLS peer did not provide a certificate"))?;
     let digest = Sha256::digest(certificate.as_ref());
-    let actual = digest.iter().map(|byte| format!("{:02x}", byte)).collect::<String>();
+    let actual = digest
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
     if actual != expected.trim().to_ascii_lowercase() {
         return Err(format!("{host}: TLS certificate SHA-256 pin mismatch"));
     }
@@ -1084,7 +1115,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     let mut messages = HashMap::new();
     let mut estimated_state_bytes = 0usize;
     let mut page_number = 0usize;
-    let searched_uids = enumerate_uid_pages(
+    let searched_uid_count = enumerate_uid_pages(
         stream,
         host,
         mailbox,
@@ -1142,7 +1173,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
                         "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
                     ));
                 }
-                if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
+                if estimated_state_bytes > MAX_ESTIMATED_FETCHED_STATE_BYTES {
                     return Err(format!(
                         "{host}: folder {mailbox}: message data exceeds memory budget"
                     ));
@@ -1151,10 +1182,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             Ok(())
         },
     )?;
-    if searched_uids.len() as u64 != start_exists {
+    if searched_uid_count != start_exists {
         return Err(format!(
-            "{host}: folder {mailbox}: SEARCH coverage mismatch (EXISTS {start_exists}, unique UIDs {})",
-            searched_uids.len()
+            "{host}: folder {mailbox}: SEARCH coverage mismatch (EXISTS {start_exists}, validated UIDs {searched_uid_count})",
         ));
     }
 
@@ -1274,12 +1304,12 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
     mut consume_page: F,
-) -> Result<HashSet<u64>, String>
+) -> Result<u64, String>
 where
     F: FnMut(&mut S, &mut [u8; 4096], &[u64]) -> Result<(), String>,
 {
     let mut window_start = 1_u64;
-    let mut searched_uids = HashSet::new();
+    let mut searched_uid_count = 0_u64;
     let mut search_number = 0usize;
     while window_start < uidnext {
         budget.check()?;
@@ -1303,14 +1333,28 @@ where
                 host,
             ));
         }
-        let uids = parse_uid_search_response(response, host, mailbox)?;
-        searched_uids.extend(uids.iter().copied());
+        let mut uids = parse_uid_search_response(response, host, mailbox)?;
+        uids.sort_unstable();
+        if uids.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(format!(
+                "{host}: folder {mailbox}: SEARCH returned duplicate UIDs in window {window_start}:{window_end}"
+            ));
+        }
+        if uids
+            .iter()
+            .any(|uid| *uid < window_start || *uid > window_end)
+        {
+            return Err(format!(
+                "{host}: folder {mailbox}: SEARCH returned a UID outside window {window_start}:{window_end}"
+            ));
+        }
+        searched_uid_count = searched_uid_count.saturating_add(uids.len() as u64);
         for uid_page in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize) {
             consume_page(stream, buffer, uid_page)?;
         }
         window_start = window_end.saturating_add(1);
     }
-    Ok(searched_uids)
+    Ok(searched_uid_count)
 }
 
 fn parse_uid_search_response(
@@ -1401,6 +1445,7 @@ pub(crate) fn fetch_tls_account_messages(
         "a005",
         &mut buffer,
         &mut mailbox_details,
+        budget,
     )?;
     let mut mailboxes = mailbox_details
         .iter()
@@ -1456,10 +1501,10 @@ pub(crate) fn fetch_tls_account_messages(
                             "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
                         ));
                     }
-                    if estimated_state_bytes > MAX_ESTIMATED_MESSAGE_STATE_BYTES {
+                    if estimated_state_bytes > MAX_ESTIMATED_FETCHED_STATE_BYTES {
                         let _ = stream.write_all(b"a999 LOGOUT\r\n");
                         return Err(format!(
-                            "{host}: account exceeded the estimated {MAX_ESTIMATED_MESSAGE_STATE_BYTES}-byte verification memory budget"
+                            "{host}: account exceeded the estimated {MAX_ESTIMATED_FETCHED_STATE_BYTES}-byte fetched-state admission budget"
                         ));
                     }
                 }
@@ -1468,18 +1513,17 @@ pub(crate) fn fetch_tls_account_messages(
             Err(error) => {
                 // Retain the folder-specific cause so the all-or-nothing
                 // account failure identifies every unstable folder.
+                let fatal_session_error = is_fatal_session_error(&error);
                 incomplete_folders.insert(mailbox, error);
+                if fatal_session_error {
+                    break;
+                }
             }
         }
     }
     let _ = stream.write_all(b"a999 LOGOUT\r\n");
     if !incomplete_folders.is_empty() {
-        let mut folders = incomplete_folders.keys().cloned().collect::<Vec<_>>();
-        folders.sort();
-        return Err(format!(
-            "{host}: verification did not obtain stable metadata for folders: {}",
-            folders.join(", ")
-        ));
+        return Err(format_folder_failures(host, &incomplete_folders));
     }
     Ok(FetchedAccountMessages {
         mailboxes: mailbox_inventory,
@@ -1489,6 +1533,64 @@ pub(crate) fn fetch_tls_account_messages(
         content_fingerprints: all_fingerprints,
         incomplete_folders,
     })
+}
+
+fn is_fatal_session_error(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "connection closed",
+        "connection reset",
+        "broken pipe",
+        "timed out",
+        "timeout",
+        "tls",
+        "could not read",
+        "could not write",
+    ]
+    .iter()
+    .any(|marker| error.contains(marker))
+}
+
+fn format_folder_failures(host: &str, failures: &HashMap<String, String>) -> String {
+    const MAX_DETAILS: usize = 16;
+    const MAX_REASON_CHARS: usize = 240;
+    let mut folders = failures.keys().cloned().collect::<Vec<_>>();
+    folders.sort();
+    let total = folders.len();
+    let details = folders
+        .into_iter()
+        .take(MAX_DETAILS)
+        .map(|folder| {
+            let reason = failures
+                .get(&folder)
+                .map(String::as_str)
+                .unwrap_or("unknown failure");
+            let reason = reason
+                .chars()
+                .map(|character| {
+                    if character.is_control() {
+                        ' '
+                    } else {
+                        character
+                    }
+                })
+                .take(MAX_REASON_CHARS)
+                .collect::<String>();
+            format!("{folder}: {reason}")
+        })
+        .collect::<Vec<_>>();
+    let omitted = total.saturating_sub(details.len());
+    if omitted == 0 {
+        format!(
+            "{host}: verification did not obtain stable metadata for folders: {}",
+            details.join("; ")
+        )
+    } else {
+        format!(
+            "{host}: verification did not obtain stable metadata for folders: {}; (+{omitted} more)",
+            details.join("; ")
+        )
+    }
 }
 
 fn estimated_message_record_bytes(
@@ -1737,7 +1839,12 @@ fn fetch_content_fingerprint(record: &str) -> Option<String> {
         .as_bytes()
         .get(body_offset..body_offset.checked_add(size)?)?;
     let digest = Sha256::digest(body);
-    Some(digest.iter().map(|byte| format!("{:02x}", byte)).collect::<String>())
+    Some(
+        digest
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<String>(),
+    )
 }
 
 fn fetch_number(line: &str, field: &str) -> Option<u64> {
@@ -1782,17 +1889,7 @@ fn fetch_message_id(record: &str) -> Option<String> {
         .as_bytes()
         .get(body_start..body_start + literal_size)?;
     let body = String::from_utf8_lossy(body);
-    body.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.trim().eq_ignore_ascii_case("message-id").then(|| {
-            value
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .trim()
-                .to_owned()
-        })
-    })
+    parse_message_id_header(&body)
 }
 
 fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
@@ -1813,17 +1910,27 @@ fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
             .position(|part| part == b"\r\n")?
         + 2;
     let body = record.get(body_start..body_start + size)?;
-    String::from_utf8_lossy(body).lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.trim().eq_ignore_ascii_case("message-id").then(|| {
-            value
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .trim()
-                .to_owned()
-        })
-    })
+    parse_message_id_header(&String::from_utf8_lossy(body))
+}
+
+fn parse_message_id_header(body: &str) -> Option<String> {
+    let mut message_id: Option<String> = None;
+    for line in body.lines() {
+        if line.starts_with([' ', '\t']) {
+            if let Some(value) = message_id.as_mut() {
+                value.push(' ');
+                value.push_str(line.trim());
+            }
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("message-id") {
+            message_id = Some(value.trim().to_owned());
+        }
+    }
+    message_id.map(|value| value.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
@@ -1836,11 +1943,13 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageFetchBudget, authenticated_list_command, parse_list_delimiter,
-        parse_list_mailbox_name, parse_message_fetch_response,
-        parse_message_fetch_response_with_fingerprints, read_imap_list_response,
-        read_imap_list_response_with_mailboxes, tagged_response_outside_literals,
+        MessageFetchBudget, authenticated_list_command, format_folder_failures,
+        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_response,
+        parse_message_fetch_response_with_fingerprints, parse_message_id_header,
+        read_imap_list_response, read_imap_list_response_with_mailboxes,
+        tagged_response_outside_literals,
     };
+    use std::collections::HashMap;
     use std::io::{self, Cursor, Read};
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
@@ -2042,6 +2151,24 @@ mod tests {
         );
         let second = &messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "9")];
         assert_eq!(second.message_id, None);
+    }
+
+    #[test]
+    fn message_id_header_parser_unfolds_continuations() {
+        assert_eq!(
+            parse_message_id_header("Message-ID:\r\n <abc@example.com>\r\n"),
+            Some("<abc@example.com>".into())
+        );
+    }
+
+    #[test]
+    fn folder_failure_details_are_bounded_and_preserved() {
+        let failures = (0..17)
+            .map(|index| (format!("folder-{index:02}"), format!("failure-{index}")))
+            .collect::<HashMap<_, _>>();
+        let detail = format_folder_failures("imap.example", &failures);
+        assert!(detail.contains("folder-00: failure-0"));
+        assert!(detail.contains("(+1 more)"));
     }
 
     #[test]

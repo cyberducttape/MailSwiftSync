@@ -95,10 +95,7 @@ use runner::{dovecot_state_candidate, record_process_tail};
 use std::process::Command;
 pub(crate) use ui::App;
 
-use eframe::{
-    egui,
-    egui::{Color32, RichText, Stroke},
-};
+use eframe::egui;
 #[cfg(test)]
 use imap_probe::{
     command_endpoint_parts, command_port, endpoint_for_probe, fresh_imap_authentication_applies,
@@ -142,9 +139,8 @@ use ui::job_state_badge;
 use ui::recommended_next_action;
 use ui::{
     AppearancePreferences, ThemeColors, ThemeKind, WorkspaceRefreshOptions, WorkspaceSnapshot,
-    WorkspaceView, display_job_state, format_elapsed, format_phase_name, markdown_escape,
-    needs_operator_review, password_visibility_id, preferred_project_id,
-    project_health_state_counts, push_visible_output, render_account, status_color,
+    WorkspaceView, display_job_state, markdown_escape, needs_operator_review,
+    preferred_project_id, project_health_state_counts, push_visible_output,
     successful_run_severity, successful_run_status, truncate_utf8,
 };
 use ui::{StatusMessage, StatusSeverity};
@@ -649,7 +645,10 @@ mod tests {
         form.profile.extra_options = "--timeout=30".into();
         let snapshot = form.plan_snapshot();
         assert!(snapshot.contains("extra_options_sha256"));
-        let expected = format!("{:x}", Sha256::digest("--timeout\u{1f}30".as_bytes()));
+        let expected = Sha256::digest("--timeout\u{1f}30".as_bytes())
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<String>();
         assert!(snapshot.contains(&expected));
         assert!(!snapshot.contains("--timeout"));
     }
