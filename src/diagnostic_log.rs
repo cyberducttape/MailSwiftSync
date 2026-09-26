@@ -131,9 +131,11 @@ impl DiagnosticLogger {
             )
         };
         let path = self.directory.join(filename);
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options
             .open(&path)
             .map_err(|error| format!("could not create diagnostic log: {error}"))?;
         restrict_file_permissions(&path)
@@ -292,6 +294,31 @@ mod tests {
         assert_eq!(
             std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o755
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostic_log_is_owner_only_at_creation_in_a_readable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-diagnostic-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        logger
+            .write_line("project", "run", "job", "stdout", "mailbox metadata")
+            .unwrap();
+        drop(logger);
+        let entry = std::fs::read_dir(&directory)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            entry.metadata().unwrap().permissions().mode() & 0o777,
+            0o600
         );
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Diagnostic transcripts now request owner-only permissions atomically when
+  each file is created on Unix, avoiding a brief umask-dependent exposure
+  before permissions are tightened.
 - Fixed the sparse-UID Dovecot fixture ownership after creating its Maildir
   tree, so the Dovecot service user can assign UIDs and expunge the fixture
   messages during integration setup.
