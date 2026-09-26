@@ -6,6 +6,10 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Production hardening
 
+- Reduced verifier peak allocations by borrowing canonical message keys across
+  reconciliation partitions and moving first-pass mismatch records instead of
+  cloning them; SQLite-backed streaming remains required for very large
+  mailbox support.
 - Hardened the capability-claims drift gate to normalize Markdown and HTML
   presentation and detect affirmative production, GA, and support claims in
   headings, tables, blockquotes, and formatted text; added adversarial tests.
