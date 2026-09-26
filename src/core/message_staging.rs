@@ -309,7 +309,7 @@ mod tests {
         stage
             .insert_messages(StagedMessageSide::Source, &messages)
             .unwrap();
-        stage.connection().execute_batch("CREATE TEMP TABLE staged_matched(side INTEGER,mailbox TEXT,uidvalidity INTEGER,uid TEXT,PRIMARY KEY(side,mailbox,uidvalidity,uid));").unwrap();
+        stage.connection().execute_batch("CREATE TABLE staged_matched(side INTEGER,mailbox TEXT,uidvalidity INTEGER,uid TEXT,PRIMARY KEY(side,mailbox,uidvalidity,uid));").unwrap();
         let batch = stage
             .batch(StagedMessageSide::Source, 0, true, true)
             .unwrap();

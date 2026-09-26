@@ -22,6 +22,9 @@ operator distribution archives.
 - Released transient fetched-page reservations immediately after SQLite staging,
   so large-account admission scales with bounded page memory instead of
   accumulating the former account-sized allowance.
+- Kept SQLite reconciliation intermediates inside the private per-run stage
+  database instead of process-wide temporary tables, preserving metadata
+  permissions and crash cleanup boundaries.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable

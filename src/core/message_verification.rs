@@ -1002,8 +1002,12 @@ impl MessageVerification {
         let connection = stage.connection();
         connection
             .execute_batch(
-                "CREATE TEMP TABLE staged_matched(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
-                 CREATE TEMP TABLE staged_folder_mapping(source TEXT PRIMARY KEY, destination TEXT NOT NULL);",
+                // Keep reconciliation intermediates in the private stage
+                // database. TEMP tables may spill into SQLite's process-wide
+                // temporary directory when temp_store=FILE, escaping the
+                // per-run permissions and cleanup lifecycle.
+                "CREATE TABLE staged_matched(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
+                 CREATE TABLE staged_folder_mapping(source TEXT PRIMARY KEY, destination TEXT NOT NULL);",
             )
             .map_err(|error| format!("could not initialize staged reconciliation: {error}"))?;
         for (source, destination) in folder_mapping {
@@ -1163,7 +1167,7 @@ impl MessageVerification {
         // Unique date/size candidates are probable matches. Buckets are held
         // in SQLite, not in a Rust HashSet proportional to account size.
         connection
-            .execute_batch("CREATE TEMP TABLE staged_fingerprint_buckets(folder TEXT NOT NULL,date_key TEXT NOT NULL,size_bytes INTEGER NOT NULL,PRIMARY KEY(folder,date_key,size_bytes));")
+            .execute_batch("CREATE TABLE staged_fingerprint_buckets(folder TEXT NOT NULL,date_key TEXT NOT NULL,size_bytes INTEGER NOT NULL,PRIMARY KEY(folder,date_key,size_bytes));")
             .map_err(|error| format!("could not initialize staged fingerprint buckets: {error}"))?;
         after_rowid = 0;
         loop {
@@ -1251,7 +1255,7 @@ impl MessageVerification {
                 missing_count = missing_count.saturating_add(1);
             }
         }
-        connection.execute_batch("CREATE TEMP TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0;").map_err(|error| error.to_string())?;
+        connection.execute_batch("CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0;").map_err(|error| error.to_string())?;
         after_rowid = 0;
         loop {
             let batch = stage
