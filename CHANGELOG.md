@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Closed SQLite handles before removing temporary database fixtures, fixing
+  Windows test failures caused by platform-specific file locking.
 - Fixed integration artifact-directory setup so the host runner applies
   private permissions before handing ownership to the container user.
 - The disposable Dovecot integration lab now explicitly runs its fixture

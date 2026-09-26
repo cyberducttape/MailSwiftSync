@@ -1669,6 +1669,9 @@ fn snapshot_repairs_dirty_current_schema_before_copying() {
         )
         .unwrap();
     assert_eq!(raw_output, 0);
+    // Windows does not allow removing a SQLite database while its connection
+    // handle remains open, even after the last query has completed.
+    drop(snapshot);
     std::fs::remove_dir_all(directory).unwrap();
 }
 
@@ -2086,6 +2089,7 @@ fn writable_open_repairs_unconstrained_current_schema_with_backup() {
         })
         .count();
     assert_eq!(backup_count, 1);
+    drop(repaired);
     std::fs::remove_dir_all(directory).unwrap();
 }
 
