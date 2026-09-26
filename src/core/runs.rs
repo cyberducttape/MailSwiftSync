@@ -24,6 +24,9 @@ impl StateStore {
         engine: &str,
         plan_snapshot: &str,
     ) -> rusqlite::Result<()> {
+        if plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let tx = self.connection.unchecked_transaction()?;
         let (current, phase_at_start): (String, String) = tx.query_row(
             "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
@@ -112,6 +115,13 @@ impl StateStore {
         plan_snapshot: &str,
         child_plans: &[BatchChildPlan],
     ) -> rusqlite::Result<Vec<String>> {
+        if plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES
+            || child_plans
+                .iter()
+                .any(|plan| plan.plan_snapshot.len() > MAX_PERSISTED_PROFILE_BYTES)
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let mut unique_job_ids = BTreeSet::new();
         let duplicate_job_id = job_ids.iter().any(|job_id| !unique_job_ids.insert(job_id));
         if job_ids.is_empty()
