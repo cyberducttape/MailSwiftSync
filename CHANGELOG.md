@@ -9,6 +9,9 @@ operator distribution archives.
 - Fixed headless batch completion validation to use chunked durable mailbox
   states instead of a capped full-mailbox status read, avoiding false failures
   for batches larger than the status-page limit.
+- Bounded complete project report snapshots so customer-proof and operator
+  exports fail closed instead of materializing an unbounded mailbox population;
+  larger projects remain available through paged status/report views.
 
 ### Documentation and release packaging
 

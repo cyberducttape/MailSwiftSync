@@ -1,6 +1,7 @@
 use super::*;
 
 const MAX_REPORT_PAGE_ROWS: u32 = 1_000;
+const MAX_REPORT_SNAPSHOT_MAILBOXES: i64 = 100_000;
 
 impl StateStore {
     pub fn project_report_snapshot(
@@ -30,6 +31,28 @@ impl StateStore {
             tx.commit()?;
             return Ok(None);
         };
+
+        // Report exports assemble a complete project snapshot in memory so
+        // that customer proofs and operator reports share one consistent
+        // read model. Keep that explicit export boundary fail-closed rather
+        // than allowing a pathological mailbox count to exhaust the
+        // application process. Paged status/report views remain available
+        // for larger projects.
+        let mailbox_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM mailbox_jobs WHERE project_id=?1",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        if mailbox_count > MAX_REPORT_SNAPSHOT_MAILBOXES {
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "project report contains {mailbox_count} mailboxes; report exports are limited to {MAX_REPORT_SNAPSHOT_MAILBOXES}"
+                    ),
+                ),
+            )));
+        }
 
         let mut jobs = Vec::new();
         let mut attention_reasons = HashMap::new();
