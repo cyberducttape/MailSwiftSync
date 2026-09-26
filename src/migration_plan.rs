@@ -56,10 +56,30 @@ fn dovecot_config_dialect(version: &str) -> Result<DovecotConfigDialect, String>
 }
 
 fn detect_dovecot_config_dialect(doveadm_path: &str) -> Result<DovecotConfigDialect, String> {
-    let version = crate::runner::probe_engine_version(doveadm_path).ok_or_else(|| {
+    let version = crate::runner::probe_engine_version(doveadm_path)
+        .or_else(|| {
+            let configured = resolve_executable_path(doveadm_path)?;
+            let path_doveadm = resolve_executable_path("doveadm")?;
+            (configured == path_doveadm)
+                .then(|| crate::runner::probe_engine_version("dovecot"))
+                .flatten()
+        })
+        .ok_or_else(|| {
         "could not determine the configured doveadm version; refusing to guess its mail-location configuration syntax".to_owned()
-    })?;
+        })?;
     dovecot_config_dialect(&version)
+}
+
+fn resolve_executable_path(executable: &str) -> Option<PathBuf> {
+    let path = Path::new(executable);
+    if path.components().count() > 1 || path.is_absolute() {
+        return path.canonicalize().ok();
+    }
+    let search_path = std::env::var_os("PATH")?;
+    std::env::split_paths(&search_path)
+        .map(|directory| directory.join(path))
+        .find(|candidate| candidate.is_file())
+        .and_then(|candidate| candidate.canonicalize().ok())
 }
 
 fn append_imapc_mail_settings(args: &mut Vec<String>, dialect: DovecotConfigDialect) {
