@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Staged verifier fallback lookups now index each message by its reconciled
+  mailbox, normalized date, and size, avoiding repeated cross-folder scans
+  when many folders share common metadata.
 - Diagnostic transcripts now request owner-only permissions atomically when
   each file is created on Unix, avoiding a brief umask-dependent exposure
   before permissions are tightened.

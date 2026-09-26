@@ -112,6 +112,7 @@ impl MessageMetadataStage {
              CREATE TABLE staged_messages(
                  side INTEGER NOT NULL CHECK(side IN (0,1)),
                  mailbox TEXT NOT NULL,
+                 match_mailbox TEXT NOT NULL,
                  uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= -1),
                  uid TEXT NOT NULL,
                  message_id TEXT,
@@ -121,7 +122,8 @@ impl MessageMetadataStage {
                  PRIMARY KEY(side,mailbox,uidvalidity,uid)
              );
              CREATE INDEX staged_messages_id ON staged_messages(side,message_id,mailbox,uidvalidity,uid);
-             CREATE INDEX staged_messages_metadata ON staged_messages(side,date_key,size_bytes,mailbox,uidvalidity,uid);",
+             CREATE INDEX staged_messages_metadata ON staged_messages(side,date_key,size_bytes,mailbox,uidvalidity,uid);
+             CREATE INDEX staged_messages_match_metadata ON staged_messages(side,match_mailbox,date_key,size_bytes,uidvalidity,uid);",
         )
     }
 
@@ -135,7 +137,7 @@ impl MessageMetadataStage {
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
         {
-            let mut insert = tx.prepare_cached("INSERT INTO staged_messages(side,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").map_err(|e| e.to_string())?;
+            let mut insert = tx.prepare_cached("INSERT INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8)").map_err(|e| e.to_string())?;
             for (key, message) in messages {
                 let uidvalidity = key
                     .uidvalidity

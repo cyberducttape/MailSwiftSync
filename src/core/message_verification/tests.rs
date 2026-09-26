@@ -948,6 +948,35 @@ fn staged_reconciliation_matches_in_memory_accounting() {
 }
 
 #[test]
+fn staged_fingerprint_lookups_seek_on_mapped_folder_date_and_size() {
+    let stage = MessageMetadataStage::open_in_memory().unwrap();
+    let mut statement = stage
+        .connection()
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM staged_messages WHERE side=?1 AND match_mailbox=?2 AND date_key=?3 AND size_bytes=?4",
+        )
+        .unwrap();
+    let plan = statement
+        .query_map(
+            rusqlite::params![
+                StagedMessageSide::Source.as_i64(),
+                "INBOX",
+                "2024-01-01T00:00:00Z",
+                4096
+            ],
+            |row| row.get::<_, String>(3),
+        )
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join(" ");
+    assert!(
+        plan.contains("staged_messages_match_metadata"),
+        "fallback lookup did not use the folder/date/size index: {plan}"
+    );
+}
+
+#[test]
 fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
     let message = |id: Option<&str>, uid: &str, size: u64, date: &str| ExtractedMessage {
         message_id: id.map(str::to_owned),

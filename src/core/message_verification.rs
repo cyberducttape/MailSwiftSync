@@ -1036,6 +1036,16 @@ impl MessageVerification {
                 )
                 .map_err(|error| format!("could not stage folder mapping: {error}"))?;
         }
+        // Precompute the effective destination folder and let SQLite seek on
+        // it directly during fallback. Evaluating this mapping expression in
+        // each count query can repeatedly scan records from every folder that
+        // shares the same date/size pair.
+        connection
+            .execute(
+                "UPDATE staged_messages SET match_mailbox=COALESCE((SELECT destination FROM staged_folder_mapping WHERE source=staged_messages.mailbox),mailbox) WHERE side=0",
+                [],
+            )
+            .map_err(|error| format!("could not index staged source folder mapping: {error}"))?;
 
         let job_context: Arc<str> = Arc::from(job_id);
         let run_context: Arc<str> = Arc::from(run_id);
@@ -1209,14 +1219,14 @@ impl MessageVerification {
                 }
                 let source_count: i64 = connection
                     .query_row(
-                        "SELECT COUNT(*) FROM staged_messages s LEFT JOIN staged_folder_mapping f ON f.source=s.mailbox WHERE s.side=0 AND COALESCE(f.destination,s.mailbox)=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid)",
+                        "SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.match_mailbox=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid)",
                         params![expected, source.date_key, sqlite_stage_size(&source)?],
                         |row| row.get(0),
                     )
                     .map_err(|error| format!("could not count staged source bucket: {error}"))?;
                 let destination_count: i64 = connection
                     .query_row(
-                        "SELECT COUNT(*) FROM staged_messages d WHERE d.side=1 AND d.mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid)",
+                        "SELECT COUNT(*) FROM staged_messages d WHERE d.side=1 AND d.match_mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid)",
                         params![expected, source.date_key, sqlite_stage_size(&source)?],
                         |row| row.get(0),
                     )
@@ -1226,12 +1236,12 @@ impl MessageVerification {
                 }
                 let source_row = stage_candidate(
                     connection,
-                    "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes FROM staged_messages s LEFT JOIN staged_folder_mapping f ON f.source=s.mailbox WHERE s.side=0 AND COALESCE(f.destination,s.mailbox)=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid) LIMIT 1",
+                    "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes FROM staged_messages s WHERE s.side=0 AND s.match_mailbox=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid) LIMIT 1",
                     params![expected, source.date_key, sqlite_stage_size(&source)?],
                 )?;
                 let destination_row = stage_candidate(
                     connection,
-                    "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) LIMIT 1",
+                    "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.match_mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) LIMIT 1",
                     params![expected, source.date_key, sqlite_stage_size(&source)?],
                 )?;
                 if let (Some(source_row), Some(destination_row)) = (source_row, destination_row) {
