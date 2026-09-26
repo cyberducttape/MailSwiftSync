@@ -15,6 +15,8 @@ operator distribution archives.
   product state, configuration, secrets, and proof outputs live under that
   private directory, and the distributed image still defaults to its
   unprivileged service account.
+- Native Dovecot integration failures now upload the same bounded, redacted
+  environment and server/controller diagnostics as the packaged IMAP lab.
 - Recovery schema validation now checks the `WHERE` predicates of partial
   unique run indexes, rejecting same-named indexes that do not enforce active
   run ownership; writable recovery backs up and rebuilds malformed indexes.

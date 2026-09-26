@@ -89,11 +89,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the distributed runtime image
         run: docker build --build-arg MAILSWIFTSYNC_GIT_SHA="${GITHUB_SHA}" --tag mailswiftsync:dovecot-integration .
+      - name: Prepare native Dovecot diagnostic artifact directory
+        run: |
+          mkdir -p provider-evidence
+          chmod 0700 provider-evidence
       - name: Run native doveadm transfer, preflight, and verification
         run: >-
           docker run --rm
           --user 0:0
+          --volume "$PWD/provider-evidence:/provider-evidence"
+          --env MAILSWIFTSYNC_EVIDENCE_OUTPUT=/provider-evidence
           --env MAILSWIFTSYNC_TEST_ENGINE=Dovecot
           --entrypoint /bin/bash
           mailswiftsync:dovecot-integration
           /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+      - name: Restore native Dovecot artifact ownership for upload
+        if: always()
+        run: |
+          if [ -d provider-evidence ]; then
+            sudo chown -R "$(id -u):$(id -g)" provider-evidence
+            chmod -R u+rwX,go-rwx provider-evidence
+          fi
+      - name: Upload native Dovecot diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-dovecot-integration-evidence
+          path: provider-evidence
+          if-no-files-found: warn
