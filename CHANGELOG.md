@@ -85,6 +85,8 @@ operator distribution archives.
   mailbox configuration blobs in support bundles.
 - Kept full mailbox configuration out of report snapshots, where report
   rendering never consumes it.
+- Bounded report snapshot history reads to the latest acceptance/evidence per
+  mailbox and the 20 runs rendered by operator reports.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
