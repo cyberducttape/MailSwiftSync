@@ -201,7 +201,7 @@ pub(crate) fn read_sheet(
 /// Reject obviously oversized XLSX worksheets before Calamine expands the
 /// sheet into a cell matrix. The worksheet dimension is near the start of the
 /// XML part, so this bounded probe does not materialize the workbook entry.
-fn validate_xlsx_sheet_dimensions(path: &Path, sheet_index: usize) -> Result<(), String> {
+fn validate_xlsx_sheet_dimensions(path: &Path, _sheet_index: usize) -> Result<(), String> {
     if path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -212,10 +212,25 @@ fn validate_xlsx_sheet_dimensions(path: &Path, sheet_index: usize) -> Result<(),
     }
     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
-    let entry_name = format!("xl/worksheets/sheet{}.xml", sheet_index + 1);
-    let Ok(mut entry) = archive.by_name(&entry_name) else {
+    let mut worksheet_found = false;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
+        let entry_name = entry.name().to_owned();
+        if !entry_name.starts_with("xl/worksheets/") || !entry_name.ends_with(".xml") {
+            continue;
+        }
+        worksheet_found = true;
+        validate_xlsx_sheet_entry_dimensions(&mut entry)?;
+    }
+    if !worksheet_found {
         return Ok(());
-    };
+    }
+    Ok(())
+}
+
+fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), String> {
     let mut prefix = Vec::with_capacity(128 * 1024);
     let mut chunk = [0_u8; 8192];
     while prefix.len() < 128 * 1024 {

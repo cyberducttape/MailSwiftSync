@@ -39,6 +39,8 @@ operator distribution archives.
   silently interpreting malformed unsigned fields as absent.
 - Replaced string-matched mailbox stability retries with a typed mutation
   outcome so transport and protocol failures are not retried as mailbox churn.
+- Hardened XLSX dimension preflight to inspect every worksheet XML part,
+  avoiding assumptions about worksheet-part numbering before Calamine parsing.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
