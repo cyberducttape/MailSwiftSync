@@ -71,6 +71,8 @@ operator distribution archives.
   in-memory comparison.
 - Streamed migration-assurance snapshot hashing instead of allocating a
   second full serialized snapshot-sized buffer.
+- Made customer-proof aggregate counters saturating so malformed extreme
+  evidence values cannot wrap into misleading totals.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
