@@ -1,6 +1,8 @@
 use super::*;
 
 const MAX_PROJECT_LIST_ROWS: usize = 10_000;
+const MAX_MAILBOX_PAGE_ROWS: u32 = 1_000;
+const MAX_MAILBOX_STATUS_ROWS: u32 = 100_000;
 
 impl StateStore {
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
@@ -126,6 +128,7 @@ impl StateStore {
         offset: u32,
         limit: u32,
     ) -> rusqlite::Result<Vec<MailboxJob>> {
+        let limit = limit.min(MAX_MAILBOX_PAGE_ROWS);
         let mut statement = self.connection.prepare(
             "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
         )?;
@@ -152,6 +155,7 @@ impl StateStore {
         offset: u32,
         limit: u32,
     ) -> rusqlite::Result<Vec<(MailboxJob, Option<AttentionReason>)>> {
+        let limit = limit.min(MAX_MAILBOX_STATUS_ROWS);
         let mut statement = self.connection.prepare(
             "SELECT id,source_mailbox,destination_mailbox,state,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
         )?;
