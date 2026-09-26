@@ -11,6 +11,8 @@ operator distribution archives.
   account-sized Rust message maps while preserving bounded mismatch evidence.
 - Verification-stage databases now live inside private per-run directories, so
   normal cleanup and stale-run recovery remove mailbox metadata after a crash.
+- XLSX import dimension checks now fail closed when a non-empty worksheet lacks
+  an early bounded dimension declaration, preventing unchecked Calamine expansion.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable
