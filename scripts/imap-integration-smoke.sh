@@ -615,7 +615,7 @@ for message_id in \
     exit 1
   fi
 done
-for index in 1 100; do
+for index in 91 100; do
   if ! destination_has_message_id "mailswiftsync-sparse-$index@example.test"; then
     echo "FAIL: destination is missing sparse UID fixture message $index" >&2
     exit 1
