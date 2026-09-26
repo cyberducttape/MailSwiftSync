@@ -1129,18 +1129,9 @@ impl Form {
             format!("imapc_user={}", self.profile.source_user),
             "-o".into(),
             format!("imapc_password={password}"),
-            "-o".into(),
-            "mail_driver=imapc".into(),
-            "-o".into(),
-            "mail_path=".into(),
-            "mailbox".into(),
-            "status".into(),
-            "-u".into(),
-            self.profile.source_user.clone(),
-            "-t".into(),
-            "messages,vsize".into(),
-            "*".into(),
         ]);
+        // These are global `doveadm -o` settings, so they must all precede
+        // the `mailbox status` subcommand (the same rule as sync/backup).
         append_dovecot_source_tls_policy(
             &mut source,
             &self.profile.source_tls,
@@ -1154,6 +1145,19 @@ impl Form {
         } else {
             source.extend(["-o".into(), format!("imapc_port={source_port}")]);
         }
+        source.extend([
+            "-o".into(),
+            "mail_driver=imapc".into(),
+            "-o".into(),
+            "mail_path=".into(),
+            "mailbox".into(),
+            "status".into(),
+            "-u".into(),
+            self.profile.source_user.clone(),
+            "-t".into(),
+            "messages,vsize".into(),
+            "*".into(),
+        ]);
         let mut destination = Vec::new();
         if !self.profile.dovecot_config.trim().is_empty() {
             destination.extend(["-c".into(), self.profile.dovecot_config.clone()]);

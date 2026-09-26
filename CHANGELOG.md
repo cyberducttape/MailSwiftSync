@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Fixed Dovecot source mailbox verification command ordering so TLS and
+  `-o` overrides are passed before the `mailbox status` subcommand.
 - Fixed Dovecot live command ordering: dsync-specific `-l`, `-s`, and `-1`
   options now follow `sync`/`backup`, avoiding a Dovecot 2.3 global-option
   parse failure before migration starts.

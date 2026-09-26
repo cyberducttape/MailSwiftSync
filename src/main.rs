@@ -325,6 +325,36 @@ mod tests {
     }
 
     #[test]
+    fn dovecot_source_status_global_options_precede_subcommand() {
+        let form = dovecot_form();
+        let commands = form.dovecot_verification_commands(true);
+        let source_args = &commands[0].1;
+        let mailbox_status = source_args
+            .windows(2)
+            .position(|pair| pair == ["mailbox", "status"])
+            .expect("source verification must query mailbox status");
+
+        for (index, argument) in source_args.iter().enumerate() {
+            if argument == "-o" || argument == "-c" {
+                assert!(
+                    index < mailbox_status,
+                    "global doveadm option {argument} appeared after mailbox status: {source_args:?}"
+                );
+            }
+        }
+        assert!(
+            source_args[..mailbox_status]
+                .windows(2)
+                .any(|pair| pair == ["-o", "imapc_port=993"])
+        );
+        assert!(
+            source_args[..mailbox_status]
+                .windows(2)
+                .any(|pair| pair == ["-o", "ssl_client_require_valid_cert=yes"])
+        );
+    }
+
+    #[test]
     fn live_dovecot_plan_uses_previous_checkpoint() {
         let mut form = dovecot_form();
         form.dry_run = false;
