@@ -22,6 +22,8 @@ operator distribution archives.
   the runtime's 100,000-row admission and restore limit.
 - CSV imports now validate and parse the same no-follow file handle, with a
   bounded reader that rejects files that grow past the input limit mid-read.
+- Release compatibility and evidence gates now share explicit prerelease
+  classification, including numbered alpha tags such as `v0.1.0-alpha.1`.
 - Headless batch retry admission now fails closed when durable mailbox state is
   missing, rather than silently omitting those mailbox IDs from selection.
 - Recovery schema validation now requires every runtime object to be an actual
