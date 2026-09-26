@@ -35,6 +35,8 @@ operator distribution archives.
   dirty current-version ledger cannot reinstall the unrepaired source file.
 - Strengthened the v12 schema signature to verify runtime index columns,
   uniqueness, and partial-index properties rather than names alone.
+- Made durable mismatch readers reject negative SQLite values instead of
+  silently interpreting malformed unsigned fields as absent.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
