@@ -13,6 +13,8 @@ impl StateStore {
         limit: usize,
     ) -> rusqlite::Result<(Vec<MessageMismatch>, bool)> {
         let limit = limit.clamp(1, 10_000);
+        let job_context: Arc<str> = Arc::from(job_id);
+        let run_context: Arc<str> = Arc::from(run_id);
         let mut statement = self.connection.prepare(
             "SELECT id,mismatch_type,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_fingerprint,destination_fingerprint FROM message_mismatches WHERE job_id=?1 AND run_id=?2 ORDER BY recorded_at,id LIMIT ?3",
         )?;
@@ -25,8 +27,8 @@ impl StateStore {
             };
             mismatches.push(MessageMismatch {
                 id: row.get(0)?,
-                job_id: Arc::from(job_id),
-                run_id: Arc::from(run_id),
+                job_id: Arc::clone(&job_context),
+                run_id: Arc::clone(&run_context),
                 mismatch_type,
                 source_folder: row.get(2)?,
                 destination_folder: row.get(3)?,

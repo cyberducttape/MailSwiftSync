@@ -19,7 +19,8 @@ operator distribution archives.
   pathological mismatch-heavy verification now fails closed for operator review
   instead of growing mismatch evidence without a process-level bound.
 - Shared the immutable job/run identifiers across in-memory mismatch records,
-  removing two repeated heap allocations per detail row during reconciliation.
+  removing two repeated heap allocations per detail row during reconciliation
+  and bounded mismatch report reads.
 
 ### Documentation and release packaging
 
