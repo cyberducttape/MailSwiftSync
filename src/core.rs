@@ -1829,6 +1829,57 @@ mod tests {
     }
 
     #[test]
+    fn writable_open_repairs_unconstrained_current_schema_with_backup() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-constraints-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "DROP INDEX idx_evidence_history_job_captured;
+                 ALTER TABLE evidence RENAME TO evidence_legacy;
+                 CREATE TABLE evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL DEFAULT 0, destination_folders INTEGER NOT NULL DEFAULT 0, authoritative INTEGER NOT NULL DEFAULT 0, missing_messages INTEGER NOT NULL DEFAULT 0, extra_messages INTEGER NOT NULL DEFAULT 0, modified_messages INTEGER NOT NULL DEFAULT 0, probable_messages INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 INSERT INTO evidence SELECT job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,captured_at FROM evidence_legacy;
+                 DROP TABLE evidence_legacy;
+                 ALTER TABLE evidence_history RENAME TO evidence_history_legacy;
+                 CREATE TABLE evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL, destination_messages INTEGER NOT NULL, source_bytes INTEGER NOT NULL, destination_bytes INTEGER NOT NULL, unmatched_messages INTEGER, failed_messages INTEGER NOT NULL, source_folders INTEGER NOT NULL, destination_folders INTEGER NOT NULL, authoritative INTEGER NOT NULL DEFAULT 0, missing_messages INTEGER NOT NULL DEFAULT 0, extra_messages INTEGER NOT NULL DEFAULT 0, modified_messages INTEGER NOT NULL DEFAULT 0, probable_messages INTEGER NOT NULL DEFAULT 0, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+                 INSERT INTO evidence_history SELECT id,job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,captured_at FROM evidence_history_legacy;
+                 DROP TABLE evidence_history_legacy;",
+            )
+            .unwrap();
+        drop(store);
+
+        let repaired = StateStore::open(&path).unwrap();
+        for table in ["evidence", "evidence_history"] {
+            let sql: String = repaired
+                .connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(sql.contains("CHECK(source_messages >= 0)"));
+        }
+        let backup_count = std::fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("state.db.pre-migrate-v12.")
+            })
+            .count();
+        assert_eq!(backup_count, 1);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_negative_unsigned_evidence_values() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-negative-{}", Uuid::new_v4()));

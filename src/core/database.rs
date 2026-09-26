@@ -111,6 +111,7 @@ impl StateStore {
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         store.migrate()?;
         Self::validate_schema_layout(&store.connection)?;
+        Self::validate_schema_constraints(&store.connection)?;
         restrict_database_sidecars(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(store)
@@ -473,8 +474,71 @@ impl StateStore {
         Ok(())
     }
 
+    fn validate_schema_constraints(connection: &Connection) -> rusqlite::Result<()> {
+        const REQUIRED_CHECKS: &[(&str, &[&str])] = &[
+            (
+                "evidence",
+                &[
+                    "check(source_messages>=0)",
+                    "check(destination_messages>=0)",
+                    "check(source_bytes>=0)",
+                    "check(destination_bytes>=0)",
+                    "check(unmatched_messagesisnullorunmatched_messages>=0)",
+                    "check(failed_messages>=0)",
+                    "check(source_folders>=0)",
+                    "check(destination_folders>=0)",
+                    "check(authoritativein(0,1))",
+                    "check(missing_messages>=0)",
+                    "check(extra_messages>=0)",
+                    "check(modified_messages>=0)",
+                    "check(probable_messages>=0)",
+                ],
+            ),
+            (
+                "evidence_history",
+                &[
+                    "check(source_messages>=0)",
+                    "check(destination_messages>=0)",
+                    "check(source_bytes>=0)",
+                    "check(destination_bytes>=0)",
+                    "check(unmatched_messagesisnullorunmatched_messages>=0)",
+                    "check(failed_messages>=0)",
+                    "check(source_folders>=0)",
+                    "check(destination_folders>=0)",
+                    "check(authoritativein(0,1))",
+                    "check(missing_messages>=0)",
+                    "check(extra_messages>=0)",
+                    "check(modified_messages>=0)",
+                    "check(probable_messages>=0)",
+                ],
+            ),
+        ];
+        for (table, required_checks) in REQUIRED_CHECKS {
+            let sql: String = connection.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+                [*table],
+                |row| row.get(0),
+            )?;
+            let normalized = sql
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|character| !character.is_ascii_whitespace())
+                .collect::<String>();
+            if required_checks
+                .iter()
+                .any(|required| !normalized.contains(required))
+            {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
+        Ok(())
+    }
+
     fn current_schema_is_clean(connection: &Connection) -> bool {
         if Self::validate_schema_layout(connection).is_err() {
+            return false;
+        }
+        if Self::validate_schema_constraints(connection).is_err() {
             return false;
         }
         (|| -> rusqlite::Result<bool> {
@@ -552,6 +616,7 @@ impl StateStore {
             };
             store.migrate()?;
             Self::validate_schema_layout(&store.connection)?;
+            Self::validate_schema_constraints(&store.connection)?;
             return Ok(store);
         }
 
@@ -565,6 +630,7 @@ impl StateStore {
         };
         store.migrate()?;
         Self::validate_schema_layout(&store.connection)?;
+        Self::validate_schema_constraints(&store.connection)?;
         Ok(store)
     }
     pub fn in_memory() -> rusqlite::Result<Self> {
@@ -573,6 +639,7 @@ impl StateStore {
         };
         store.migrate()?;
         Self::validate_schema_layout(&store.connection)?;
+        Self::validate_schema_constraints(&store.connection)?;
         Ok(store)
     }
 
@@ -581,6 +648,7 @@ impl StateStore {
     /// typo from silently overwriting a prior recovery artifact.
     pub fn backup_to(&self, destination: &Path) -> rusqlite::Result<()> {
         Self::validate_schema_layout(&self.connection)?;
+        Self::validate_schema_constraints(&self.connection)?;
         self.backup_to_unchecked(destination)
     }
 
@@ -641,6 +709,7 @@ impl StateStore {
             source_connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if source_schema_version == CURRENT_SCHEMA_VERSION {
             Self::validate_schema_layout(&source_connection)?;
+            Self::validate_schema_constraints(&source_connection)?;
         } else if source_schema_version > CURRENT_SCHEMA_VERSION
             || !Self::has_legacy_mailbox_table(&source_connection)?
         {
@@ -672,6 +741,7 @@ impl StateStore {
             }
             if source_schema_version == CURRENT_SCHEMA_VERSION {
                 Self::validate_schema_layout(&destination_connection)?;
+                Self::validate_schema_constraints(&destination_connection)?;
             }
             Ok(())
         })();
@@ -1012,6 +1082,7 @@ impl StateStore {
                  DROP TABLE evidence_history_legacy;",
             )?;
         }
+        Self::ensure_evidence_counter_constraints(&tx)?;
 
         let mismatch_columns = tx
             .prepare("PRAGMA table_info(message_mismatches)")?
@@ -1047,6 +1118,53 @@ impl StateStore {
             )?;
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         tx.commit()?;
+        Ok(())
+    }
+
+    fn ensure_evidence_counter_constraints(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        let has_constraints = |table: &str| -> rusqlite::Result<bool> {
+            let sql: String = tx.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |row| row.get(0),
+            )?;
+            let normalized = sql
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|character| !character.is_ascii_whitespace())
+                .collect::<String>();
+            let required = [
+                "check(source_messages>=0)",
+                "check(destination_messages>=0)",
+                "check(source_bytes>=0)",
+                "check(destination_bytes>=0)",
+                "check(unmatched_messagesisnullorunmatched_messages>=0)",
+                "check(failed_messages>=0)",
+                "check(source_folders>=0)",
+                "check(destination_folders>=0)",
+                "check(authoritativein(0,1))",
+                "check(missing_messages>=0)",
+                "check(extra_messages>=0)",
+                "check(modified_messages>=0)",
+                "check(probable_messages>=0)",
+            ];
+            Ok(required.iter().all(|check| normalized.contains(check)))
+        };
+        if has_constraints("evidence")? && has_constraints("evidence_history")? {
+            return Ok(());
+        }
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_evidence_history_job_captured;
+             ALTER TABLE evidence RENAME TO evidence_unconstrained;
+             CREATE TABLE evidence (job_id TEXT PRIMARY KEY REFERENCES mailbox_jobs(id), verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL DEFAULT 0 CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL DEFAULT 0 CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             INSERT INTO evidence SELECT job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,captured_at FROM evidence_unconstrained;
+             DROP TABLE evidence_unconstrained;
+             ALTER TABLE evidence_history RENAME TO evidence_history_unconstrained;
+             CREATE TABLE evidence_history (id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL, verification_method TEXT NOT NULL DEFAULT 'aggregate_engine', verification_outcome TEXT NOT NULL DEFAULT 'incomplete', source_messages INTEGER NOT NULL CHECK(source_messages >= 0), destination_messages INTEGER NOT NULL CHECK(destination_messages >= 0), source_bytes INTEGER NOT NULL CHECK(source_bytes >= 0), destination_bytes INTEGER NOT NULL CHECK(destination_bytes >= 0), unmatched_messages INTEGER CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0), failed_messages INTEGER NOT NULL CHECK(failed_messages >= 0), source_folders INTEGER NOT NULL CHECK(source_folders >= 0), destination_folders INTEGER NOT NULL CHECK(destination_folders >= 0), authoritative INTEGER NOT NULL DEFAULT 0 CHECK(authoritative IN (0,1)), missing_messages INTEGER NOT NULL DEFAULT 0 CHECK(missing_messages >= 0), extra_messages INTEGER NOT NULL DEFAULT 0 CHECK(extra_messages >= 0), modified_messages INTEGER NOT NULL DEFAULT 0 CHECK(modified_messages >= 0), probable_messages INTEGER NOT NULL DEFAULT 0 CHECK(probable_messages >= 0), captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+             INSERT INTO evidence_history SELECT id,job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,captured_at FROM evidence_history_unconstrained;
+             DROP TABLE evidence_history_unconstrained;
+             CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);",
+        )?;
         Ok(())
     }
 
