@@ -52,6 +52,13 @@ class CapabilityClaimTests(unittest.TestCase):
             with self.subTest(fixture=fixture):
                 self.assertFalse(CHECKER.contains_affirmative_claim(fixture))
 
+    def test_manifest_marked_experimental_terms_cannot_be_in_stable_status(self):
+        manifest = {"documentation": {"experimental_only_terms": ["native dovecot execution"]}}
+        valid = "Stable today:\n- imapsync\n\nExperimental or planned:\n- Native Dovecot execution\n"
+        invalid = "Stable today:\n- Native Dovecot execution\n\nExperimental or planned:\n- Native Dovecot execution\n"
+        self.assertEqual(CHECKER.find_status_section_violations(valid, manifest), [])
+        self.assertEqual(len(CHECKER.find_status_section_violations(invalid, manifest)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

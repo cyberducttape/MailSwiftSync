@@ -56,6 +56,24 @@ def contains_affirmative_claim(line: str) -> bool:
     return any(pattern.search(normalized) for pattern in AFFIRMATIVE_CLAIMS)
 
 
+def find_status_section_violations(content: str, manifest: dict) -> list[str]:
+    """Reject manifest-marked experimental terms duplicated in stable status."""
+    sections = re.split(r"(?m)^Experimental or planned:\s*$", content, maxsplit=1)
+    if len(sections) != 2 or "Stable today:" not in sections[0]:
+        return []
+    stable = sections[0].split("Stable today:", 1)[1].casefold()
+    experimental = sections[1].casefold()
+    violations = []
+    for term in manifest.get("documentation", {}).get("experimental_only_terms", []):
+        normalized = str(term).casefold()
+        if normalized in stable and normalized in experimental:
+            violations.append(
+                "README status contradiction: manifest-marked experimental term "
+                f"{term!r} appears in both Stable today and Experimental or planned"
+            )
+    return violations
+
+
 def get_schema_version() -> int:
     """Extract CURRENT_SCHEMA_VERSION from src/core.rs."""
     if not CORE_RS.exists():
@@ -77,6 +95,15 @@ def main() -> int:
     ]
 
     violations = []
+
+    readme = ROOT / "README.md"
+    if readme.exists():
+        violations.extend(
+            f"README.md: {violation}"
+            for violation in find_status_section_violations(
+                readme.read_text(encoding="utf-8"), manifest
+            )
+        )
 
     for path in sorted(ROOT.rglob("*.md")):
         relative = path.relative_to(ROOT)

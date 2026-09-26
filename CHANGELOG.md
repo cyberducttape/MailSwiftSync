@@ -16,6 +16,8 @@ operator distribution archives.
 - Archived scheduler and message-verification design documents, maintainer
   qualification material, CI setup, and historical reports from distribution
   archives.
+- Removed the duplicate Native Dovecot entry from the README's stable section
+  and added manifest-backed validation for experimental-only status terms.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 

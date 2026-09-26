@@ -80,8 +80,6 @@ Stable today:
 - Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
 - Metadata-level message mismatch reports with durable missing, extra, and modified counts; these are not body-content proof.
-- Native Dovecot execution is implemented and wired, but remains experimental
-  until its integration fixture and recovery scenarios pass in CI.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
 - Running jobs show elapsed time and can be stopped through an explicit confirmation; Advanced options include contextual guidance for per-process throttles.

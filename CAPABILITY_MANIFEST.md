@@ -4,6 +4,9 @@
 **Last verified:** 2026-09-25
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
+The `[documentation]` policy in `capabilities.toml` also marks terms that must
+remain confined to the README's experimental/planned status section; CI checks
+that status layout against the machine-readable source.
 
 ## Legend
 
