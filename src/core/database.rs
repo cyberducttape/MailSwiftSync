@@ -366,41 +366,94 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
-        const INDEXES: &[&str] = &[
-            "idx_mailbox_jobs_project_state",
-            "idx_runs_project_started",
-            "idx_runs_job_started",
-            "idx_events_project_created",
-            "idx_events_project_kind_id",
-            "idx_evidence_history_job_captured",
-            "idx_active_processes_pid",
-            "idx_verification_acceptances_job",
-            "idx_engine_versions_captured",
-            "idx_message_mismatches_job_run",
-            "idx_events_run_created",
-            "one_running_run_per_job",
-            "one_active_run_per_job",
+        const INDEX_SIGNATURES: &[(&str, &[&str], bool, bool)] = &[
+            (
+                "idx_mailbox_jobs_project_state",
+                &["project_id", "state"],
+                false,
+                false,
+            ),
+            (
+                "idx_runs_project_started",
+                &["project_id", "started_at"],
+                false,
+                false,
+            ),
+            (
+                "idx_runs_job_started",
+                &["job_id", "started_at"],
+                false,
+                false,
+            ),
+            (
+                "idx_events_project_created",
+                &["project_id", "created_at"],
+                false,
+                false,
+            ),
+            (
+                "idx_events_project_kind_id",
+                &["project_id", "kind", "id"],
+                false,
+                false,
+            ),
+            (
+                "idx_evidence_history_job_captured",
+                &["job_id", "captured_at"],
+                false,
+                false,
+            ),
+            ("idx_active_processes_pid", &["pid"], false, false),
+            (
+                "idx_verification_acceptances_job",
+                &["job_id", "id"],
+                false,
+                false,
+            ),
+            (
+                "idx_engine_versions_captured",
+                &["captured_at"],
+                false,
+                false,
+            ),
+            (
+                "idx_message_mismatches_job_run",
+                &["job_id", "run_id", "recorded_at"],
+                false,
+                false,
+            ),
+            (
+                "idx_events_run_created",
+                &["run_id", "created_at"],
+                false,
+                false,
+            ),
+            ("one_running_run_per_job", &["job_id"], true, true),
+            ("one_active_run_per_job", &["job_id"], true, true),
         ];
-        for index in INDEXES {
-            let exists: bool = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1)",
+        for &(index, expected_columns, expected_unique, expected_partial) in INDEX_SIGNATURES {
+            let table: String = connection.query_row(
+                "SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?1",
                 [index],
                 |row| row.get(0),
             )?;
-            if !exists {
-                return Err(rusqlite::Error::InvalidQuery);
-            }
-        }
-        for (index, expected_unique) in [
-            ("one_running_run_per_job", true),
-            ("one_active_run_per_job", true),
-        ] {
             let (unique, partial): (i64, i64) = connection.query_row(
-                "SELECT \"unique\", partial FROM pragma_index_list('runs') WHERE name=?1",
-                [index],
+                "SELECT \"unique\", partial FROM pragma_index_list(?1) WHERE name=?2",
+                rusqlite::params![table, index],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
-            if (unique != expected_unique as i64) || partial != 1 {
+            let actual_columns = connection
+                .prepare(&format!("PRAGMA index_info({index})"))?
+                .query_map([], |row| row.get::<_, Option<String>>(2))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if unique != expected_unique as i64
+                || partial != expected_partial as i64
+                || actual_columns.len() != expected_columns.len()
+                || actual_columns
+                    .iter()
+                    .zip(expected_columns.iter())
+                    .any(|(actual, expected)| actual.as_deref() != Some(*expected))
+            {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
