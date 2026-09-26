@@ -3,7 +3,7 @@ use crate::credentials::SecretString;
 use crate::imap_protocol::{
     advertises_capability, atom_eq, is_tagged_response, is_untagged_response,
 };
-use crate::oauth::{read_auth_continuation, read_auth_result};
+use crate::oauth::{read_auth_continuation_with_deadline, read_auth_result_with_deadline};
 use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use sha2::{Digest, Sha256};
@@ -1311,7 +1311,17 @@ fn authenticate_imap_stream<S: Read + Write>(
                 "could not write XOAUTH2 authentication command",
             )?;
             response.clear();
-            read_auth_continuation(&mut stream, "a002", &mut response, &mut buffer)?;
+            let (deadline, cancel) = budget
+                .map(|budget| (Some(budget.deadline), Some(budget.cancel)))
+                .unwrap_or((None, None));
+            read_auth_continuation_with_deadline(
+                &mut stream,
+                "a002",
+                &mut response,
+                &mut buffer,
+                deadline,
+                cancel,
+            )?;
             write_imap_command(
                 &mut stream,
                 encoded.as_bytes(),
@@ -1325,7 +1335,14 @@ fn authenticate_imap_stream<S: Read + Write>(
                 "could not finish XOAUTH2 payload",
             )?;
             response.clear();
-            read_auth_result(&mut stream, "a002", &mut response, &mut buffer)?;
+            read_auth_result_with_deadline(
+                &mut stream,
+                "a002",
+                &mut response,
+                &mut buffer,
+                deadline,
+                cancel,
+            )?;
         } else {
             let quoted_password = SecretString::new(imap_quote(credential)?);
             let login = format!(
