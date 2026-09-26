@@ -50,7 +50,7 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
     value = {
         "format": "mailswiftsync-customer-proof",
         "format_version": 1,
-        "application_version": "0.1.0",
+        "application_version": "0.1.0-alpha.1",
         "artifact_role": "customer_evidence",
         "completion_claim": {"status": claim_status},
         "project": project,
@@ -89,7 +89,7 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
 class ProviderEvidenceGeneratorTests(unittest.TestCase):
     IDENTITY = {
         "engine_version": "2.314",
-        "mailswiftsync_version": "0.1.0",
+        "mailswiftsync_version": "0.1.0-alpha.1",
         "mailswiftsync_commit": "abc123",
         "mailswiftsync_binary_sha256": "a" * 64,
         "imapsync_binary_sha256": "b" * 64,

@@ -132,7 +132,7 @@ The system is:
 4. Document and resolve provider-specific edge cases
 
 **Build Information:**
-- Version: 0.1.0-alpha
+- Version: 0.1.0-alpha.1
 - Schema Version: 12 (current)
 - Qualified imapsync: 2.314
 - Build Date: September 25, 2026

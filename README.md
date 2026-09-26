@@ -156,7 +156,7 @@ MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its a
 
 ### 2. Download or build MailSwiftSync
 
-For released binaries, see [GitHub Releases](https://github.com/cyberducttape/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Release tags use the `v0.1.0-alpha`, `v0.1.0-beta.1`, or `v0.1.0` scheme and are blocked when they do not match Cargo's package version.
+For released binaries, see [GitHub Releases](https://github.com/cyberducttape/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Every release tag must exactly equal `v` plus Cargo's package version (currently `v0.1.0-alpha.1`), so prerelease identifiers remain part of the binary and report provenance.
 
 For contributors or users building from source:
 

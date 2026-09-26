@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Production hardening
 
+- Set the package version to `0.1.0-alpha.1` so binaries, reports, and evidence
+  carry the prerelease identifier; release tags must now exactly match the
+  Cargo package version.
 - Added authoritative v12 schema-layout validation to writable, read-only,
   backup, and restore paths; same-version ledgers are backed up before any
   state-changing repair, and structurally valid non-ledger SQLite files are

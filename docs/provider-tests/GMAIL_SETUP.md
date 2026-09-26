@@ -154,7 +154,7 @@ After a successful test run, document the results:
    - Dest: mailswiftsync-dest-test@gmail.com (disposable)
    
    **Engine Versions:**
-   - MailSwiftSync: 0.1.0 (packaged)
+   - MailSwiftSync: 0.1.0-alpha.1 (packaged)
    - imapsync: 2.314
    
    **Test Results:**

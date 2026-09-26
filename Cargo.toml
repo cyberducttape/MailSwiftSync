@@ -1,6 +1,6 @@
 [package]
 name = "mailswiftsync"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 description = "Local-first mailbox migration workbench for planning, execution, verification, and audit"
 license = "MIT"
