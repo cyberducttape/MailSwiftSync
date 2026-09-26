@@ -1,7 +1,8 @@
 # Changelog
 
 All notable changes to MailSwiftSync are documented here. Detailed pre-alpha
-development history is preserved in [the archived changelog](docs/history/CHANGELOG-pre-alpha.md).
+development history is preserved in repository history and is not shipped in
+operator distribution archives.
 
 ## [Unreleased]
 
@@ -10,8 +11,11 @@ development history is preserved in [the archived changelog](docs/history/CHANGE
 - Fixed the broken bulk-migration template link and added a real local
   Markdown-link validator for source documentation and release archives.
 - Release staging now includes linked capability metadata and the provider
-  integration script, so packaged documentation does not point outside the
-  archive.
+  operator documentation allowlist, so packaged documentation does not point
+  outside the archive.
+- Archived scheduler and message-verification design documents, maintainer
+  qualification material, CI setup, and historical reports from distribution
+  archives.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 

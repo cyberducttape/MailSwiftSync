@@ -17,9 +17,7 @@ DOCUMENTS = (
     "PRODUCTION_STATUS.md",
     "SECURITY.md",
     "CHANGELOG.md",
-    "CONTRIBUTING.md",
     "capabilities.toml",
-    "scripts/provider-integration-test.sh",
 )
 
 
@@ -29,8 +27,11 @@ def make_bundle(root: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# fixture\n", encoding="utf-8")
     (root / "mailswiftsync-test").write_text("binary fixture\n", encoding="utf-8")
-    (root / "scripts/provider-integration-test.sh").write_text(
-        "#!/usr/bin/env bash\n", encoding="utf-8"
+    (root / "CAPABILITY_MANIFEST.md").write_text(
+        "[capabilities](capabilities.toml)\n", encoding="utf-8"
+    )
+    (root / "README.md").write_text(
+        "[release docs](docs/release-readiness.md)\n", encoding="utf-8"
     )
     docs = root / "docs"
     docs.mkdir()

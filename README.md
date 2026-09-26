@@ -106,10 +106,9 @@ The current tested scope and explicit gaps are tracked in the
 [compatibility matrix](docs/compatibility-matrix.md); an entry is not treated
 as supported until its dry/live/recovery/evidence gates are complete.
 
-To test MailSwiftSync against a new IMAP provider, see the
-[provider testing guide](docs/provider-testing-guide.md). The guide includes
-setup instructions for Gmail, Microsoft 365, and Fastmail, plus a reusable
-[provider integration test script](scripts/provider-integration-test.sh).
+Provider qualification procedures and evidence-generation tools for Gmail,
+Microsoft 365, Fastmail, and disposable Dovecot fixtures are maintained in
+the source repository; they are not part of the normal operator distribution.
 
 ## Why use this instead of the alternatives?
 
@@ -164,8 +163,8 @@ For contributors or users building from source:
 cargo run --release
 ```
 
-Linux packaging targets for a stable release are tracked in the
-[Linux packaging roadmap](docs/distribution/linux-packaging-roadmap.md): signed
+Linux packaging targets for a stable release are tracked in the repository's
+release-readiness plan: signed
 Debian/Ubuntu and RHEL-family packages and repositories, x86_64/ARM64 builds,
 shell completions, a man page, and a dependency doctor. The alpha release
 continues to use portable archives and the pinned container image.

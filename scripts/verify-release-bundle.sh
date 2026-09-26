@@ -44,9 +44,7 @@ required_documents=(
   PRODUCTION_STATUS.md
   SECURITY.md
   CHANGELOG.md
-  CONTRIBUTING.md
   capabilities.toml
-  scripts/provider-integration-test.sh
 )
 
 for document in "${required_documents[@]}"; do

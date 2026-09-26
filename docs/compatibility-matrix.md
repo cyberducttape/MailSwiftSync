@@ -4,7 +4,7 @@ This matrix documents provider support and test coverage.
 
 **Status levels:**
 - **Code path verified** — Logic implemented and tested locally; this is not provider evidence
-- **Documented test** — Step-by-step procedure available in provider-testing-guide.md
+- **Documented test** — Step-by-step procedure maintained in the repository's qualification documentation
 - **Scenario tests** — Automated model/scenario coverage for match detection,
   recovery, and edge cases. These are not provider integration tests; current
   runnable counts and pass/fail results come from the CI test summary artifact.
@@ -18,8 +18,8 @@ release workflow requires a separate passing evidence record for every policy
 phase (dry pilot, live pilot, and recovery test), with the expected imapsync
 engine and version. Evidence is generated or supplied as an external release
 bundle after checkout so its commit field can name the exact immutable release
-SHA; see [the release evidence hand-off](provider-evidence-release.md). This
-Markdown matrix remains the human-readable report.
+SHA; the qualification hand-off is repository/CI material rather than a normal
+operator-bundle document. This Markdown matrix remains the human-readable report.
 
 | Source | Destination | Engine | TLS/auth | Folder namespace | Dovecot/provider version | Dry pilot | Live pilot | Recovery | Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|

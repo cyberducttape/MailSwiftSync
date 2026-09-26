@@ -12,7 +12,8 @@ fn doc_files_exist() {
 
     let expected_files = vec![
         "architecture.md",
-        "message-level-verification-design.md",
+        "history/message-level-verification-design.md",
+        "history/scheduler-design.md",
         "provider-testing-guide.md",
     ];
 
@@ -27,8 +28,8 @@ fn readme_mentions_production_status() {
     let readme = fs::read_to_string("README.md").expect("Could not read README.md");
     assert!(
         readme.contains("docs/compatibility-matrix.md")
-            && readme.contains("docs/provider-testing-guide.md"),
-        "README should link the active compatibility and provider-testing documents"
+            && readme.contains("source repository"),
+        "README should identify the active compatibility and source-only qualification documents"
     );
 }
 
