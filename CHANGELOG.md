@@ -10,6 +10,9 @@ operator distribution archives.
   SQLite table, rejecting stamped ledgers that substitute views for tables.
 - Durable batch reuse now streams queue comparison and loads only mailbox IDs,
   avoiding materialization of every persisted profile for large imported queues.
+- Verification staging now keeps SQLite temporary sort and join data in memory,
+  preventing sensitive mailbox metadata from spilling into a process-wide temp
+  directory outside the private run lifecycle.
 - Live IMAP metadata verification now stages source and destination records in
   a private SQLite database and reconciles them in bounded batches, avoiding
   account-sized Rust message maps while preserving bounded mismatch evidence.
