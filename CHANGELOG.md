@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- The Dovecot integration fixture now selects `initial_mirror` explicitly, so
+  its initial transfer exercises `doveadm backup` rather than inheriting the
+  final-preservation `sync -1` default.
 - Strengthened the archive-layout regression test to inspect the actual
   macOS/Linux/Windows release packaging commands before validating extracted
   archive roots.

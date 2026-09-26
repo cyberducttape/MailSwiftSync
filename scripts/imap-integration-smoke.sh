@@ -433,6 +433,7 @@ destination_ca_bundle = "$workspace/destination/ca.crt"
 destination_certificate_pin_sha256 = ""
 imapsync_path = "$imapsync_path"
 engine = "$test_engine"
+dovecot_strategy = "initial_mirror"
 doveadm_path = "$doveadm_path"
 dovecot_config = "$dovecot_config"
 batch_concurrency = 1
