@@ -36,6 +36,8 @@ operator distribution archives.
   enforcement, not only the scheduled audit.
 - Updated the cargo-deny pin to 0.20.2 so current RustSec CVSS 4.0 advisories
   are parsed before policy checks run.
+- Indexed wrong-folder reconciliation by metadata and ordered folder ranges to
+  avoid rescanning every folder for each duplicate Message-ID candidate.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 
