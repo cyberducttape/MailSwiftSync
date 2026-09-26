@@ -402,6 +402,48 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        // SQLite INTEGER values are signed, while the application exposes
+        // these counters and byte sizes as u64. Reject negative values at the
+        // ledger boundary instead of allowing a malformed but structurally
+        // valid database to become a huge value through an unchecked cast.
+        const NON_NEGATIVE_COLUMNS: &[(&str, &str)] = &[
+            ("mailbox_jobs", "attempt"),
+            ("evidence", "source_messages"),
+            ("evidence", "destination_messages"),
+            ("evidence", "source_bytes"),
+            ("evidence", "destination_bytes"),
+            ("evidence", "unmatched_messages"),
+            ("evidence", "failed_messages"),
+            ("evidence", "source_folders"),
+            ("evidence", "destination_folders"),
+            ("evidence", "missing_messages"),
+            ("evidence", "extra_messages"),
+            ("evidence", "modified_messages"),
+            ("evidence", "probable_messages"),
+            ("evidence_history", "source_messages"),
+            ("evidence_history", "destination_messages"),
+            ("evidence_history", "source_bytes"),
+            ("evidence_history", "destination_bytes"),
+            ("evidence_history", "unmatched_messages"),
+            ("evidence_history", "failed_messages"),
+            ("evidence_history", "source_folders"),
+            ("evidence_history", "destination_folders"),
+            ("evidence_history", "missing_messages"),
+            ("evidence_history", "extra_messages"),
+            ("evidence_history", "modified_messages"),
+            ("evidence_history", "probable_messages"),
+            ("message_mismatches", "source_uidvalidity"),
+            ("message_mismatches", "destination_uidvalidity"),
+            ("message_mismatches", "source_size_bytes"),
+            ("message_mismatches", "dest_size_bytes"),
+        ];
+        for (table, column) in NON_NEGATIVE_COLUMNS {
+            let sql = format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column} < 0)");
+            let has_negative: bool = connection.query_row(&sql, [], |row| row.get(0))?;
+            if has_negative {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         Ok(())
     }
 
