@@ -289,6 +289,14 @@ impl StateStore {
             ),
         ];
         for (table, expected) in TABLES {
+            let object_type: String = connection.query_row(
+                "SELECT type FROM sqlite_master WHERE name=?1",
+                [*table],
+                |row| row.get(0),
+            )?;
+            if object_type != "table" {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
             let mut actual = connection
                 .prepare(&format!("PRAGMA table_info({table})"))?
                 .query_map([], |row| {
