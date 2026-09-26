@@ -51,6 +51,7 @@ pub(crate) fn minimal_status_payload(status: serde_json::Value) -> serde_json::V
                 "id": project.get("id"),
                 "phase": project.get("phase"),
                 "mailbox_state_counts": project.get("mailbox_state_counts"),
+                "attention_reason_counts": project.get("attention_reason_counts"),
             })
         })
         .collect::<Vec<_>>();
@@ -328,7 +329,8 @@ mod tests {
                 "source_endpoint": "imap.customer.example",
                 "destination_endpoint": "imap.destination.example",
                 "phase": "completed",
-                "mailbox_state_counts": {"completed": 3}
+                "mailbox_state_counts": {"completed": 3},
+                "attention_reason_counts": {"verification_incomplete": 1}
             }]
         });
         let payload = minimal_status_payload(status);
@@ -339,6 +341,10 @@ mod tests {
         assert_eq!(payload["projects"][0]["id"], "project-id");
         assert_eq!(payload["projects"][0]["phase"], "completed");
         assert!(payload["projects"][0].get("mailbox_state_counts").is_some());
+        assert_eq!(
+            payload["projects"][0]["attention_reason_counts"]["verification_incomplete"],
+            1
+        );
         for field in ["name", "batch", "source_endpoint", "destination_endpoint"] {
             assert!(payload["projects"][0].get(field).is_none());
         }

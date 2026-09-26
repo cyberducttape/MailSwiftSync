@@ -143,6 +143,27 @@ impl StateStore {
         }
         Ok(reasons)
     }
+
+    /// Return aggregate counts by durable reason without loading mailbox IDs.
+    pub fn mailbox_attention_reason_counts(
+        &self,
+        project_id: &str,
+    ) -> rusqlite::Result<HashMap<String, usize>> {
+        let mut statement = self.connection.prepare(
+            "SELECT attention_reason,COUNT(*) FROM mailbox_jobs WHERE project_id=?1 AND attention_reason IS NOT NULL GROUP BY attention_reason",
+        )?;
+        let mut counts = HashMap::new();
+        for row in statement.query_map([project_id], |row| {
+            Ok((row.get::<_, String>(0)?, super::sqlite_usize(row.get(1)?)?))
+        })? {
+            let (stored_reason, count) = row?;
+            let reason = AttentionReason::parse(&stored_reason).unwrap_or(AttentionReason::Unknown);
+            let total = counts.entry(reason.as_str().to_owned()).or_insert(0usize);
+            *total = total.saturating_add(count);
+        }
+        Ok(counts)
+    }
+
     /// Return the last committed Dovecot stateful-sync checkpoint for a
     /// mailbox. The value is intentionally read separately from credentials;
     /// it contains engine state, not authentication material.

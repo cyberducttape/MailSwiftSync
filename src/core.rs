@@ -3895,7 +3895,7 @@ destination_port = "000"
         assert_eq!(
             attention_reason_for(
                 "attention",
-                "message-level verification incomplete: IMAP metadata fetch timed out",
+                "[attention_reason=verification_incomplete] message-level verification incomplete: IMAP metadata fetch timed out",
             ),
             Some(AttentionReason::VerificationIncomplete)
         );
@@ -3936,6 +3936,13 @@ destination_port = "000"
         assert_eq!(
             reasons.get(&second),
             Some(&AttentionReason::CapacityLimited)
+        );
+        assert_eq!(
+            db.mailbox_attention_reason_counts(&project.id).unwrap(),
+            HashMap::from([
+                ("authentication_failed".to_owned(), 1),
+                ("capacity_limited".to_owned(), 1),
+            ])
         );
     }
 

@@ -11,6 +11,9 @@ operator distribution archives.
   customer metadata requires the explicit `--include-customer-metadata` option.
 - Removed the verifier-wide dead-code exemption so unused production verifier
   paths are reported by normal compiler and lint checks.
+- Batch verification failures now persist an explicit verification-incomplete
+  reason, and bounded status summaries/webhooks include aggregate counts by
+  durable attention reason.
 - New profiles disable imapsync automapping by default so independent message
   verification can certify live migrations; headless live rejects plans that
   cannot provide required verification evidence.

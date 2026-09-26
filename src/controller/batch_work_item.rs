@@ -679,7 +679,11 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 } else {
                     verification_failure.map_or_else(
                         || "process completed".into(),
-                        |reason| format!("message-level verification incomplete: {reason}"),
+                        |reason| {
+                            format!(
+                                "[attention_reason=verification_incomplete] message-level verification incomplete: {reason}"
+                            )
+                        },
                     )
                 },
                 if job.form.dry_run {

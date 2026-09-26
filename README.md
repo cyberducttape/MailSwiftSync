@@ -329,8 +329,9 @@ explicit truncation flag when its 1,000-project recent view is incomplete.
 This is for operators running multiple instances or
 [sharding a large migration](docs/wiki/Scaling-large-migrations.md) across
 several ledgers. `notify-webhook` POSTs a minimal credential-free operational
-status by default (project IDs, phases, and aggregate mailbox counts; no names,
-endpoints, or process details) to one operator-configured `https://` URL.
+status by default (project IDs, phases, aggregate mailbox counts, and durable
+attention-reason counts; no names, endpoints, or process details) to one
+operator-configured `https://` URL.
 Pass `--include-customer-metadata` to explicitly include names and endpoints.
 Treat either representation as sensitive operational data; see
 [PSA and ticketing notifications](docs/wiki/PSA-notifications.md).

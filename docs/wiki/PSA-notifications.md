@@ -4,8 +4,9 @@ MSPs generally track migration work in a PSA/ticketing platform
 (ConnectWise, Autotask, Halo, Syncro, ...) rather than by polling
 MailSwiftSync directly. `notify-webhook` bridges the two without a
 vendor-specific integration. By default it sends credential-free operational
-status—project IDs, phases, and aggregate mailbox counts, excluding customer
-names, endpoints, and process details—to an operator-configured HTTPS URL.
+status—project IDs, phases, aggregate mailbox counts, and counts by durable
+attention reason, excluding customer names, endpoints, and process details—to
+an operator-configured HTTPS URL.
 The payload is still sensitive operational metadata and should go only to a
 trusted receiver.
 
