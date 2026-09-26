@@ -18,6 +18,7 @@ use std::{
 
 const DNS_RESOLVER_WORKERS: usize = 4;
 const DNS_RESOLVER_QUEUE: usize = 32;
+const BUDGETED_IMAP_IO_SLICE: Duration = Duration::from_millis(250);
 
 struct DnsResolverRequest {
     address: String,
@@ -134,6 +135,37 @@ fn read_imap_tagged<S: Read>(
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
     read_imap_tagged_with_limit(stream, tag, response, buffer, 1_048_576)
+}
+
+fn write_imap_command<S: Write>(
+    stream: &mut S,
+    bytes: &[u8],
+    budget: Option<&MessageFetchBudget<'_>>,
+    operation: &str,
+) -> Result<(), String> {
+    let Some(budget) = budget else {
+        return stream
+            .write_all(bytes)
+            .map_err(|error| format!("{operation}: {error}"));
+    };
+    let mut offset = 0;
+    while offset < bytes.len() {
+        budget.check()?;
+        match stream.write(&bytes[offset..]) {
+            Ok(0) => return Err(format!("{operation}: IMAP connection closed while writing")),
+            Ok(written) => offset = offset.saturating_add(written),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(format!("{operation}: {error}")),
+        }
+    }
+    Ok(())
 }
 
 fn read_imap_tagged_with_limit<S: Read>(
@@ -947,16 +979,24 @@ fn connect_tls_stream_inner(
         let mut response = String::new();
         let mut buffer = [0; 4096];
         let greeting = read_imap_greeting(&mut tcp, host, budget)?;
-        tcp.write_all(b"s001 CAPABILITY\r\n")
-            .map_err(|e| e.to_string())?;
+        write_imap_command(
+            &mut tcp,
+            b"s001 CAPABILITY\r\n",
+            budget,
+            "could not write CAPABILITY",
+        )?;
         read_imap_tagged(&mut tcp, "s001", &mut response, &mut buffer)?;
         if !imap_command_succeeded(&response, "s001")
             || !advertises_capability(&response, "STARTTLS")
         {
             return Err(format!("{host}: server does not advertise STARTTLS"));
         }
-        tcp.write_all(b"s002 STARTTLS\r\n")
-            .map_err(|e| e.to_string())?;
+        write_imap_command(
+            &mut tcp,
+            b"s002 STARTTLS\r\n",
+            budget,
+            "could not write STARTTLS",
+        )?;
         read_imap_tagged(&mut tcp, "s002", &mut response, &mut buffer)?;
         if !imap_command_succeeded(&response, "s002") {
             return Err(format!("{host}: STARTTLS negotiation failed"));
@@ -993,7 +1033,7 @@ fn refresh_socket_timeout(
             budget
                 .deadline
                 .saturating_duration_since(Instant::now())
-                .min(Duration::from_secs(8))
+                .min(BUDGETED_IMAP_IO_SLICE)
         })
         .unwrap_or_else(|| Duration::from_secs(8));
     if timeout.is_zero() {
@@ -1037,7 +1077,7 @@ pub(crate) fn probe_tls_authentication_with_transport(
     let (stream, greeting) =
         connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
     let (mut stream, _) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
+        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting, None)?;
     let mut response = String::new();
     let mut buffer = [0; 4096];
     stream
@@ -1087,12 +1127,16 @@ fn authenticate_imap_stream<S: Read + Write>(
     credential: &str,
     auth_method: &str,
     greeting: String,
+    budget: Option<&MessageFetchBudget<'_>>,
 ) -> Result<(S, String), String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
-    stream
-        .write_all(b"a001 CAPABILITY\r\n")
-        .map_err(|e| e.to_string())?;
+    write_imap_command(
+        &mut stream,
+        b"a001 CAPABILITY\r\n",
+        budget,
+        "could not write pre-auth CAPABILITY",
+    )?;
     read_imap_tagged(&mut stream, "a001", &mut response, &mut buffer)?;
     if !imap_command_succeeded(&response, "a001") {
         return Err(imap_command_failure(
@@ -1108,15 +1152,26 @@ fn authenticate_imap_stream<S: Read + Write>(
     if !preauth {
         if auth_method == "oauth2" {
             let encoded = crate::oauth::xoauth2_payload(user, credential);
-            stream
-                .write_all(b"a002 AUTHENTICATE XOAUTH2\r\n")
-                .map_err(|e| e.to_string())?;
+            write_imap_command(
+                &mut stream,
+                b"a002 AUTHENTICATE XOAUTH2\r\n",
+                budget,
+                "could not write XOAUTH2 authentication command",
+            )?;
             response.clear();
             read_auth_continuation(&mut stream, "a002", &mut response, &mut buffer)?;
-            stream
-                .write_all(encoded.as_bytes())
-                .and_then(|_| stream.write_all(b"\r\n"))
-                .map_err(|e| e.to_string())?;
+            write_imap_command(
+                &mut stream,
+                encoded.as_bytes(),
+                budget,
+                "could not write XOAUTH2 payload",
+            )?;
+            write_imap_command(
+                &mut stream,
+                b"\r\n",
+                budget,
+                "could not finish XOAUTH2 payload",
+            )?;
             response.clear();
             read_auth_result(&mut stream, "a002", &mut response, &mut buffer)?;
         } else {
@@ -1127,9 +1182,12 @@ fn authenticate_imap_stream<S: Read + Write>(
                 quoted_password.as_str()
             );
             let login = SecretString::new(login);
-            stream
-                .write_all(login.as_bytes())
-                .map_err(|e| e.to_string())?;
+            write_imap_command(
+                &mut stream,
+                login.as_bytes(),
+                budget,
+                "could not write IMAP authentication",
+            )?;
             read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
         }
         if !imap_command_succeeded(&response, "a002") {
@@ -1143,9 +1201,12 @@ fn authenticate_imap_stream<S: Read + Write>(
     }
     // RFC 9051 permits capabilities to change after authentication, so the
     // post-auth response is the one used for readiness decisions.
-    stream
-        .write_all(b"a003 CAPABILITY\r\n")
-        .map_err(|e| e.to_string())?;
+    write_imap_command(
+        &mut stream,
+        b"a003 CAPABILITY\r\n",
+        budget,
+        "could not write post-auth CAPABILITY",
+    )?;
     let mut post_auth_response = String::new();
     read_imap_tagged(&mut stream, "a003", &mut post_auth_response, &mut buffer)?;
     if !imap_command_succeeded(&post_auth_response, "a003") {
@@ -1168,7 +1229,7 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     greeting: String,
 ) -> Result<crate::core::ServerCapabilities, String> {
     let (mut stream, post_auth_response) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
+        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting, None)?;
     let mut buffer = [0; 4096];
     stream
         .write_all(b"a004 NAMESPACE\r\n")
@@ -1294,9 +1355,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     }
     let quoted_mailbox = imap_quote(mailbox)?;
     let select = format!("v001 SELECT {quoted_mailbox}\r\n");
-    stream
-        .write_all(select.as_bytes())
-        .map_err(|error| format!("{host}: could not select mailbox: {error}"))?;
+    write_imap_command(
+        stream,
+        select.as_bytes(),
+        Some(budget),
+        &format!("{host}: could not select mailbox"),
+    )?;
     let mut response = String::new();
     let mut buffer = [0; 4096];
     read_imap_tagged_with_budget(
@@ -1349,9 +1413,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             let command = format!(
                 "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])\r\n"
             );
-            stream
-                .write_all(command.as_bytes())
-                .map_err(|error| format!("{host}: could not fetch mailbox metadata: {error}"))?;
+            write_imap_command(
+                stream,
+                command.as_bytes(),
+                Some(budget),
+                &format!("{host}: could not fetch mailbox metadata"),
+            )?;
             let raw_response = read_imap_tagged_bytes_with_budget(
                 stream,
                 &tag,
@@ -1408,9 +1475,13 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     // missing, extra, or modified mail. The account-level caller retries this
     // folder once before marking verification incomplete.
     let end_tag = format!("v{:03}", page_number + 3);
-    stream
-        .write_all(format!("{end_tag} SELECT {quoted_mailbox}\r\n").as_bytes())
-        .map_err(|error| format!("{host}: could not re-select mailbox: {error}"))?;
+    let end_select = format!("{end_tag} SELECT {quoted_mailbox}\r\n");
+    write_imap_command(
+        stream,
+        end_select.as_bytes(),
+        Some(budget),
+        &format!("{host}: could not re-select mailbox"),
+    )?;
     response.clear();
     read_imap_tagged_with_budget(
         stream,
@@ -1500,11 +1571,13 @@ where
             .min(uidnext.saturating_sub(1));
         let search_tag = format!("s{:03}", search_number + 2);
         search_number = search_number.saturating_add(1);
-        stream
-            .write_all(
-                format!("{search_tag} UID SEARCH UID {window_start}:{window_end}\r\n").as_bytes(),
-            )
-            .map_err(|error| format!("{host}: could not search mailbox UIDs: {error}"))?;
+        let search_command = format!("{search_tag} UID SEARCH UID {window_start}:{window_end}\r\n");
+        write_imap_command(
+            stream,
+            search_command.as_bytes(),
+            Some(budget),
+            &format!("{host}: could not search mailbox UIDs"),
+        )?;
         response.clear();
         read_imap_tagged_with_budget(stream, &search_tag, response, buffer, 1_048_576, budget)?;
         if !imap_command_succeeded(response, &search_tag) {
@@ -1611,14 +1684,21 @@ pub(crate) fn fetch_tls_account_messages(
     }
     let (stream, greeting) =
         connect_tls_stream_with_budget(host, transport, ca_bundle, certificate_pin_sha256, budget)?;
-    let (mut stream, post_auth_response) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
-    stream
-        .write_all(authenticated_list_command(advertises_capability(
-            &post_auth_response,
-            "SPECIAL-USE",
-        )))
-        .map_err(|error| format!("{host}: could not enumerate folders: {error}"))?;
+    let (mut stream, post_auth_response) = authenticate_imap_stream(
+        stream,
+        host,
+        user,
+        credential,
+        auth_method,
+        greeting,
+        Some(budget),
+    )?;
+    write_imap_command(
+        &mut stream,
+        authenticated_list_command(advertises_capability(&post_auth_response, "SPECIAL-USE")),
+        Some(budget),
+        &format!("{host}: could not enumerate folders"),
+    )?;
     let mut buffer = [0; 4096];
     let mut mailbox_details = Vec::new();
     let summary = read_imap_list_response_with_details(
@@ -2144,10 +2224,10 @@ mod tests {
         format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
         parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
         parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
-        read_with_deadline, tagged_response_outside_literals,
+        read_with_deadline, tagged_response_outside_literals, write_imap_command,
     };
     use std::collections::HashMap;
-    use std::io::{self, Cursor, Read};
+    use std::io::{self, Cursor, Read, Write};
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
@@ -2164,6 +2244,52 @@ mod tests {
             }
             self.data.read(buffer)
         }
+    }
+
+    struct TimeoutThenWrite {
+        timed_out: bool,
+        data: Vec<u8>,
+    }
+
+    impl Write for TimeoutThenWrite {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if !self.timed_out {
+                self.timed_out = true;
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "synthetic timeout"));
+            }
+            self.data.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn budgeted_write_retries_transient_socket_timeout() {
+        let cancelled = AtomicBool::new(false);
+        let budget = MessageFetchBudget::new(Duration::from_secs(1), &cancelled);
+        let mut stream = TimeoutThenWrite {
+            timed_out: false,
+            data: Vec::new(),
+        };
+        write_imap_command(&mut stream, b"command\r\n", Some(&budget), "write command").unwrap();
+        assert_eq!(stream.data, b"command\r\n");
+    }
+
+    #[test]
+    fn budgeted_write_honors_cancellation_before_writing() {
+        let cancelled = AtomicBool::new(true);
+        let budget = MessageFetchBudget::new(Duration::from_secs(1), &cancelled);
+        let mut stream = TimeoutThenWrite {
+            timed_out: false,
+            data: Vec::new(),
+        };
+        let error = write_imap_command(&mut stream, b"command\r\n", Some(&budget), "write command")
+            .unwrap_err();
+        assert!(error.contains("cancelled"));
+        assert!(stream.data.is_empty());
     }
 
     #[test]
