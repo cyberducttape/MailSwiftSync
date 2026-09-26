@@ -35,6 +35,8 @@ jobs:
       - run: cargo fmt --check
       - name: Verify documentation claims against capability manifest
         run: python3 scripts/verify-capability-claims.py
+      - name: Test documentation claim detection
+        run: python3 tests/verify_capability_claims_test.py
       - run: bash -n scripts/*.sh
       - name: Verify release archive root layout
         run: python3 tests/release_bundle_layout_test.py

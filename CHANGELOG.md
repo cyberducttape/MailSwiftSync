@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Production hardening
 
+- Hardened the capability-claims drift gate to normalize Markdown and HTML
+  presentation and detect affirmative production, GA, and support claims in
+  headings, tables, blockquotes, and formatted text; added adversarial tests.
 - Archived the dated production-readiness report and made the active status
   surfaces consistently identify the product as technical-preview only until
   the documented provider, scale, and recovery gates are met.
