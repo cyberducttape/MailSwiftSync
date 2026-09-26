@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Strengthened the archive-layout regression test to inspect the actual
+  macOS/Linux/Windows release packaging commands before validating extracted
+  archive roots.
 - The Dovecot integration fixture now asserts sparse-mailbox ownership and
   owner-write permission before transfer, failing immediately with the actual
   UID and mode instead of timing out later in the migration.

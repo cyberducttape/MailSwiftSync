@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import io
+import re
 import stat
 import subprocess
 import tarfile
@@ -21,6 +22,22 @@ DOCUMENTS = (
     "CHANGELOG.md",
     "capabilities.toml",
 )
+
+
+def verify_workflow_packaging_commands() -> None:
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+    commands = {
+        "macOS": r'\(cd bundle && ditto -c -k \. "\.\./dist/mailswiftsync-\$\{\{ matrix\.target \}\}\.zip"\)',
+        "Linux": r'tar --sort=name --mtime="@\$\{SOURCE_DATE_EPOCH\}" --owner=0 --group=0 --numeric-owner -C bundle -czf dist/mailswiftsync-\$\{\{ matrix\.target \}\}\.tar\.gz \.',
+        "Windows": r'Compress-Archive -Path bundle/\* -DestinationPath dist/mailswiftsync-\$\{\{ matrix\.target \}\}\.zip',
+    }
+    for platform, pattern in commands.items():
+        if not re.search(pattern, workflow):
+            raise AssertionError(
+                f"release workflow no longer packages {platform} contents from the bundle root"
+            )
+    if "--keepParent" in workflow:
+        raise AssertionError("macOS ditto --keepParent would nest the release bundle")
 
 
 def make_bundle(root: Path) -> None:
@@ -66,6 +83,7 @@ def run_link_checker(root: Path, expected: bool) -> None:
 
 with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temporary:
     workspace = Path(temporary)
+    verify_workflow_packaging_commands()
 
     links = workspace / "links"
     (links / "docs").mkdir(parents=True)
