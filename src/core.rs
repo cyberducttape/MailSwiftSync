@@ -2439,6 +2439,54 @@ mod tests {
     }
 
     #[test]
+    fn terminal_write_rejects_contradictory_exact_evidence() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("exact-write-boundary", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "exact-write-run", "imapsync")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::MetadataReconciliation,
+            verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+            source_messages: 2,
+            destination_messages: 1,
+            source_bytes: 20,
+            destination_bytes: 10,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+        };
+        assert!(
+            db.finish_run_for_mailbox_with_evidence_and_checkpoint(
+                &project.id,
+                &job,
+                "exact-write-run",
+                "completed",
+                "verification_difference",
+                "contradictory exact evidence",
+                &evidence,
+                None,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.run_status("exact-write-run").unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
+    }
+
+    #[test]
     fn migration_clears_legacy_raw_preflight_plans() {
         let db = StateStore::in_memory().unwrap();
         let project = db
