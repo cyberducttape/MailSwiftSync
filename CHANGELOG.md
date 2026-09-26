@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Fixed integration artifact-directory setup so the host runner applies
+  private permissions before handing ownership to the container user.
 - Recovery schema validation now checks the `WHERE` predicates of partial
   unique run indexes, rejecting same-named indexes that do not enforce active
   run ownership; writable recovery backs up and rebuilds malformed indexes.
