@@ -61,6 +61,7 @@ pub use models::{
 pub use state::{AttentionReason, MailboxState, Phase};
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 
 pub(crate) use policy::{
     MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES, attention_reason_for,

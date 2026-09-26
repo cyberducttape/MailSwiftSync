@@ -1,7 +1,6 @@
 use super::*;
 
 const MAX_PROJECT_LIST_ROWS: usize = 10_000;
-const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 const MAX_MAILBOX_PAGE_ROWS: u32 = 1_000;
 const MAX_MAILBOX_STATUS_ROWS: u32 = 100_000;
 

@@ -58,7 +58,7 @@ impl StateStore {
         destination: &str,
         mailboxes: &[(String, String)],
     ) -> rusqlite::Result<(Project, Vec<String>)> {
-        if mailboxes.is_empty() {
+        if mailboxes.is_empty() || mailboxes.len() > MAX_DURABLE_MAILBOX_ROWS {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let mut destinations = BTreeSet::new();
@@ -106,7 +106,7 @@ impl StateStore {
         destination: &str,
         mailboxes: &[(String, String, String)],
     ) -> rusqlite::Result<(Project, Vec<String>)> {
-        if mailboxes.is_empty() {
+        if mailboxes.is_empty() || mailboxes.len() > MAX_DURABLE_MAILBOX_ROWS {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let _total_profile_bytes = mailboxes.iter().try_fold(0usize, |total, (_, _, config)| {
