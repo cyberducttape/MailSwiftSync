@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
+const MAX_SUPPORT_MAILBOX_ROWS_TOTAL: usize = 100_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL: usize = 100_000;
 const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
@@ -89,17 +90,24 @@ pub(crate) fn export_support_bundle_with_sample_limit(
     sample_limit: u32,
 ) -> Result<(), String> {
     let store = core::StateStore::open_readonly(state_path).map_err(|error| error.to_string())?;
+    let sample_limit = sample_limit.min(SUPPORT_MAILBOX_SAMPLE_LIMIT);
     let projects = store
         .recent_projects(1_000)
         .map_err(|error| error.to_string())?;
     let mut project_values = Vec::with_capacity(projects.len());
+    let mut remaining_mailbox_rows = MAX_SUPPORT_MAILBOX_ROWS_TOTAL;
     for project in projects {
         let counts = store
             .mailbox_state_counts(&project.id)
             .map_err(|error| error.to_string())?;
         let jobs = store
-            .mailbox_status_page(&project.id, 0, sample_limit)
+            .mailbox_status_page(
+                &project.id,
+                0,
+                sample_limit.min(remaining_mailbox_rows.try_into().unwrap_or(u32::MAX)),
+            )
             .map_err(|error| error.to_string())?;
+        remaining_mailbox_rows = remaining_mailbox_rows.saturating_sub(jobs.len());
         let mailbox_values = jobs
             .iter()
             .map(|(job, attention_reason)| {
