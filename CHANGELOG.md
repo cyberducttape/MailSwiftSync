@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Expanded `make check` to include documentation-claim fixtures, local Markdown
+  link validation, release-channel and archive-layout tests, and the same
+  preview compatibility gate used by CI.
 - Restored Dovecot service-account ownership of the sparse Maildir after
   `doveadm expunge`, which can create or rewrite root-owned mailbox metadata.
 - Staged verifier fallback lookups now index each message by its reconciled

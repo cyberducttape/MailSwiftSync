@@ -1,10 +1,11 @@
 .DEFAULT_GOAL := check
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: check format capability-check shell-check evidence-check compatibility clippy test build integration audit release-check
+.PHONY: check format capability-check documentation-check shell-check script-check evidence-check compatibility clippy test build integration audit release-check
 
-# Fast local equivalent of the CI source, script, and static-analysis checks.
-check: format capability-check shell-check evidence-check compatibility clippy
+# Fast local formatting, documentation, script, and static-analysis checks.
+# CI additionally runs platform builds, container integrations, and audits.
+check: format capability-check documentation-check shell-check script-check evidence-check compatibility clippy
 
 format:
 	cargo fmt --check
@@ -12,8 +13,16 @@ format:
 capability-check:
 	python3 scripts/verify-capability-claims.py
 
+documentation-check:
+	python3 tests/verify_capability_claims_test.py
+	python3 scripts/verify-markdown-links.py .
+
 shell-check:
 	bash -n scripts/*.sh
+
+script-check:
+	bash tests/release-channel.sh
+	python3 tests/release_bundle_layout_test.py
 
 evidence-check:
 	python3 tests/provider_evidence_generator_test.py
@@ -21,7 +30,7 @@ evidence-check:
 	python3 tests/verify_evidence_gate_test.py
 
 compatibility:
-	scripts/verify-compatibility-matrix.sh docs/compatibility-matrix.md
+	scripts/verify-compatibility-matrix.sh --release-preview docs/compatibility-matrix.md
 
 clippy:
 	cargo clippy --locked --all-targets --all-features -- -D warnings
