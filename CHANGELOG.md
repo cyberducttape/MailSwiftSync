@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Recovery schema validation now requires every runtime object to be an actual
+  SQLite table, rejecting stamped ledgers that substitute views for tables.
 - Live IMAP metadata verification now stages source and destination records in
   a private SQLite database and reconciles them in bounded batches, avoiding
   account-sized Rust message maps while preserving bounded mismatch evidence.

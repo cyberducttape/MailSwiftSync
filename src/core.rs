@@ -1921,6 +1921,28 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_current_schema_required_object_that_is_not_a_table() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-object-type-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE projects RENAME TO projects_table;
+                 CREATE VIEW projects AS SELECT id,name,source_endpoint,destination_endpoint,phase,created_at FROM projects_table;",
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_current_schema_with_missing_evidence_history_foreign_key() {
         let directory = std::env::temp_dir().join(format!(
             "mailswiftsync-schema-history-fk-{}",
