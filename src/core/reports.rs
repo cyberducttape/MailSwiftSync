@@ -202,7 +202,9 @@ impl StateStore {
                                 destination_messages: row.get::<_, i64>(13)? as u64,
                                 source_bytes: row.get::<_, i64>(14)? as u64,
                                 destination_bytes: row.get::<_, i64>(15)? as u64,
-                                unmatched_messages: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                                unmatched_messages: row
+                                    .get::<_, Option<i64>>(16)?
+                                    .map(|v| v as u64),
                                 failed_messages: row.get::<_, i64>(17)? as u64,
                                 source_folders: row.get::<_, i64>(18)? as u64,
                                 destination_folders: row.get::<_, i64>(19)? as u64,
