@@ -1,10 +1,13 @@
 use super::*;
 
+pub(crate) const MAX_PERSISTED_PROFILE_BYTES: usize = 1024 * 1024;
+
 pub(crate) fn normalized_destination_identity(
     destination_mailbox: &str,
     config: Option<&str>,
 ) -> String {
     if let Some(config) = config
+        && config.len() <= MAX_PERSISTED_PROFILE_BYTES
         && let Ok(value) = toml::from_str::<toml::Value>(config)
     {
         let host = value

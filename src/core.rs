@@ -61,8 +61,8 @@ pub use state::{AttentionReason, MailboxState, Phase};
 pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 pub(crate) use policy::{
-    attention_reason_for, normalized_destination_identity, valid_dovecot_checkpoint,
-    valid_mailbox_transition,
+    MAX_PERSISTED_PROFILE_BYTES, attention_reason_for, normalized_destination_identity,
+    valid_dovecot_checkpoint, valid_mailbox_transition,
 };
 
 pub(crate) fn sqlite_i64(value: u64) -> rusqlite::Result<i64> {

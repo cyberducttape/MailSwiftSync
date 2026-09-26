@@ -3,6 +3,7 @@
 use super::batch::BatchExecutionMode;
 use super::batch::BulkRetryScope;
 use super::run::{ActiveRunContext, RunKind};
+use crate::core::MAX_PERSISTED_PROFILE_BYTES;
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
 use std::collections::HashSet;
 
@@ -53,6 +54,11 @@ pub(crate) fn decode_persisted_batch_profile(
 ) -> Result<Profile, String> {
     let config =
         config.ok_or_else(|| format!("Saved batch mailbox {job_id} has no migration plan"))?;
+    if config.len() > MAX_PERSISTED_PROFILE_BYTES {
+        return Err(format!(
+            "Saved batch mailbox {job_id} migration plan exceeds the {MAX_PERSISTED_PROFILE_BYTES}-byte limit"
+        ));
+    }
     toml::from_str(config)
         .map_err(|error| format!("Saved batch mailbox {job_id} is corrupt: {error}"))
 }
@@ -657,6 +663,7 @@ mod tests {
         batch_project_identity, decode_persisted_batch_profile, prepare_batch_run,
         prepare_selected_batch_jobs,
     };
+    use crate::core::MAX_PERSISTED_PROFILE_BYTES;
     use crate::{bulk_import::BulkJob, migration_plan::Form};
     use std::collections::HashSet;
 
@@ -905,5 +912,11 @@ mod tests {
         let profile = Form::default().profile;
         let encoded = toml::to_string(&profile).unwrap();
         assert!(decode_persisted_batch_profile(Some(&encoded), "job-valid").is_ok());
+
+        let oversized = "x".repeat(MAX_PERSISTED_PROFILE_BYTES + 1);
+        let error = decode_persisted_batch_profile(Some(&oversized), "job-large")
+            .err()
+            .expect("oversized plan must be rejected");
+        assert!(error.contains("exceeds"));
     }
 }
