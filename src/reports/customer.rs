@@ -99,7 +99,9 @@ pub(crate) fn export_from_store_with_options_and_identity(
         |mut total, value| {
             for field in ["source", "destination", "missing", "extra", "modified", "unmatched", "failed"] {
                 let current = total[field].as_u64().unwrap_or(0);
-                total[field] = serde_json::json!(current + value[field].as_u64().unwrap_or(0));
+                total[field] = serde_json::json!(
+                    current.saturating_add(value[field].as_u64().unwrap_or(0))
+                );
             }
             total
         },
