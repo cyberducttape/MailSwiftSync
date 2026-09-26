@@ -2563,6 +2563,34 @@ mod tests {
     }
 
     #[test]
+    fn project_report_snapshot_rejects_unbounded_mailbox_exports() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("report-limit", "source", "destination")
+            .unwrap();
+        {
+            let tx = db.connection.unchecked_transaction().unwrap();
+            for index in 0..=100_000 {
+                tx.execute(
+                    "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')",
+                    rusqlite::params![
+                        format!("job-{index}"),
+                        project.id,
+                        format!("source-{index}"),
+                        format!("destination-{index}"),
+                        format!("destination-{index}").to_ascii_lowercase(),
+                    ],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        let error = db.project_report_snapshot(&project.id).unwrap_err();
+        assert!(error.to_string().contains("report exports are limited"));
+    }
+
+    #[test]
     fn paged_workspace_reads_keep_large_mailbox_projects_bounded() {
         const MAILBOX_COUNT: usize = 100_000;
         const PAGE_SIZE: u32 = 200;
