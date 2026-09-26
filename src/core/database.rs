@@ -604,6 +604,37 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        // `partial=1` alone is not a schema guarantee: a same-named unique
+        // index with a weaker WHERE clause can admit multiple active runs.
+        // These predicates enforce durable run ownership and are part of the
+        // v12 schema signature just like the indexed columns above.
+        const PARTIAL_INDEX_PREDICATES: &[(&str, &str)] = &[
+            (
+                "one_running_run_per_job",
+                "wherejob_idisnotnullandstatus='running'",
+            ),
+            (
+                "one_active_run_per_job",
+                "wherejob_idisnotnullandstatusin('queued','running')",
+            ),
+        ];
+        for (index, expected_predicate) in PARTIAL_INDEX_PREDICATES {
+            let sql: String = connection.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name=?1",
+                [*index],
+                |row| row.get(0),
+            )?;
+            let normalized = sql
+                .to_ascii_lowercase()
+                .chars()
+                .filter(|character| {
+                    !character.is_ascii_whitespace() && !matches!(character, '"' | '`' | '[' | ']')
+                })
+                .collect::<String>();
+            if !normalized.ends_with(expected_predicate) {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         // SQLite INTEGER values are signed, while the application exposes
         // these counters and byte sizes as u64. Reject negative values at the
         // ledger boundary instead of allowing a malformed but structurally

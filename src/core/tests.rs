@@ -1674,7 +1674,13 @@ fn snapshot_repairs_dirty_current_schema_before_copying() {
 
 #[test]
 fn readonly_rejects_current_schema_with_missing_column_or_index() {
-    for missing in ["column", "index", "index-columns", "index-table"] {
+    for missing in [
+        "column",
+        "index",
+        "index-columns",
+        "index-table",
+        "index-predicate",
+    ] {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-{missing}-{}", Uuid::new_v4()));
         let path = directory.join("state.db");
@@ -1699,6 +1705,18 @@ fn readonly_rejects_current_schema_with_missing_column_or_index() {
                 .connection
                 .execute(
                     "CREATE INDEX idx_active_processes_pid ON active_processes(run_id)",
+                    [],
+                )
+                .unwrap();
+        } else if missing == "index-predicate" {
+            store
+                .connection
+                .execute("DROP INDEX one_active_run_per_job", [])
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "CREATE UNIQUE INDEX one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='failed'",
                     [],
                 )
                 .unwrap();

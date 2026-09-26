@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Recovery schema validation now checks the `WHERE` predicates of partial
+  unique run indexes, rejecting same-named indexes that do not enforce active
+  run ownership.
 - Webhook notifications now default to credential-free operational status with
   customer names, endpoint hosts, and active-process details excluded; sending
   customer metadata requires the explicit `--include-customer-metadata` option.
