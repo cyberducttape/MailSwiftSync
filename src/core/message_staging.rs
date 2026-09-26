@@ -39,9 +39,11 @@ pub(crate) struct MessageMetadataStage {
 
 impl MessageMetadataStage {
     pub(crate) fn open_ephemeral() -> Result<Self, String> {
-        let directory = crate::credentials::secret_runtime_base();
-        crate::credentials::ensure_private_directory(&directory)
-            .map_err(|error| format!("could not secure verification stage directory: {error}"))?;
+        // Put the database under the same private run-directory lifecycle as
+        // credential files. If the process is killed before Drop runs, the
+        // normal stale-run cleanup can remove the mailbox metadata later.
+        let directory = crate::credentials::create_secret_directory()
+            .map_err(|error| format!("could not create verification stage directory: {error}"))?;
         let path = directory.join(format!("verification-stage-{}.db", Uuid::new_v4()));
         let mut options = OpenOptions::new();
         options.read(true).write(true).create_new(true);
@@ -59,6 +61,7 @@ impl MessageMetadataStage {
             Ok(connection) => connection,
             Err(error) => {
                 let _ = fs::remove_file(&path);
+                let _ = fs::remove_dir(&directory);
                 return Err(format!("could not open verification stage: {error}"));
             }
         };
@@ -72,7 +75,10 @@ impl MessageMetadataStage {
                 let _ = connection.close();
             }
             if let Some(path) = path {
-                let _ = fs::remove_file(path);
+                let _ = fs::remove_file(&path);
+                if let Some(directory) = path.parent() {
+                    let _ = fs::remove_dir(directory);
+                }
             }
             return Err(format!("could not initialize verification stage: {error}"));
         }
@@ -276,7 +282,10 @@ impl Drop for MessageMetadataStage {
             let _ = connection.close();
         }
         if let Some(path) = self.path.take() {
-            let _ = fs::remove_file(path);
+            let _ = fs::remove_file(&path);
+            if let Some(directory) = path.parent() {
+                let _ = fs::remove_dir(directory);
+            }
         }
     }
 }
