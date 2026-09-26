@@ -17,6 +17,8 @@ operator distribution archives.
   behavior share the byte-preserving parser.
 - Bound XOAUTH2 continuation reads, error acknowledgements, and tagged results
   to the live verification deadline and operator cancellation signal.
+- Added an aggregate memory bound for retained IMAP LIST folder descriptors,
+  preventing many individually bounded records from exhausting verifier memory.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable
