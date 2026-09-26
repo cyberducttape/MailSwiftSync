@@ -857,8 +857,14 @@ impl StateStore {
                 .map(i64::try_from)
                 .transpose()
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            // Privacy boundary: by default, omit sensitive mailbox-derived metadata
+            // (message IDs, folder names) from durable storage. Only UIDs, sizes, dates,
+            // and fingerprints are retained for investigation. Operators should use the
+            // verification reports for detailed evidence export, not the durable ledger.
+            // This prevents accidental disclosure of folder structures and message
+            // identifiers in database backups and exports.
             tx.execute(
-                "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14)",
                 params![
                     mismatch.id,
                     job_id,
@@ -866,14 +872,10 @@ impl StateStore {
                     mismatch.mismatch_type.as_str(),
                     mismatch.source_uid,
                     mismatch.dest_uid,
-                    mismatch.source_message_id,
-                    mismatch.dest_message_id,
                     source_size,
                     destination_size,
                     mismatch.source_date,
                     mismatch.dest_date,
-                    mismatch.source_folder,
-                    mismatch.destination_folder,
                     source_uidvalidity,
                     destination_uidvalidity,
                     mismatch.source_fingerprint,
