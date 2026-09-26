@@ -32,6 +32,8 @@ operator distribution archives.
   where inspecting every recorded process is required for safety.
 - Added an aggregate mailbox-row budget to detailed headless status so many
   projects cannot combine their per-project pages into an oversized response.
+- Applied the same aggregate sample budget to support-bundle mailbox exports,
+  preventing large multi-project ledgers from producing oversized artifacts.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable
