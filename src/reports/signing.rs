@@ -9,6 +9,27 @@ use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use std::{io::Read, path::Path};
 
 const MAX_SIGNING_KEY_BYTES: u64 = 64 * 1024;
+const MAX_PROOF_BYTES: u64 = 32 * 1024 * 1024;
+
+fn read_proof_file(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_PROOF_BYTES {
+        return Err(format!(
+            "migration proof exceeds the {MAX_PROOF_BYTES}-byte limit"
+        ));
+    }
+    let mut text = String::new();
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_PROOF_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    if text.len() as u64 > MAX_PROOF_BYTES {
+        return Err(format!(
+            "migration proof exceeds the {MAX_PROOF_BYTES}-byte limit"
+        ));
+    }
+    Ok(text)
+}
 
 #[cfg(unix)]
 fn read_private_signing_key(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
@@ -248,7 +269,7 @@ pub(crate) fn sign_file(
     };
     let key_pair = Ed25519KeyPair::from_pkcs8(&key_bytes)
         .map_err(|_| "signing key is not a supported Ed25519 PKCS#8 key".to_owned())?;
-    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let text = read_proof_file(path)?;
     let value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
     let mut value = with_proof_digest(value)?;
@@ -284,7 +305,7 @@ pub(crate) fn sign_file(
 }
 
 pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Result<String, String> {
-    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let text = read_proof_file(path)?;
     let mut value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|error| format!("Invalid migration proof JSON: {error}"))?;
     let format = value
