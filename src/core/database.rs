@@ -436,6 +436,10 @@ impl StateStore {
             ("message_mismatches", "destination_uidvalidity"),
             ("message_mismatches", "source_size_bytes"),
             ("message_mismatches", "dest_size_bytes"),
+            ("active_processes", "pid"),
+            ("active_processes", "start_ticks"),
+            ("active_processes", "process_group"),
+            ("active_processes", "session_id"),
         ];
         for (table, column) in NON_NEGATIVE_COLUMNS {
             let sql = format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column} < 0)");
@@ -455,6 +459,8 @@ impl StateStore {
             "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome NOT IN ('exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_method NOT IN ('aggregate_engine','metadata_reconciliation','body_hash','native_dovecot'))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome NOT IN ('exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE authoritative NOT IN (0,1))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE mismatch_type NOT IN ('message_id_only','message_present_wrong_folder','missing','extra','duplicated'))",
             "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE attention_reason IS NOT NULL AND attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))",
         ];
