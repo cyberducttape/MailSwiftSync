@@ -2,6 +2,10 @@
 
 This is a technical preview for administrators who want to test the local-first migration workflow with disposable or fully backed-up mailboxes. It is not a production-support commitment.
 
+The prerelease workflow qualifies the reproducible local Dovecot/product lab
+and requires hosted-provider rows to remain explicitly labeled as not run or
+unsupported. Hosted-provider live evidence is reserved for stable releases.
+
 ## Included
 
 - Dovecot-native `doveadm`/`dsync` planning and execution when destination administration is available.

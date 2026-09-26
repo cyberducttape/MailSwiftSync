@@ -38,6 +38,8 @@ jobs:
       - run: bash -n scripts/*.sh
       - name: Verify release archive root layout
         run: python3 tests/release_bundle_layout_test.py
+      - name: Verify prerelease compatibility policy
+        run: scripts/verify-compatibility-matrix.sh --release-preview docs/compatibility-matrix.md
       - name: Install provider evidence validator
         run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
       - run: python3 tests/provider_evidence_generator_test.py
