@@ -135,7 +135,8 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_host,
         &form.profile.destination_port,
     )?;
-    let source = crate::imap_probe::fetch_tls_account_messages(
+    let mut stage = core::MessageMetadataStage::open_ephemeral()?;
+    let source = crate::imap_probe::fetch_tls_account_messages_to_stage(
         &source_host,
         &form.profile.source_user,
         form.source_password.as_str(),
@@ -145,8 +146,10 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.source_certificate_pin_sha256,
         &budget,
         &state_budget,
+        &mut stage,
+        core::StagedMessageSide::Source,
     )?;
-    let destination = crate::imap_probe::fetch_tls_account_messages(
+    let destination = crate::imap_probe::fetch_tls_account_messages_to_stage(
         &destination_host,
         &form.profile.destination_user,
         form.destination_password.as_str(),
@@ -156,9 +159,19 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_certificate_pin_sha256,
         &budget,
         &state_budget,
+        &mut stage,
+        core::StagedMessageSide::Destination,
     )?;
-    if (source.total_exists > 0 && source.messages.is_empty())
-        || (destination.total_exists > 0 && destination.messages.is_empty())
+    if (source.total_exists > 0
+        && stage
+            .count(core::StagedMessageSide::Source)
+            .map_err(|e| e.to_string())?
+            == 0)
+        || (destination.total_exists > 0
+            && stage
+                .count(core::StagedMessageSide::Destination)
+                .map_err(|e| e.to_string())?
+                == 0)
     {
         return Err(
             "message-level verification refused: IMAP FETCH extraction was empty despite non-empty EXISTS evidence"
@@ -185,26 +198,18 @@ pub(crate) fn run_imap_message_verification(
         &destination.mailboxes,
         form.profile.delete2,
     )?;
-    // The live adapter currently fetches metadata only. Keep it on the
-    // metadata-verifier API until BODY[] hashing is explicitly enabled; an
-    // empty fingerprint map must never look like a content-verification run.
-    let (mismatches, summary) = core::MessageVerification::detect_mismatches_with_metadata(
+    let (mismatches, summary) = core::MessageVerification::detect_mismatches_from_stage(
         job_id,
         run_id,
-        &source.messages,
-        &destination.messages,
+        &stage,
         &folder_mapping,
     )?;
-    let source_bytes = source
-        .messages
-        .values()
-        .filter_map(|message| message.size_bytes)
-        .fold(0_u64, u64::saturating_add);
-    let destination_bytes = destination
-        .messages
-        .values()
-        .filter_map(|message| message.size_bytes)
-        .fold(0_u64, u64::saturating_add);
+    let source_bytes = stage
+        .sum_bytes(core::StagedMessageSide::Source)
+        .map_err(|e| e.to_string())?;
+    let destination_bytes = stage
+        .sum_bytes(core::StagedMessageSide::Destination)
+        .map_err(|e| e.to_string())?;
     let source_folders = source.mailboxes.len() as u64;
     let destination_folders = destination.mailboxes.len() as u64;
     let evidence = core::MailboxEvidence {

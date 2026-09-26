@@ -26,6 +26,7 @@ mod evidence;
 mod evidence_ops;
 mod mailboxes;
 mod message_extraction;
+mod message_staging;
 mod message_verification;
 mod models;
 mod phases;
@@ -51,6 +52,7 @@ pub use evidence::{
     VerificationOutcome,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
+pub(crate) use message_staging::{MessageMetadataStage, StagedMessageSide};
 pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,

@@ -218,10 +218,11 @@ The verifier fails closed for `--justfolders`, `--addheader`, disabled internal-
 sync, or `--allowsizemismatch` plans until their semantics can be represented
 without overstating exact evidence. It also enforces a conservative estimated
 bounded UID-window enumeration; it no longer materializes a mailbox-wide
-`UID SEARCH ALL` response. The reconciliation records themselves remain
-in-memory and are still subject to the aggregate estimated verifier-state admission budget,
-including reconciliation-index overhead;
-SQLite streaming reconciliation remains future work for very large accounts.
+`UID SEARCH ALL` response. Fetched metadata is staged in a private SQLite
+database and reconciled in bounded batches, so the live path does not retain
+both account-wide message maps in Rust. Mismatch detail remains bounded and
+the feature is still metadata-only: body-content proof and live
+large-provider qualification remain outstanding.
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
 
