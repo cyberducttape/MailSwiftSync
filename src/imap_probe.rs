@@ -2126,82 +2126,6 @@ fn parse_selected_mailbox(
     Ok((exists, uidvalidity, uidnext))
 }
 
-#[cfg(test)]
-fn parse_message_fetch_response(
-    response: &str,
-    mailbox: &str,
-    uidvalidity: Option<u64>,
-) -> Result<crate::core::ExtractedMessages, String> {
-    Ok(parse_message_fetch_response_with_fingerprints(response, mailbox, uidvalidity)?.0)
-}
-
-#[cfg(test)]
-fn parse_message_fetch_response_with_fingerprints(
-    response: &str,
-    mailbox: &str,
-    uidvalidity: Option<u64>,
-) -> Result<
-    (
-        crate::core::ExtractedMessages,
-        HashMap<crate::core::MailboxMessageKey, String>,
-    ),
-    String,
-> {
-    let mut messages = HashMap::new();
-    let mut content_fingerprints = HashMap::new();
-    let mut offset = 0;
-    while offset < response.len() {
-        let Some(relative_line_end) = response[offset..].find("\r\n") else {
-            break;
-        };
-        let line_end = offset + relative_line_end;
-        let line = &response[offset..line_end];
-        let next_line = line_end + 2;
-        if !is_fetch_record_line(line) {
-            offset = next_fetch_record_start(response, offset);
-            continue;
-        }
-        let record_end = next_fetch_record_start(response, next_line);
-        let record = &response[offset..record_end.min(response.len())];
-        let first_line_end = record
-            .find("\r\n")
-            .ok_or_else(|| "IMAP FETCH record had no line terminator".to_owned())?;
-        let first_line = &record[..first_line_end];
-        let uid = fetch_number(first_line, "UID")
-            .ok_or_else(|| "IMAP FETCH record omitted UID".to_owned())?;
-        let size_bytes = fetch_number(first_line, "RFC822.SIZE");
-        let internal_date = fetch_quoted(first_line, "INTERNALDATE");
-        let message_id = fetch_message_id(record).filter(|value| !value.is_empty());
-        let uid = uid.to_string();
-        let key = match uidvalidity {
-            Some(value) => {
-                crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
-            }
-            None => crate::core::MailboxMessageKey::new(mailbox, uid.clone()),
-        };
-        let fingerprint = fetch_content_fingerprint(record);
-        let fingerprint_key = fingerprint.as_ref().map(|_| key.clone());
-        match messages.entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(crate::core::ExtractedMessage {
-                    message_id,
-                    uid: Some(uid),
-                    size_bytes,
-                    internal_date,
-                });
-            }
-            Entry::Occupied(entry) => {
-                return Err(format!("duplicate FETCH UID {}", entry.key().uid));
-            }
-        }
-        if let (Some(key), Some(fingerprint)) = (fingerprint_key, fingerprint) {
-            content_fingerprints.insert(key, fingerprint);
-        }
-        offset = record_end;
-    }
-    Ok((messages, content_fingerprints))
-}
-
 /// Parse the live verifier's metadata-only FETCH response. Body fingerprints
 /// intentionally use a separate parser/API and are not produced here.
 #[cfg(test)]
@@ -2273,22 +2197,6 @@ fn parse_message_fetch_metadata_response_bytes_with_mailbox(
     Ok(messages)
 }
 
-#[cfg(test)]
-fn next_fetch_record_start(response: &str, mut offset: usize) -> usize {
-    while offset < response.len() {
-        let Some(relative_line_end) = response[offset..].find("\r\n") else {
-            return response.len();
-        };
-        let line_end = offset + relative_line_end;
-        let line = &response[offset..line_end];
-        if is_fetch_record_line(line) {
-            return offset;
-        }
-        offset = (line_end + 2).saturating_add(imap_literal_size(line).unwrap_or(0));
-    }
-    response.len()
-}
-
 fn next_fetch_record_start_bytes(response: &[u8], mut offset: usize) -> usize {
     while offset < response.len() {
         let Some(relative_line_end) = response[offset..]
@@ -2320,43 +2228,10 @@ fn is_fetch_record_line_bytes(line: &[u8]) -> bool {
     std::str::from_utf8(line).is_ok_and(is_fetch_record_line)
 }
 
-#[cfg(test)]
-fn imap_literal_size(line: &str) -> Option<usize> {
-    let close = line.strip_suffix('}')?;
-    let open = close.rfind('{')?;
-    close[open + 1..].parse::<usize>().ok()
-}
-
 fn imap_literal_size_bytes(line: &[u8]) -> Option<usize> {
     let line = line.strip_suffix(b"}")?;
     let start = line.iter().rposition(|byte| *byte == b'{')?;
     std::str::from_utf8(&line[start + 1..]).ok()?.parse().ok()
-}
-
-#[cfg(test)]
-fn fetch_content_fingerprint(record: &str) -> Option<String> {
-    let marker_start = find_ascii_case_insensitive(record, "BODY[]")? + "BODY[]".len();
-    let literal = record[marker_start..].trim_start();
-    if literal
-        .get(..3)
-        .is_some_and(|value| value.eq_ignore_ascii_case("NIL"))
-    {
-        return None;
-    }
-    let open = literal.find('{')?;
-    let close = literal[open..].find("}\r\n")? + open;
-    let size = literal[open + 1..close].parse::<usize>().ok()?;
-    let body_offset = marker_start + record[marker_start..].find("\r\n")? + 2;
-    let body = record
-        .as_bytes()
-        .get(body_offset..body_offset.checked_add(size)?)?;
-    let digest = Sha256::digest(body);
-    Some(
-        digest
-            .iter()
-            .map(|byte| format!("{:02x}", byte))
-            .collect::<String>(),
-    )
 }
 
 fn fetch_number(line: &str, field: &str) -> Option<u64> {
@@ -2380,29 +2255,6 @@ fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
         .as_bytes()
         .windows(needle.len())
         .position(|part| part.eq_ignore_ascii_case(needle.as_bytes()))
-}
-
-#[cfg(test)]
-fn fetch_message_id(record: &str) -> Option<String> {
-    let marker = "BODY[HEADER.FIELDS (MESSAGE-ID)]";
-    let marker_start = find_ascii_case_insensitive(record, marker)? + marker.len();
-    let literal = record[marker_start..].trim_start();
-    if literal
-        .get(..3)
-        .is_some_and(|value| value.eq_ignore_ascii_case("NIL"))
-    {
-        return None;
-    }
-    let literal_size_end = literal.find("}\r\n")?;
-    let literal_size = literal.strip_prefix('{')?[..literal_size_end - 1]
-        .parse::<usize>()
-        .ok()?;
-    let body_start = marker_start + record[marker_start..].find("\r\n")? + 2;
-    let body = record
-        .as_bytes()
-        .get(body_start..body_start + literal_size)?;
-    let body = String::from_utf8_lossy(body);
-    parse_message_id_header(&body)
 }
 
 fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
@@ -2459,10 +2311,9 @@ mod tests {
         MAX_ESTIMATED_FETCHED_STATE_BYTES, MailboxFetchError, MessageFetchBudget,
         MessageStateBudget, TaggedResponseScanner, authenticated_list_command,
         classify_mailbox_fetch_error, dns_resolver_pool, format_folder_failures,
-        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_response,
-        parse_message_fetch_response_with_fingerprints, parse_message_id_header,
-        read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
-        tagged_response_outside_literals, write_imap_command,
+        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes,
+        parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
+        read_with_deadline, tagged_response_outside_literals, write_imap_command,
     };
     use std::collections::HashMap;
     use std::io::{self, Cursor, Read, Write};
@@ -2751,10 +2602,11 @@ mod tests {
 
     #[test]
     fn fetch_parser_extracts_message_metadata_and_uidvalidity() {
-        let response = "* 1 FETCH (UID 5 RFC822.SIZE 100 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <a@example.com>\r\n\r\n)\r\n\
+        let response = b"* 1 FETCH (UID 5 RFC822.SIZE 100 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {31}\r\nMessage-ID: <a@example.com>\r\n\r\n)\r\n\
                        * 2 FETCH (UID 9 RFC822.SIZE 200 INTERNALDATE \"02-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] NIL)\r\n\
                        v002 OK FETCH completed\r\n";
-        let messages = parse_message_fetch_response(response, "INBOX", Some(77)).unwrap();
+        let messages =
+            parse_message_fetch_metadata_response_bytes(response, "INBOX", Some(77)).unwrap();
         assert_eq!(messages.len(), 2);
         let first = &messages[&crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "5")];
         assert_eq!(first.message_id.as_deref(), Some("<a@example.com>"));
@@ -2869,26 +2721,6 @@ mod tests {
         assert_eq!(
             super::parse_selected_mailbox(response, "imap.example", "INBOX").unwrap(),
             (2, Some(77), Some(900001))
-        );
-    }
-
-    #[test]
-    fn fetch_parser_hashes_bounded_full_message_literals() {
-        let response = concat!(
-            "* 1 FETCH (UID 9 RFC822.SIZE 5 INTERNALDATE \"01-Jan-2026 00:00:00 +0000\" ",
-            "BODY[HEADER.FIELDS (MESSAGE-ID)] {21}\r\n",
-            "Message-ID: <a@b>\r\n\r\n",
-            "BODY[] {5}\r\n",
-            "abcde\r\n)\r\n",
-            "v002 OK FETCH completed\r\n"
-        );
-        let (messages, fingerprints) =
-            parse_message_fetch_response_with_fingerprints(response, "INBOX", Some(77)).unwrap();
-        let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "9");
-        assert_eq!(messages.len(), 1);
-        assert_eq!(
-            fingerprints[&key],
-            "36bbe50ed96841d10443bcb670d6554f0a34b761be67ec9c4a8ad2c0c44ca42c"
         );
     }
 
