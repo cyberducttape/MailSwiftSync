@@ -106,6 +106,26 @@ impl StateStore {
         Ok(store)
     }
 
+    fn validate_schema_layout(connection: &Connection) -> rusqlite::Result<()> {
+        let required_tables = vec![
+            "projects", "mailbox_jobs", "evidence", "evidence_history",
+            "runs", "active_processes", "events", "verification_acceptances",
+            "engine_versions", "message_mismatches", "message_extraction",
+        ];
+
+        for table in required_tables {
+            let exists: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                [table],
+                |row| row.get(0),
+            )?;
+            if exists != 1 {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
+        Ok(())
+    }
+
     /// Open an existing ledger without taking the application lock or
     /// mutating its file. Current-schema ledgers are observed directly through
     /// SQLite's WAL snapshot semantics. Older ledgers are copied into a
@@ -127,6 +147,7 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         if stored_schema_version == CURRENT_SCHEMA_VERSION {
+            Self::validate_schema_layout(&connection)?;
             return Ok(Self { connection });
         }
 
