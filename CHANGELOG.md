@@ -25,6 +25,8 @@ operator distribution archives.
 - Kept SQLite reconciliation intermediates inside the private per-run stage
   database instead of process-wide temporary tables, preserving metadata
   permissions and crash cleanup boundaries.
+- Capped DNS address results before connection attempts so hostile or malformed
+  resolver responses cannot create an unbounded socket-address vector.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable

@@ -18,6 +18,7 @@ use std::{
 
 const DNS_RESOLVER_WORKERS: usize = 4;
 const DNS_RESOLVER_QUEUE: usize = 32;
+const MAX_DNS_ADDRESSES: usize = 64;
 const BUDGETED_IMAP_IO_SLICE: Duration = Duration::from_millis(250);
 
 struct DnsResolverRequest {
@@ -51,7 +52,7 @@ impl DnsResolverPool {
                         let result = request
                             .address
                             .to_socket_addrs()
-                            .map(|addresses| addresses.collect::<Vec<_>>());
+                            .and_then(collect_dns_addresses);
                         let _ = request.result.send(result);
                     }
                 })
@@ -73,6 +74,26 @@ impl DnsResolverPool {
             })?;
         Ok(receiver)
     }
+}
+
+fn collect_dns_addresses<I>(mut addresses: I) -> std::io::Result<Vec<SocketAddr>>
+where
+    I: Iterator<Item = SocketAddr>,
+{
+    let mut collected = Vec::with_capacity(MAX_DNS_ADDRESSES);
+    for _ in 0..MAX_DNS_ADDRESSES {
+        let Some(address) = addresses.next() else {
+            return Ok(collected);
+        };
+        collected.push(address);
+    }
+    if addresses.next().is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("DNS response exceeded the {MAX_DNS_ADDRESSES}-address limit"),
+        ));
+    }
+    Ok(collected)
 }
 
 fn dns_resolver_pool() -> Result<&'static DnsResolverPool, String> {
@@ -2361,18 +2382,22 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
-        MailboxFetchError, MessageFetchBudget, MessageStateBudget, StateReservation,
-        TaggedResponseScanner, authenticated_list_command, classify_mailbox_fetch_error,
-        dns_resolver_pool, format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
-        parse_message_fetch_metadata_response_bytes, parse_message_id_header,
-        read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
-        record_list_entry, tagged_response_outside_literals, write_imap_command,
+        ListInventorySummary, MAX_DNS_ADDRESSES, MAX_ESTIMATED_FETCHED_STATE_BYTES,
+        MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageStateBudget,
+        StateReservation, TaggedResponseScanner, authenticated_list_command,
+        classify_mailbox_fetch_error, dns_resolver_pool, format_folder_failures,
+        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes,
+        parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
+        read_with_deadline, record_list_entry, tagged_response_outside_literals,
+        write_imap_command,
     };
     use std::collections::HashMap;
-    use std::io::{self, Cursor, Read, Write};
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
+    use std::{
+        io::{self, Cursor, Read, Write},
+        net::SocketAddr,
+    };
 
     struct TimeoutThenData {
         timed_out: bool,
@@ -2458,6 +2483,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(addresses.iter().any(|address| address.ip().is_loopback()));
+    }
+
+    #[test]
+    fn dns_address_collection_rejects_excessive_responses() {
+        let addresses =
+            (0..=MAX_DNS_ADDRESSES).map(|port| SocketAddr::from(([127, 0, 0, 1], port as u16)));
+        let error = super::collect_dns_addresses(addresses).unwrap_err();
+        assert!(error.to_string().contains("address limit"));
     }
 
     #[test]
