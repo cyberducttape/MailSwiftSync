@@ -1872,7 +1872,7 @@ mod tests {
 
     #[test]
     fn readonly_rejects_current_schema_with_missing_column_or_index() {
-        for missing in ["column", "index", "index-columns"] {
+        for missing in ["column", "index", "index-columns", "index-table"] {
             let directory = std::env::temp_dir()
                 .join(format!("mailswiftsync-schema-{missing}-{}", Uuid::new_v4()));
             let path = directory.join("state.db");
@@ -1888,7 +1888,7 @@ mod tests {
                     .connection
                     .execute("DROP INDEX one_active_run_per_job", [])
                     .unwrap();
-            } else {
+            } else if missing == "index-columns" {
                 store
                     .connection
                     .execute("DROP INDEX idx_active_processes_pid", [])
@@ -1897,6 +1897,18 @@ mod tests {
                     .connection
                     .execute(
                         "CREATE INDEX idx_active_processes_pid ON active_processes(run_id)",
+                        [],
+                    )
+                    .unwrap();
+            } else {
+                store
+                    .connection
+                    .execute("DROP INDEX idx_active_processes_pid", [])
+                    .unwrap();
+                store
+                    .connection
+                    .execute(
+                        "CREATE INDEX idx_active_processes_pid ON events(project_id)",
                         [],
                     )
                     .unwrap();

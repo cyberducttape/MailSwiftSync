@@ -431,7 +431,30 @@ impl StateStore {
             ("one_running_run_per_job", &["job_id"], true, true),
             ("one_active_run_per_job", &["job_id"], true, true),
         ];
+        const INDEX_TABLES: &[(&str, &str)] = &[
+            ("idx_mailbox_jobs_project_state", "mailbox_jobs"),
+            ("idx_runs_project_started", "runs"),
+            ("idx_runs_job_started", "runs"),
+            ("idx_events_project_created", "events"),
+            ("idx_events_project_kind_id", "events"),
+            ("idx_evidence_history_job_captured", "evidence_history"),
+            ("idx_active_processes_pid", "active_processes"),
+            (
+                "idx_verification_acceptances_job",
+                "verification_acceptances",
+            ),
+            ("idx_engine_versions_captured", "engine_versions"),
+            ("idx_message_mismatches_job_run", "message_mismatches"),
+            ("idx_events_run_created", "events"),
+            ("one_running_run_per_job", "runs"),
+            ("one_active_run_per_job", "runs"),
+        ];
         for &(index, expected_columns, expected_unique, expected_partial) in INDEX_SIGNATURES {
+            let expected_table = INDEX_TABLES
+                .iter()
+                .find(|(name, _)| *name == index)
+                .map(|(_, table)| *table)
+                .ok_or(rusqlite::Error::InvalidQuery)?;
             let table: String = connection.query_row(
                 "SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?1",
                 [index],
@@ -446,7 +469,8 @@ impl StateStore {
                 .prepare(&format!("PRAGMA index_info({index})"))?
                 .query_map([], |row| row.get::<_, Option<String>>(2))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            if unique != expected_unique as i64
+            if table != expected_table
+                || unique != expected_unique as i64
                 || partial != expected_partial as i64
                 || actual_columns.len() != expected_columns.len()
                 || actual_columns
