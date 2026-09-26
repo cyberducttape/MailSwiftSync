@@ -1,31 +1,45 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 /// A message's local identity. IMAP UIDs are unique only within a mailbox
 /// and UIDVALIDITY context, so a bare UID is never a valid map key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MailboxMessageKey {
-    pub mailbox: String,
+    pub mailbox: Arc<str>,
     pub uidvalidity: Option<u64>,
     pub uid: String,
 }
 
 impl MailboxMessageKey {
+    #[cfg(test)]
     pub fn new(mailbox: impl Into<String>, uid: impl Into<String>) -> Self {
         Self {
-            mailbox: mailbox.into(),
+            mailbox: Arc::from(mailbox.into()),
             uidvalidity: None,
             uid: uid.into(),
         }
     }
 
+    #[cfg(test)]
     pub fn with_uidvalidity(
         mailbox: impl Into<String>,
         uidvalidity: u64,
         uid: impl Into<String>,
     ) -> Self {
         Self {
-            mailbox: mailbox.into(),
+            mailbox: Arc::from(mailbox.into()),
             uidvalidity: Some(uidvalidity),
+            uid: uid.into(),
+        }
+    }
+
+    pub fn with_shared_mailbox(
+        mailbox: Arc<str>,
+        uidvalidity: Option<u64>,
+        uid: impl Into<String>,
+    ) -> Self {
+        Self {
+            mailbox,
+            uidvalidity,
             uid: uid.into(),
         }
     }

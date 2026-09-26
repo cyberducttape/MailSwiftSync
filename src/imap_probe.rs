@@ -1457,6 +1457,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     let mut messages = HashMap::new();
     let mut estimated_state_bytes = 0usize;
     let mut page_number = 0usize;
+    let mailbox_context: std::sync::Arc<str> = std::sync::Arc::from(mailbox);
     let searched_uid_count = enumerate_uid_pages(
         stream,
         host,
@@ -1499,9 +1500,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
                     host,
                 ));
             }
-            let page_messages = parse_message_fetch_metadata_response_bytes(
+            let page_messages = parse_message_fetch_metadata_response_bytes_with_mailbox(
                 &raw_response,
-                mailbox,
+                std::sync::Arc::clone(&mailbox_context),
                 Some(start_uidvalidity),
             )?;
             validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
@@ -2046,9 +2047,22 @@ fn parse_message_fetch_response_with_fingerprints(
 
 /// Parse the live verifier's metadata-only FETCH response. Body fingerprints
 /// intentionally use a separate parser/API and are not produced here.
+#[cfg(test)]
 fn parse_message_fetch_metadata_response_bytes(
     response: &[u8],
     mailbox: &str,
+    uidvalidity: Option<u64>,
+) -> Result<crate::core::ExtractedMessages, String> {
+    parse_message_fetch_metadata_response_bytes_with_mailbox(
+        response,
+        std::sync::Arc::from(mailbox),
+        uidvalidity,
+    )
+}
+
+fn parse_message_fetch_metadata_response_bytes_with_mailbox(
+    response: &[u8],
+    mailbox: std::sync::Arc<str>,
     uidvalidity: Option<u64>,
 ) -> Result<crate::core::ExtractedMessages, String> {
     let mut messages = HashMap::new();
@@ -2077,12 +2091,11 @@ fn parse_message_fetch_metadata_response_bytes(
         let uid = fetch_number(&first_line, "UID")
             .ok_or_else(|| "IMAP FETCH record omitted UID".to_owned())?
             .to_string();
-        let key = match uidvalidity {
-            Some(value) => {
-                crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
-            }
-            None => crate::core::MailboxMessageKey::new(mailbox, uid.clone()),
-        };
+        let key = crate::core::MailboxMessageKey::with_shared_mailbox(
+            std::sync::Arc::clone(&mailbox),
+            uidvalidity,
+            uid.clone(),
+        );
         match messages.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(crate::core::ExtractedMessage {

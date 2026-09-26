@@ -114,7 +114,7 @@ fn build_uid_folder_index(
         .keys()
         .map(|key| {
             (
-                (key.uidvalidity, key.uid.as_str(), key.mailbox.as_str()),
+                (key.uidvalidity, key.uid.as_str(), key.mailbox.as_ref()),
                 key,
             )
         })
@@ -329,7 +329,8 @@ impl MessageVerification {
             let Some(dest_key) = dest_by_fingerprint.get(&fingerprint).copied() else {
                 continue;
             };
-            if expected_destination_folder(source_key, folder_mapping) != dest_key.mailbox {
+            if expected_destination_folder(source_key, folder_mapping) != dest_key.mailbox.as_ref()
+            {
                 continue;
             }
             let source_mismatches = mismatch_by_source
@@ -510,7 +511,7 @@ impl MessageVerification {
             for dest_key in dest_uids {
                 if let Some(fingerprint) = metadata_fingerprint(&dest_messages[*dest_key]) {
                     destination_by_metadata
-                        .entry((dest_key.mailbox.clone(), fingerprint))
+                        .entry((dest_key.mailbox.to_string(), fingerprint))
                         .or_default()
                         .push_back(*dest_key);
                 }
@@ -536,7 +537,7 @@ impl MessageVerification {
             for dest_key in dest_uids {
                 if !matched_dest.contains(dest_key) {
                     destination_by_folder
-                        .entry(dest_key.mailbox.clone())
+                        .entry(dest_key.mailbox.to_string())
                         .or_default()
                         .push_back(*dest_key);
                 }
@@ -622,7 +623,7 @@ impl MessageVerification {
                 dest_by_metadata
                     .entry(metadata)
                     .or_default()
-                    .entry(dest_key.mailbox.clone())
+                    .entry(dest_key.mailbox.to_string())
                     .or_default()
                     .push_back(dest_key);
             }
@@ -1163,7 +1164,7 @@ fn index_by_fingerprint<'a>(
         let folder = if source_side {
             expected_destination_folder(uid, folder_mapping)
         } else {
-            uid.mailbox.clone()
+            uid.mailbox.to_string()
         };
         index
             .entry((folder, fingerprint))
@@ -1179,9 +1180,9 @@ fn expected_destination_folder(
     folder_mapping: &HashMap<String, String>,
 ) -> String {
     folder_mapping
-        .get(&source_key.mailbox)
+        .get(source_key.mailbox.as_ref())
         .cloned()
-        .unwrap_or_else(|| source_key.mailbox.clone())
+        .unwrap_or_else(|| source_key.mailbox.to_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1243,8 +1244,8 @@ fn make_mismatch(
         job_id: Arc::clone(job_id),
         run_id: Arc::clone(run_id),
         mismatch_type,
-        source_folder: source_key.map(|key| key.mailbox.clone()),
-        destination_folder: dest_key.map(|key| key.mailbox.clone()),
+        source_folder: source_key.map(|key| key.mailbox.to_string()),
+        destination_folder: dest_key.map(|key| key.mailbox.to_string()),
         source_uidvalidity: source_key.and_then(|key| key.uidvalidity),
         destination_uidvalidity: dest_key.and_then(|key| key.uidvalidity),
         source_uid: source_key.map(|key| key.uid.clone()),
