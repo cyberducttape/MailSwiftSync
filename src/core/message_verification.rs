@@ -7,6 +7,12 @@ use super::{
     message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey},
 };
 
+/// Conservative admission budget for the combined source/destination state
+/// used by reconciliation. This is an estimate, not a process-wide peak RSS
+/// guarantee: hash tables, indexes, classification sets, and mismatch
+/// evidence can have allocator overhead beyond the per-record estimate.
+const MAX_ESTIMATED_VERIFIER_STATE_BYTES: usize = 256 * 1024 * 1024;
+
 /// Mismatch classifications currently supported by the executable verifier.
 ///
 /// Exact and date/size matches are successful match outcomes represented in
@@ -131,6 +137,37 @@ fn mismatch_destination_key(
             folder.clone(),
         ))
         .cloned()
+}
+
+fn estimated_verifier_record_bytes(key: &MailboxMessageKey, message: &ExtractedMessage) -> usize {
+    512usize
+        .saturating_add(key.mailbox.len())
+        .saturating_add(key.uid.len())
+        .saturating_add(message.message_id.as_deref().map_or(0, str::len))
+        .saturating_add(message.internal_date.as_deref().map_or(0, str::len))
+}
+
+fn estimated_verifier_state_bytes(
+    source_messages: &ExtractedMessages,
+    dest_messages: &ExtractedMessages,
+) -> usize {
+    source_messages
+        .iter()
+        .chain(dest_messages)
+        .map(|(key, message)| estimated_verifier_record_bytes(key, message))
+        .fold(0usize, |total, record| {
+            total.saturating_add(record.saturating_mul(2))
+        })
+}
+
+fn enforce_verifier_state_budget(estimated_state_bytes: usize) -> Result<(), String> {
+    if estimated_state_bytes > MAX_ESTIMATED_VERIFIER_STATE_BYTES {
+        return Err(format!(
+            "verification state exceeds the estimated {}-byte aggregate verifier budget",
+            MAX_ESTIMATED_VERIFIER_STATE_BYTES
+        ));
+    }
+    Ok(())
 }
 
 /// Core message verification engine.
@@ -567,6 +604,8 @@ impl MessageVerification {
         dest_messages: &ExtractedMessages,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        let estimated_state_bytes = estimated_verifier_state_bytes(source_messages, dest_messages);
+        enforce_verifier_state_budget(estimated_state_bytes)?;
         let mut all_mismatches = Vec::new();
         let mut total_metadata_matches = 0_u64;
         let mut total_probable_matches = 0_u64;
@@ -1140,6 +1179,12 @@ impl VerificationSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aggregate_verifier_budget_fails_closed_before_reconciliation() {
+        assert!(enforce_verifier_state_budget(MAX_ESTIMATED_VERIFIER_STATE_BYTES).is_ok());
+        assert!(enforce_verifier_state_budget(MAX_ESTIMATED_VERIFIER_STATE_BYTES + 1).is_err());
+    }
 
     fn key(uid: &str) -> MailboxMessageKey {
         MailboxMessageKey::new("INBOX", uid)
