@@ -29,7 +29,7 @@ impl StateStore {
             .query_row("SELECT COUNT(*) FROM projects", [], |row| {
                 row.get::<_, i64>(0)
             })
-            .map(|count| count as usize)
+            .and_then(sqlite_usize)
     }
 
     /// Return the monotonic durable event position used by presentation
@@ -177,11 +177,11 @@ impl StateStore {
             [project_id],
             |row| {
                 Ok(MailboxStateCounts {
-                    total: row.get::<_, i64>(0)? as usize,
-                    ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize,
-                    running: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
-                    verified: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize,
-                    needs_review: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize,
+                    total: sqlite_usize(row.get(0)?)?,
+                    ready: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
+                    running: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
+                    verified: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
+                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
                 })
             },
         )
@@ -193,11 +193,11 @@ impl StateStore {
             [],
             |row| {
                 Ok(MailboxStateCounts {
-                    total: row.get::<_, i64>(0)? as usize,
-                    ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0) as usize,
-                    running: row.get::<_, Option<i64>>(2)?.unwrap_or(0) as usize,
-                    verified: row.get::<_, Option<i64>>(3)?.unwrap_or(0) as usize,
-                    needs_review: row.get::<_, Option<i64>>(4)?.unwrap_or(0) as usize,
+                    total: sqlite_usize(row.get(0)?)?,
+                    ready: sqlite_usize(row.get::<_, Option<i64>>(1)?.unwrap_or(0))?,
+                    running: sqlite_usize(row.get::<_, Option<i64>>(2)?.unwrap_or(0))?,
+                    verified: sqlite_usize(row.get::<_, Option<i64>>(3)?.unwrap_or(0))?,
+                    needs_review: sqlite_usize(row.get::<_, Option<i64>>(4)?.unwrap_or(0))?,
                 })
             },
         )
