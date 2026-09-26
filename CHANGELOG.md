@@ -32,6 +32,8 @@ All notable changes to MailSwiftSync are documented here.
   attention, and mismatch enum values instead of silently applying defaults.
 - Hardened active-process identity validation and boolean evidence flags so
   malformed signed integers cannot be silently dropped or treated as true.
+- Rejected lossy signed/unsigned conversions at the evidence and process
+  persistence boundary instead of allowing counters or byte totals to wrap.
 
 ### Fixed
 

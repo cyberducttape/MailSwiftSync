@@ -65,6 +65,22 @@ pub(crate) use policy::{
     valid_mailbox_transition,
 };
 
+pub(crate) fn sqlite_i64(value: u64) -> rusqlite::Result<i64> {
+    i64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
+pub(crate) fn sqlite_u64(value: i64) -> rusqlite::Result<u64> {
+    u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
+pub(crate) fn sqlite_optional_i64(value: Option<u64>) -> rusqlite::Result<Option<i64>> {
+    value.map(sqlite_i64).transpose()
+}
+
+pub(crate) fn sqlite_optional_u64(value: Option<i64>) -> rusqlite::Result<Option<u64>> {
+    value.map(sqlite_u64).transpose()
+}
+
 pub struct StateStore {
     connection: Connection,
 }
@@ -1803,10 +1819,58 @@ mod tests {
                 [],
             )
             .unwrap();
+        assert!(store.evidence("j").is_err());
         drop(store);
 
         assert!(StateStore::open_readonly(&path).is_err());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn evidence_rejects_values_that_do_not_fit_sqlite_signed_integers() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("overflow", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "run-overflow", "imapsync")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+            source_messages: u64::MAX,
+            destination_messages: 0,
+            source_bytes: 0,
+            destination_bytes: 0,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 0,
+            destination_folders: 0,
+            authoritative: true,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+        };
+        assert!(
+            db.finish_run_for_mailbox_with_evidence(
+                &project.id,
+                &job,
+                "run-overflow",
+                "completed",
+                "verified",
+                "",
+                &evidence,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.run_status("run-overflow").unwrap().as_deref(),
+            Some("running")
+        );
+        assert!(db.evidence(&job).unwrap().is_none());
     }
 
     #[test]

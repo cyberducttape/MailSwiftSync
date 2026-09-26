@@ -47,7 +47,7 @@ impl StateStore {
                     process.run_id,
                     process.job_id,
                     i64::from(process.pid),
-                    process.start_ticks.map(|value| value as i64),
+                    sqlite_optional_i64(process.start_ticks)?,
                     process.process_group.map(i64::from),
                     process.session_id,
                     process.executable,
@@ -95,7 +95,7 @@ impl StateStore {
                 process.run_id,
                 process.job_id,
                 i64::from(process.pid),
-                process.start_ticks.map(|value| value as i64),
+                sqlite_optional_i64(process.start_ticks)?,
                 process.process_group.map(i64::from),
                 process.session_id.map(i64::from),
                 process.executable
@@ -118,9 +118,13 @@ impl StateStore {
                     run_id: row.get(0)?,
                     job_id: row.get(1)?,
                     pid,
-                    start_ticks: start_ticks.and_then(|value| u64::try_from(value).ok()),
-                    process_group: process_group.and_then(|value| u32::try_from(value).ok()),
-                    session_id: session_id.and_then(|value| u32::try_from(value).ok()),
+                    start_ticks: sqlite_optional_u64(start_ticks)?,
+                    process_group: process_group
+                        .map(|value| u32::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery))
+                        .transpose()?,
+                    session_id: session_id
+                        .map(|value| u32::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery))
+                        .transpose()?,
                     executable: row.get(6)?,
                 })
             })?
