@@ -2021,6 +2021,49 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_cross_mailbox_process_and_acceptance_links() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-cross-runtime-link-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        let (project, jobs) = store
+            .create_project_with_mailboxes(
+                "cross-runtime-links",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        store
+            .begin_run(&project.id, &jobs[0], "runtime-run-one", "test")
+            .unwrap();
+        store
+            .begin_run(&project.id, &jobs[1], "runtime-run-two", "test")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO active_processes(run_id,job_id,pid,executable) VALUES('runtime-run-two',?1,1,'test')",
+                params![jobs[0]],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO verification_acceptances(job_id,run_id,operator,reason) VALUES(?1,'runtime-run-two','operator','reason')",
+                params![jobs[0]],
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_current_schema_with_weakened_foreign_key_action() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-fk-action-{}", Uuid::new_v4()));

@@ -677,8 +677,12 @@ impl StateStore {
             }
         }
         const OWNERSHIP_CHECKS: &[&str] = &[
+            "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=r.job_id WHERE r.job_id IS NOT NULL AND r.project_id<>j.project_id)",
             "SELECT EXISTS(SELECT 1 FROM evidence_history h JOIN runs r ON r.id=h.run_id WHERE r.job_id IS NULL OR r.job_id<>h.job_id)",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches m JOIN runs r ON r.id=m.run_id WHERE r.job_id IS NULL OR r.job_id<>m.job_id)",
+            "SELECT EXISTS(SELECT 1 FROM active_processes p JOIN runs r ON r.id=p.run_id WHERE r.job_id IS NULL OR r.job_id<>p.job_id)",
+            "SELECT EXISTS(SELECT 1 FROM verification_acceptances a JOIN runs r ON r.id=a.run_id WHERE r.job_id<>a.job_id)",
+            "SELECT EXISTS(SELECT 1 FROM events e JOIN runs r ON r.id=e.run_id WHERE r.project_id<>e.project_id)",
         ];
         for sql in OWNERSHIP_CHECKS {
             let mismatched_owner: bool = connection.query_row(sql, [], |row| row.get(0))?;
