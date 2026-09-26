@@ -58,6 +58,8 @@ operator distribution archives.
   recover the preserved SQLite sidecars when possible.
 - Bounded secret-file reads after opening the file, so concurrent growth cannot
   bypass the configured 64 KiB credential-file limit.
+- Applied the same bounded signing-key read to the Windows signing path as to
+  Unix, preventing platform-specific unbounded key allocations.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
