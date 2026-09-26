@@ -493,6 +493,9 @@ pub(crate) fn headless_recover(
     for process in &processes {
         if process.pid > 0 && recorded_process_matches(process) {
             terminate_recorded_process_group(process);
+            if recorded_process_matches(process) {
+                unverified.push(process.clone());
+            }
         } else if recorded_process_is_gone(process) {
             // The owned process already exited (for example after the
             // Linux parent-death signal). There is nothing left to signal,
@@ -505,6 +508,8 @@ pub(crate) fn headless_recover(
         .recover_abandoned_jobs_preserving(&unverified)
         .map_err(|error| error.to_string())?;
     if unverified.is_empty() {
+        crate::cleanup_reconciled_secret_directories(&secret_runtime_base());
+    } else {
         cleanup_stale_secret_directories(&secret_runtime_base());
     }
     Ok(HeadlessRecoveryResult {

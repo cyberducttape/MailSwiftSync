@@ -95,6 +95,9 @@ impl App {
                 for process in &processes {
                     if process.pid > 0 && recorded_process_matches(process) {
                         terminate_recorded_process_group(process);
+                        if recorded_process_matches(process) {
+                            unverified.push(process.clone());
+                        }
                     } else if recorded_process_is_gone(process) {
                         // The registered process exited before startup
                         // recovery could inspect it; do not preserve a dead
@@ -116,13 +119,16 @@ impl App {
         } else {
             (0, 0, Vec::new())
         };
-        // Only the lock owner may reconcile stale runtime secrets. If any
-        // recorded child identity could not be verified, fail closed and
-        // preserve age-only secret directories: an unverified process may
-        // still depend on its passfile. The operator can review and clean it
-        // up after confirming the process is gone.
-        if persistence_warning.is_none() && unverified_processes.is_empty() {
-            cleanup_stale_secret_directories(&secret_runtime_base());
+        // The instance lock and completed durable-process reconciliation make
+        // immediate cleanup safe when there are no unverified owners. If an
+        // owner remains ambiguous, retain young directories and apply only
+        // the seven-day fallback age policy.
+        if persistence_warning.is_none() {
+            if unverified_processes.is_empty() {
+                cleanup_reconciled_secret_directories(&secret_runtime_base());
+            } else {
+                cleanup_stale_secret_directories(&secret_runtime_base());
+            }
         }
         let mut initial_output_lines = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with Preflight against a test destination mailbox.".into()],
@@ -144,7 +150,7 @@ impl App {
                 "{unverified_process_count} recorded process identity(ies) could not be verified and were not signalled; review the affected jobs before retrying."
             ));
             initial_output_lines.push(
-                "Stale secret cleanup was deferred because an unverified process may still need its passfile."
+                "Immediate secret cleanup was deferred; directories older than seven days remain eligible for age-based cleanup."
                     .into(),
             );
         }

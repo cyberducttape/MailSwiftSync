@@ -16,6 +16,9 @@ operator distribution archives.
 - The disposable IMAP integration artifact now retains MailSwiftSync command
   output when a smoke run fails, enabling diagnosis without retaining fixture
   credentials or private server keys.
+- Startup now immediately removes leftover credential run directories when
+  durable process recovery proves there are no surviving or unverified owners;
+  ambiguous ownership retains the seven-day cleanup fallback.
 - Startup recovery now bounds the number of active process identities it will
   materialize and fails closed on an oversized ledger instead of allocating an
   unbounded recovery vector.

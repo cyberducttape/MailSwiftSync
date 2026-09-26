@@ -211,7 +211,19 @@ pub fn cleanup_stale_secret_directories(base: &Path) {
     cleanup_stale_secret_directories_at(base, SystemTime::now(), MAX_SECRET_DIRECTORY_AGE);
 }
 
+/// Remove every residual run directory after durable process recovery has
+/// established that no recorded engine can still be consuming its passfiles.
+/// Callers must hold the application instance lock and must not use this when
+/// process ownership is unverified.
+pub fn cleanup_reconciled_secret_directories(base: &Path) {
+    cleanup_secret_directories(base, None, SystemTime::now());
+}
+
 fn cleanup_stale_secret_directories_at(base: &Path, now: SystemTime, max_age: Duration) {
+    cleanup_secret_directories(base, Some(max_age), now);
+}
+
+fn cleanup_secret_directories(base: &Path, max_age: Option<Duration>, now: SystemTime) {
     // Cleanup must never inspect or remove children through an attacker-owned
     // base path. The Unix helper opens with O_NOFOLLOW and verifies ownership
     // and private permissions before read_dir is allowed to proceed.
@@ -231,13 +243,15 @@ fn cleanup_stale_secret_directories_at(base: &Path, now: SystemTime, max_age: Du
         if !entry.file_name().to_string_lossy().starts_with("run-") || !file_type.is_dir() {
             continue;
         }
-        let stale = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age > max_age);
-        if stale {
+        let eligible = max_age.is_none_or(|max_age| {
+            entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age > max_age)
+        });
+        if eligible {
             let _ = fs::remove_dir_all(path);
         }
     }
@@ -734,7 +748,7 @@ pub fn verify_directory_writable(dir: &Path) -> std::io::Result<()> {
 mod tests {
     #[cfg(unix)]
     use super::cleanup_stale_secret_directories_at;
-    use super::{SecretString, read_secret_file};
+    use super::{SecretString, cleanup_reconciled_secret_directories, read_secret_file};
     use std::fs;
     #[cfg(unix)]
     use std::{
@@ -748,6 +762,31 @@ mod tests {
         let debug = format!("{secret:?}");
         assert_eq!(debug, "SecretString(REDACTED)");
         assert!(!debug.contains("customer-password"));
+    }
+
+    #[test]
+    fn reconciled_cleanup_removes_recent_run_directories_only() {
+        let base = std::env::temp_dir().join(format!(
+            "mailswiftsync-reconciled-cleanup-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let run_dir = super::create_secret_directory_at(&base).unwrap();
+        let unrelated = base.join("keep-this-directory");
+        fs::create_dir(&unrelated).unwrap();
+        super::write_secret_file(&run_dir.join("source.secret"), "test-credential").unwrap();
+
+        cleanup_reconciled_secret_directories(&base);
+
+        assert!(
+            !run_dir.exists(),
+            "reconciled run passfiles should be purged immediately"
+        );
+        assert!(
+            unrelated.exists(),
+            "cleanup must leave non-run directories alone"
+        );
+        fs::remove_dir(unrelated).unwrap();
+        fs::remove_dir(base).unwrap();
     }
 
     #[test]
@@ -871,6 +910,34 @@ mod tests {
         assert!(target.exists());
         fs::remove_file(link).unwrap();
         fs::remove_dir(target).unwrap();
+        fs::remove_dir(base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ambiguous_cleanup_retains_recent_run_directories_until_fallback_age() {
+        let base = std::env::temp_dir().join(format!(
+            "mailswiftsync-age-cleanup-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let run_dir = super::create_secret_directory_at(&base).unwrap();
+        let max_age = Duration::from_secs(7 * 24 * 60 * 60);
+
+        cleanup_stale_secret_directories_at(&base, SystemTime::now(), max_age);
+        assert!(
+            run_dir.exists(),
+            "recent credentials must survive ambiguous ownership"
+        );
+
+        cleanup_stale_secret_directories_at(
+            &base,
+            SystemTime::now() + Duration::from_secs(8 * 24 * 60 * 60),
+            max_age,
+        );
+        assert!(
+            !run_dir.exists(),
+            "the existing age fail-safe remains in force"
+        );
         fs::remove_dir(base).unwrap();
     }
 
