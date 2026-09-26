@@ -24,11 +24,23 @@ jobs:
       - name: Run disposable real-server transfer
         run: |
           mkdir -p provider-evidence
+          sudo chown 10001:10001 provider-evidence
+          chmod 0700 provider-evidence
           docker run --rm \
             --volume "$PWD/provider-evidence:/provider-evidence" \
             --env MAILSWIFTSYNC_EVIDENCE_OUTPUT=/provider-evidence \
             --entrypoint /bin/bash mailswiftsync:integration \
             /usr/local/lib/mailswiftsync/imap-integration-smoke.sh
+      - name: Restore private artifact ownership for upload
+        if: always()
+        run: |
+          if [ -d provider-evidence ]; then
+            sudo chown -R "$(id -u):$(id -g)" provider-evidence
+            chmod -R u+rwX,go-rwx provider-evidence
+          fi
+      - name: Generate generic IMAP qualification evidence
+        if: success()
+        run: |
           run_id=$(python3 - provider-evidence/customer-proof.json <<'PY'
           import json, sys
           proof = json.load(open(sys.argv[1], encoding="utf-8"))
