@@ -480,7 +480,7 @@ fastio1 = false
 fastio2 = false
 allowsizemismatch = false
 delete2 = false
-extra_options = "--timeout=30"
+extra_options = "--timeout=30 --debug"
 EOF
 source_secret="$app_runtime/source.secret"
 destination_secret="$app_runtime/destination.secret"

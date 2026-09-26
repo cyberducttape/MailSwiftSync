@@ -41,9 +41,9 @@ operator distribution archives.
 - The distributed Linux runtime now includes `procps`, which packaged
   imapsync invokes for process inspection; the product integration lab fails
   early if `ps` is missing.
-- The packaged-imapsync integration fixture now applies a bounded 30-second
-  engine protocol timeout so blocked IMAP operations fail with actionable
-  engine output before the outer lab watchdog expires.
+- The packaged-imapsync integration fixture now enables bounded diagnostic
+  output and a 30-second engine protocol timeout to locate the dry-run shutdown
+  stall before the outer lab watchdog expires.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
