@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import io
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -114,5 +115,21 @@ with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temp
         entry.size = len(payload)
         archive.addfile(entry, fileobj=io.BytesIO(payload))
     run_verifier(traversal_tar, False)
+
+    symlink_zip = workspace / "symlink.zip"
+    with zipfile.ZipFile(symlink_zip, "w") as archive:
+        info = zipfile.ZipInfo("README.md")
+        info.create_system = 3
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(info, "/etc/passwd")
+    run_verifier(symlink_zip, False)
+
+    symlink_tar = workspace / "symlink.tar.gz"
+    with tarfile.open(symlink_tar, "w:gz") as archive:
+        entry = tarfile.TarInfo("README.md")
+        entry.type = tarfile.SYMTYPE
+        entry.linkname = "/etc/passwd"
+        archive.addfile(entry)
+    run_verifier(symlink_tar, False)
 
 print("PASS: release archive layouts are consistent across tar.gz and ZIP formats")
