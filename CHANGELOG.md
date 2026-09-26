@@ -23,6 +23,9 @@ All notable changes to MailSwiftSync are documented here.
 - Completed the explicit dependency license allowlist for the GUI stack so
   `cargo deny check advisories bans licenses sources` passes without treating
   bundled fonts or clipboard support as policy violations.
+- Fixed the scheduled dependency-audit workflow to use the supported
+  `cargo-audit` invocation instead of passing it Cargo's unsupported
+  `--locked` flag.
 
 ### Fixed
 
