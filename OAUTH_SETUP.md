@@ -294,13 +294,26 @@ When you configure OAuth in MailSwiftSync:
 3. **Rotation:** If provider issues new refresh token, MailSwiftSync stores it automatically
 4. **Expiry:** If refresh token expires, migration fails with clear error message
 
-### Refresh Token Expiry
+### Provider-specific refresh-token lifecycle
 
-- **Gmail:** Refresh tokens expire after 6 months of inactivity
-- **Microsoft 365:** Configurable, often 1-2 years
-- **Fastmail:** Check provider documentation
+There is no safe universal lifetime to put in an operations runbook. A refresh
+token can be revoked, invalidated by account or administrator policy, replaced
+when the provider rotates it, or expire under a provider-specific grant.
 
-**Pro tip:** Periodically run a preflight check to keep your refresh token active.
+- **Google:** Google documents several invalidation cases, including revoked
+  consent, prolonged non-use, password changes for Gmail-scoped tokens, token
+  limits, time-based access, and administrator policy. See Google's current
+  [refresh-token expiration guidance](https://developers.google.com/identity/protocols/oauth2#expiration).
+- **Microsoft 365:** Microsoft documents refresh-token behavior by flow and
+  resource, including rotation and inactivity rules; do not rely on a
+  tenant-wide folklore lifetime. See the current [Microsoft identity-platform
+  refresh-token documentation](https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens).
+- **Fastmail:** Follow [Fastmail's current OAuth documentation](https://www.fastmail.com/help/developers/oauth.html)
+  for its issuance, rotation, and revocation behavior.
+
+A preflight exercises the configured refresh path, but it is not a guarantee
+that a provider will keep a token valid. Treat refresh errors as an
+authentication event: inspect provider policy and re-authorize when required.
 
 ---
 
