@@ -10,11 +10,76 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    sync::Arc,
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     sync::atomic::AtomicBool,
+    sync::{Arc, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
 };
+
+const DNS_RESOLVER_WORKERS: usize = 4;
+const DNS_RESOLVER_QUEUE: usize = 32;
+
+struct DnsResolverRequest {
+    address: String,
+    result: mpsc::Sender<std::io::Result<Vec<SocketAddr>>>,
+}
+
+struct DnsResolverPool {
+    requests: mpsc::SyncSender<DnsResolverRequest>,
+}
+
+static DNS_RESOLVER_POOL: OnceLock<Result<DnsResolverPool, String>> = OnceLock::new();
+
+impl DnsResolverPool {
+    fn new() -> Result<Self, String> {
+        let (requests, receiver) = mpsc::sync_channel::<DnsResolverRequest>(DNS_RESOLVER_QUEUE);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for worker_number in 0..DNS_RESOLVER_WORKERS {
+            let receiver = Arc::clone(&receiver);
+            std::thread::Builder::new()
+                .name(format!("mailswiftsync-dns-{worker_number}"))
+                .spawn(move || {
+                    loop {
+                        let request = match receiver.lock() {
+                            Ok(receiver) => receiver.recv(),
+                            Err(_) => return,
+                        };
+                        let Ok(request) = request else {
+                            return;
+                        };
+                        let result = request
+                            .address
+                            .to_socket_addrs()
+                            .map(|addresses| addresses.collect::<Vec<_>>());
+                        let _ = request.result.send(result);
+                    }
+                })
+                .map_err(|error| format!("could not start DNS resolver worker: {error}"))?;
+        }
+        Ok(Self { requests })
+    }
+
+    fn resolve(
+        &self,
+        address: String,
+    ) -> Result<mpsc::Receiver<std::io::Result<Vec<SocketAddr>>>, String> {
+        let (result, receiver) = mpsc::channel();
+        self.requests
+            .try_send(DnsResolverRequest { address, result })
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full(_) => "DNS resolver queue is full".to_owned(),
+                mpsc::TrySendError::Disconnected(_) => "DNS resolver pool stopped".to_owned(),
+            })?;
+        Ok(receiver)
+    }
+}
+
+fn dns_resolver_pool() -> Result<&'static DnsResolverPool, String> {
+    DNS_RESOLVER_POOL
+        .get_or_init(|| DnsResolverPool::new().map_err(|error| error.to_string()))
+        .as_ref()
+        .map_err(Clone::clone)
+}
 
 pub(crate) fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
     let host = host.trim();
@@ -765,14 +830,7 @@ fn connect_tls_stream_inner(
     } else {
         format!("{server_name}:{port}")
     };
-    let (resolved, resolver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = resolved.send(
-            address
-                .to_socket_addrs()
-                .map(|iter| iter.collect::<Vec<_>>()),
-        );
-    });
+    let resolver = dns_resolver_pool()?.resolve(address)?;
     let dns_deadline = budget
         .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
@@ -2039,7 +2097,7 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageFetchBudget, TaggedResponseScanner, authenticated_list_command,
+        MessageFetchBudget, TaggedResponseScanner, authenticated_list_command, dns_resolver_pool,
         format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
         parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
         parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
@@ -2075,6 +2133,19 @@ mod tests {
             authenticated_list_command(false),
             b"a005 LIST \"\" \"*\"\r\n"
         );
+    }
+
+    #[test]
+    fn dns_resolution_uses_the_bounded_shared_pool() {
+        let receiver = dns_resolver_pool()
+            .unwrap()
+            .resolve("127.0.0.1:993".to_owned())
+            .unwrap();
+        let addresses = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert!(addresses.iter().any(|address| address.ip().is_loopback()));
     }
 
     #[test]

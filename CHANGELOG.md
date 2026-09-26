@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Production hardening
 
+- Replaced per-probe detached DNS resolver threads with a four-worker,
+  32-request bounded resolver pool; resolver timeouts no longer accumulate an
+  unbounded number of orphaned lookup threads.
 - Replaced repeated whole-response IMAP framing scans and UTF-8 conversions
   with an incremental literal-aware tagged-response scanner; string decoding
   now occurs only after a complete response is received.
