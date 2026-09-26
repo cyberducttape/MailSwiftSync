@@ -392,6 +392,7 @@ fn tagged_response_outside_literals(response: &[u8], tag: &str) -> bool {
 const MAX_IMAP_LIST_LINE_BYTES: usize = 64 * 1024;
 const MAX_IMAP_LIST_LITERAL_BYTES: usize = 1024 * 1024;
 const MAX_IMAP_LIST_MAILBOXES: usize = 100_000;
+const MAX_IMAP_LIST_INVENTORY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
 const MAX_IMAP_COMMAND_DURATION: Duration = Duration::from_secs(15);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
@@ -610,6 +611,7 @@ fn read_imap_list_response_inner<S: Read>(
     let mut literal_header: Option<String> = None;
     let mut literal_value = Vec::new();
     let mut summary = ListInventorySummary::default();
+    let mut inventory_bytes = 0_usize;
     const MAX_INTER_READ_STALL: Duration = Duration::from_secs(15);
     let deadline = started + MAX_IMAP_LIST_DURATION;
     loop {
@@ -650,6 +652,7 @@ fn read_imap_list_response_inner<S: Read>(
                             Some(&literal_value),
                             &mut summary,
                             &mut mailbox_details,
+                            &mut inventory_bytes,
                         )?;
                     }
                     literal_value.clear();
@@ -676,7 +679,13 @@ fn read_imap_list_response_inner<S: Read>(
             let text = text.trim_end_matches(['\r', '\n']);
             let literal_size = list_literal_size(text);
             if is_untagged_response(text, "LIST") && literal_size.is_none() {
-                record_list_entry(text, None, &mut summary, &mut mailbox_details)?;
+                record_list_entry(
+                    text,
+                    None,
+                    &mut summary,
+                    &mut mailbox_details,
+                    &mut inventory_bytes,
+                )?;
             }
             if is_tagged_response(text, tag) {
                 let status = text.split_whitespace().nth(1);
@@ -722,6 +731,7 @@ fn record_list_entry(
     literal_name: Option<&[u8]>,
     summary: &mut ListInventorySummary,
     mailbox_details: &mut Option<&mut Vec<MailboxDescriptor>>,
+    inventory_bytes: &mut usize,
 ) -> Result<(), String> {
     if !is_untagged_response(line, "LIST") {
         return Ok(());
@@ -747,6 +757,19 @@ fn record_list_entry(
             None => parse_list_mailbox_name(line)
                 .ok_or_else(|| "IMAP LIST mailbox name was missing or malformed".to_owned())?,
         };
+        let descriptor_bytes = wire_name
+            .len()
+            .saturating_add(parse_list_delimiter(line).as_ref().map_or(0, String::len))
+            .saturating_add(special_use.iter().map(String::len).sum::<usize>())
+            // Account for the descriptor/vector and string allocation
+            // overhead in addition to the retained character data.
+            .saturating_add(256);
+        *inventory_bytes = inventory_bytes.saturating_add(descriptor_bytes);
+        if *inventory_bytes > MAX_IMAP_LIST_INVENTORY_BYTES {
+            return Err(format!(
+                "IMAP LIST inventory exceeded the {MAX_IMAP_LIST_INVENTORY_BYTES}-byte limit"
+            ));
+        }
         details.push(MailboxDescriptor {
             wire_name,
             delimiter: parse_list_delimiter(line),
@@ -2325,12 +2348,13 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_ESTIMATED_FETCHED_STATE_BYTES, MailboxFetchError, MessageFetchBudget,
-        MessageStateBudget, TaggedResponseScanner, authenticated_list_command,
-        classify_mailbox_fetch_error, dns_resolver_pool, format_folder_failures,
-        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes,
-        parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
-        read_with_deadline, tagged_response_outside_literals, write_imap_command,
+        ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
+        MailboxFetchError, MessageFetchBudget, MessageStateBudget, TaggedResponseScanner,
+        authenticated_list_command, classify_mailbox_fetch_error, dns_resolver_pool,
+        format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
+        parse_message_fetch_metadata_response_bytes, parse_message_id_header,
+        read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
+        record_list_entry, tagged_response_outside_literals, write_imap_command,
     };
     use std::collections::HashMap;
     use std::io::{self, Cursor, Read, Write};
@@ -2553,6 +2577,35 @@ mod tests {
             read_imap_list_response(&mut literal_stream, "a005", &mut buffer)
                 .unwrap_err()
                 .contains("literal exceeded")
+        );
+    }
+
+    #[test]
+    fn list_inventory_descriptor_memory_is_aggregate_bounded() {
+        let line = format!(
+            "* LIST (\\HasNoChildren) \"/\" \"{}\"",
+            "x".repeat(16 * 1024)
+        );
+        let mut summary = ListInventorySummary::default();
+        let mut details = Vec::new();
+        let mut inventory_bytes = 0;
+        let mut error: Option<String> = None;
+        for _ in 0..=MAX_IMAP_LIST_INVENTORY_BYTES / (16 * 1024) {
+            if let Err(value) = record_list_entry(
+                &line,
+                None,
+                &mut summary,
+                &mut Some(&mut details),
+                &mut inventory_bytes,
+            ) {
+                error = Some(value);
+                break;
+            }
+        }
+        assert!(
+            error
+                .expect("aggregate inventory limit must reject oversized descriptor population")
+                .contains("inventory exceeded")
         );
     }
 
