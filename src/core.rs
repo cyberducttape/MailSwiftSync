@@ -1810,6 +1810,26 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_unknown_persisted_enum_values() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-schema-enum-{}", Uuid::new_v4()));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES('p','p','s','d','not-a-phase')",
+                [],
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn migration_removes_legacy_message_subject_column() {
         let db = StateStore::in_memory().unwrap();
         db.connection

@@ -28,6 +28,8 @@ All notable changes to MailSwiftSync are documented here.
   `--locked` flag.
 - Hardened ledger validation against negative SQLite values in unsigned
   evidence counters, byte sizes, retry counts, and message identity fields.
+- Hardened ledger validation against unknown persisted lifecycle, evidence,
+  attention, and mismatch enum values instead of silently applying defaults.
 
 ### Fixed
 
