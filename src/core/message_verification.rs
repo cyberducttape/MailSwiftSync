@@ -83,43 +83,48 @@ pub struct MessageMismatch {
 /// Identity ownership produced by reconciliation. Every input key must occur
 /// in exactly one source or destination classification.
 #[derive(Debug, Clone, Default)]
-pub struct VerificationMembership {
-    pub matched_source: HashSet<MailboxMessageKey>,
-    pub matched_destination: HashSet<MailboxMessageKey>,
-    pub probable_source: HashSet<MailboxMessageKey>,
-    pub probable_destination: HashSet<MailboxMessageKey>,
-    pub missing_source: HashSet<MailboxMessageKey>,
-    pub extra_destination: HashSet<MailboxMessageKey>,
-    pub duplicated_destination: HashSet<MailboxMessageKey>,
-    pub changed_source: HashSet<MailboxMessageKey>,
-    pub changed_destination: HashSet<MailboxMessageKey>,
+pub struct VerificationMembership<'a> {
+    pub matched_source: HashSet<&'a MailboxMessageKey>,
+    pub matched_destination: HashSet<&'a MailboxMessageKey>,
+    pub probable_source: HashSet<&'a MailboxMessageKey>,
+    pub probable_destination: HashSet<&'a MailboxMessageKey>,
+    pub missing_source: HashSet<&'a MailboxMessageKey>,
+    pub extra_destination: HashSet<&'a MailboxMessageKey>,
+    pub duplicated_destination: HashSet<&'a MailboxMessageKey>,
+    pub changed_source: HashSet<&'a MailboxMessageKey>,
+    pub changed_destination: HashSet<&'a MailboxMessageKey>,
 }
 
 fn build_uid_folder_index(
     messages: &ExtractedMessages,
-) -> HashMap<(Option<u64>, String, String), &MailboxMessageKey> {
+) -> HashMap<(Option<u64>, &str, &str), &MailboxMessageKey> {
     messages
         .keys()
-        .map(|key| ((key.uidvalidity, key.uid.clone(), key.mailbox.clone()), key))
+        .map(|key| {
+            (
+                (key.uidvalidity, key.uid.as_str(), key.mailbox.as_str()),
+                key,
+            )
+        })
         .collect()
 }
 
 fn mismatch_source_key<'a>(
     mismatch: &MessageMismatch,
-    index: &HashMap<(Option<u64>, String, String), &'a MailboxMessageKey>,
+    index: &HashMap<(Option<u64>, &str, &str), &'a MailboxMessageKey>,
 ) -> Option<&'a MailboxMessageKey> {
     let (uid, folder) = mismatch
         .source_uid
         .as_ref()
         .zip(mismatch.source_folder.as_ref())?;
     index
-        .get(&(mismatch.source_uidvalidity, uid.clone(), folder.clone()))
+        .get(&(mismatch.source_uidvalidity, uid.as_str(), folder.as_str()))
         .copied()
 }
 
 fn mismatch_destination_key<'a>(
     mismatch: &MessageMismatch,
-    index: &HashMap<(Option<u64>, String, String), &'a MailboxMessageKey>,
+    index: &HashMap<(Option<u64>, &str, &str), &'a MailboxMessageKey>,
 ) -> Option<&'a MailboxMessageKey> {
     let (uid, folder) = mismatch
         .dest_uid
@@ -128,8 +133,8 @@ fn mismatch_destination_key<'a>(
     index
         .get(&(
             mismatch.destination_uidvalidity,
-            uid.clone(),
-            folder.clone(),
+            uid.as_str(),
+            folder.as_str(),
         ))
         .copied()
 }
@@ -375,18 +380,18 @@ impl MessageVerification {
     /// in the mapping supplied by the caller, not in this generic verifier.
     /// Reconciliation Pass 1: Message-ID + exact metadata matching.
     /// Returns (mismatches created, source keys matched, dest keys matched).
-    fn pass_1_message_id_exact_metadata(
+    fn pass_1_message_id_exact_metadata<'a>(
         job_id: &str,
         run_id: &str,
-        source_messages: &ExtractedMessages,
-        dest_messages: &ExtractedMessages,
+        source_messages: &'a ExtractedMessages,
+        dest_messages: &'a ExtractedMessages,
         folder_mapping: &HashMap<String, String>,
-        source_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
-        dest_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
+        source_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
+        dest_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
     ) -> (
         Vec<MessageMismatch>,
-        HashSet<MailboxMessageKey>,
-        HashSet<MailboxMessageKey>,
+        HashSet<&'a MailboxMessageKey>,
+        HashSet<&'a MailboxMessageKey>,
     ) {
         let mut mismatches = Vec::new();
         let mut matched_source = HashSet::new();
@@ -424,8 +429,8 @@ impl MessageVerification {
                     .get_mut(&(expected_folder, fingerprint))
                     .and_then(VecDeque::pop_front)
                 {
-                    matched_source.insert((*source_key).clone());
-                    matched_dest.insert((*dest_key).clone());
+                    matched_source.insert(*source_key);
+                    matched_dest.insert(dest_key);
                 }
             }
 
@@ -452,8 +457,8 @@ impl MessageVerification {
                 };
                 let source_msg = &source_messages[source_key];
                 let dest_msg = &dest_messages[dest_key];
-                matched_source.insert((*source_key).clone());
-                matched_dest.insert((*dest_key).clone());
+                matched_source.insert(*source_key);
+                matched_dest.insert(dest_key);
                 mismatches.push(make_mismatch(
                     job_id,
                     run_id,
@@ -472,20 +477,20 @@ impl MessageVerification {
     /// Reconciliation Pass 2: Wrong-folder detection for Message-ID matches.
     /// Finds messages with identical Message-ID and metadata but in unexpected folders.
     #[allow(clippy::too_many_arguments)]
-    fn pass_2_wrong_folder_detection(
+    fn pass_2_wrong_folder_detection<'a>(
         job_id: &str,
         run_id: &str,
-        source_messages: &ExtractedMessages,
-        dest_messages: &ExtractedMessages,
+        source_messages: &'a ExtractedMessages,
+        dest_messages: &'a ExtractedMessages,
         folder_mapping: &HashMap<String, String>,
-        unmatched_source: &HashSet<MailboxMessageKey>,
-        unmatched_dest: &HashSet<MailboxMessageKey>,
-        source_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
-        dest_by_message_id: &HashMap<&str, Vec<&MailboxMessageKey>>,
+        unmatched_source: &HashSet<&MailboxMessageKey>,
+        unmatched_dest: &HashSet<&MailboxMessageKey>,
+        source_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
+        dest_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
     ) -> (
         Vec<MessageMismatch>,
-        HashSet<MailboxMessageKey>,
-        HashSet<MailboxMessageKey>,
+        HashSet<&'a MailboxMessageKey>,
+        HashSet<&'a MailboxMessageKey>,
     ) {
         let mut mismatches = Vec::new();
         let mut matched_source = HashSet::new();
@@ -533,8 +538,8 @@ impl MessageVerification {
                         continue;
                     }
                     if let Some(dest_key) = candidates.pop() {
-                        matched_source.insert((*source_key).clone());
-                        matched_dest.insert((*dest_key).clone());
+                        matched_source.insert(*source_key);
+                        matched_dest.insert(dest_key);
                         mismatches.push(make_mismatch(
                             job_id,
                             run_id,
@@ -555,24 +560,25 @@ impl MessageVerification {
 
     /// Reconciliation Pass 3: Fingerprint fallback for unmatched messages.
     /// Only processes messages not matched in Passes 1-2.
-    fn pass_3_fingerprint_fallback(
-        source_messages: &ExtractedMessages,
-        dest_messages: &ExtractedMessages,
-        unmatched_source: &HashSet<MailboxMessageKey>,
-        unmatched_dest: &HashSet<MailboxMessageKey>,
+    fn pass_3_fingerprint_fallback<'a>(
+        source_messages: &'a ExtractedMessages,
+        dest_messages: &'a ExtractedMessages,
+        unmatched_source: &HashSet<&'a MailboxMessageKey>,
+        unmatched_dest: &HashSet<&'a MailboxMessageKey>,
         folder_mapping: &HashMap<String, String>,
-    ) -> (u64, HashSet<MailboxMessageKey>, HashSet<MailboxMessageKey>) {
+    ) -> (
+        u64,
+        HashSet<&'a MailboxMessageKey>,
+        HashSet<&'a MailboxMessageKey>,
+    ) {
         let mut probable_matches = 0_u64;
         let mut matched_source = HashSet::new();
         let mut matched_dest = HashSet::new();
 
-        let unmatched_refs: HashSet<_> = unmatched_source.iter().collect();
-        let unmatched_dest_refs: HashSet<_> = unmatched_dest.iter().collect();
-
         let source_by_fingerprint =
-            index_by_fingerprint(source_messages, &unmatched_refs, folder_mapping, true);
+            index_by_fingerprint(source_messages, unmatched_source, folder_mapping, true);
         let dest_by_fingerprint =
-            index_by_fingerprint(dest_messages, &unmatched_dest_refs, folder_mapping, false);
+            index_by_fingerprint(dest_messages, unmatched_dest, folder_mapping, false);
 
         let mut fingerprints: Vec<_> = source_by_fingerprint
             .keys()
@@ -585,8 +591,8 @@ impl MessageVerification {
             let source_uids = &source_by_fingerprint[&fingerprint];
             let dest_uids = &dest_by_fingerprint[&fingerprint];
             if source_uids.len() == 1 && dest_uids.len() == 1 {
-                matched_source.insert((*source_uids[0]).clone());
-                matched_dest.insert((*dest_uids[0]).clone());
+                matched_source.insert(source_uids[0]);
+                matched_dest.insert(dest_uids[0]);
                 probable_matches += 1;
             }
         }
@@ -622,24 +628,28 @@ impl MessageVerification {
                 &source_by_message_id,
                 &dest_by_message_id,
             );
-        all_mismatches.extend(pass1_mismatches.iter().cloned());
         // Pass 1 returns one mismatch for each matched source that failed
         // exact metadata comparison. Counting those directly avoids scanning
         // the growing mismatch vector once per matched message.
-        total_metadata_matches = pass1_matched_src
-            .len()
-            .saturating_sub(pass1_mismatches.len()) as u64;
+        let pass1_mismatch_count = pass1_mismatches.len();
+        total_metadata_matches =
+            pass1_matched_src.len().saturating_sub(pass1_mismatch_count) as u64;
+        // Move the first-pass records into the final output instead of
+        // cloning every mismatch and retaining two full vectors concurrently.
+        all_mismatches.extend(pass1_mismatches);
 
         // Build unmatched sets for Pass 2
-        let mut unmatched_source: HashSet<MailboxMessageKey> = source_messages
+        // Borrow canonical map keys throughout reconciliation. Cloning every
+        // key into both unmatched sets materially inflates peak memory on
+        // large accounts; owned keys are created only for final membership
+        // evidence after classification is complete.
+        let mut unmatched_source: HashSet<&MailboxMessageKey> = source_messages
             .keys()
             .filter(|k| !pass1_matched_src.contains(k))
-            .cloned()
             .collect();
-        let mut unmatched_dest: HashSet<MailboxMessageKey> = dest_messages
+        let mut unmatched_dest: HashSet<&MailboxMessageKey> = dest_messages
             .keys()
             .filter(|k| !pass1_matched_dst.contains(k))
-            .cloned()
             .collect();
 
         // Pass 2: Wrong-folder detection for Message-ID matches
@@ -673,13 +683,11 @@ impl MessageVerification {
                 folder_mapping,
             );
         total_probable_matches = pass3_probable;
-        let probable_source = pass3_matched_src.clone();
-        let probable_destination = pass3_matched_dst.clone();
-        for key in pass3_matched_src {
-            unmatched_source.remove(&key);
+        for key in &pass3_matched_src {
+            unmatched_source.remove(key);
         }
-        for key in pass3_matched_dst {
-            unmatched_dest.remove(&key);
+        for key in &pass3_matched_dst {
+            unmatched_dest.remove(key);
         }
 
         // Report remaining unmatched messages
@@ -742,11 +750,11 @@ impl MessageVerification {
 
         let source_index = build_uid_folder_index(source_messages);
         let dest_index = build_uid_folder_index(dest_messages);
-        let mut missing_source = HashSet::new();
-        let mut extra_destination = HashSet::new();
-        let mut duplicated_destination = HashSet::new();
-        let mut changed_source = HashSet::new();
-        let mut changed_destination = HashSet::new();
+        let mut missing_source: HashSet<&MailboxMessageKey> = HashSet::new();
+        let mut extra_destination: HashSet<&MailboxMessageKey> = HashSet::new();
+        let mut duplicated_destination: HashSet<&MailboxMessageKey> = HashSet::new();
+        let mut changed_source: HashSet<&MailboxMessageKey> = HashSet::new();
+        let mut changed_destination: HashSet<&MailboxMessageKey> = HashSet::new();
         let mut missing_count = 0_u64;
         let mut extra_count = 0_u64;
         let mut duplicated_count = 0_u64;
@@ -756,28 +764,28 @@ impl MessageVerification {
                 MismatchType::Missing => {
                     missing_count += 1;
                     if let Some(key) = mismatch_source_key(mismatch, &source_index) {
-                        missing_source.insert(key.clone());
+                        missing_source.insert(key);
                     }
                 }
                 MismatchType::Extra => {
                     extra_count += 1;
                     if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-                        extra_destination.insert(key.clone());
+                        extra_destination.insert(key);
                     }
                 }
                 MismatchType::Duplicated => {
                     duplicated_count += 1;
                     if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-                        duplicated_destination.insert(key.clone());
+                        duplicated_destination.insert(key);
                     }
                 }
                 MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder => {
                     changed_count += 1;
                     if let Some(key) = mismatch_source_key(mismatch, &source_index) {
-                        changed_source.insert(key.clone());
+                        changed_source.insert(key);
                     }
                     if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-                        changed_destination.insert(key.clone());
+                        changed_destination.insert(key);
                     }
                 }
             }
@@ -796,15 +804,17 @@ impl MessageVerification {
 
         let membership = VerificationMembership {
             matched_source: pass1_matched_src
-                .difference(&changed_source)
-                .cloned()
+                .iter()
+                .copied()
+                .filter(|key| !changed_source.contains(*key))
                 .collect(),
             matched_destination: pass1_matched_dst
-                .difference(&changed_destination)
-                .cloned()
+                .iter()
+                .copied()
+                .filter(|key| !changed_destination.contains(*key))
                 .collect(),
-            probable_source,
-            probable_destination,
+            probable_source: pass3_matched_src,
+            probable_destination: pass3_matched_dst,
             missing_source,
             extra_destination,
             duplicated_destination,
@@ -826,22 +836,22 @@ impl MessageVerification {
 /// Validate that reconciliation accounting is consistent and complete.
 /// This catches bugs where messages are counted incorrectly or reconciled multiple times.
 #[allow(clippy::collapsible_if)]
-pub fn validate_verification_summary(
-    source_messages: &ExtractedMessages,
-    dest_messages: &ExtractedMessages,
+pub fn validate_verification_summary<'a>(
+    source_messages: &'a ExtractedMessages,
+    dest_messages: &'a ExtractedMessages,
     mismatches: &[MessageMismatch],
     summary: &VerificationSummary,
-    membership: &VerificationMembership,
+    membership: &VerificationMembership<'a>,
 ) -> Result<(), String> {
-    fn check_partition(
+    fn check_partition<'a>(
         side: &str,
-        input: &ExtractedMessages,
-        partitions: &[(&str, &HashSet<MailboxMessageKey>)],
+        input: &'a ExtractedMessages,
+        partitions: &[(&str, &HashSet<&'a MailboxMessageKey>)],
     ) -> Result<(), String> {
-        let mut owners = HashMap::<MailboxMessageKey, Vec<&str>>::new();
+        let mut owners = HashMap::<&MailboxMessageKey, Vec<&str>>::new();
         for (name, keys) in partitions {
             for key in *keys {
-                owners.entry(key.clone()).or_default().push(name);
+                owners.entry(key).or_default().push(name);
             }
         }
         for key in input.keys() {
@@ -893,11 +903,11 @@ pub fn validate_verification_summary(
     let source_index = build_uid_folder_index(source_messages);
     let dest_index = build_uid_folder_index(dest_messages);
 
-    let mut seen_source = HashSet::new();
-    let mut seen_destination = HashSet::new();
+    let mut seen_source: HashSet<&MailboxMessageKey> = HashSet::new();
+    let mut seen_destination: HashSet<&MailboxMessageKey> = HashSet::new();
     for mismatch in mismatches {
         if let Some(key) = mismatch_source_key(mismatch, &source_index) {
-            if !seen_source.insert(key.clone()) {
+            if !seen_source.insert(key) {
                 return Err(format!(
                     "source mismatch identity {:?} appears more than once",
                     key
@@ -905,7 +915,7 @@ pub fn validate_verification_summary(
             }
         }
         if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-            if !seen_destination.insert(key.clone()) {
+            if !seen_destination.insert(key) {
                 return Err(format!(
                     "destination mismatch identity {:?} appears more than once",
                     key
@@ -1658,12 +1668,13 @@ mod tests {
         };
         let source = HashMap::from([(key("1"), empty_message()), (key("2"), empty_message())]);
         let destination = source.clone();
-        let first = key("1");
+        let first_source = source.keys().find(|key| key.uid == "1").unwrap();
+        let first_destination = destination.keys().find(|key| key.uid == "1").unwrap();
         let membership = VerificationMembership {
-            matched_source: HashSet::from([first.clone()]),
-            matched_destination: HashSet::from([first.clone()]),
-            probable_source: HashSet::from([first.clone()]),
-            probable_destination: HashSet::from([first]),
+            matched_source: HashSet::from([first_source]),
+            matched_destination: HashSet::from([first_destination]),
+            probable_source: HashSet::from([first_source]),
+            probable_destination: HashSet::from([first_destination]),
             ..Default::default()
         };
         let summary = VerificationSummary {
@@ -1682,9 +1693,10 @@ mod tests {
                 .unwrap_err();
         assert!(error.contains("unclassified") || error.contains("classifications"));
 
+        let second_destination = destination.keys().find(|key| key.uid == "2").unwrap();
         let missing_membership = VerificationMembership {
-            matched_source: HashSet::from([key("1")]),
-            matched_destination: HashSet::from([key("1"), key("2")]),
+            matched_source: HashSet::from([first_source]),
+            matched_destination: HashSet::from([first_destination, second_destination]),
             ..Default::default()
         };
         let error = validate_verification_summary(
