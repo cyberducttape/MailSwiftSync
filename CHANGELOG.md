@@ -6,8 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
-- Fixed Dovecot 2.3 environment expansion for the source IMAP password while
-  keeping the credential out of process arguments.
+- Dovecot native transfers now pass source credentials through a private
+  owner-only temporary file instead of relying on environment interpolation;
+  the secret remains out of process arguments and is removed after verification.
 - Fixed Dovecot source mailbox verification command ordering so TLS and
   `-o` overrides are passed before the `mailbox status` subcommand.
 - Fixed Dovecot live command ordering: dsync-specific `-l`, `-s`, and `-1`

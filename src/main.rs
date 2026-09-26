@@ -596,23 +596,31 @@ mod tests {
     }
 
     #[test]
-    fn local_dovecot_credentials_use_child_environment() {
+    fn local_dovecot_credentials_use_private_file_not_process_arguments() {
         let mut form = dovecot_form();
+        form.dry_run = false;
         form.source_password = String::from("secret").into();
         let prepared = form.prepared_command().unwrap();
+        let _cleanup = credentials::CleanupGuard::new(prepared.cleanup.clone());
+        let password_file = prepared
+            .args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("imapc_password= <"))
+            .expect("Dovecot password must be loaded from a private file");
         assert!(
-            prepared
+            !prepared
                 .args
                 .iter()
-                .any(|arg| { arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD " })
+                .any(|arg| arg == "imapc_password=secret")
         );
-        assert!(!prepared.args.iter().any(|arg| arg.contains("secret")));
-        assert_eq!(
-            prepared.env,
-            vec![(
-                "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                credentials::SecretString::new("secret".into()),
-            ),]
+        assert!(prepared.env.is_empty());
+        assert_eq!(std::fs::read(password_file).unwrap(), b"secret");
+        assert_eq!(prepared.verification.len(), 2);
+        assert!(
+            prepared.verification[0]
+                .1
+                .iter()
+                .any(|arg| arg == &format!("imapc_password= <{password_file}"))
         );
     }
 
@@ -876,7 +884,7 @@ mod tests {
         assert_eq!(exe, form.profile.doveadm_path);
         assert!(
             args.iter()
-                .any(|arg| arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD ")
+                .any(|arg| arg == "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD")
         );
     }
 
