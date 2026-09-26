@@ -120,6 +120,14 @@ cleanup() {
           echo '--- MailSwiftSync command output (last 64 KiB) ---'
           tail -c 65536 "$product_log" || true
         fi
+        if [[ -n "${diagnostic_dir:-}" && -d "${diagnostic_dir:-}" ]]; then
+          for log in "$diagnostic_dir"/mailswiftsync-*.log; do
+            if [[ -f "$log" ]]; then
+              echo "--- $log (last 64 KiB) ---"
+              tail -c 65536 "$log" || true
+            fi
+          done
+        fi
       } | sed 's/lab-password/[REDACTED]/g' | head -c 262144 \
         > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-diagnostics.txt" || true
       chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-diagnostics.txt" 2>/dev/null || true
@@ -426,6 +434,7 @@ if [[ "$test_engine" == "Dovecot" ]]; then
 fi
 app_runtime="$XDG_RUNTIME_DIR"
 state="$app_runtime/state.db"
+diagnostic_dir="$app_runtime/diagnostics"
 export XDG_CONFIG_HOME="$app_runtime/config"
 mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
 chmod 0700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/mailswiftsync"
@@ -508,12 +517,14 @@ assert_mailbox_state() {
 }
 
 run_product headless "$state" preflight \
-  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
+  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+  --diagnostic-log "$diagnostic_dir"
 echo "PASS: packaged MailSwiftSync preflight completed against real STARTTLS servers"
 assert_mailbox_state ready
 
 run_product headless "$state" live \
-  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
+  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+  --diagnostic-log "$diagnostic_dir"
 echo "PASS: packaged MailSwiftSync live migration completed"
 if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions)?"'; then
   echo "FAIL: durable ledger did not record a verified terminal state" >&2
@@ -546,7 +557,8 @@ This message proves that a subsequent incremental pass is exercised.
 EOF
 
 run_product headless "$state" live \
-  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret"
+  --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+  --diagnostic-log "$diagnostic_dir"
 echo "PASS: packaged MailSwiftSync incremental live migration completed"
 if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions)?"'; then
   echo "FAIL: incremental orchestration did not leave a verified terminal state" >&2

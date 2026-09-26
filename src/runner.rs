@@ -1176,10 +1176,25 @@ pub(crate) fn run_dovecot_verification(
             });
         }
         if status.exit_code != Some(0) {
+            let diagnostic = report
+                .iter()
+                .rev()
+                .take(5)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .map(|line| truncate_utf8(line, 512))
+                .collect::<Vec<_>>()
+                .join(" | ");
             return Err(format!(
-                "Dovecot verification command {} exited with code {:?}",
+                "Dovecot verification command {} exited with code {:?}{}",
                 index + 1,
-                status.exit_code
+                status.exit_code,
+                if diagnostic.is_empty() {
+                    String::new()
+                } else {
+                    format!("; recent output: {diagnostic}")
+                }
             ));
         }
         if truncated {
@@ -1201,8 +1216,29 @@ pub(crate) fn run_dovecot_verification(
     if reports.len() < 2 {
         return Err("Dovecot verification returned incomplete reports".into());
     }
-    verification::dovecot_evidence_from_accumulators(&reports[0].1, &reports[1].1)
-        .ok_or_else(|| "Dovecot status output was incomplete".into())
+    verification::dovecot_evidence_from_accumulators(&reports[0].1, &reports[1].1).ok_or_else(
+        || {
+            let summarize = |status: &verification::DovecotStatusAccumulator| {
+                format!(
+                    "{} folders, {} messages, {} bytes, {} malformed status lines{}",
+                    status.folders,
+                    status.messages,
+                    status.bytes,
+                    status.malformed_lines,
+                    if status.overflowed {
+                        ", counters overflowed"
+                    } else {
+                        ""
+                    }
+                )
+            };
+            format!(
+                "Dovecot status output was incomplete (source: {}; destination: {})",
+                summarize(&reports[0].1),
+                summarize(&reports[1].1)
+            )
+        },
+    )
 }
 
 #[cfg(all(test, unix))]

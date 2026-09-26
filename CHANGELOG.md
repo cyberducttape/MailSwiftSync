@@ -14,6 +14,12 @@ operator distribution archives.
 - Native Dovecot preflight now validates the destination userdb without
   enumerating the target mailbox store before its first sync, avoiding early
   target access that can trigger GUID/UIDVALIDITY conflicts.
+- The disposable IMAP integration lab now captures bounded, redacted engine
+  diagnostic logs on failure, including output produced before a headless
+  command stalls or times out.
+- Native Dovecot verification failures now retain the failing command's
+  bounded diagnostic tail or report the parsed source/destination inventory
+  counts, making incomplete status output actionable instead of generic.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
