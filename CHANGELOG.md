@@ -45,6 +45,8 @@ operator distribution archives.
   its intended runtime table.
 - Hardened XLSX dimension parsing against overflowing column references before
   applying worksheet size limits.
+- Preserved duplicate IMAP SEARCH UIDs until coverage validation so malformed
+  server responses cannot be silently deduplicated.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
