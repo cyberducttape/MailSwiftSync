@@ -1,9 +1,21 @@
 //! Read-only qualification-envelope diagnostics for operators.
 
 use crate::migration_plan::Form;
+use crate::process::{
+    CapturedOutput, collect_redacted_lines_with_callback, configure_process_group,
+    wait_with_timeout,
+};
 use fs2::available_space;
 use serde::Serialize;
-use std::{path::Path, process::Command};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+    sync::atomic::AtomicBool,
+    thread,
+    time::Duration,
+};
+
+const IMAPSYNC_DOCTOR_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Serialize)]
 pub(crate) struct DoctorCheck {
@@ -97,14 +109,60 @@ pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
 }
 
 fn check_imapsync(path: &str) -> DoctorCheck {
-    match Command::new(path).arg("--version").output() {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let version = if version.is_empty() {
-                String::from_utf8_lossy(&output.stderr).trim().to_string()
-            } else {
-                version
+    let mut command = Command::new(path);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return DoctorCheck {
+                name: "imapsync executable",
+                status: "blocked",
+                detail: format!("could not execute {path}: {error}"),
             };
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = wait_with_timeout(&mut child, Duration::from_secs(1), &AtomicBool::new(true));
+        return DoctorCheck {
+            name: "imapsync executable",
+            status: "blocked",
+            detail: format!("{path}: could not capture version output"),
+        };
+    };
+    let Some(stderr) = child.stderr.take() else {
+        let _ = wait_with_timeout(&mut child, Duration::from_secs(1), &AtomicBool::new(true));
+        return DoctorCheck {
+            name: "imapsync executable",
+            status: "blocked",
+            detail: format!("{path}: could not capture version diagnostics"),
+        };
+    };
+    let stdout_thread = thread::spawn(|| capture_doctor_output(stdout));
+    let stderr_thread = thread::spawn(|| capture_doctor_output(stderr));
+    let cancel = AtomicBool::new(false);
+    let outcome = wait_with_timeout(&mut child, IMAPSYNC_DOCTOR_TIMEOUT, &cancel);
+    let stdout = stdout_thread.join().ok().and_then(Result::ok);
+    let stderr = stderr_thread.join().ok().and_then(Result::ok);
+    match outcome {
+        Ok(outcome) if outcome.timed_out => DoctorCheck {
+            name: "imapsync executable",
+            status: "blocked",
+            detail: format!("{path} did not return --version within 5 seconds"),
+        },
+        Ok(outcome) if outcome.cancelled => DoctorCheck {
+            name: "imapsync executable",
+            status: "blocked",
+            detail: format!("{path} version probe was cancelled"),
+        },
+        Ok(outcome) if outcome.exit_code == Some(0) => {
+            let version = first_captured_line(stdout.as_ref())
+                .or_else(|| first_captured_line(stderr.as_ref()))
+                .unwrap_or_else(|| "(no version output)".into());
             let status = if version.contains("2.314") {
                 "qualified"
             } else {
@@ -116,17 +174,27 @@ fn check_imapsync(path: &str) -> DoctorCheck {
                 detail: format!("{path}: {version}"),
             }
         }
-        Ok(output) => DoctorCheck {
+        Ok(outcome) => DoctorCheck {
             name: "imapsync executable",
             status: "blocked",
-            detail: format!("{path} exited with {}", output.status),
+            detail: format!("{path} exited with {:?}", outcome.exit_code),
         },
         Err(error) => DoctorCheck {
             name: "imapsync executable",
             status: "blocked",
-            detail: format!("could not execute {path}: {error}"),
+            detail: format!("{path} version probe failed: {error}"),
         },
     }
+}
+
+fn capture_doctor_output<R: std::io::Read>(reader: R) -> std::io::Result<CapturedOutput> {
+    collect_redacted_lines_with_callback(reader, &[], |_| {})
+}
+
+fn first_captured_line(output: Option<&CapturedOutput>) -> Option<String> {
+    output
+        .and_then(|output| output.lines.iter().find(|line| !line.trim().is_empty()))
+        .map(|line| line.trim().to_owned())
 }
 
 fn check_state_path(path: Option<&Path>) -> DoctorCheck {
@@ -201,4 +269,27 @@ fn operating_system() -> String {
         std::env::consts::ARCH,
         std::env::consts::FAMILY
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn doctor_output_capture_is_bounded_and_keeps_the_version_line() {
+        let input = format!("imapsync 2.314\n{}\n", "x".repeat(3 * 1024 * 1024));
+        let captured = capture_doctor_output(Cursor::new(input)).unwrap();
+        assert_eq!(
+            first_captured_line(Some(&captured)).as_deref(),
+            Some("imapsync 2.314")
+        );
+        assert!(
+            captured
+                .lines
+                .iter()
+                .any(|line| line.contains("line truncated by MailSwiftSync"))
+        );
+        assert!(captured.lines.iter().map(String::len).sum::<usize>() <= 2 * 1024 * 1024 + 128);
+    }
 }

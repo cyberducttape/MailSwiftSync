@@ -12,6 +12,9 @@ operator distribution archives.
 - Durable batch creation and full mailbox/ID loads now fail closed above the
   100,000-row queue limit instead of accepting or materializing an arbitrarily
   large restored ledger.
+- The doctor imapsync version probe now uses a five-second process timeout and
+  bounded output capture, preventing a malformed executable from hanging or
+  exhausting diagnostic memory.
 - Headless batch retry admission now fails closed when durable mailbox state is
   missing, rather than silently omitting those mailbox IDs from selection.
 - Recovery schema validation now requires every runtime object to be an actual
