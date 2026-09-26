@@ -754,7 +754,7 @@ impl MessageVerification {
         let dest_by_message_id = index_by_message_id(dest_messages);
 
         // Pass 1: Message-ID + exact metadata matching
-        let (pass1_mismatches, pass1_matched_src, pass1_matched_dst) =
+        let (mut pass1_mismatches, pass1_matched_src, pass1_matched_dst) =
             Self::pass_1_message_id_exact_metadata(
                 &job_id,
                 &run_id,
@@ -784,7 +784,7 @@ impl MessageVerification {
                 MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
             ));
         }
-        all_mismatches.extend(pass1_mismatches);
+        all_mismatches.append(&mut pass1_mismatches);
 
         // Build unmatched sets for Pass 2
         // Borrow canonical map keys throughout reconciliation. Cloning every
@@ -801,7 +801,7 @@ impl MessageVerification {
             .collect();
 
         // Pass 2: Wrong-folder detection for Message-ID matches
-        let (pass2_mismatches, pass2_matched_src, pass2_matched_dst) =
+        let (mut pass2_mismatches, pass2_matched_src, pass2_matched_dst) =
             Self::pass_2_wrong_folder_detection(
                 &job_id,
                 &run_id,
@@ -825,7 +825,7 @@ impl MessageVerification {
                 MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
             ));
         }
-        all_mismatches.extend(pass2_mismatches);
+        all_mismatches.append(&mut pass2_mismatches);
         for key in &pass2_matched_src {
             unmatched_source.remove(key);
         }
