@@ -8,6 +8,8 @@ operator distribution archives.
 
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
+- Added SQLite nonnegative constraints for process identity fields and durable
+  mismatch numeric metadata, with transactional repair of older ledger tables.
 - Fixed headless batch completion validation to use chunked durable mailbox
   states instead of a capped full-mailbox status read, avoiding false failures
   for batches larger than the status-page limit.
