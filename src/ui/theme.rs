@@ -60,7 +60,9 @@ pub(crate) struct ThemeColors {
     pub(crate) warning: Color32,
     pub(crate) danger: Color32,
     pub(crate) link: Color32,
+    #[allow(dead_code)]
     pub(crate) selection: Color32,
+    #[allow(dead_code)]
     pub(crate) border: Color32,
 }
 

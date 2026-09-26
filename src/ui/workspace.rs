@@ -146,6 +146,7 @@ impl WorkspaceSnapshot {
         self.refresh_error.is_some()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn durable_revision(&self) -> Option<i64> {
         self.durable_revision
     }

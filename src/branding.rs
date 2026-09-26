@@ -38,6 +38,7 @@ impl OperatorBranding {
             .unwrap_or_default()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn save(&self) -> Result<(), String> {
         let path = Self::path();
         if let Some(parent) = path.parent() {
