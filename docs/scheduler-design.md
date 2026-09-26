@@ -16,7 +16,6 @@
 ### What Remains
 - ⏳ Config file parsing (`scheduler.toml`)
 - ⏳ Systemd timer templates and documentation
-- ⏳ `supervise-dry` command (preview mode)
 
 ---
 
@@ -46,13 +45,9 @@ mailswiftsync supervise /var/lib/state.db \
   --max-duration 3600 \
   --retry-on-incomplete
 
-# With config file
-mailswiftsync supervise /var/lib/state.db \
-  --config /etc/mailswiftsync/scheduler.toml
-
-# Dry-run: show what would be executed this window
-mailswiftsync supervise-dry /var/lib/state.db \
-  --maintenance-window "02:00-04:00"
+# With config file (planned)
+# mailswiftsync supervise /var/lib/state.db \
+#   --config /etc/mailswiftsync/scheduler.toml
 ```
 
 ### Phase 2: Config File
@@ -159,8 +154,8 @@ curl http://localhost:9999/pending-work
 ### Phase 1: CLI Enhancement (MVP for v0.2)
 
 1. **Extend CLI parser:**
-   - Add `--maintenance-window`, `--max-duration`, `--retry-on-incomplete`, `--config` flags to `supervise`
-   - Add `supervise-dry` command (show planned work without executing)
+   - Add `--maintenance-window`, `--max-duration`, `--retry-on-incomplete`, `--config` flags to `supervise` (✅ partially done)
+   - Add dry-run mode to `supervise` (planned for future consideration)
 
 2. **Config file parsing:**
    - Parse TOML maintenance-window config
@@ -247,7 +242,7 @@ Use a thin HTTP wrapper (`actix-web` or similar) to expose:
 4. **Systemd-native:** Works with systemd timers on Linux
 5. **Cron-compatible:** Works with standard cron for non-systemd systems
 6. **Config file support:** Operators can set window in one place, not per invocation
-7. **Dry-run:** `supervise-dry` shows what would run without executing
+7. **Dry-run:** A dry-run mode for `supervise` is planned for future implementation
 8. **Blackout support:** Can skip blackout dates/windows (holidays, etc.)
 
 ## Limitations (By Design)
@@ -301,7 +296,7 @@ Use a thin HTTP wrapper (`actix-web` or similar) to expose:
 ## Implementation Task Checklist
 
 - [ ] Add `--maintenance-window`, `--max-duration`, `--retry-on-incomplete`, `--config` to CLI
-- [ ] Implement `supervise-dry` command
+- [ ] Implement dry-run mode for `supervise` command
 - [ ] Add time-window validation logic
 - [ ] Add TOML config file parsing
 - [ ] Add blackout-date support (optional, v0.3)

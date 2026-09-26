@@ -30,6 +30,8 @@ compares two JSON snapshots and writes a deterministic assurance report:
 mailswiftsync migrateaudit source.json destination.json assurance-report.json
 ```
 
+This command has an alias: `mailswiftsync audit` is equivalent.
+
 Each top-level JSON array is a resource category, such as `mailboxes`,
 `folders`, `messages`, `permissions`, `databases`, `dns`, or `ssl`. Records
 are matched by typed identities where a schema is known: messages use account,
