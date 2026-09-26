@@ -62,6 +62,8 @@ operator distribution archives.
   Unix, preventing platform-specific unbounded key allocations.
 - Made Windows signing-key reads open the final path component without
   following reparse points, matching the secret-file safety boundary.
+- Switched executable and trust-bundle identity hashing to fixed-size chunks,
+  avoiding whole-file allocations during plan validation.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

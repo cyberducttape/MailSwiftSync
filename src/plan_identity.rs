@@ -5,7 +5,10 @@
 //! local executable or trust/configuration artifact.
 
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 pub(crate) fn snapshot_sha256(snapshot: &str) -> String {
     let digest = Sha256::digest(snapshot.as_bytes());
@@ -42,17 +45,28 @@ fn resolve_executable(executable: &str) -> Option<PathBuf> {
 }
 
 fn file_content_identity(path: &Path) -> String {
-    match std::fs::read(path) {
-        Ok(contents) => {
-            let digest = Sha256::digest(contents);
-            let hex = digest
-                .iter()
-                .map(|byte| format!("{:02x}", byte))
-                .collect::<String>();
-            format!("sha256:{}", hex)
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) => return format!("unavailable:{:?}", error.kind()),
+    };
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = match file.read(&mut buffer) {
+            Ok(count) => count,
+            Err(error) => return format!("unavailable:{:?}", error.kind()),
+        };
+        if count == 0 {
+            break;
         }
-        Err(error) => format!("unavailable:{:?}", error.kind()),
+        hasher.update(&buffer[..count]);
     }
+    let hex = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>();
+    format!("sha256:{}", hex)
 }
 
 pub(crate) fn configured_file_content_identity(path: &str) -> String {
