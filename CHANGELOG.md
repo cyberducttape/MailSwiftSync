@@ -15,6 +15,9 @@ operator distribution archives.
 - Removed an unnecessary full clone of the pending single-run mismatch vector
   before terminal persistence, reducing peak memory during large verifications
   while preserving retry-on-durability-failure behavior.
+- Added a separate 64 MiB estimated budget for accumulated mismatch detail;
+  pathological mismatch-heavy verification now fails closed for operator review
+  instead of growing mismatch evidence without a process-level bound.
 
 ### Documentation and release packaging
 

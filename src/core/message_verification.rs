@@ -13,6 +13,10 @@ use super::{
 /// guarantee: hash tables, indexes, classification sets, and mismatch
 /// evidence can have allocator overhead beyond the per-record estimate.
 const MAX_ESTIMATED_VERIFIER_STATE_BYTES: usize = 256 * 1024 * 1024;
+/// Bound the owned mismatch evidence retained before the durable SQLite
+/// transaction. This is separate from fetched-state admission because a
+/// mismatch-heavy account owns additional strings for every detail row.
+const MAX_ESTIMATED_MISMATCH_DETAIL_BYTES: usize = 64 * 1024 * 1024;
 
 /// Mismatch classifications currently supported by the executable verifier.
 ///
@@ -168,6 +172,44 @@ fn enforce_verifier_state_budget(estimated_state_bytes: usize) -> Result<(), Str
             MAX_ESTIMATED_VERIFIER_STATE_BYTES
         ));
     }
+    Ok(())
+}
+
+fn estimated_mismatch_bytes(mismatch: &MessageMismatch) -> usize {
+    384usize
+        .saturating_add(mismatch.id.len())
+        .saturating_add(mismatch.job_id.len())
+        .saturating_add(mismatch.run_id.len())
+        .saturating_add(mismatch.source_folder.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.destination_folder.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.source_uid.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.dest_uid.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.source_message_id.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.dest_message_id.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.source_date.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.dest_date.as_deref().map_or(0, str::len))
+        .saturating_add(mismatch.source_fingerprint.as_deref().map_or(0, str::len))
+        .saturating_add(
+            mismatch
+                .destination_fingerprint
+                .as_deref()
+                .map_or(0, str::len),
+        )
+}
+
+fn append_mismatch_with_budget(
+    mismatches: &mut Vec<MessageMismatch>,
+    mismatch: MessageMismatch,
+    estimated_bytes: &mut usize,
+) -> Result<(), String> {
+    *estimated_bytes = estimated_bytes.saturating_add(estimated_mismatch_bytes(&mismatch));
+    if *estimated_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
+        return Err(format!(
+            "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+            MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+        ));
+    }
+    mismatches.push(mismatch);
     Ok(())
 }
 
@@ -668,6 +710,7 @@ impl MessageVerification {
         let estimated_state_bytes = estimated_verifier_state_bytes(source_messages, dest_messages);
         enforce_verifier_state_budget(estimated_state_bytes)?;
         let mut all_mismatches = Vec::new();
+        let mut estimated_detail_bytes = 0usize;
         let mut total_metadata_matches = 0_u64;
         let mut total_probable_matches = 0_u64;
 
@@ -693,6 +736,18 @@ impl MessageVerification {
             pass1_matched_src.len().saturating_sub(pass1_mismatch_count) as u64;
         // Move the first-pass records into the final output instead of
         // cloning every mismatch and retaining two full vectors concurrently.
+        estimated_detail_bytes = estimated_detail_bytes.saturating_add(
+            pass1_mismatches
+                .iter()
+                .map(estimated_mismatch_bytes)
+                .sum::<usize>(),
+        );
+        if estimated_detail_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
+            return Err(format!(
+                "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+                MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+            ));
+        }
         all_mismatches.extend(pass1_mismatches);
 
         // Build unmatched sets for Pass 2
@@ -722,6 +777,18 @@ impl MessageVerification {
                 &source_by_message_id,
                 &dest_by_message_id,
             );
+        estimated_detail_bytes = estimated_detail_bytes.saturating_add(
+            pass2_mismatches
+                .iter()
+                .map(estimated_mismatch_bytes)
+                .sum::<usize>(),
+        );
+        if estimated_detail_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
+            return Err(format!(
+                "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+                MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+            ));
+        }
         all_mismatches.extend(pass2_mismatches);
         for key in &pass2_matched_src {
             unmatched_source.remove(key);
@@ -752,15 +819,19 @@ impl MessageVerification {
         unmatched_source_vec.sort();
         for source_uid in unmatched_source_vec {
             let source_msg = &source_messages[source_uid];
-            all_mismatches.push(make_mismatch(
-                job_id,
-                run_id,
-                MismatchType::Missing,
-                Some(source_uid),
-                None,
-                Some(source_msg),
-                None,
-            ));
+            append_mismatch_with_budget(
+                &mut all_mismatches,
+                make_mismatch(
+                    job_id,
+                    run_id,
+                    MismatchType::Missing,
+                    Some(source_uid),
+                    None,
+                    Some(source_msg),
+                    None,
+                ),
+                &mut estimated_detail_bytes,
+            )?;
         }
 
         // Report duplicates and extra destination messages
@@ -779,30 +850,38 @@ impl MessageVerification {
         for dest_uid in duplicate_dest_uids {
             let dest_msg = &dest_messages[&dest_uid];
             unmatched_dest.remove(&dest_uid);
-            all_mismatches.push(make_mismatch(
-                job_id,
-                run_id,
-                MismatchType::Duplicated,
-                None,
-                Some(&dest_uid),
-                None,
-                Some(dest_msg),
-            ));
+            append_mismatch_with_budget(
+                &mut all_mismatches,
+                make_mismatch(
+                    job_id,
+                    run_id,
+                    MismatchType::Duplicated,
+                    None,
+                    Some(&dest_uid),
+                    None,
+                    Some(dest_msg),
+                ),
+                &mut estimated_detail_bytes,
+            )?;
         }
 
         let mut unmatched_dest_vec: Vec<_> = unmatched_dest.iter().collect();
         unmatched_dest_vec.sort();
         for dest_uid in unmatched_dest_vec {
             let dest_msg = &dest_messages[dest_uid];
-            all_mismatches.push(make_mismatch(
-                job_id,
-                run_id,
-                MismatchType::Extra,
-                None,
-                Some(dest_uid),
-                None,
-                Some(dest_msg),
-            ));
+            append_mismatch_with_budget(
+                &mut all_mismatches,
+                make_mismatch(
+                    job_id,
+                    run_id,
+                    MismatchType::Extra,
+                    None,
+                    Some(dest_uid),
+                    None,
+                    Some(dest_msg),
+                ),
+                &mut estimated_detail_bytes,
+            )?;
         }
 
         let source_index = build_uid_folder_index(source_messages);
