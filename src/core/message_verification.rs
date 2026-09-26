@@ -318,6 +318,33 @@ impl MessageVerification {
                 .collect();
         }
         let dest_by_message_id = index_by_message_id(dest_messages);
+        let mut destination_match_indexes = HashMap::new();
+        for (message_id, dest_keys) in &dest_by_message_id {
+            let mut destinations_by_metadata =
+                HashMap::<MetadataFingerprint<'_>, VecDeque<&MailboxMessageKey>>::new();
+            let mut destinations_by_content =
+                HashMap::<(MetadataFingerprint<'_>, &str), VecDeque<&MailboxMessageKey>>::new();
+            for dest_key in dest_keys {
+                let Some(destination_metadata) = metadata_fingerprint(&dest_messages[dest_key])
+                else {
+                    continue;
+                };
+                destinations_by_metadata
+                    .entry(destination_metadata)
+                    .or_default()
+                    .push_back(*dest_key);
+                if let Some(destination_fingerprint) = dest_fingerprints.get(*dest_key) {
+                    destinations_by_content
+                        .entry((destination_metadata, destination_fingerprint.as_str()))
+                        .or_default()
+                        .push_back(*dest_key);
+                }
+            }
+            destination_match_indexes.insert(
+                *message_id,
+                (destinations_by_metadata, destinations_by_content),
+            );
+        }
         let mut used_dest = HashSet::new();
         for source_key in sorted_keys(&source_messages.keys().collect()) {
             let Some(source_message_id) = source_messages[source_key]
@@ -331,32 +358,14 @@ impl MessageVerification {
             let Some(source_fingerprint) = source_fingerprints.get(source_key) else {
                 continue;
             };
-            let Some(dest_keys) = dest_by_message_id.get(source_message_id) else {
-                continue;
-            };
             let Some(source_metadata) = metadata_fingerprint(&source_messages[source_key]) else {
                 continue;
             };
-            let mut destinations_by_metadata =
-                HashMap::<MetadataFingerprint<'_>, VecDeque<&MailboxMessageKey>>::new();
-            let mut destinations_by_content =
-                HashMap::<(MetadataFingerprint<'_>, &str), VecDeque<&MailboxMessageKey>>::new();
-            for dest_key in dest_keys {
-                let Some(destination_metadata) = metadata_fingerprint(&dest_messages[dest_key])
-                else {
-                    continue;
-                };
-                destinations_by_metadata
-                    .entry(destination_metadata)
-                    .or_default()
-                    .push_back(dest_key);
-                if let Some(destination_fingerprint) = dest_fingerprints.get(dest_key) {
-                    destinations_by_content
-                        .entry((destination_metadata, destination_fingerprint.as_str()))
-                        .or_default()
-                        .push_back(dest_key);
-                }
-            }
+            let Some((destinations_by_metadata, destinations_by_content)) =
+                destination_match_indexes.get_mut(source_message_id)
+            else {
+                continue;
+            };
             let dest_key = pop_unused_destination(
                 destinations_by_content.get_mut(&(source_metadata, source_fingerprint.as_str())),
                 &used_dest,
