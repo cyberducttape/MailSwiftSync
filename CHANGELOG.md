@@ -117,6 +117,8 @@ operator distribution archives.
   are parsed before policy checks run.
 - Indexed wrong-folder reconciliation by metadata and ordered folder ranges to
   avoid rescanning every folder for each duplicate Message-ID candidate.
+- Indexed duplicate Message-ID content and metadata matching with per-group
+  queues, avoiding repeated linear scans of large duplicate groups.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 
