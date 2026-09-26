@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 /// Bound on the token endpoint response so a hostile or misbehaving endpoint
 /// cannot exhaust memory during an unattended refresh.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_REFRESH_CONFIG_BYTES: usize = 64 * 1024;
 const REFRESH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_TOTAL_BUDGET: Duration = Duration::from_secs(30);
 
@@ -141,6 +142,11 @@ pub(crate) fn decode_refresh_config(json: &str) -> Result<OAuthRefreshConfig, St
         refresh_token: SecretString,
     }
 
+    if json.len() > MAX_REFRESH_CONFIG_BYTES {
+        return Err(format!(
+            "stored OAuth refresh configuration exceeds the {MAX_REFRESH_CONFIG_BYTES}-byte limit"
+        ));
+    }
     let stored: StoredOAuthRefreshConfig = serde_json::from_str(json)
         .map_err(|error| format!("stored OAuth refresh configuration is corrupt: {error}"))?;
     if stored.token_endpoint.trim().is_empty() {
@@ -411,6 +417,13 @@ mod tests {
             decode_refresh_config(r#"{"token_endpoint":"https://x/token","client_id":"c"}"#)
                 .unwrap_err();
         assert!(error.contains("refresh_token"));
+    }
+
+    #[test]
+    fn refresh_config_decoding_rejects_oversized_keyring_values() {
+        let oversized = "x".repeat(MAX_REFRESH_CONFIG_BYTES + 1);
+        let error = decode_refresh_config(&oversized).unwrap_err();
+        assert!(error.contains("exceeds"));
     }
 
     #[test]
