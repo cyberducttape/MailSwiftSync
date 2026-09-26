@@ -1,5 +1,10 @@
 use super::*;
 
+type SchemaColumn = (&'static str, &'static str, bool, i64);
+type SchemaTable = (&'static str, &'static [SchemaColumn]);
+type ForeignKey = (&'static str, &'static str, &'static str);
+type ForeignKeyTable = (&'static str, &'static [ForeignKey]);
+
 #[cfg(unix)]
 type DatabaseIdentity = (u64, u64);
 #[cfg(not(unix))]
@@ -94,29 +99,18 @@ impl StateStore {
                 .map(|metadata| metadata.len() > 0)
                 .unwrap_or(false)
         {
-            eprintln!("starting pre-repair backup");
             // Preserve the exact pre-migration ledger before any schema
             // rewrite. The backup is unique and non-overwriting, so a failed
             // upgrade never destroys the last recovery artifact.
             let backup_path = migration_backup_path(path, stored_schema_version);
             // This is intentionally a raw snapshot: a legacy or dirty
             // layout is exactly what the pre-repair artifact must preserve.
-            store.backup_to_unchecked(&backup_path).map_err(|error| {
-                eprintln!("pre-repair backup failed: {error:?}");
-                error
-            })?;
+            store.backup_to_unchecked(&backup_path)?;
         }
         restrict_database_permissions(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        eprintln!("starting migration");
-        store.migrate().map_err(|error| {
-            eprintln!("migration failed: {error:?}");
-            error
-        })?;
-        Self::validate_schema_layout(&store.connection).map_err(|error| {
-            eprintln!("schema validation failed: {error:?}");
-            error
-        })?;
+        store.migrate()?;
+        Self::validate_schema_layout(&store.connection)?;
         restrict_database_sidecars(path)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         Ok(store)
@@ -127,7 +121,7 @@ impl StateStore {
     /// the v12 CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
     fn validate_schema_layout(connection: &Connection) -> rusqlite::Result<()> {
-        const TABLES: &[(&str, &[(&str, &str, bool, i64)])] = &[
+        const TABLES: &[SchemaTable] = &[
             (
                 "projects",
                 &[
@@ -320,7 +314,7 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
-        const FOREIGN_KEYS: &[(&str, &[(&str, &str, &str)])] = &[
+        const FOREIGN_KEYS: &[ForeignKeyTable] = &[
             ("mailbox_jobs", &[("projects", "project_id", "id")]),
             ("evidence", &[("mailbox_jobs", "job_id", "id")]),
             (
@@ -447,6 +441,14 @@ impl StateStore {
         })().unwrap_or(false)
     }
 
+    fn has_legacy_mailbox_table(connection: &Connection) -> rusqlite::Result<bool> {
+        connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='mailbox_jobs')",
+            [],
+            |row| row.get(0),
+        )
+    }
+
     /// Open an existing ledger without taking the application lock or
     /// mutating its file. Current-schema ledgers are observed directly through
     /// SQLite's WAL snapshot semantics. Older ledgers are copied into a
@@ -481,6 +483,7 @@ impl StateStore {
                 connection: migrated,
             };
             store.migrate()?;
+            Self::validate_schema_layout(&store.connection)?;
             return Ok(store);
         }
 
@@ -493,6 +496,7 @@ impl StateStore {
             connection: migrated,
         };
         store.migrate()?;
+        Self::validate_schema_layout(&store.connection)?;
         Ok(store)
     }
     pub fn in_memory() -> rusqlite::Result<Self> {
@@ -565,6 +569,15 @@ impl StateStore {
         if integrity != "ok" {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let source_schema_version: i64 =
+            source_connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if source_schema_version == CURRENT_SCHEMA_VERSION {
+            Self::validate_schema_layout(&source_connection)?;
+        } else if source_schema_version > CURRENT_SCHEMA_VERSION
+            || !Self::has_legacy_mailbox_table(&source_connection)?
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
 
         verify_database_parent(destination)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -588,6 +601,9 @@ impl StateStore {
                 destination_connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
             if integrity != "ok" {
                 return Err(rusqlite::Error::InvalidQuery);
+            }
+            if source_schema_version == CURRENT_SCHEMA_VERSION {
+                Self::validate_schema_layout(&destination_connection)?;
             }
             Ok(())
         })();
@@ -644,6 +660,7 @@ impl StateStore {
         // version stamp in one transaction. If an upgrade fails halfway
         // through, SQLite can roll back to the prior durable ledger.
         let tx = self.connection.unchecked_transaction()?;
+        Self::prepare_legacy_mailbox_jobs(&tx)?;
         tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS mailbox_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), source_mailbox TEXT NOT NULL, destination_mailbox TEXT NOT NULL, destination_identity TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, checkpoint TEXT, preflight_plan TEXT, config TEXT, attention_reason TEXT);
@@ -747,7 +764,6 @@ impl StateStore {
                 [],
             )?;
         }
-        Self::rebuild_mailbox_jobs_with_foreign_key(&tx)?;
         // Older releases stored the generated preflight plan itself. Do not
         // carry that potentially sensitive configuration into the hardened
         // schema; an invalidated row must be preflighted again before live
@@ -1027,6 +1043,46 @@ impl StateStore {
              DROP TABLE mailbox_jobs_legacy;",
         )?;
         Ok(())
+    }
+
+    fn prepare_legacy_mailbox_jobs(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='mailbox_jobs')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(());
+        }
+        let has_project_foreign_key: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('mailbox_jobs') WHERE \"from\"='project_id' AND \"table\"='projects' AND \"to\"='id')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_project_foreign_key {
+            return Ok(());
+        }
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, source_endpoint TEXT NOT NULL, destination_endpoint TEXT NOT NULL, phase TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);",
+        )?;
+        let columns = tx
+            .prepare("PRAGMA table_info(mailbox_jobs)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (column, definition) in [
+            ("destination_identity", "TEXT NOT NULL DEFAULT ''"),
+            ("preflight_plan", "TEXT"),
+            ("config", "TEXT"),
+            ("attention_reason", "TEXT"),
+        ] {
+            if !columns.iter().any(|existing| existing == column) {
+                tx.execute(
+                    &format!("ALTER TABLE mailbox_jobs ADD COLUMN {column} {definition}"),
+                    [],
+                )?;
+            }
+        }
+        Self::rebuild_mailbox_jobs_with_foreign_key(tx)
     }
 
     fn purge_raw_output_events(tx: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {

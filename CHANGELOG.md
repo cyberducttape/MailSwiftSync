@@ -4,11 +4,28 @@ All notable changes to MailSwiftSync are documented here.
 
 ## [Unreleased]
 
+### Production hardening
+
+- Added authoritative v12 schema-layout validation to writable, read-only,
+  backup, and restore paths; same-version ledgers are backed up before any
+  state-changing repair, and structurally valid non-ledger SQLite files are
+  rejected.
+- Reworked message reconciliation bookkeeping to use hash indexes instead of
+  repeated linear scans, prepared mismatch inserts once per transaction, and
+  normalized equivalent IMAP INTERNALDATE values.
+- Bounded IMAP DNS, connection, read, write, LIST, and cancellation behavior;
+  unfolded folded Message-ID headers and retained bounded per-folder failure
+  details.
+- Made plaintext-secret imports require exactly
+  `MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1`, tightened workbook preflight
+  limits, removed obsolete compatibility modules, and refreshed release
+  documentation.
+
 ### Fixed
 
-- Fixed egui 0.35 compatibility: updated App trait implementation to use the new
-  `ui()` method signature instead of deprecated `update()` method. Stub UI pending
-  full refactoring to work with new egui 0.35 panel APIs.
+- Fixed egui 0.35 compatibility: updated the App trait implementation to use
+  the new `ui()` method signature and wired the production workspace views,
+  dialogs, navigation, and plan controls.
 - Fixed u64 SQLite serialization: all u64 database fields now properly convert to
   i64 for SQLite storage and back when reading. Affected evidence history, message
   statistics, and process tracking queries.

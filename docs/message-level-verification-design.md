@@ -22,7 +22,7 @@ hashing and durable per-message staging remain production trust work.
 same message population on encrypted imapsync runs, but it does not yet prove
 that the message bodies are byte-for-byte identical. The live verifier also
 materializes both account message maps and several reconciliation indexes. Its
-one-million-record cap and estimated 256 MiB state budget are fail-closed
+one-million-record cap and estimated 256 MiB fetched-state admission budget are fail-closed
 admission guards, not peak-memory guarantees. SQLite-backed streaming
 reconciliation is a production blocker for very large MSP migrations, not a
 mere optimization.
@@ -249,19 +249,19 @@ Overall: 20,498 exact, 2 missing, 1 extra → ACCEPT or REMEDIATE
 - If operator requests message-level verification:
   - Extract UIDs and Message-IDs from destination (requires fresh IMAP auth)
   - Extract UIDs and Message-IDs from source (requires fresh IMAP auth)
-  - Store extraction results in new `message_extraction` table
+  - Keep bounded extraction results in the live verifier's in-memory maps
   - Perform set comparison (source ∪ destination = union; identify Δ)
 
 #### Step 3: Mismatch Classification (New)
 - For each mismatch, classify as missing/extra/modified
 - Retain only identity and reconciliation metadata (Message-ID, folder,
-  UID/UIDVALIDITY, size, date, flags, and content fingerprint)
+  UID/UIDVALIDITY, size, date, and content fingerprint)
 - Store in `message_mismatches` table
 
 #### Step 4: Operator Review (New)
 - UI shows per-mailbox mismatch counts
-- Operator can review mismatches and accept specific ones
-- Store acceptance with reason in `message_mismatch_acceptance` table
+- Operator can review bounded durable mismatch details
+- Per-mismatch durable acceptance is not part of the current runtime path
 
 #### Step 5: Final Evidence
 - Report includes message-level section:
@@ -300,8 +300,7 @@ content verification for very large mailboxes.
 
 - Add `missing_messages`, `extra_messages`, `modified_messages` to `mailbox_evidence`
 - Create `message_mismatches` table
-- Create `message_mismatch_acceptance` table
-- Create `message_extraction` (temporary, per-run)
+- Do not add staging or acceptance tables until the SQLite streaming design is implemented
 
 ### 2.2 Verification Accumulator Extension
 
@@ -312,7 +311,7 @@ Update `ImapsyncEvidenceAccumulator`:
 
 Update `DovecotStatusAccumulator`:
 - Post-migration, run `doveadm fetch` to extract UIDs
-- Persist to `message_extraction` table
+- Persist bounded mismatch evidence through the existing run transaction
 
 ### 2.3 Comparison & Mismatch Persistence
 

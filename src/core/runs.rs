@@ -836,6 +836,9 @@ impl StateStore {
             "DELETE FROM message_mismatches WHERE job_id=?1 AND run_id=?2",
             params![job_id, run_id],
         )?;
+        let mut insert = tx.prepare_cached(
+            "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14)",
+        )?;
         for mismatch in mismatches {
             let source_size = mismatch
                 .source_size_bytes
@@ -863,26 +866,24 @@ impl StateStore {
             // verification reports for detailed evidence export, not the durable ledger.
             // This prevents accidental disclosure of folder structures and message
             // identifiers in database backups and exports.
-            tx.execute(
-                "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uid,dest_uid,source_message_id,dest_message_id,source_size_bytes,dest_size_bytes,source_date,dest_date,source_folder,destination_folder,source_uidvalidity,destination_uidvalidity,source_fingerprint,destination_fingerprint) VALUES(?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL,NULL,?11,?12,?13,?14)",
-                params![
-                    mismatch.id,
-                    job_id,
-                    run_id,
-                    mismatch.mismatch_type.as_str(),
-                    mismatch.source_uid,
-                    mismatch.dest_uid,
-                    source_size,
-                    destination_size,
-                    mismatch.source_date,
-                    mismatch.dest_date,
-                    source_uidvalidity,
-                    destination_uidvalidity,
-                    mismatch.source_fingerprint,
-                    mismatch.destination_fingerprint,
-                ],
-            )?;
+            insert.execute(params![
+                mismatch.id,
+                job_id,
+                run_id,
+                mismatch.mismatch_type.as_str(),
+                mismatch.source_uid,
+                mismatch.dest_uid,
+                source_size,
+                destination_size,
+                mismatch.source_date,
+                mismatch.dest_date,
+                source_uidvalidity,
+                destination_uidvalidity,
+                mismatch.source_fingerprint,
+                mismatch.destination_fingerprint,
+            ])?;
         }
+        drop(insert);
         tx.execute(
             "UPDATE mailbox_jobs SET state=?1,attention_reason=?2,preflight_plan=COALESCE(?3,preflight_plan),checkpoint=COALESCE(?4,checkpoint) WHERE id=?5 AND project_id=?6",
             params![mailbox_state, attention_reason, preflight_plan, checkpoint, job_id, project_id],

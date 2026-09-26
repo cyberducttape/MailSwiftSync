@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
+use chrono::{DateTime, FixedOffset};
+
 use super::{
     evidence::VerificationOutcome,
     message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey},
@@ -89,33 +91,46 @@ pub struct VerificationMembership {
 
 fn build_uid_folder_index(
     messages: &ExtractedMessages,
-) -> HashMap<(String, String), MailboxMessageKey> {
+) -> HashMap<(Option<u64>, String, String), MailboxMessageKey> {
     messages
         .keys()
-        .map(|key| ((key.uid.clone(), key.mailbox.clone()), key.clone()))
+        .map(|key| {
+            (
+                (key.uidvalidity, key.uid.clone(), key.mailbox.clone()),
+                key.clone(),
+            )
+        })
         .collect()
 }
 
 fn mismatch_source_key(
     mismatch: &MessageMismatch,
-    index: &HashMap<(String, String), MailboxMessageKey>,
+    index: &HashMap<(Option<u64>, String, String), MailboxMessageKey>,
 ) -> Option<MailboxMessageKey> {
     let (uid, folder) = mismatch
         .source_uid
         .as_ref()
         .zip(mismatch.source_folder.as_ref())?;
-    index.get(&(uid.clone(), folder.clone())).cloned()
+    index
+        .get(&(mismatch.source_uidvalidity, uid.clone(), folder.clone()))
+        .cloned()
 }
 
 fn mismatch_destination_key(
     mismatch: &MessageMismatch,
-    index: &HashMap<(String, String), MailboxMessageKey>,
+    index: &HashMap<(Option<u64>, String, String), MailboxMessageKey>,
 ) -> Option<MailboxMessageKey> {
     let (uid, folder) = mismatch
         .dest_uid
         .as_ref()
         .zip(mismatch.destination_folder.as_ref())?;
-    index.get(&(uid.clone(), folder.clone())).cloned()
+    index
+        .get(&(
+            mismatch.destination_uidvalidity,
+            uid.clone(),
+            folder.clone(),
+        ))
+        .cloned()
 }
 
 /// Core message verification engine.
@@ -128,6 +143,7 @@ impl MessageVerification {
     /// identity across the two inputs. Messages are matched first by a unique
     /// RFC Message-ID, then by a unique internal-date/size fingerprint. A
     /// UID is retained only as diagnostic context in the result.
+    #[cfg(test)]
     pub fn detect_mismatches(
         job_id: &str,
         run_id: &str,
@@ -166,6 +182,7 @@ impl MessageVerification {
     /// independently fetched RFC822 bytes differ. Content hashes are only
     /// authoritative when both sides supplied a bounded SHA-256 fingerprint;
     /// missing fingerprints preserve the existing metadata-only result.
+    #[cfg(test)]
     pub fn detect_mismatches_with_content_fingerprints(
         job_id: &str,
         run_id: &str,
@@ -187,6 +204,22 @@ impl MessageVerification {
         // placement still has to agree with the migration mapping.
         let source_by_fingerprint = unique_fingerprint_index(source_fingerprints);
         let dest_by_fingerprint = unique_fingerprint_index(dest_fingerprints);
+        let source_index = build_uid_folder_index(source_messages);
+        let dest_index = build_uid_folder_index(dest_messages);
+        let mut mismatch_by_source = HashMap::<MailboxMessageKey, HashSet<usize>>::new();
+        let mut mismatch_by_destination = HashMap::<MailboxMessageKey, HashSet<usize>>::new();
+        for (index, mismatch) in mismatches.iter().enumerate() {
+            if let Some(key) = mismatch_source_key(mismatch, &source_index) {
+                mismatch_by_source.entry(key).or_default().insert(index);
+            }
+            if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
+                mismatch_by_destination
+                    .entry(key)
+                    .or_default()
+                    .insert(index);
+            }
+        }
+        let mut resolved_mismatches = HashSet::new();
         for (fingerprint, source_key) in source_by_fingerprint {
             let Some(dest_key) = dest_by_fingerprint.get(&fingerprint).copied() else {
                 continue;
@@ -194,14 +227,16 @@ impl MessageVerification {
             if expected_destination_folder(source_key, folder_mapping) != dest_key.mailbox {
                 continue;
             }
-            let source_present = mismatches.iter().any(|m| {
-                m.source_uid.as_deref() == Some(source_key.uid.as_str())
-                    && m.source_folder.as_deref() == Some(source_key.mailbox.as_str())
-            });
-            let dest_present = mismatches.iter().any(|m| {
-                m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
-                    && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str())
-            });
+            let source_mismatches = mismatch_by_source
+                .get(source_key)
+                .cloned()
+                .unwrap_or_default();
+            let destination_mismatches = mismatch_by_destination
+                .get(dest_key)
+                .cloned()
+                .unwrap_or_default();
+            let source_present = !source_mismatches.is_empty();
+            let dest_present = !destination_mismatches.is_empty();
             if !source_present || !dest_present {
                 continue;
             }
@@ -209,30 +244,37 @@ impl MessageVerification {
             // as a same-ID metadata change or a wrong-folder result. Only the
             // Missing+Extra pair created by identity uncertainty is eligible
             // for resolution by a unique content fingerprint.
-            let has_other_mismatch = mismatches.iter().any(|m| {
-                let source_matches = m.source_uid.as_deref() == Some(source_key.uid.as_str())
-                    && m.source_folder.as_deref() == Some(source_key.mailbox.as_str());
-                let destination_matches = m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
-                    && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str());
-                source_matches
-                    && destination_matches
-                    && !matches!(m.mismatch_type, MismatchType::Missing | MismatchType::Extra)
+            let has_other_mismatch = source_mismatches.iter().any(|index| {
+                destination_mismatches.contains(index)
+                    && !matches!(
+                        mismatches[*index].mismatch_type,
+                        MismatchType::Missing | MismatchType::Extra
+                    )
             });
             if has_other_mismatch {
                 continue;
             }
-            mismatches.retain(|m| {
-                !((m.mismatch_type == MismatchType::Missing
-                    && m.source_uid.as_deref() == Some(source_key.uid.as_str())
-                    && m.source_folder.as_deref() == Some(source_key.mailbox.as_str()))
-                    || (m.mismatch_type == MismatchType::Extra
-                        && m.dest_uid.as_deref() == Some(dest_key.uid.as_str())
-                        && m.destination_folder.as_deref() == Some(dest_key.mailbox.as_str())))
-            });
+            for index in source_mismatches.into_iter().chain(destination_mismatches) {
+                if matches!(
+                    mismatches[index].mismatch_type,
+                    MismatchType::Missing | MismatchType::Extra
+                ) {
+                    resolved_mismatches.insert(index);
+                }
+            }
             summary.metadata_matches += 1;
             summary.probable_matches = summary.probable_matches.saturating_sub(1);
             summary.missing_count = summary.missing_count.saturating_sub(1);
             summary.extra_count = summary.extra_count.saturating_sub(1);
+        }
+        if !resolved_mismatches.is_empty() {
+            mismatches = mismatches
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, mismatch)| {
+                    (!resolved_mismatches.contains(&index)).then_some(mismatch)
+                })
+                .collect();
         }
         let dest_by_message_id = index_by_message_id(dest_messages);
         let mut used_dest = HashSet::new();
@@ -544,15 +586,12 @@ impl MessageVerification {
                 &dest_by_message_id,
             );
         all_mismatches.extend(pass1_mismatches.iter().cloned());
+        // Pass 1 returns one mismatch for each matched source that failed
+        // exact metadata comparison. Counting those directly avoids scanning
+        // the growing mismatch vector once per matched message.
         total_metadata_matches = pass1_matched_src
-            .iter()
-            .filter(|k| {
-                all_mismatches.iter().all(|m| {
-                    m.source_uid.as_ref() != Some(&k.uid)
-                        || m.source_folder.as_ref() != Some(&k.mailbox)
-                })
-            })
-            .count() as u64;
+            .len()
+            .saturating_sub(pass1_mismatches.len()) as u64;
 
         // Build unmatched sets for Pass 2
         let mut unmatched_source: HashSet<MailboxMessageKey> = source_messages
@@ -664,58 +703,60 @@ impl MessageVerification {
             ));
         }
 
-        // Generate summary by counting mismatch types
+        let source_index = build_uid_folder_index(source_messages);
+        let dest_index = build_uid_folder_index(dest_messages);
+        let mut missing_source = HashSet::new();
+        let mut extra_destination = HashSet::new();
+        let mut duplicated_destination = HashSet::new();
+        let mut changed_source = HashSet::new();
+        let mut changed_destination = HashSet::new();
+        let mut missing_count = 0_u64;
+        let mut extra_count = 0_u64;
+        let mut duplicated_count = 0_u64;
+        let mut changed_count = 0_u64;
+        for mismatch in &all_mismatches {
+            match mismatch.mismatch_type {
+                MismatchType::Missing => {
+                    missing_count += 1;
+                    if let Some(key) = mismatch_source_key(mismatch, &source_index) {
+                        missing_source.insert(key);
+                    }
+                }
+                MismatchType::Extra => {
+                    extra_count += 1;
+                    if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
+                        extra_destination.insert(key);
+                    }
+                }
+                MismatchType::Duplicated => {
+                    duplicated_count += 1;
+                    if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
+                        duplicated_destination.insert(key);
+                    }
+                }
+                MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder => {
+                    changed_count += 1;
+                    if let Some(key) = mismatch_source_key(mismatch, &source_index) {
+                        changed_source.insert(key);
+                    }
+                    if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
+                        changed_destination.insert(key);
+                    }
+                }
+            }
+        }
+
         let summary = VerificationSummary {
             total_source: source_messages.len() as u64,
             total_destination: dest_messages.len() as u64,
             metadata_matches: total_metadata_matches,
             probable_matches: total_probable_matches,
-            missing_count: all_mismatches
-                .iter()
-                .filter(|m| m.mismatch_type == MismatchType::Missing)
-                .count() as u64,
-            extra_count: all_mismatches
-                .iter()
-                .filter(|m| m.mismatch_type == MismatchType::Extra)
-                .count() as u64,
-            duplicated_count: all_mismatches
-                .iter()
-                .filter(|m| m.mismatch_type == MismatchType::Duplicated)
-                .count() as u64,
-            changed_count: all_mismatches
-                .iter()
-                .filter(|m| {
-                    matches!(
-                        m.mismatch_type,
-                        MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
-                    )
-                })
-                .count() as u64,
+            missing_count,
+            extra_count,
+            duplicated_count,
+            changed_count,
         };
 
-        let source_index = build_uid_folder_index(source_messages);
-        let dest_index = build_uid_folder_index(dest_messages);
-
-        let changed_source = all_mismatches
-            .iter()
-            .filter(|m| {
-                matches!(
-                    m.mismatch_type,
-                    MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
-                )
-            })
-            .filter_map(|m| mismatch_source_key(m, &source_index))
-            .collect::<HashSet<_>>();
-        let changed_destination = all_mismatches
-            .iter()
-            .filter(|m| {
-                matches!(
-                    m.mismatch_type,
-                    MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
-                )
-            })
-            .filter_map(|m| mismatch_destination_key(m, &dest_index))
-            .collect::<HashSet<_>>();
         let membership = VerificationMembership {
             matched_source: pass1_matched_src
                 .difference(&changed_source)
@@ -727,21 +768,9 @@ impl MessageVerification {
                 .collect(),
             probable_source,
             probable_destination,
-            missing_source: all_mismatches
-                .iter()
-                .filter(|m| m.mismatch_type == MismatchType::Missing)
-                .filter_map(|m| mismatch_source_key(m, &source_index))
-                .collect(),
-            extra_destination: all_mismatches
-                .iter()
-                .filter(|m| m.mismatch_type == MismatchType::Extra)
-                .filter_map(|m| mismatch_destination_key(m, &dest_index))
-                .collect(),
-            duplicated_destination: all_mismatches
-                .iter()
-                .filter(|m| m.mismatch_type == MismatchType::Duplicated)
-                .filter_map(|m| mismatch_destination_key(m, &dest_index))
-                .collect(),
+            missing_source,
+            extra_destination,
+            duplicated_destination,
             changed_source,
             changed_destination,
         };
@@ -867,6 +896,7 @@ fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&Mailb
     index
 }
 
+#[cfg(test)]
 fn unique_fingerprint_index(
     fingerprints: &HashMap<MailboxMessageKey, String>,
 ) -> HashMap<&String, &MailboxMessageKey> {
@@ -921,17 +951,22 @@ fn expected_destination_folder(
         .unwrap_or_else(|| source_key.mailbox.clone())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum NormalizedInternalDate<'a> {
+    Epoch(i64),
+    Raw(&'a str),
+}
+
 /// Borrowed metadata key used only while reconciling one in-memory batch.
-/// Keeping the date as a borrowed normalized string avoids constructing a
-/// delimiter-based fingerprint for every message. A future SQLite-backed
-/// verifier can store the normalized date and size as separate indexed
-/// columns instead of materializing this map at all.
+/// Parsed IMAP dates use their UTC epoch; non-IMAP synthetic dates retain
+/// their original representation for compatibility with extracted fixtures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct MetadataFingerprint<'a> {
-    internal_date: &'a str,
+    internal_date: NormalizedInternalDate<'a>,
     size_bytes: u64,
 }
 
+#[cfg(test)]
 fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxMessageKey> {
     let mut sorted = keys.iter().copied().collect::<Vec<_>>();
     sorted.sort_by(|left, right| {
@@ -945,9 +980,15 @@ fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxM
 
 fn metadata_fingerprint(message: &ExtractedMessage) -> Option<MetadataFingerprint<'_>> {
     Some(MetadataFingerprint {
-        internal_date: message.internal_date.as_deref()?,
+        internal_date: normalize_internal_date(message.internal_date.as_deref()?),
         size_bytes: message.size_bytes?,
     })
+}
+
+fn normalize_internal_date(value: &str) -> NormalizedInternalDate<'_> {
+    DateTime::<FixedOffset>::parse_from_str(value.trim(), "%d-%b-%Y %H:%M:%S %z")
+        .map(|date| NormalizedInternalDate::Epoch(date.timestamp()))
+        .unwrap_or(NormalizedInternalDate::Raw(value))
 }
 
 fn make_mismatch(
@@ -1009,6 +1050,7 @@ pub struct VerificationSummary {
 /// most serious observed condition wins, so a large population of successful
 /// matches cannot hide missing, changed, or unexpected destination messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum EvidenceLevel {
     MetadataMatched,
     StrongMetadataMatch,
@@ -1019,6 +1061,7 @@ pub enum EvidenceLevel {
     Unexpected,
 }
 
+#[cfg(test)]
 impl EvidenceLevel {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -1029,21 +1072,6 @@ impl EvidenceLevel {
             Self::Missing => "missing",
             Self::Changed => "changed",
             Self::Unexpected => "unexpected",
-        }
-    }
-
-    /// Explicit operator-facing wording. The stable machine value from
-    /// `as_str` remains available for reports and integrations, but human
-    /// labels must never imply that message bodies were compared.
-    pub fn display_label(self) -> &'static str {
-        match self {
-            Self::MetadataMatched => "Metadata reconciled — message bodies not compared",
-            Self::StrongMetadataMatch => "Strong metadata match — message bodies not compared",
-            Self::ProbableMatch => "Probable metadata match — message bodies not compared",
-            Self::Ambiguous => "Ambiguous metadata result — message bodies not compared",
-            Self::Missing => "Missing messages detected",
-            Self::Changed => "Changed messages detected",
-            Self::Unexpected => "Unexpected messages detected",
         }
     }
 }
@@ -1071,6 +1099,7 @@ impl VerificationSummary {
 
     /// Return whether all extracted records reconcile by metadata alone.
     /// This must not be presented as content verification.
+    #[cfg(test)]
     pub fn is_perfect_metadata_match(&self) -> bool {
         self.missing_count == 0
             && self.extra_count == 0
@@ -1086,6 +1115,7 @@ impl VerificationSummary {
     /// This method intentionally evaluates every negative category before
     /// successful match counts. A migration with 950 metadata matches and
     /// 10,000 missing messages is therefore not high-confidence or verified.
+    #[cfg(test)]
     pub fn evidence_level(&self) -> EvidenceLevel {
         if self.missing_count > 0 {
             EvidenceLevel::Missing
@@ -1160,6 +1190,24 @@ mod tests {
             .find(|m| m.mismatch_type == MismatchType::Missing)
             .unwrap();
         assert_eq!(missing.source_uid, Some("2".to_string()));
+    }
+
+    #[test]
+    fn equivalent_internal_date_offsets_match_semantically() {
+        let message = |date: &str| ExtractedMessage {
+            message_id: Some("<same@example.com>".into()),
+            uid: Some("1".into()),
+            size_bytes: Some(100),
+            internal_date: Some(date.into()),
+        };
+        let source = HashMap::from([(key("1"), message("01-Jan-2024 12:00:00 +0000"))]);
+        let destination = HashMap::from([(key("1"), message("01-Jan-2024 07:00:00 -0500"))]);
+
+        let (mismatches, summary) =
+            MessageVerification::detect_mismatches("job1", "run1", &source, &destination).unwrap();
+
+        assert!(mismatches.is_empty());
+        assert_eq!(summary.metadata_matches, 1);
     }
 
     #[test]

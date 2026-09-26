@@ -379,7 +379,9 @@ pub(crate) fn run() -> eframe::Result<()> {
                 std::process::exit(1);
             }
         };
-        match core::StateStore::open(&source).and_then(|store| store.backup_to(&destination)) {
+        match core::StateStore::open_readonly(&source)
+            .and_then(|store| store.backup_to(&destination))
+        {
             Ok(()) => {
                 println!("Created verified ledger backup: {}", destination.display());
                 return Ok(());

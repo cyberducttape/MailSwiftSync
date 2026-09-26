@@ -25,9 +25,7 @@ mod events;
 mod evidence;
 mod evidence_ops;
 mod mailboxes;
-#[allow(dead_code)]
 mod message_extraction;
-#[allow(dead_code)]
 mod message_verification;
 mod models;
 mod phases;
@@ -44,8 +42,6 @@ mod reports;
 mod run_queries;
 mod runs;
 mod state;
-#[allow(dead_code)]
-mod verification_details;
 pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
 #[allow(unused_imports)]
@@ -1719,6 +1715,67 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_a_current_version_database_without_application_schema() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-schema-empty-{}", Uuid::new_v4()));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)
+            .unwrap();
+        drop(connection);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn snapshot_rejects_a_structurally_valid_non_ledger() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-snapshot-invalid-{}", Uuid::new_v4()));
+        create_private_test_directory(&directory);
+        let source = directory.join("source.db");
+        let destination = directory.join("snapshot.db");
+        let connection = Connection::open(&source).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE unrelated (id INTEGER PRIMARY KEY); PRAGMA user_version=12;",
+            )
+            .unwrap();
+        drop(connection);
+
+        assert!(StateStore::snapshot_to(&source, &destination).is_err());
+        assert!(!destination.exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn readonly_rejects_current_schema_with_missing_column_or_index() {
+        for missing in ["column", "index"] {
+            let directory = std::env::temp_dir()
+                .join(format!("mailswiftsync-schema-{missing}-{}", Uuid::new_v4()));
+            let path = directory.join("state.db");
+            create_private_test_directory(&directory);
+            let store = StateStore::open(&path).unwrap();
+            if missing == "column" {
+                store
+                    .connection
+                    .execute("ALTER TABLE mailbox_jobs RENAME COLUMN attention_reason TO old_attention_reason", [])
+                    .unwrap();
+            } else {
+                store
+                    .connection
+                    .execute("DROP INDEX one_active_run_per_job", [])
+                    .unwrap();
+            }
+            drop(store);
+            assert!(StateStore::open_readonly(&path).is_err());
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
     fn migration_removes_legacy_message_subject_column() {
         let db = StateStore::in_memory().unwrap();
         db.connection
@@ -1765,6 +1822,18 @@ mod tests {
             )
             .unwrap();
         drop(connection);
+
+        let snapshot = directory.join("legacy-snapshot.db");
+        StateStore::snapshot_to(&path, &snapshot).unwrap();
+        let snapshot_store = StateStore::open_readonly(&snapshot).unwrap();
+        assert_eq!(
+            snapshot_store
+                .connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+        drop(snapshot_store);
 
         let readonly = StateStore::open_readonly(&path).unwrap();
         let copied_version: i64 = readonly

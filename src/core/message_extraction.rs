@@ -46,6 +46,7 @@ pub struct ExtractedMessage {
 /// APPEND/COPY. Both UIDs are mailbox-local and must not be used as a
 /// cross-mailbox message identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ImapsyncCopyRecord {
     pub source_mailbox: String,
     pub source_uid: String,
@@ -60,8 +61,10 @@ pub struct ImapsyncCopyRecord {
 /// example: `msg INBOX/5 {279010} copied to backup/INBOX/49 ...`.
 /// Message-ID, INTERNALDATE, and content fingerprints must come from explicit
 /// IMAP FETCH operations; they are not fabricated from progress text.
+#[cfg(test)]
 pub struct ImapsyncMessageExtractor;
 
+#[cfg(test)]
 impl ImapsyncMessageExtractor {
     /// Parse imapsync copy-progress output to extract source UIDs and sizes.
     /// Returns a map keyed by source mailbox and local UID.
@@ -116,6 +119,7 @@ impl ImapsyncMessageExtractor {
 /// may contain spaces and the line may continue with throughput statistics,
 /// so whitespace tokenization cannot identify its end. The final `/digits`
 /// component is the destination UID; everything before it is the mailbox.
+#[cfg(test)]
 fn split_destination_path(value: &str) -> Option<(String, String)> {
     let value = value.trim_start();
     if let Some(quoted) = value.strip_prefix('"')
@@ -145,6 +149,7 @@ fn split_destination_path(value: &str) -> Option<(String, String)> {
     None
 }
 
+#[cfg(test)]
 fn unquote_path(value: &str) -> &str {
     value
         .strip_prefix('"')
@@ -152,6 +157,7 @@ fn unquote_path(value: &str) -> &str {
         .unwrap_or(value)
 }
 
+#[cfg(test)]
 fn split_mailbox_uid(value: &str) -> Option<(String, String)> {
     let separator = value.rfind('/')?;
     let (mailbox, uid) = value.split_at(separator);
@@ -163,8 +169,10 @@ fn split_mailbox_uid(value: &str) -> Option<(String, String)> {
 }
 
 /// Message extraction from Dovecot using doveadm.
+#[cfg(test)]
 pub struct DovecotMessageExtractor;
 
+#[cfg(test)]
 impl DovecotMessageExtractor {
     /// Fields requested from `doveadm fetch`. The explicit tab formatter is
     /// part of this parser contract; default human-oriented output is not
@@ -260,10 +268,12 @@ impl DovecotMessageExtractor {
     }
 }
 
+#[cfg(test)]
 fn nonempty(value: &str) -> Option<&str> {
     (!value.is_empty()).then_some(value)
 }
 
+#[cfg(test)]
 fn parse_optional_u64(value: &str, field: &str, index: usize) -> Result<Option<u64>, String> {
     nonempty(value)
         .map(|value| {
@@ -274,6 +284,7 @@ fn parse_optional_u64(value: &str, field: &str, index: usize) -> Result<Option<u
         .transpose()
 }
 
+#[cfg(test)]
 fn normalize_message_id(value: &str) -> String {
     value
         .trim()

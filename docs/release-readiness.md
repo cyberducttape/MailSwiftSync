@@ -260,7 +260,7 @@ and require the corresponding integration run.
   provide a reliable query.
 - Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints remain engine resume tokens, not UIDVALIDITY-aware message proof.
 - Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
-- Independent metadata-level message mismatch reporting and reconciliation is now wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. The current verifier fails closed at one million records or its conservative estimated state admission budget, but that estimate is not a peak-memory guarantee because both account maps and reconciliation indexes are materialized. SQLite-backed per-message extraction staging and streaming reconciliation are a production blocker for very large MSP migrations; body-content hashing and live-provider qualification also remain outstanding.
+- Independent metadata-level message mismatch reporting and reconciliation is now wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. The current verifier fails closed at one million records or its conservative estimated fetched-state admission budget, but that estimate is not a peak-memory guarantee because both account maps and reconciliation indexes are materialized. SQLite-backed per-message extraction staging and streaming reconciliation are a production blocker for very large MSP migrations; body-content hashing and live-provider qualification also remain outstanding.
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is covered by `scripts/engine-storage-fault-smoke.sh`.
 - **Dovecot 2.4.x probe stall safeguard (resolved in the controller):** the LIST/discovery reader now retries transient socket `TimedOut`/`WouldBlock` reads only within its 60-second total deadline, instead of checking the deadline only after a successful read. A regression test covers a timeout during LIST followed by a valid response. Dovecot 2.4.x remains a compatibility-matrix qualification target until a disposable live pilot is recorded; the controller will now fail with bounded discovery evidence rather than hang for the external 300-second watchdog.
@@ -275,7 +275,7 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 1. Add provider OAuth/Modern Auth and a secret-safe remote execution path.
 2. Expand the compatibility matrix with provider-specific dry/live pilots,
    interruption recovery, and evidence exports.
-3. Add body-content hashing, UIDVALIDITY-aware evidence, and per-message checkpoints.
+3. Add body-content hashing, UIDVALIDITY-aware durable checkpoints, and per-message checkpoints.
 4. Add controller crash/restart, storage-fault, and cross-platform supervision
    tests against disposable servers.
 5. Publish signed native installers, upgrade/rollback guidance, and results
@@ -283,4 +283,4 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 
 ## Current dependency audit
 
-CI runs `cargo audit`, and the scheduled dependency workflow runs both `cargo audit` and `cargo deny check advisories bans licenses sources` weekly. The current dependency graph has no reported vulnerabilities; RustSec reports only the unmaintained transitive crates `paste` and `ttf-parser`, which come from the desktop GUI stack and remain tracked for upstream replacement. Those maintenance findings are not suppressed by the policy.
+CI runs `cargo audit`, and the scheduled dependency workflow runs both `cargo audit` and `cargo deny check advisories bans licenses sources` weekly. The current dependency graph has no reported vulnerabilities; RustSec reports only the unmaintained transitive crate `ttf-parser`, which comes from the desktop GUI stack and remains tracked for upstream replacement. This maintenance finding is not suppressed by the policy.

@@ -11,7 +11,7 @@ use crate::ui::{
 use eframe::egui::{self, RichText};
 
 impl App {
-    fn overview_view(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn overview_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Migration overview");
         ui.label(
             RichText::new("A calm, evidence-led workspace for moving mailboxes safely.")
@@ -92,6 +92,7 @@ impl App {
                     .color(self.theme_colors().text_secondary),
             );
         });
+        self.project_summary(ui);
         ui.add_space(14.0);
         if project.is_none() && self.bulk_jobs.is_empty() {
             ui.group(|ui| {
