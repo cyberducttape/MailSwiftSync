@@ -83,6 +83,8 @@ operator distribution archives.
   SQLite's signed LIMIT conversion into an accidental unbounded ledger load.
 - Stopped secret-free mailbox summary reads from materializing discarded
   mailbox configuration blobs in support bundles.
+- Kept full mailbox configuration out of report snapshots, where report
+  rendering never consumes it.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

@@ -32,17 +32,17 @@ impl StateStore {
         let mut jobs = Vec::new();
         let mut attention_reasons = HashMap::new();
         let mut statement = tx.prepare(
-            "SELECT id,source_mailbox,destination_mailbox,state,config,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
+            "SELECT id,source_mailbox,destination_mailbox,state,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
         )?;
         for row in statement.query_map([project_id], |row| {
-            let raw_reason: Option<String> = row.get(5)?;
+            let raw_reason: Option<String> = row.get(4)?;
             Ok((
                 MailboxJob {
                     id: row.get(0)?,
                     source_mailbox: row.get(1)?,
                     destination_mailbox: row.get(2)?,
                     state: row.get(3)?,
-                    config: row.get(4)?,
+                    config: None,
                 },
                 raw_reason,
             ))
