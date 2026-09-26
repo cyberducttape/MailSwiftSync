@@ -322,15 +322,17 @@ optional operator/agency name and contact line — set once under **Settings →
 Report branding** in the GUI, independent of any migration plan or profile —
 is included as `issued_by` when either field is non-blank, for MSPs and
 consultants who want their own name on the artifact they hand to a customer.
-`fleet-status` aggregates secret-free `status --summary` output across every
+`fleet-status` aggregates credential-free operational status across every
 MailSwiftSync ledger found under a directory (read-only, no instance lock
 taken). Each ledger summary reports returned and total project counts and an
 explicit truncation flag when its 1,000-project recent view is incomplete.
 This is for operators running multiple instances or
 [sharding a large migration](docs/wiki/Scaling-large-migrations.md) across
-several ledgers. `notify-webhook` POSTs that same secret-free summary as
-JSON to one operator-configured `https://` URL — for updating a PSA/ticketing
-system without a vendor-specific integration; see
+several ledgers. `notify-webhook` POSTs a minimal credential-free operational
+status by default (project IDs, phases, and aggregate mailbox counts; no names,
+endpoints, or process details) to one operator-configured `https://` URL.
+Pass `--include-customer-metadata` to explicitly include names and endpoints.
+Treat either representation as sensitive operational data; see
 [PSA and ticketing notifications](docs/wiki/PSA-notifications.md).
 
 `doctor` is a read-only qualification-envelope check. It reports the

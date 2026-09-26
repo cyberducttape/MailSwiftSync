@@ -726,16 +726,25 @@ pub(crate) fn run() -> eframe::Result<()> {
     }
     if command == std::ffi::OsStr::new("notify-webhook") {
         let (Some(state), Some(url)) = (arguments.next(), arguments.next()) else {
-            eprintln!("Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id]");
+            eprintln!(
+                "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata]"
+            );
             std::process::exit(2);
         };
         let mut project_id = None;
+        let mut include_customer_metadata = false;
         for argument in arguments {
-            if project_id.is_none() {
+            if argument == std::ffi::OsStr::new("--include-customer-metadata") {
+                if include_customer_metadata {
+                    eprintln!("Webhook notification option was supplied more than once");
+                    std::process::exit(2);
+                }
+                include_customer_metadata = true;
+            } else if project_id.is_none() {
                 project_id = Some(argument);
             } else {
                 eprintln!(
-                    "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id]"
+                    "Usage: mailswiftsync notify-webhook <state.db> <https-url> [project-id] [--include-customer-metadata]"
                 );
                 std::process::exit(2);
             }
@@ -765,7 +774,17 @@ pub(crate) fn run() -> eframe::Result<()> {
                 std::process::exit(1);
             }
         };
-        let body = match serde_json::to_string(&summary) {
+        let payload = match serde_json::to_value(summary) {
+            Ok(payload) if include_customer_metadata => payload,
+            Ok(payload) => webhook::minimal_status_payload(payload),
+            Err(error) => {
+                eprintln!(
+                    "Webhook notification refused: could not serialize migration status: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let body = match serde_json::to_string(&payload) {
             Ok(body) => body,
             Err(error) => {
                 eprintln!(
@@ -956,7 +975,7 @@ fn print_cli_help() {
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
     println!(
-        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate secret-free status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST secret-free status JSON to an operator-configured https:// URL\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate credential-free operational status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST minimal credential-free operational status to HTTPS; opt into customer metadata explicitly\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
     );
     println!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."

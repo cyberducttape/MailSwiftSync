@@ -3,12 +3,20 @@
 MSPs generally track migration work in a PSA/ticketing platform
 (ConnectWise, Autotask, Halo, Syncro, ...) rather than by polling
 MailSwiftSync directly. `notify-webhook` bridges the two without a
-vendor-specific integration: it sends the same secret-free JSON
-`status --summary` already produces as one HTTPS POST to an
-operator-configured URL.
+vendor-specific integration. By default it sends credential-free operational
+status—project IDs, phases, and aggregate mailbox counts, excluding customer
+names, endpoints, and process details—to an operator-configured HTTPS URL.
+The payload is still sensitive operational metadata and should go only to a
+trusted receiver.
 
 ```bash
 mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc123
+```
+
+To include project names and source/destination endpoints, explicitly opt in:
+
+```bash
+mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc123 --include-customer-metadata
 ```
 
 For a secret-bearing URL path, put the URL in an owner-readable file and set
@@ -89,8 +97,8 @@ instead of one per shard.
   calls (OAuth token refresh) use. There is currently no option to pin a
   private/internal CA for this specific path — use a public-CA endpoint or a
   receiver that has one.
-- The payload is exactly what `status --summary` already returns:
-  secret-free, but not customer-anonymized the way `customer-proof` is (it
-  includes endpoint hostnames and project names). Treat the receiving
-  endpoint and any automation downstream of it as trusted infrastructure,
-  the same as you would the host running MailSwiftSync itself.
+- The default payload is credential-free operational status, not nonsensitive
+  data. Its IDs, states, and counts can still identify customer operations.
+  With `--include-customer-metadata`, project names and endpoint hosts are also
+  transmitted. Treat the receiver and downstream automation as trusted
+  infrastructure.

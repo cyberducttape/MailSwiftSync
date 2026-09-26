@@ -4,8 +4,8 @@
 //! system (ConnectWise, Autotask, Halo, Syncro, or a generic automation
 //! endpoint) rather than by polling MailSwiftSync directly. Rather than
 //! building a vendor-specific integration for each of those, this sends the
-//! same secret-free JSON `status --summary` already produces as an HTTPS
-//! POST to one operator-configured URL; almost every PSA and automation
+//! a credential-free operational status projection as an HTTPS POST to one
+//! operator-configured URL; almost every PSA and automation
 //! platform can ingest a generic webhook and route it from there.
 //!
 //! ## Authentication
@@ -26,9 +26,8 @@
 //! leak to process listings (ps aux), shell history, /proc/<pid>/cmdline, systemd units,
 //! cron logs, audit logs, and monitoring telemetry.
 //!
-//! Only `https://` targets are accepted: an operator-supplied migration
-//! status is not secret, but a plaintext endpoint would still let anyone on
-//! the network path observe and tamper with it in flight.
+//! Only `https://` targets are accepted. Operational status can contain
+//! sensitive customer metadata even though it contains no credentials.
 use crate::credentials::{SecretString, read_secret_file};
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderName, HeaderValue};
@@ -37,6 +36,34 @@ use std::{io::Read, time::Duration};
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const WEBHOOK_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const WEBHOOK_TOTAL_BUDGET: Duration = Duration::from_secs(30);
+
+/// Retain only identifiers, phases, and aggregate counts for the default
+/// webhook representation. Names, endpoints, and process metadata require an
+/// explicit operator opt-in at the CLI.
+pub(crate) fn minimal_status_payload(status: serde_json::Value) -> serde_json::Value {
+    let project_summaries = status
+        .get("projects")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|project| {
+            serde_json::json!({
+                "id": project.get("id"),
+                "phase": project.get("phase"),
+                "mailbox_state_counts": project.get("mailbox_state_counts"),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "data_classification": "credential-free operational status",
+        "schema_version": status.get("schema_version"),
+        "returned_projects": status.get("returned_projects"),
+        "total_projects": status.get("total_projects"),
+        "projects_truncated": status.get("projects_truncated"),
+        "aggregate_mailbox_state_counts": status.get("aggregate_mailbox_state_counts"),
+        "projects": project_summaries,
+    })
+}
 
 /// POST `body` (already-serialized JSON) to `url` using the shared reqwest
 /// Rustls transport used by OAuth refresh. Authentication credentials are read
@@ -283,6 +310,40 @@ fn validate_header_value(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_status_projection_omits_customer_and_process_metadata() {
+        let status = serde_json::json!({
+            "schema_version": 12,
+            "active_processes": [{"pid": 42}],
+            "active_processes_truncated": false,
+            "returned_projects": 1,
+            "total_projects": 1,
+            "projects_truncated": false,
+            "aggregate_mailbox_state_counts": {"completed": 3},
+            "projects": [{
+                "id": "project-id",
+                "name": "Customer name",
+                "batch": true,
+                "source_endpoint": "imap.customer.example",
+                "destination_endpoint": "imap.destination.example",
+                "phase": "completed",
+                "mailbox_state_counts": {"completed": 3}
+            }]
+        });
+        let payload = minimal_status_payload(status);
+        assert_eq!(
+            payload["data_classification"],
+            "credential-free operational status"
+        );
+        assert_eq!(payload["projects"][0]["id"], "project-id");
+        assert_eq!(payload["projects"][0]["phase"], "completed");
+        assert!(payload["projects"][0].get("mailbox_state_counts").is_some());
+        for field in ["name", "batch", "source_endpoint", "destination_endpoint"] {
+            assert!(payload["projects"][0].get(field).is_none());
+        }
+        assert!(payload.get("active_processes").is_none());
+    }
 
     #[test]
     fn parses_https_url_with_explicit_port_and_path() {

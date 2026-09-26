@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Webhook notifications now default to credential-free operational status with
+  customer names, endpoint hosts, and active-process details excluded; sending
+  customer metadata requires the explicit `--include-customer-metadata` option.
+- Removed the verifier-wide dead-code exemption so unused production verifier
+  paths are reported by normal compiler and lint checks.
 - New profiles disable imapsync automapping by default so independent message
   verification can certify live migrations; headless live rejects plans that
   cannot provide required verification evidence.
