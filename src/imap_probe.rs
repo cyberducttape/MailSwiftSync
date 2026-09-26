@@ -1534,7 +1534,6 @@ fn parse_uid_search_response(
         })
         .collect::<Result<Vec<_>, _>>()?;
     uids.sort_unstable();
-    uids.dedup();
     Ok(uids)
 }
 
@@ -2421,6 +2420,19 @@ mod tests {
         assert!(
             super::parse_uid_search_response("* SEARCH 100 nope\r\n", "imap.example", "INBOX")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn uid_search_parser_preserves_duplicates_for_coverage_validation() {
+        assert_eq!(
+            super::parse_uid_search_response(
+                "* SEARCH 100 100 104\r\nv002 OK SEARCH completed\r\n",
+                "imap.example",
+                "INBOX"
+            )
+            .unwrap(),
+            vec![100, 100, 104]
         );
     }
 
