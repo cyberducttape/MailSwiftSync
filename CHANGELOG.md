@@ -7,9 +7,13 @@ operator distribution archives.
 ## [Unreleased]
 
 - The native Dovecot integration lab now uses mdbox for its destination
-  mailbox store. Initial `doveadm backup` must reconcile an already-opened
-  destination INBOX, which Maildir cannot delete and recreate; fixture
-  messages are verified through `doveadm fetch` instead of Maildir filenames.
+  mailbox store because initial `doveadm backup` may need to replace INBOX,
+  which Maildir cannot delete and recreate. Both fixture servers explicitly
+  share a hierarchy separator, and messages are verified through
+  `doveadm fetch` instead of Maildir filenames.
+- Native Dovecot preflight now validates the destination userdb without
+  enumerating the target mailbox store before its first sync, avoiding early
+  target access that can trigger GUID/UIDVALIDITY conflicts.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.

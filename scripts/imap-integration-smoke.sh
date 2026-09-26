@@ -283,6 +283,11 @@ auth_verbose = yes
 first_valid_uid = 1
 mail_home = $root/mail/%u
 $mail_settings
+namespace inbox {
+  inbox = yes
+  prefix =
+  separator = /
+}
 $auth_settings
 service imap-login {
   inet_listener imap {

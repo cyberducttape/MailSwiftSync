@@ -799,10 +799,10 @@ mod tests {
     }
 
     #[test]
-    fn dovecot_destination_preflight_checks_user_and_mailboxes() {
+    fn dovecot_destination_preflight_checks_user_without_opening_mailboxes() {
         let form = dovecot_form();
         let commands = form.dovecot_destination_preflight_commands();
-        assert_eq!(commands.len(), 2);
+        assert_eq!(commands.len(), 1);
         assert!(
             commands[0]
                 .1
@@ -810,16 +810,10 @@ mod tests {
                 .any(|pair| pair == ["user", "new-user"])
         );
         assert!(
-            commands[1]
+            !commands[0]
                 .1
                 .windows(2)
                 .any(|pair| pair == ["mailbox", "list"])
-        );
-        assert!(
-            commands[1]
-                .1
-                .windows(2)
-                .any(|pair| pair == ["-u", "new-user"])
         );
     }
 

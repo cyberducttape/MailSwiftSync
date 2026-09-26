@@ -1286,20 +1286,12 @@ impl Form {
             user.extend(["-c".into(), self.profile.dovecot_config.clone()]);
         }
         user.extend(["user".into(), self.profile.destination_user.clone()]);
-        let mut mailboxes = Vec::new();
-        if !self.profile.dovecot_config.trim().is_empty() {
-            mailboxes.extend(["-c".into(), self.profile.dovecot_config.clone()]);
-        }
-        mailboxes.extend([
-            "mailbox".into(),
-            "list".into(),
-            "-u".into(),
-            self.profile.destination_user.clone(),
-        ]);
-        vec![
-            (self.profile.doveadm_path.clone(), user),
-            (self.profile.doveadm_path.clone(), mailboxes),
-        ]
+        // Do not open or enumerate the destination mailboxes before the first
+        // dsync. Dovecot warns that this can alter INBOX GUID/UIDVALIDITY and
+        // cause the initial backup to fail (or reconcile the wrong state).
+        // The userdb lookup validates the local destination identity without
+        // touching the mailbox store.
+        vec![(self.profile.doveadm_path.clone(), user)]
     }
 }
 
