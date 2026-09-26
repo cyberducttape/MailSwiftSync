@@ -655,7 +655,7 @@ impl StateStore {
         // ledger boundary so a crafted large queue cannot turn startup into an
         // unbounded allocation before admission has a chance to run.
         let profile_budget_exceeded: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE config IS NOT NULL AND length(config) > ?1) OR COALESCE((SELECT SUM(length(config)) FROM mailbox_jobs WHERE config IS NOT NULL), 0) > ?2",
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE config IS NOT NULL AND length(CAST(config AS BLOB)) > ?1) OR COALESCE((SELECT SUM(length(CAST(config AS BLOB))) FROM mailbox_jobs WHERE config IS NOT NULL), 0) > ?2",
             rusqlite::params![
                 MAX_PERSISTED_PROFILE_BYTES as i64,
                 MAX_TOTAL_PERSISTED_PROFILE_BYTES as i64
