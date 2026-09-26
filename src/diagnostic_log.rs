@@ -18,6 +18,7 @@ const RETAIN_FILES: usize = 20;
 const MAX_LINE_BYTES: usize = 16 * 1024;
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_DIRECTORY_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_FILENAME_COMPONENT_BYTES: usize = 128;
 const WRITER_CAPACITY: usize = 64 * 1024;
 const FLUSH_BYTES: usize = 64 * 1024;
 const FLUSH_LINES: usize = 64;
@@ -203,6 +204,7 @@ impl Drop for DiagnosticLogger {
 fn safe_component(value: &str) -> String {
     value
         .chars()
+        .take(MAX_FILENAME_COMPONENT_BYTES)
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
                 character
@@ -234,6 +236,10 @@ mod tests {
     #[test]
     fn components_are_safe_for_filenames() {
         assert_eq!(safe_component("a/b c"), "a_b_c");
+        assert_eq!(
+            safe_component(&"x".repeat(256)).len(),
+            MAX_FILENAME_COMPONENT_BYTES
+        );
     }
 
     #[test]
