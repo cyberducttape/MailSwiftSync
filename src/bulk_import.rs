@@ -231,9 +231,10 @@ fn validate_xlsx_sheet_dimensions(path: &Path, _sheet_index: usize) -> Result<()
 }
 
 fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), String> {
+    const MAX_DIMENSION_PREFIX_BYTES: usize = 128 * 1024;
     let mut prefix = Vec::with_capacity(128 * 1024);
     let mut chunk = [0_u8; 8192];
-    while prefix.len() < 128 * 1024 {
+    while prefix.len() < MAX_DIMENSION_PREFIX_BYTES {
         let count = entry
             .read(&mut chunk)
             .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
@@ -247,6 +248,16 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
     }
     let text = String::from_utf8_lossy(&prefix);
     let Some(start) = text.find("<dimension") else {
+        let nonempty_sheet_data = text.find("<sheetData").is_some_and(|offset| {
+            let remainder = &text[offset..];
+            !remainder.starts_with("<sheetData/>") && !remainder.starts_with("<sheetData />")
+        });
+        if nonempty_sheet_data || prefix.len() >= MAX_DIMENSION_PREFIX_BYTES {
+            return Err(
+                "The worksheet does not declare a bounded early dimension; refusing to materialize it."
+                    .into(),
+            );
+        }
         return Ok(());
     };
     let Some(reference_start) = text[start..].find("ref=") else {
@@ -527,10 +538,11 @@ fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
 mod tests {
     use super::{
         job_from_values, parse_xlsx_cell_reference, plaintext_secrets_allowed,
-        validate_workbook_input,
+        validate_workbook_input, validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
     use std::collections::HashMap;
+    use std::io::Cursor;
 
     #[test]
     fn plaintext_secret_switch_requires_exactly_one() {
@@ -546,6 +558,26 @@ mod tests {
         assert!(parse_xlsx_cell_reference("XFD1048576").is_ok());
         assert!(parse_xlsx_cell_reference("A").is_err());
         assert!(parse_xlsx_cell_reference(&format!("{}1", "X".repeat(256))).is_err());
+    }
+
+    #[test]
+    fn xlsx_dimension_probe_fails_closed_for_unbounded_nonempty_sheets() {
+        assert!(
+            validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(
+                b"<worksheet><sheetData><row r=\"1\"/></sheetData></worksheet>",
+            ))
+            .is_err()
+        );
+        assert!(
+            validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(b"<worksheet><sheetData>",))
+                .is_err()
+        );
+        assert!(
+            validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(
+                b"<worksheet><sheetData/></worksheet>",
+            ))
+            .is_ok()
+        );
     }
 
     #[test]
