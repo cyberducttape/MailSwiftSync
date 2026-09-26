@@ -20,6 +20,10 @@ operator distribution archives.
 - Native Dovecot verification failures now retain the failing command's
   bounded diagnostic tail or report the parsed source/destination inventory
   counts, making incomplete status output actionable instead of generic.
+- Native Dovecot source enumeration and verification now select the correct
+  mail-location override for Dovecot 2.3 versus 2.4; headless failure output
+  also includes the bounded verification reason instead of hiding it behind
+  a generic durability message.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.

@@ -31,6 +31,48 @@ use zeroize::Zeroizing;
 const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 const MAX_KEYRING_CREDENTIAL_BYTES: usize = 64 * 1024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DovecotConfigDialect {
+    Legacy23,
+    Modern24,
+}
+
+fn dovecot_config_dialect(version: &str) -> Result<DovecotConfigDialect, String> {
+    let version_token = version.split_whitespace().next().unwrap_or_default();
+    let mut components = version_token.split('.');
+    let major = components
+        .next()
+        .and_then(|component| component.parse::<u32>().ok());
+    let minor = components
+        .next()
+        .and_then(|component| component.parse::<u32>().ok());
+    match (major, minor) {
+        (Some(2), Some(3)) => Ok(DovecotConfigDialect::Legacy23),
+        (Some(2), Some(4)) => Ok(DovecotConfigDialect::Modern24),
+        _ => Err(format!(
+            "unsupported or unrecognized Dovecot version {version:?}; native migration currently supports Dovecot 2.3 and 2.4"
+        )),
+    }
+}
+
+fn detect_dovecot_config_dialect(doveadm_path: &str) -> Result<DovecotConfigDialect, String> {
+    let version = crate::runner::probe_engine_version(doveadm_path).ok_or_else(|| {
+        "could not determine the configured doveadm version; refusing to guess its mail-location configuration syntax".to_owned()
+    })?;
+    dovecot_config_dialect(&version)
+}
+
+fn append_imapc_mail_settings(args: &mut Vec<String>, dialect: DovecotConfigDialect) {
+    args.extend(["-o".into()]);
+    match dialect {
+        DovecotConfigDialect::Legacy23 => args.push("mail_location=imapc:".into()),
+        DovecotConfigDialect::Modern24 => {
+            args.push("mail_driver=imapc".into());
+            args.extend(["-o".into(), "mail_path=".into()]);
+        }
+    }
+}
+
 fn read_profile_file(path: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
     if file.metadata()?.len() > MAX_PROFILE_BYTES {
@@ -849,19 +891,26 @@ impl Form {
     }
     #[cfg(test)]
     pub(crate) fn prepared_command(&self) -> Result<PreparedCommand, String> {
-        self.prepared_command_with_throttle_divisor(1)
-    }
-    #[cfg(test)]
-    pub(crate) fn prepared_command_with_throttle_divisor(
-        &self,
-        throttle_divisor: usize,
-    ) -> Result<PreparedCommand, String> {
-        self.prepared_command_with_throttle_divisor_and_checkpoint(throttle_divisor, None)
+        self.prepare_command_with_dialect(1, None, Some(DovecotConfigDialect::Modern24))
     }
     pub(crate) fn prepared_command_with_throttle_divisor_and_checkpoint(
         &self,
         throttle_divisor: usize,
         checkpoint: Option<&str>,
+    ) -> Result<PreparedCommand, String> {
+        let dovecot_dialect = if self.engine() == core::Engine::Dovecot {
+            Some(detect_dovecot_config_dialect(&self.profile.doveadm_path)?)
+        } else {
+            None
+        };
+        self.prepare_command_with_dialect(throttle_divisor, checkpoint, dovecot_dialect)
+    }
+
+    fn prepare_command_with_dialect(
+        &self,
+        throttle_divisor: usize,
+        checkpoint: Option<&str>,
+        dovecot_dialect: Option<DovecotConfigDialect>,
     ) -> Result<PreparedCommand, String> {
         // Keep command preparation as a hard validation boundary. The
         // low-level builder emits canonical options, but it must never be
@@ -869,6 +918,9 @@ impl Form {
         // not passed the same validator used by admission.
         self.extra_options_valid()?;
         if self.engine() == core::Engine::Dovecot {
+            let dovecot_dialect = dovecot_dialect.ok_or_else(|| {
+                "Dovecot command preparation requires a detected configuration dialect".to_owned()
+            })?;
             let secret_dir = create_secret_directory()?;
             let source_file = secret_dir.join("source.secret");
             let runtime_config = write_secret_file(&source_file, self.source_password.as_str())
@@ -893,11 +945,16 @@ impl Form {
                 checkpoint,
                 self.dry_run,
                 Some(&config_path),
+                dovecot_dialect,
             );
             let verification = if self.dry_run {
                 Vec::new()
             } else {
-                self.dovecot_verification_commands_with_config(false, Some(&config_path))
+                self.dovecot_verification_commands_with_config(
+                    false,
+                    Some(&config_path),
+                    dovecot_dialect,
+                )
             };
             return Ok(PreparedCommand {
                 executable,
@@ -1112,7 +1169,13 @@ impl Form {
         checkpoint: Option<&str>,
         dry_run: bool,
     ) -> (String, Vec<String>) {
-        self.command_with_checkpoint_and_mode_and_config(redact, checkpoint, dry_run, None)
+        self.command_with_checkpoint_and_mode_and_config(
+            redact,
+            checkpoint,
+            dry_run,
+            None,
+            DovecotConfigDialect::Modern24,
+        )
     }
     fn command_with_checkpoint_and_mode_and_config(
         &self,
@@ -1120,6 +1183,7 @@ impl Form {
         checkpoint: Option<&str>,
         dry_run: bool,
         runtime_config: Option<&str>,
+        dovecot_dialect: DovecotConfigDialect,
     ) -> (String, Vec<String>) {
         if self.engine() != core::Engine::Dovecot {
             return (
@@ -1160,11 +1224,8 @@ impl Form {
             args.extend(["-o".into(), format!("imapc_port={source_port}")]);
         }
         if dry_run {
+            append_imapc_mail_settings(&mut args, dovecot_dialect);
             args.extend([
-                "-o".into(),
-                "mail_driver=imapc".into(),
-                "-o".into(),
-                "mail_path=".into(),
                 "mailbox".into(),
                 "list".into(),
                 "-u".into(),
@@ -1198,12 +1259,13 @@ impl Form {
     }
     #[cfg(test)]
     pub(crate) fn dovecot_verification_commands(&self, redact: bool) -> Vec<(String, Vec<String>)> {
-        self.dovecot_verification_commands_with_config(redact, None)
+        self.dovecot_verification_commands_with_config(redact, None, DovecotConfigDialect::Modern24)
     }
     fn dovecot_verification_commands_with_config(
         &self,
         redact: bool,
         runtime_config: Option<&str>,
+        dovecot_dialect: DovecotConfigDialect,
     ) -> Vec<(String, Vec<String>)> {
         if self.engine() != core::Engine::Dovecot {
             return Vec::new();
@@ -1243,11 +1305,8 @@ impl Form {
         } else {
             source.extend(["-o".into(), format!("imapc_port={source_port}")]);
         }
+        append_imapc_mail_settings(&mut source, dovecot_dialect);
         source.extend([
-            "-o".into(),
-            "mail_driver=imapc".into(),
-            "-o".into(),
-            "mail_path=".into(),
             "mailbox".into(),
             "status".into(),
             "-u".into(),
@@ -1306,8 +1365,10 @@ pub(crate) struct PreparedCommand {
 #[cfg(test)]
 mod tests {
     use super::{
-        Form, MAX_PROFILE_BYTES, OAuthRefreshOutcome, decode_report_run_snapshot,
-        decode_saved_profile, persist_rotated_refresh_config_with_retry, validate_certificate_pin,
+        DovecotConfigDialect, Form, MAX_PROFILE_BYTES, OAuthRefreshOutcome,
+        decode_report_run_snapshot, decode_saved_profile, detect_dovecot_config_dialect,
+        dovecot_config_dialect, persist_rotated_refresh_config_with_retry,
+        validate_certificate_pin,
     };
     use crate::SecretString;
     use crate::oauth_refresh::OAuthRefreshConfig;
@@ -1316,6 +1377,76 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn dovecot_mail_location_syntax_tracks_supported_major_minor_versions() {
+        assert_eq!(
+            dovecot_config_dialect("2.3.19.1 (9b53102964)").unwrap(),
+            DovecotConfigDialect::Legacy23
+        );
+        assert_eq!(
+            dovecot_config_dialect("2.4.0 (abc123)").unwrap(),
+            DovecotConfigDialect::Modern24
+        );
+        assert!(dovecot_config_dialect("not-a-version").is_err());
+        assert!(dovecot_config_dialect("2.5.0").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dovecot_config_dialect_is_probed_from_the_selected_doveadm() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-doveadm-version-{}-{}.sh",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, "#!/bin/sh\nprintf '2.3.19.1 (fixture)\\n'\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            detect_dovecot_config_dialect(&path.to_string_lossy()).unwrap(),
+            DovecotConfigDialect::Legacy23
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn dovecot_source_commands_use_the_matching_mail_location_dialect() {
+        let mut form = Form::default();
+        form.profile.engine = crate::core::Engine::Dovecot;
+        form.dry_run = true;
+        for (dialect, expected, unexpected) in [
+            (
+                DovecotConfigDialect::Legacy23,
+                "mail_location=imapc:",
+                "mail_driver=imapc",
+            ),
+            (
+                DovecotConfigDialect::Modern24,
+                "mail_driver=imapc",
+                "mail_location=imapc:",
+            ),
+        ] {
+            let (_, args) =
+                form.command_with_checkpoint_and_mode_and_config(true, None, true, None, dialect);
+            assert!(args.iter().any(|argument| argument == expected));
+            assert!(!args.iter().any(|argument| argument == unexpected));
+            let verification = form.dovecot_verification_commands_with_config(true, None, dialect);
+            assert!(
+                verification[0]
+                    .1
+                    .iter()
+                    .any(|argument| argument == expected)
+            );
+            assert!(
+                !verification[0]
+                    .1
+                    .iter()
+                    .any(|argument| argument == unexpected)
+            );
+        }
+    }
 
     #[test]
     fn legacy_remote_dovecot_profiles_fail_closed() {

@@ -1153,10 +1153,13 @@ pub(crate) fn run_dovecot_verification(
     for (index, (verify_exe, verify_args)) in commands.iter().enumerate() {
         let accumulator = Arc::new(Mutex::new(verification::DovecotStatusAccumulator::default()));
         let observer_accumulator = Arc::clone(&accumulator);
+        let diagnostic_tail = Arc::new(Mutex::new(BoundedLineBuffer::new()));
+        let observer_tail = Arc::clone(&diagnostic_tail);
         let observer: OutputObserver = Arc::new(move |line| {
             if let Ok(mut accumulator) = observer_accumulator.lock() {
                 accumulator.observe(line);
             }
+            record_process_tail(&observer_tail, line);
         });
         let (status, report, truncated) = run_capture_lines(
             verify_exe,
@@ -1176,16 +1179,7 @@ pub(crate) fn run_dovecot_verification(
             });
         }
         if status.exit_code != Some(0) {
-            let diagnostic = report
-                .iter()
-                .rev()
-                .take(5)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .map(|line| truncate_utf8(line, 512))
-                .collect::<Vec<_>>()
-                .join(" | ");
+            let diagnostic = truncate_utf8(&process_tail_text(&diagnostic_tail), 4096);
             return Err(format!(
                 "Dovecot verification command {} exited with code {:?}{}",
                 index + 1,
@@ -1246,11 +1240,12 @@ mod tests {
     use super::{
         TerminalEvidenceSource, automap_blocks_live_certification, automap_folder_kind,
         infer_automap_folder_mapping, message_verification_enabled,
-        persist_engine_identity_before_launch, resolve_imapsync_identity, terminal_evidence_source,
-        validate_destination_folder_policy,
+        persist_engine_identity_before_launch, process_tail_text, record_process_tail,
+        resolve_imapsync_identity, terminal_evidence_source, validate_destination_folder_policy,
     };
     use crate::{
-        Event, StreamOutcome, imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile,
+        BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES, StreamOutcome,
+        imap_probe::MailboxDescriptor, verification::ImapsyncOutputProfile,
     };
     use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, sync::mpsc, thread};
 
@@ -1270,6 +1265,21 @@ mod tests {
         let result = super::send_reliable_event(&tx, Event::Finished(Ok(StreamOutcome::Completed)));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("disconnected"));
+    }
+
+    #[test]
+    fn process_diagnostic_tail_retains_latest_output_within_its_bound() {
+        let tail = std::sync::Mutex::new(BoundedLineBuffer::new());
+        record_process_tail(&tail, "early status output");
+        for _ in 0..80 {
+            record_process_tail(&tail, &"x".repeat(MAX_DIAGNOSTIC_LINE_BYTES));
+        }
+        record_process_tail(&tail, "final Dovecot error");
+
+        let diagnostic = process_tail_text(&tail);
+        assert!(diagnostic.contains("final Dovecot error"));
+        assert!(!diagnostic.contains("early status output"));
+        assert!(diagnostic.len() <= MAX_PROCESS_TAIL_BYTES);
     }
 
     #[test]

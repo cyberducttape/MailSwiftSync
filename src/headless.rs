@@ -974,10 +974,40 @@ pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> 
         thread::sleep(Duration::from_millis(100));
     }
     if app.durability_error || app.durability_recovery_pending {
+        let verification_detail = last_verification_detail(&app.output)
+            .map(|detail| {
+                format!(
+                    "; verification detail: {}",
+                    crate::truncate_utf8(detail, 2048)
+                )
+            })
+            .unwrap_or_default();
         return Err(format!(
-            "durable terminal state was not confirmed: {}",
+            "durable terminal state was not confirmed: {}{verification_detail}",
             app.status.text
         ));
     }
     Ok(())
+}
+
+fn last_verification_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
+    output
+        .iter()
+        .rev()
+        .find_map(|line| line.strip_prefix("[verification] "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::last_verification_detail;
+    use crate::BoundedLineBuffer;
+
+    #[test]
+    fn headless_failure_keeps_the_latest_verification_detail() {
+        let mut output = BoundedLineBuffer::new();
+        output.push_bounded("[verification] earlier issue".into(), 10, 1024);
+        output.push_bounded("engine output".into(), 10, 1024);
+        output.push_bounded("[verification] latest issue".into(), 10, 1024);
+        assert_eq!(last_verification_detail(&output), Some("latest issue"));
+    }
 }
