@@ -90,8 +90,9 @@ pub(crate) fn spawn_sheet_import(
 }
 
 pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String> {
-    validate_bulk_import_file(path)?;
-    let mut reader = csv::Reader::from_path(path).map_err(|error| error.to_string())?;
+    let file = open_import_file(path)?;
+    let mut reader = csv::ReaderBuilder::new()
+        .from_reader(file.take(crate::MAX_BULK_IMPORT_BYTES.saturating_add(1)));
     let headers = reader
         .headers()
         .map_err(|error| error.to_string())?
@@ -126,6 +127,12 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
     }
     if jobs.is_empty() {
         return Err("The file has no migration rows.".into());
+    }
+    if reader.into_inner().limit() == 0 {
+        return Err(format!(
+            "The import file exceeds the {}-byte limit.",
+            crate::MAX_BULK_IMPORT_BYTES
+        ));
     }
     Ok(jobs)
 }
@@ -447,7 +454,9 @@ pub(crate) fn validate_headers(
 }
 
 pub(crate) fn validate_bulk_import_file(path: &Path) -> Result<(), String> {
-    let size = std::fs::metadata(path)
+    let size = open_import_file(path)
+        .map_err(|error| format!("Could not inspect import file: {error}"))?
+        .metadata()
         .map_err(|error| format!("Could not inspect import file: {error}"))?
         .len();
     if size > crate::MAX_BULK_IMPORT_BYTES {
@@ -457,6 +466,33 @@ pub(crate) fn validate_bulk_import_file(path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn open_import_file(path: &Path) -> Result<std::fs::File, String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("Could not open import file: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("Could not inspect import file: {error}"))?;
+    if !metadata.is_file() {
+        return Err("The import path must refer to a regular file.".into());
+    }
+    if metadata.len() > crate::MAX_BULK_IMPORT_BYTES {
+        return Err(format!(
+            "The import file is {} bytes; the limit is {} bytes.",
+            metadata.len(),
+            crate::MAX_BULK_IMPORT_BYTES
+        ));
+    }
+    Ok(file)
 }
 
 pub(crate) fn validate_workbook_container_limits(
