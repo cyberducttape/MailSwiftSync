@@ -74,7 +74,7 @@ MailSwiftSync is an early, usable 0.1 development release aimed at technical ope
 Stable today:
 
 - `imapsync` fallback for arbitrary IMAP endpoints.
-- CSV/XLS/XLSX batch queue with bounded operator-selected concurrency (1–16 workers), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states.
+- CSV/XLSX batch queue with bounded operator-selected concurrency (1–16 workers), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states. Legacy XLS imports are disabled because the parser cannot be bounded safely before worksheet materialization.
 - Explicit imapsync message and byte throttles for provider-friendly single-mailbox runs.
 - Configurable per-process timeout (1–720 hours) so large mailboxes can run longer than the default while hung jobs remain bounded.
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.

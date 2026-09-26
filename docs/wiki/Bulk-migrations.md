@@ -2,7 +2,9 @@
 
 Use the **Transient retries** control for short-lived transport failures. MailSwiftSync labels failures as `authentication`, `quota`, `capacity`, `transport`, `configuration`, `message`, or `unknown`; transport and provider-capacity signals such as rate limits, HTTP 429 responses, server-busy responses, and connection ceilings are eligible for retry. Capacity retries use a longer bounded backoff than ordinary transport retries, while exhausted quota, authentication, and configuration errors stop clearly. Backoff is cancellation-aware. For imapsync, message/byte throttle targets are divided across concurrent workers and process starts are globally paced; a finite target must be at least the worker count. These are application-level safeguards, not a substitute for provider-specific tenant limits.
 
-MailSwiftSync can import a migration list from CSV, XLS, or XLSX and process rows with a bounded worker pool. Choose 1–16 concurrent workers to balance migration-window speed against provider throttling. Every mailbox must first complete a matching preflight; after that, the same durable queue can be explicitly promoted to a live batch run. Live execution offers scopes for **Unresolved**, **Failed or Attention only**, **Delta required only**, **Verification differences only**, or **All rows (explicit re-run)**. The default excludes verified rows and operator-review states; use an explicit review scope after inspecting the durable reason, and use the all-rows scope only when deliberately repeating an evidence-backed migration.
+MailSwiftSync can import a migration list from CSV or XLSX and process rows with a bounded worker pool. Legacy XLS is currently rejected: its parser materializes ranges before resource limits can be checked. Convert legacy workbooks to XLSX or CSV before importing. Choose 1–16 concurrent workers to balance migration-window speed against provider throttling. Every mailbox must first complete a matching preflight; after that, the same durable queue can be explicitly promoted to a live batch run. Live execution offers scopes for **Unresolved**, **Failed or Attention only**, **Delta required only**, **Verification differences only**, or **All rows (explicit re-run)**. The default excludes verified rows and operator-review states; use an explicit review scope after inspecting the durable reason, and use the all-rows scope only when deliberately repeating an evidence-backed migration.
+
+XLSX files are limited to 100,000 data rows, 64 columns, and 1,000,000 occupied or expanded cells per selected worksheet. Sheets whose declared or actual cell range exceeds those limits are rejected before Calamine creates its dense worksheet matrix.
 
 ![Mailboxes workspace workflow preview](assets/batch-queue.png)
 
@@ -33,7 +35,7 @@ Optional columns are `project_name`, `source_credential_id`, `destination_creden
 
 1. Open **Mailboxes** and choose **Import / edit queue**.
 2. Click **Import CSV / Excel…** and select the file.
-3. If the file is XLS or XLSX, choose the worksheet containing the migration headers; MailSwiftSync does not assume the first worksheet.
+3. If the file is XLSX, choose the worksheet containing the migration headers; MailSwiftSync does not assume the first worksheet.
 4. Review each source and destination in the queue table and enter any missing credentials in the masked fields.
 5. Correct the spreadsheet and import it again if any account is wrong.
 6. Choose a conservative concurrency value and click **Run N preflight checks**.

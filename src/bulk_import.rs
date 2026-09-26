@@ -6,7 +6,7 @@
 //! result application.
 
 use crate::{Form, SecretString};
-use calamine::{Reader, Sheets, Xls, Xlsx, open_workbook_from_rs};
+use calamine::{Reader, Sheets, Xlsx, open_workbook_from_rs};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -63,10 +63,10 @@ pub(crate) fn spawn_import(
             .to_ascii_lowercase();
         let result = if ext == "csv" {
             read_csv(&path, &base).map(BulkImportResult::Jobs)
-        } else if ext == "xls" || ext == "xlsx" {
+        } else if ext == "xlsx" {
             workbook_sheets(&path).map(|sheets| BulkImportResult::Workbook { path, sheets })
         } else {
-            Err("Choose a .csv, .xls, or .xlsx file.".into())
+            Err("Choose a .csv or .xlsx file. Legacy .xls imports are disabled because they cannot be safely bounded before parsing.".into())
         };
         let _ = sender.send(result);
     });
@@ -153,6 +153,7 @@ pub(crate) fn read_sheet(
     sheet_index: usize,
 ) -> Result<Vec<BulkJob>, String> {
     let mut book = open_import_workbook(path)?;
+    validate_xlsx_sheet_layout(&mut book, sheet_index)?;
     let range = book
         .worksheet_range_at(sheet_index)
         .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?
@@ -202,6 +203,71 @@ pub(crate) fn read_sheet(
     Ok(jobs)
 }
 
+fn validate_xlsx_sheet_layout(
+    book: &mut Sheets<BufReader<std::fs::File>>,
+    sheet_index: usize,
+) -> Result<(), String> {
+    let Sheets::Xlsx(book) = book else {
+        return Ok(());
+    };
+    let sheet_name = book
+        .sheet_names()
+        .get(sheet_index)
+        .cloned()
+        .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?;
+    let mut cells = book
+        .worksheet_cells_reader(&sheet_name)
+        .map_err(|error| format!("Could not inspect worksheet cells: {error}"))?;
+    let mut cell_count = 0_usize;
+    let mut min_row = u32::MAX;
+    let mut min_column = u32::MAX;
+    let mut max_row = 0_u32;
+    let mut max_column = 0_u32;
+    while let Some(cell) = cells
+        .next_cell()
+        .map_err(|error| format!("Could not inspect worksheet cells: {error}"))?
+    {
+        let (row, column) = cell.get_position();
+        if row > crate::MAX_BULK_IMPORT_ROWS as u32 {
+            return Err(format!(
+                "The worksheet contains a cell beyond the {}-row import limit.",
+                crate::MAX_BULK_IMPORT_ROWS
+            ));
+        }
+        if column >= crate::MAX_BULK_IMPORT_COLUMNS as u32 {
+            return Err(format!(
+                "The worksheet contains a cell beyond the {}-column import limit.",
+                crate::MAX_BULK_IMPORT_COLUMNS
+            ));
+        }
+        cell_count = cell_count.saturating_add(1);
+        if cell_count > crate::MAX_BULK_IMPORT_WORKSHEET_CELLS {
+            return Err(format!(
+                "The worksheet exceeds the {}-cell import limit.",
+                crate::MAX_BULK_IMPORT_WORKSHEET_CELLS
+            ));
+        }
+        min_row = min_row.min(row);
+        min_column = min_column.min(column);
+        max_row = max_row.max(row);
+        max_column = max_column.max(column);
+    }
+    if cell_count > 0 {
+        let rows = (max_row - min_row + 1) as usize;
+        let columns = (max_column - min_column + 1) as usize;
+        let area = rows.checked_mul(columns).ok_or_else(|| {
+            "The worksheet's used cell range exceeds the supported import size.".to_owned()
+        })?;
+        if area > crate::MAX_BULK_IMPORT_WORKSHEET_CELLS {
+            return Err(format!(
+                "The worksheet's used cell range exceeds the {}-cell import limit.",
+                crate::MAX_BULK_IMPORT_WORKSHEET_CELLS
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Reject obviously oversized XLSX worksheets before Calamine expands the
 /// sheet into a cell matrix. The worksheet dimension is near the start of the
 /// XML part, so this bounded probe does not materialize the workbook entry.
@@ -245,8 +311,9 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
             break;
         }
     }
-    let text = String::from_utf8_lossy(&prefix);
-    let Some(start) = text.find("<dimension") else {
+    let text = std::str::from_utf8(&prefix)
+        .map_err(|_| "The worksheet dimension prefix is not valid UTF-8.".to_owned())?;
+    let Some(start) = find_xlsx_dimension_element(text)? else {
         let nonempty_sheet_data = text.find("<sheetData").is_some_and(|offset| {
             let remainder = &text[offset..];
             !remainder.starts_with("<sheetData/>") && !remainder.starts_with("<sheetData />")
@@ -259,17 +326,22 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
         }
         return Ok(());
     };
-    let Some(reference_start) = text[start..].find("ref=") else {
-        return Ok(());
+    let reference = xlsx_dimension_reference(text, start)?;
+    let mut endpoints = reference.split(':');
+    let (start_columns, start_rows) = parse_xlsx_cell_reference(
+        endpoints
+            .next()
+            .ok_or_else(|| "The worksheet dimension has no starting cell.".to_owned())?,
+    )?;
+    let (columns, rows) = if let Some(end) = endpoints.next() {
+        if endpoints.next().is_some() {
+            return Err("The worksheet dimension contains too many range endpoints.".into());
+        }
+        let (end_columns, end_rows) = parse_xlsx_cell_reference(end)?;
+        (start_columns.max(end_columns), start_rows.max(end_rows))
+    } else {
+        (start_columns, start_rows)
     };
-    let reference = text[start + reference_start + 4..].trim_start();
-    let reference = reference
-        .strip_prefix('"')
-        .or_else(|| reference.strip_prefix('\''))
-        .unwrap_or(reference);
-    let end = reference.find(['"', '\'']).unwrap_or(reference.len());
-    let endpoint = reference[..end].split(':').next_back().unwrap_or("");
-    let (columns, rows) = parse_xlsx_cell_reference(endpoint)?;
     if columns > crate::MAX_BULK_IMPORT_COLUMNS {
         return Err(format!(
             "The worksheet declares {columns} columns; the limit is {}.",
@@ -283,6 +355,142 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
         ));
     }
     Ok(())
+}
+
+fn find_xlsx_dimension_element(text: &str) -> Result<Option<usize>, String> {
+    let mut offset = 0;
+    while let Some(relative_start) = text[offset..].find('<') {
+        let start = offset + relative_start;
+        let rest = &text[start..];
+        if rest.starts_with("<!--") {
+            let end = rest
+                .find("-->")
+                .ok_or_else(|| "The worksheet has an unterminated XML comment.".to_owned())?;
+            offset = start + end + 3;
+            continue;
+        }
+        if rest.starts_with("<?") {
+            let end = rest.find("?>").ok_or_else(|| {
+                "The worksheet has an unterminated XML processing instruction.".to_owned()
+            })?;
+            offset = start + end + 2;
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            let end = rest
+                .find("]]>")
+                .ok_or_else(|| "The worksheet has an unterminated CDATA section.".to_owned())?;
+            offset = start + end + 3;
+            continue;
+        }
+        if rest.starts_with("<!") {
+            return Err("The worksheet contains an unsupported XML declaration.".into());
+        }
+        let name_start = usize::from(rest.starts_with("</")) + 1;
+        let name_end = rest[name_start..]
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '/' | '>')
+            })
+            .map(|end| name_start + end)
+            .unwrap_or(rest.len());
+        if name_end == name_start {
+            return Err("The worksheet contains a malformed XML tag.".into());
+        }
+        let name = &rest[name_start..name_end];
+        if !rest.starts_with("</") && name == "dimension" {
+            return Ok(Some(start));
+        }
+        if !rest.starts_with("</") && name == "sheetData" {
+            return Ok(None);
+        }
+        let mut quote = None;
+        let mut end = None;
+        for (index, byte) in rest.as_bytes().iter().copied().enumerate().skip(name_end) {
+            match (quote, byte) {
+                (Some(expected), actual) if expected == actual => quote = None,
+                (Some(_), _) => {}
+                (None, b'\'' | b'"') => quote = Some(byte),
+                (None, b'>') => {
+                    end = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        offset = start
+            + end.ok_or_else(|| "The worksheet contains an incomplete XML tag.".to_owned())?
+            + 1;
+    }
+    Ok(None)
+}
+
+fn xlsx_dimension_reference(text: &str, start: usize) -> Result<&str, String> {
+    let tag = &text[start..];
+    if !tag.starts_with("<dimension")
+        || !tag
+            .as_bytes()
+            .get("<dimension".len())
+            .is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+    {
+        return Err("The worksheet has a malformed dimension element.".into());
+    }
+    let bytes = tag.as_bytes();
+    let mut quote = None;
+    let mut tag_end = None;
+    for (index, byte) in bytes.iter().copied().enumerate().skip("<dimension".len()) {
+        match (quote, byte) {
+            (Some(expected), actual) if expected == actual => quote = None,
+            (Some(_), _) => {}
+            (None, b'\'' | b'"') => quote = Some(byte),
+            (None, b'>') => {
+                tag_end = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let tag_end =
+        tag_end.ok_or_else(|| "The worksheet dimension element is incomplete.".to_owned())?;
+    let mut attributes = tag["<dimension".len()..tag_end].trim();
+    let mut dimension_reference = None;
+    while !attributes.is_empty() {
+        attributes = attributes.trim_start();
+        if attributes.is_empty() || attributes.starts_with('/') {
+            break;
+        }
+        let name_end = attributes
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '=' | '/')
+            })
+            .unwrap_or(attributes.len());
+        if name_end == 0 {
+            return Err("The worksheet dimension has malformed attributes.".into());
+        }
+        let name = &attributes[..name_end];
+        attributes = attributes[name_end..].trim_start();
+        let Some(after_equals) = attributes.strip_prefix('=') else {
+            return Err("The worksheet dimension has a malformed attribute.".into());
+        };
+        attributes = after_equals.trim_start();
+        let Some(quote) = attributes
+            .as_bytes()
+            .first()
+            .copied()
+            .filter(|byte| matches!(byte, b'\'' | b'"'))
+        else {
+            return Err("The worksheet dimension has an unquoted attribute.".into());
+        };
+        attributes = &attributes[1..];
+        let Some(value_end) = attributes.as_bytes().iter().position(|byte| *byte == quote) else {
+            return Err("The worksheet dimension has an unterminated attribute.".into());
+        };
+        let value = &attributes[..value_end];
+        if name == "ref" && dimension_reference.replace(value).is_some() {
+            return Err("The worksheet dimension has duplicate ref attributes.".into());
+        }
+        attributes = &attributes[value_end + 1..];
+    }
+    dimension_reference.ok_or_else(|| "The worksheet dimension has no ref attribute.".into())
 }
 
 fn parse_xlsx_cell_reference(reference: &str) -> Result<(usize, u32), String> {
@@ -304,6 +512,9 @@ fn parse_xlsx_cell_reference(reference: &str) -> Result<(usize, u32), String> {
     let rows = digits
         .parse::<u32>()
         .map_err(|_| "The worksheet dimension has an invalid row.".to_owned())?;
+    if rows == 0 || columns == 0 {
+        return Err("The worksheet dimension cell coordinates must be positive.".into());
+    }
     Ok((columns, rows))
 }
 
@@ -348,7 +559,7 @@ pub(crate) fn job_from_values(
     let source_password = values.remove("source_password").unwrap_or_default();
     let destination_password = values.remove("destination_password").unwrap_or_default();
     // Direct callers may provide password fields, but plaintext material is
-    // still opt-in. Normal CSV/XLS(X) imports are rejected earlier when the
+    // still opt-in. Normal CSV/XLSX imports are rejected earlier when the
     // headers themselves are present unless the operator explicitly enables
     // plaintext-secret imports.
     if !allow_plaintext_secrets
@@ -507,11 +718,6 @@ pub(crate) fn validate_workbook_container_limits(
     Ok(())
 }
 
-#[cfg(test)]
-fn validate_workbook_input(path: &Path) -> Result<(), String> {
-    open_import_workbook(path).map(drop)
-}
-
 fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>, String> {
     let extension = path
         .extension()
@@ -542,34 +748,16 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
                 .map(Sheets::Xlsx)
                 .map_err(|error| format!("The XLSX workbook could not be parsed: {error}"))
         }
-        "xls" => {
-            const OLE_HEADER: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-            let mut file = file;
-            let mut header = [0; OLE_HEADER.len()];
-            file.read_exact(&mut header)
-                .map_err(|error| format!("Could not read XLS import header: {error}"))?;
-            if header != OLE_HEADER {
-                return Err("The XLS workbook is not a valid legacy BIFF/OLE file.".into());
-            }
-            file.seek(SeekFrom::Start(0))
-                .map_err(|error| format!("Could not rewind XLS import: {error}"))?;
-            open_workbook_from_rs::<Xls<_>, _>(BufReader::new(file))
-                .map(Sheets::Xls)
-                .map_err(|error| {
-                    format!(
-                        "The XLS workbook could not be parsed as a legacy BIFF workbook: {error}"
-                    )
-                })
-        }
-        _ => Err("Choose a .xls or .xlsx workbook.".into()),
+        "xls" => Err("Legacy .xls imports are disabled because their parser materializes worksheet ranges before MailSwiftSync can enforce memory bounds. Convert the workbook to .xlsx or CSV.".into()),
+        _ => Err("Choose a .xlsx workbook.".into()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        job_from_values, parse_xlsx_cell_reference, plaintext_secrets_allowed,
-        validate_workbook_input, validate_xlsx_sheet_entry_dimensions,
+        job_from_values, open_import_workbook, parse_xlsx_cell_reference,
+        plaintext_secrets_allowed, validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
     use calamine::{DataType, Reader};
@@ -577,7 +765,7 @@ mod tests {
     use std::io::Cursor;
     use zip::write::SimpleFileOptions;
 
-    fn write_minimal_xlsx(path: &std::path::Path) {
+    fn write_minimal_xlsx(path: &std::path::Path, worksheet_xml: &str) {
         let file = std::fs::File::create(path).unwrap();
         let mut archive = zip::ZipWriter::new(file);
         let options = SimpleFileOptions::default();
@@ -598,10 +786,7 @@ mod tests {
                 "xl/_rels/workbook.xml.rels",
                 r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
             ),
-            (
-                "xl/worksheets/sheet1.xml",
-                r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>source_host</t></is></c></row></sheetData></worksheet>"#,
-            ),
+            ("xl/worksheets/sheet1.xml", worksheet_xml),
         ] {
             archive.start_file(name, options).unwrap();
             std::io::Write::write_all(&mut archive, contents.as_bytes()).unwrap();
@@ -643,20 +828,37 @@ mod tests {
             ))
             .is_ok()
         );
+        assert!(validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(
+            b"<worksheet><!-- <dimension ref='A1'/> --><dimension ref='XFD1'/><sheetData/></worksheet>",
+        ))
+        .is_err());
+        assert!(
+            validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(
+                b"<worksheet><dimension bogus='A1'/><sheetData/></worksheet>",
+            ))
+            .is_err()
+        );
+        assert!(
+            validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(
+                b"<worksheet><dimension ref='XFD100000:A1'/><sheetData/></worksheet>",
+            ))
+            .is_err()
+        );
     }
 
     #[test]
-    fn legacy_xls_input_must_be_a_parseable_biff_workbook() {
+    fn legacy_xls_import_fails_closed_before_calamine_parsing() {
         let path = std::env::temp_dir().join(format!(
             "mailswiftsync-legacy-xls-header-{}-{}.xls",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let ole_header = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-        std::fs::write(&path, ole_header).unwrap();
+        std::fs::write(&path, b"legacy xls is disabled").unwrap();
 
-        let error = validate_workbook_input(&path).expect_err("header-only input must be rejected");
-        assert!(error.contains("could not be parsed as a legacy BIFF workbook"));
+        let error = open_import_workbook(&path)
+            .err()
+            .expect("legacy XLS must fail closed");
+        assert!(error.contains("Legacy .xls imports are disabled"));
 
         std::fs::remove_file(path).unwrap();
     }
@@ -667,7 +869,10 @@ mod tests {
             "mailswiftsync-import-snapshot-{}.xlsx",
             uuid::Uuid::new_v4()
         ));
-        write_minimal_xlsx(&path);
+        write_minimal_xlsx(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>source_host</t></is></c></row></sheetData></worksheet>"#,
+        );
         assert_eq!(super::workbook_sheets(&path).unwrap(), vec!["Mailboxes"]);
         let mut workbook = super::open_import_workbook(&path).unwrap();
         let worksheet = workbook.worksheet_range_at(0).unwrap().unwrap();
@@ -675,6 +880,33 @@ mod tests {
             worksheet.get((0, 0)).and_then(|cell| cell.get_string()),
             Some("source_host")
         );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_actual_cell_coordinates_are_bounded_before_range_materialization() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-coordinate-limit-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        write_minimal_xlsx(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="XFD1" t="inlineStr"><is><t>far</t></is></c></row></sheetData></worksheet>"#,
+        );
+        let error = super::read_sheet(&path, &Form::default(), 0)
+            .err()
+            .expect("a cell outside the column limit must fail before range creation");
+        assert!(error.contains("column"));
+        std::fs::remove_file(&path).unwrap();
+
+        write_minimal_xlsx(
+            &path,
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:BL100001"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>first</t></is></c></row><row r="100001"><c r="BL100001" t="inlineStr"><is><t>last</t></is></c></row></sheetData></worksheet>"#,
+        );
+        let error = super::read_sheet(&path, &Form::default(), 0)
+            .err()
+            .expect("a sparse range that expands past the area budget must be rejected");
+        assert!(error.contains("cell import limit"));
         std::fs::remove_file(path).unwrap();
     }
 
