@@ -846,7 +846,8 @@ fn verify_certificate_pin(
         .peer_certificates()
         .and_then(|certificates| certificates.first())
         .ok_or_else(|| format!("{host}: TLS peer did not provide a certificate"))?;
-    let actual = format!("{:x}", Sha256::digest(certificate.as_ref()));
+    let digest = Sha256::digest(certificate.as_ref());
+    let actual = digest.iter().map(|byte| format!("{:02x}", byte)).collect::<String>();
     if actual != expected.trim().to_ascii_lowercase() {
         return Err(format!("{host}: TLS certificate SHA-256 pin mismatch"));
     }
@@ -1735,7 +1736,8 @@ fn fetch_content_fingerprint(record: &str) -> Option<String> {
     let body = record
         .as_bytes()
         .get(body_offset..body_offset.checked_add(size)?)?;
-    Some(format!("{:x}", Sha256::digest(body)))
+    let digest = Sha256::digest(body);
+    Some(digest.iter().map(|byte| format!("{:02x}", byte)).collect::<String>())
 }
 
 fn fetch_number(line: &str, field: &str) -> Option<u64> {

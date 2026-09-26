@@ -6,6 +6,15 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Fixed egui 0.35 compatibility: updated App trait implementation to use the new
+  `ui()` method signature instead of deprecated `update()` method. Stub UI pending
+  full refactoring to work with new egui 0.35 panel APIs.
+- Fixed u64 SQLite serialization: all u64 database fields now properly convert to
+  i64 for SQLite storage and back when reading. Affected evidence history, message
+  statistics, and process tracking queries.
+- Fixed SHA256 digest hex formatting: all SHA256 digest outputs now properly convert
+  bytes to hex strings using iterative formatting instead of relying on unimplemented
+  LowerHex trait.
 - Removed `Serialize` from `SecretString`. Secret material can now be
   serialized only at explicit keyring-storage boundaries, preventing an
   innocent future `#[derive(Serialize)]` from emitting a secret by default.
