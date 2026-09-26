@@ -60,15 +60,26 @@ impl StateStore {
         if reason.is_empty() || reason.len() > 4096 {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let tx = self.connection.unchecked_transaction()?;
         let current: String =
-            self.connection
-                .query_row("SELECT phase FROM projects WHERE id=?1", [id], |row| {
-                    row.get(0)
-                })?;
+            tx.query_row("SELECT phase FROM projects WHERE id=?1", [id], |row| {
+                row.get(0)
+            })?;
         if current != Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let tx = self.connection.unchecked_transaction()?;
+        let (total, verified, active_runs, active_processes): (i64, i64, i64, i64) = tx.query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(CASE WHEN j.state IN ('verified','verified_with_exceptions') THEN 1 ELSE 0 END),0),
+                    (SELECT COUNT(*) FROM runs r WHERE r.project_id=?1 AND r.status IN ('queued','running')),
+                    (SELECT COUNT(*) FROM active_processes ap JOIN runs r ON r.id=ap.run_id WHERE r.project_id=?1)
+             FROM mailbox_jobs j WHERE j.project_id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        if total == 0 || verified != total || active_runs != 0 || active_processes != 0 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let changed = tx.execute(
             "UPDATE projects SET phase='attention' WHERE id=?1 AND phase='complete'",
             [id],

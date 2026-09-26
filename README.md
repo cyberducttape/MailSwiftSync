@@ -278,6 +278,7 @@ mailswiftsync notify-webhook /path/to/state.db https://hooks.example.com/in/abc1
 mailswiftsync supervise /path/to/state.db [poll-seconds] [idle-polls] [maintenance-window]
 mailswiftsync headless /path/to/state.db preflight
 mailswiftsync headless /path/to/state.db live
+mailswiftsync headless /path/to/state.db live --reopen-reason "scheduled incremental sync"
 mailswiftsync headless /path/to/state.db batch-preflight
 mailswiftsync headless /path/to/state.db batch-live
 ```
@@ -379,6 +380,12 @@ fingerprint. It refuses restored batch queues rather than silently selecting
 one row. `batch-preflight` and `batch-live` operate only on a complete durable
 queue previously imported and validated through the GUI; they refuse an
 ambiguous or partially restored queue.
+
+A completed project remains immutable by default. To run a later incremental
+pass against that same single-mailbox project, `headless live` requires an
+explicit `--reopen-reason`. The ledger records the reason, and reopening is
+refused unless every mailbox is verified and no queued or running execution
+remains. A fresh preflight still runs before the new live attempt.
 
 ### Real IMAP engine lab
 

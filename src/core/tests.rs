@@ -762,7 +762,14 @@ fn mailbox_state_machine_has_an_exhaustive_transition_matrix() {
         ),
         ("failed", &["running", "attention"]),
         ("cancelled", &["running", "attention"]),
-        ("verified", &["delta_required", "running", "attention"]),
+        (
+            "verified",
+            &["ready", "delta_required", "running", "attention"],
+        ),
+        (
+            "verified_with_exceptions",
+            &["ready", "delta_required", "running", "attention"],
+        ),
         ("attention", &["running"]),
     ];
     for current in states {
@@ -1056,6 +1063,16 @@ fn attention_phase_can_return_to_reviewable_work() {
     assert_eq!(
         db.project(&project.id).unwrap().unwrap().phase,
         Phase::Verification
+    );
+}
+
+#[test]
+fn completed_project_cannot_be_reopened_without_verified_mailboxes() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db.create_project("test", "source", "destination").unwrap();
+    assert!(
+        db.reopen_project(&project.id, "incremental sync requested")
+            .is_err()
     );
 }
 

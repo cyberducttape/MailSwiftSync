@@ -558,6 +558,7 @@ EOF
 
 run_product headless "$state" live \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+  --reopen-reason "integration fixture incremental synchronization" \
   --diagnostic-log "$diagnostic_dir"
 echo "PASS: packaged MailSwiftSync incremental live migration completed"
 if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions)?"'; then

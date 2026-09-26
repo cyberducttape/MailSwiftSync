@@ -225,7 +225,10 @@ pub(crate) fn valid_mailbox_transition(current: &str, next: &str) -> bool {
         }
         MailboxState::Verified | MailboxState::VerifiedWithExceptions => matches!(
             next,
-            MailboxState::DeltaRequired | MailboxState::Running | MailboxState::Attention
+            MailboxState::Ready
+                | MailboxState::DeltaRequired
+                | MailboxState::Running
+                | MailboxState::Attention
         ),
         MailboxState::Attention => matches!(next, MailboxState::Running),
     }

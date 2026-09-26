@@ -835,7 +835,7 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
-                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>] [--reopen-reason <reason>]"
             );
             std::process::exit(2);
         };
@@ -843,7 +843,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             Some(mode) => mode,
             None => {
                 eprintln!(
-                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>]"
+                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>] [--reopen-reason <reason>]"
                 );
                 std::process::exit(2);
             }
@@ -851,6 +851,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         let mut source_secret_file = None;
         let mut destination_secret_file = None;
         let mut diagnostic_log = None;
+        let mut reopen_reason = None;
         let mut mailbox_ids: Option<HashSet<String>> = None;
         while let Some(option) = arguments.next() {
             let Some(option) = option.to_str() else {
@@ -858,6 +859,18 @@ pub(crate) fn run() -> eframe::Result<()> {
                 std::process::exit(2);
             };
             let target = match option {
+                "--reopen-reason" => {
+                    let Some(value) = arguments.next() else {
+                        eprintln!("Headless --reopen-reason option requires a reason");
+                        std::process::exit(2);
+                    };
+                    let reason = value.to_string_lossy().into_owned();
+                    if reason.trim().is_empty() || reopen_reason.replace(reason).is_some() {
+                        eprintln!("Headless --reopen-reason requires one non-empty reason");
+                        std::process::exit(2);
+                    }
+                    continue;
+                }
                 "--mailboxes" => {
                     let Some(value) = arguments.next() else {
                         eprintln!("Headless --mailboxes option requires a comma-separated value");
@@ -895,15 +908,18 @@ pub(crate) fn run() -> eframe::Result<()> {
         if mode.is_batch()
             && (source_secret_file.is_some()
                 || destination_secret_file.is_some()
-                || diagnostic_log.is_some())
+                || diagnostic_log.is_some()
+                || reopen_reason.is_some())
         {
-            eprintln!(
-                "Secret-file and --diagnostic-log options are supported for single-mailbox headless execution only."
-            );
+            eprintln!("Single-mailbox-only headless options cannot be used with batch modes.");
             std::process::exit(2);
         }
         if !mode.is_batch() && mailbox_ids.is_some() {
             eprintln!("Headless --mailboxes is supported only for batch execution.");
+            std::process::exit(2);
+        }
+        if reopen_reason.is_some() && mode != HeadlessMode::Live {
+            eprintln!("Headless --reopen-reason is supported only for live execution.");
             std::process::exit(2);
         }
         let credentials = match (source_secret_file, destination_secret_file) {
@@ -938,12 +954,14 @@ pub(crate) fn run() -> eframe::Result<()> {
                 false,
                 credentials,
                 diagnostic_log.as_deref(),
+                None,
             ),
             HeadlessMode::Live => headless_execute_with_credentials(
                 &state,
                 true,
                 credentials,
                 diagnostic_log.as_deref(),
+                reopen_reason.as_deref(),
             ),
             HeadlessMode::BatchPreflight => {
                 headless_batch_execute_selected(&state, false, mailbox_ids.as_ref())

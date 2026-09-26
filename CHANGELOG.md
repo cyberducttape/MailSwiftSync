@@ -29,6 +29,10 @@ operator distribution archives.
   diagnostic, so integration failures identify the failed ledger operation.
 - Late or foreign process-output events are discarded without marking the
   durable migration result as failed; those events are presentation-only.
+- A completed single-mailbox project can be reopened for an incremental
+  headless pass only with an explicit `--reopen-reason`; reopening verifies
+  the prior queue is fully verified and has no active run, and records the
+  operator-provided reason in the ledger.
 - The distributed Linux runtime now includes `procps`, which packaged
   imapsync invokes for process inspection; the product integration lab fails
   early if `ps` is missing.

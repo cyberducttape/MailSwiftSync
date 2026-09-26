@@ -531,6 +531,7 @@ pub(crate) fn headless_execute_with_credentials(
     live: bool,
     credentials: Option<HeadlessCredentials>,
     diagnostic_log: Option<&std::path::Path>,
+    reopen_reason: Option<&str>,
 ) -> Result<String, String> {
     // Use the same startup recovery as the GUI, but pass the ledger path as
     // data instead of mutating process-global environment state.
@@ -565,6 +566,46 @@ pub(crate) fn headless_execute_with_credentials(
 
     if live && crate::runner::automap_blocks_live_certification(&app.form) {
         return Err("headless live requires independent message-verification evidence; imapsync automapping is not replayable from an immutable mapping snapshot. Disable automap and retry".into());
+    }
+
+    if let Some(project_id) = app.project_id.clone() {
+        let project = app
+            .store
+            .project(&project_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "headless execution project no longer exists".to_owned())?;
+        if project.phase == core::Phase::Complete {
+            if !live {
+                return Err(
+                    "completed projects are immutable; request an explicit live reopen with --reopen-reason"
+                        .into(),
+                );
+            }
+            let mailbox_count = app
+                .store
+                .mailbox_state_counts(&project_id)
+                .map_err(|error| error.to_string())?
+                .total;
+            if mailbox_count != 1 {
+                return Err(format!(
+                    "headless incremental reopen requires exactly one mailbox; durable project contains {mailbox_count}"
+                ));
+            }
+            let reason = reopen_reason.ok_or_else(|| {
+                "completed projects require --reopen-reason before another headless live pass"
+                    .to_owned()
+            })?;
+            app.store
+                .reopen_project(&project_id, reason)
+                .map_err(|error| {
+                    format!("could not reopen completed project for incremental sync: {error}")
+                })?;
+            app.refresh_ui_snapshot_now();
+        } else if reopen_reason.is_some() {
+            return Err("--reopen-reason is only valid when reopening a completed project".into());
+        }
+    } else if reopen_reason.is_some() {
+        return Err("--reopen-reason requires an existing completed project".into());
     }
 
     app.form.dry_run = true;
