@@ -30,6 +30,8 @@ operator distribution archives.
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
   to pull-request CI and release publication gates.
+- Added the capability-claim validator to the local `make check` path and
+  explicitly exclude repository metadata from host-native package archives.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 
