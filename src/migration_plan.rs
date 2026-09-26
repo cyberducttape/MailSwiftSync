@@ -21,11 +21,35 @@ pub(crate) use profile::{
 };
 use sha2::{Digest, Sha256};
 use std::{
+    io::{Error, ErrorKind, Read},
     path::{Path, PathBuf},
     thread,
     time::Duration,
 };
 use zeroize::Zeroizing;
+
+const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
+
+fn read_profile_file(path: &Path) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_PROFILE_BYTES {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("profile exceeds the {MAX_PROFILE_BYTES}-byte limit"),
+        ));
+    }
+    let mut text = String::new();
+    file.by_ref()
+        .take(MAX_PROFILE_BYTES + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_PROFILE_BYTES {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("profile exceeds the {MAX_PROFILE_BYTES}-byte limit"),
+        ));
+    }
+    Ok(text)
+}
 
 pub(crate) fn decode_report_run_snapshot(
     snapshot: &str,
@@ -225,10 +249,10 @@ impl Form {
             .and_then(|parent| parent.parent())
             .map(|directory| directory.join("sourcecraft-imapsync/profile.toml"))
             .ok_or_else(|| "Saved profile path has no configuration directory.".to_owned())?;
-        let text = match std::fs::read_to_string(&path) {
+        let text = match read_profile_file(&path) {
             Ok(text) => Some((path, text)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::read_to_string(&legacy) {
+                match read_profile_file(&legacy) {
                     Ok(text) => Some((legacy, text)),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                     Err(error) => return Err(format!("could not read legacy profile: {error}")),
