@@ -2487,6 +2487,56 @@ mod tests {
     }
 
     #[test]
+    fn terminal_write_rejects_non_authoritative_exact_engine_evidence() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("non-authoritative-exact", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.begin_run(&project.id, &job, "non-authoritative-exact-run", "imapsync")
+            .unwrap();
+        let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::AggregateEngine,
+            verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+            source_messages: 1,
+            destination_messages: 1,
+            source_bytes: 10,
+            destination_bytes: 10,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+        };
+        assert!(
+            db.finish_run_for_mailbox_with_evidence_and_checkpoint(
+                &project.id,
+                &job,
+                "non-authoritative-exact-run",
+                "completed",
+                "verification_difference",
+                "non-authoritative exact engine evidence",
+                &evidence,
+                None,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            db.run_status("non-authoritative-exact-run")
+                .unwrap()
+                .as_deref(),
+            Some("running")
+        );
+        assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
+    }
+
+    #[test]
     fn migration_clears_legacy_raw_preflight_plans() {
         let db = StateStore::in_memory().unwrap();
         let project = db
