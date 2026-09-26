@@ -783,14 +783,10 @@ pub(crate) fn headless_batch_execute_selected(
         );
     }
     wait_for_headless_controller(&mut app)?;
-    let final_mailboxes = app
+    let final_selected = app
         .store
-        .mailbox_status_page(&project_id, 0, u32::MAX)
+        .batch_admission_states(&project_id, &job_ids)
         .map_err(|error| error.to_string())?;
-    let final_selected = final_mailboxes
-        .iter()
-        .filter(|(mailbox, _)| app.bulk_selected_ids.contains(&mailbox.id))
-        .collect::<Vec<_>>();
     if final_selected.is_empty() {
         return Err(
             "headless batch live run resolved zero selected durable mailbox states; refusing success"
@@ -806,8 +802,8 @@ pub(crate) fn headless_batch_execute_selected(
     }
     let unresolved = final_selected
         .iter()
-        .filter(|(mailbox, _)| !is_verified_terminal_state(&mailbox.state))
-        .map(|(mailbox, _)| format!("{}={}", mailbox.id, mailbox.state))
+        .filter(|mailbox| !is_verified_terminal_state(&mailbox.state))
+        .map(|mailbox| format!("{}={}", mailbox.job_id, mailbox.state))
         .collect::<Vec<_>>();
     if !unresolved.is_empty() {
         return Err(format!(

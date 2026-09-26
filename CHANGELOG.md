@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Fixed headless batch completion validation to use chunked durable mailbox
+  states instead of a capped full-mailbox status read, avoiding false failures
+  for batches larger than the status-page limit.
+
 ### Documentation and release packaging
 
 - Fixed the broken bulk-migration template link and added a real local
