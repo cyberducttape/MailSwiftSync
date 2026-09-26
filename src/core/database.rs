@@ -1442,8 +1442,10 @@ impl StateStore {
         Self::refresh_destination_identities(&tx)?;
         Self::purge_raw_output_events(&tx)?;
         tx.execute_batch(
-                "CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
-                 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');",
+                "DROP INDEX IF EXISTS one_running_run_per_job;
+                 DROP INDEX IF EXISTS one_active_run_per_job;
+                 CREATE UNIQUE INDEX one_running_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='running';
+                 CREATE UNIQUE INDEX one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status IN ('queued','running');",
             )?;
         tx.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         tx.commit()?;

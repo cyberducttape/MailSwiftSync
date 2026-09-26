@@ -1740,6 +1740,54 @@ fn readonly_rejects_current_schema_with_missing_column_or_index() {
 }
 
 #[test]
+fn writable_open_backups_and_repairs_current_schema_with_wrong_run_index_predicate() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-schema-index-repair-{}",
+        Uuid::new_v4()
+    ));
+    let path = directory.join("state.db");
+    create_private_test_directory(&directory);
+    let store = StateStore::open(&path).unwrap();
+    store
+        .connection
+        .execute("DROP INDEX one_active_run_per_job", [])
+        .unwrap();
+    store
+        .connection
+        .execute(
+            "CREATE UNIQUE INDEX one_active_run_per_job ON runs(job_id) WHERE job_id IS NOT NULL AND status='failed'",
+            [],
+        )
+        .unwrap();
+    drop(store);
+
+    let repaired = StateStore::open(&path).unwrap();
+    let index_sql: String = repaired
+        .connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='one_active_run_per_job'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(index_sql.contains("status IN ('queued','running')"));
+    drop(repaired);
+    assert!(StateStore::open_readonly(&path).is_ok());
+    let migration_backups = std::fs::read_dir(&directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("state.db.pre-migrate-v12.")
+        })
+        .count();
+    assert_eq!(migration_backups, 1);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn readonly_rejects_current_schema_required_object_that_is_not_a_table() {
     let directory = std::env::temp_dir().join(format!(
         "mailswiftsync-schema-object-type-{}",
