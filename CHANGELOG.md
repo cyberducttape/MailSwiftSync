@@ -18,6 +18,9 @@ operator distribution archives.
   allocations during durable-state restore; the checks use UTF-8 byte length.
 - Terminal run details now use the durable event-size bound for both run and
   event records, preventing oversized provider errors from bloating the ledger.
+- Batch parent runs now retain a bounded count-and-digest plan summary while
+  child runs retain their individual plans, avoiding a duplicated giant parent
+  snapshot for large queues.
 - Live IMAP metadata verification now stages source and destination records in
   a private SQLite database and reconciles them in bounded batches, avoiding
   account-sized Rust message maps while preserving bounded mismatch evidence.

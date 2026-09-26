@@ -3,8 +3,9 @@
 use super::batch::BatchExecutionMode;
 use super::batch::BulkRetryScope;
 use super::run::{ActiveRunContext, RunKind};
-use crate::core::MAX_PERSISTED_PROFILE_BYTES;
+use crate::core::{MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES};
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 pub(crate) struct BatchProjectIdentity {
@@ -609,31 +610,45 @@ pub(crate) fn prepare_batch_run(
     } else {
         Vec::new()
     };
-    let snapshots = selected_jobs
-        .iter()
-        .zip(queue_checkpoints.iter())
-        .map(|(selected, checkpoint)| {
-            selected
-                .job
-                .form
-                .plan_snapshot_with_checkpoint(checkpoint.as_deref())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let child_plans = selected_jobs
-        .iter()
-        .zip(snapshots.iter())
-        .map(|(selected, plan_snapshot)| core::BatchChildPlan {
+    let mut batch_digest = Sha256::new();
+    let mut child_plans = Vec::with_capacity(selected_jobs.len());
+    let mut total_snapshot_bytes = 0usize;
+    for (selected, checkpoint) in selected_jobs.iter().zip(queue_checkpoints.iter()) {
+        let plan_snapshot = selected
+            .job
+            .form
+            .plan_snapshot_with_checkpoint(checkpoint.as_deref())?;
+        total_snapshot_bytes = total_snapshot_bytes
+            .checked_add(plan_snapshot.len())
+            .ok_or_else(|| "Batch plan snapshots exceed the aggregate size budget".to_owned())?;
+        if total_snapshot_bytes > MAX_TOTAL_PERSISTED_PROFILE_BYTES {
+            return Err(format!(
+                "Batch plan snapshots exceed the aggregate {MAX_TOTAL_PERSISTED_PROFILE_BYTES}-byte budget"
+            ));
+        }
+        batch_digest.update((plan_snapshot.len() as u64).to_le_bytes());
+        batch_digest.update(plan_snapshot.as_bytes());
+        child_plans.push(core::BatchChildPlan {
             engine: selected.job.form.engine().label().to_owned(),
-            plan_snapshot: plan_snapshot.clone(),
+            plan_snapshot,
             engine_version: None,
-        })
-        .collect();
+        });
+    }
+    let batch_plan_digest = batch_digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let plan_snapshot = format!(
+        "batch_plan_count={}\nbatch_plan_sha256={batch_plan_digest}\n",
+        child_plans.len()
+    );
     Ok(PreparedBatchRun {
         selected_job_ids,
         queue_checkpoints,
         expected_plans,
         batch_plan_fingerprints,
-        plan_snapshot: snapshots.join("\n--- batch mailbox plan ---\n"),
+        plan_snapshot,
         child_plans,
     })
 }
