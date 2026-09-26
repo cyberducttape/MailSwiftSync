@@ -86,6 +86,27 @@ fn security_md_exists_and_complete() {
 }
 
 #[test]
+fn release_and_pull_request_ci_enforce_the_dependency_policy() {
+    for workflow in [".github/workflows/ci.yml", ".github/workflows/release.yml"] {
+        let contents = fs::read_to_string(workflow).expect("workflow should be readable");
+        assert!(
+            contents.contains("cargo install cargo-deny --version 0.18.3 --locked"),
+            "{workflow} must install the pinned cargo-deny version"
+        );
+        assert!(
+            contents.contains("cargo deny check advisories bans licenses sources"),
+            "{workflow} must enforce all committed cargo-deny policy categories"
+        );
+    }
+
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("CI workflow should exist");
+    assert!(
+        ci.contains("pull_request:"),
+        "dependency policy must run in pull-request CI"
+    );
+}
+
+#[test]
 fn capability_manifest_is_current() {
     let capabilities = fs::read_to_string("capabilities.toml")
         .expect("machine-readable capability status should exist");

@@ -28,6 +28,8 @@ operator distribution archives.
   huge evidence counts.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
+- Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
+  to pull-request CI and release publication gates.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 
