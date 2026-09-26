@@ -1,7 +1,7 @@
 # MailSwiftSync Capability Manifest
 
 **Status source:** [`capabilities.toml`](capabilities.toml)
-**Last verified:** 2026-09-24
+**Last verified:** 2026-09-25
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
 

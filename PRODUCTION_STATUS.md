@@ -1,6 +1,6 @@
 # MailSwiftSync Production Readiness Status
 
-**Last Updated:** September 24, 2026
+**Last Updated:** September 25, 2026
 **Test Coverage:** See the CI-generated test summary artifact for the current
 target-specific test inventory and execution result.
 **Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
@@ -277,7 +277,7 @@ Open an issue with: `[FEATURE REQUEST]` prefix
 - **Status:** Technical Preview / Early Adoption
 - **Schema Version:** 10
 - **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; native Dovecot 2.3/2.4 CI qualification remains pending
-- **Build Date:** September 22, 2026
+- **Build Date:** September 25, 2026
 
 ---
 
