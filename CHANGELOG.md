@@ -38,6 +38,8 @@ All notable changes to MailSwiftSync are documented here.
   instead of silently substituting a different verification method or outcome.
 - Added an aggregate verifier-state admission budget covering both account
   maps before reconciliation indexes and classification sets are constructed.
+- Reduced verifier peak memory by indexing canonical mailbox keys by reference
+  instead of cloning every key into the UID/folder lookup index.
 
 ### Fixed
 
