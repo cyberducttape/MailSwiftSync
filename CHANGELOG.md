@@ -122,6 +122,8 @@ operator distribution archives.
 - Capped core mailbox pages at 1,000 rows, mailbox status exports at 100,000
   rows, and verification/run-list pages at 1,000 rows before passing limits
   to SQLite.
+- Capped detailed headless status mailbox output at 10,000 rows per project
+  and added an explicit truncation indicator; summary status remains exact.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 

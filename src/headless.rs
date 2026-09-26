@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
+const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct HeadlessStatus {
@@ -29,6 +30,7 @@ pub(crate) struct HeadlessProjectStatus {
     pub(crate) source_endpoint: String,
     pub(crate) destination_endpoint: String,
     pub(crate) phase: String,
+    pub(crate) mailboxes_truncated: bool,
     pub(crate) mailboxes: Vec<HeadlessMailboxStatus>,
 }
 
@@ -222,12 +224,17 @@ pub(crate) fn headless_status(
     };
     let mut result = Vec::with_capacity(projects.len());
     for project in projects {
+        let mailbox_count = store
+            .mailbox_state_counts(&project.id)
+            .map_err(|error| error.to_string())?
+            .total;
         let batch = store
             .project_has_mailbox_configs(&project.id)
             .map_err(|error| error.to_string())?;
         let mut mailboxes = Vec::new();
+        let mailbox_limit = MAX_HEADLESS_DETAIL_MAILBOXES;
         for (mailbox, attention_reason) in store
-            .mailbox_status_page(&project.id, 0, u32::MAX)
+            .mailbox_status_page(&project.id, 0, mailbox_limit)
             .map_err(|error| error.to_string())?
         {
             mailboxes.push(HeadlessMailboxStatus {
@@ -245,6 +252,7 @@ pub(crate) fn headless_status(
             source_endpoint: project.source_endpoint,
             destination_endpoint: project.destination_endpoint,
             phase: project.phase.as_str().to_owned(),
+            mailboxes_truncated: mailbox_count > mailbox_limit as usize,
             mailboxes,
         });
     }
