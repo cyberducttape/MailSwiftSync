@@ -207,11 +207,26 @@ pub(crate) fn sign_file(
     #[cfg(not(unix))]
     let key_bytes = {
         require_private_key_permissions(signing_key_path)?;
-        let mut file = std::fs::File::open(signing_key_path)
+        use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let mut file = options
+            .open(signing_key_path)
             .map_err(|error| format!("could not open signing key: {error}"))?;
         let metadata = file
             .metadata()
             .map_err(|error| format!("could not inspect signing key: {error}"))?;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err("signing key path must not refer to a symlink or reparse point".into());
+        }
+        if !metadata.is_file() {
+            return Err("signing key path must refer to a regular file".into());
+        }
         if metadata.len() > MAX_SIGNING_KEY_BYTES {
             return Err(format!(
                 "signing key exceeds the {MAX_SIGNING_KEY_BYTES}-byte limit"
