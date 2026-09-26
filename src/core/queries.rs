@@ -153,11 +153,11 @@ impl StateStore {
         limit: u32,
     ) -> rusqlite::Result<Vec<(MailboxJob, Option<AttentionReason>)>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,source_mailbox,destination_mailbox,state,config,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
+            "SELECT id,source_mailbox,destination_mailbox,state,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
         )?;
         statement
             .query_map(params![project_id, limit, offset], |row| {
-                let reason = row.get::<_, Option<String>>(5)?.map(|value| {
+                let reason = row.get::<_, Option<String>>(4)?.map(|value| {
                     AttentionReason::parse(&value).unwrap_or(AttentionReason::Unknown)
                 });
                 Ok((
@@ -166,7 +166,7 @@ impl StateStore {
                         source_mailbox: row.get(1)?,
                         destination_mailbox: row.get(2)?,
                         state: row.get(3)?,
-                        config: row.get(4)?,
+                        config: None,
                     },
                     reason,
                 ))
