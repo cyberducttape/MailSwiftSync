@@ -388,6 +388,10 @@ done
 # UID assignment rather than relying on filename order.
 chown -R "$mail_uid:$mail_gid" "$workspace/source/mail/$user/Maildir"
 doveadm -c "$workspace/source.conf" expunge -u "$user" mailbox Sparse uid 1:90
+# doveadm may create or rewrite mailbox index/UID files as root while
+# preparing the sparse-UID fixture. Restore service-account ownership before
+# the migration process accesses the mailbox over IMAP.
+chown -R "$mail_uid:$mail_gid" "$workspace/source/mail/$user/Maildir"
 
 binary="$(command -v mailswiftsync)"
 imapsync_path="$(command -v imapsync)"

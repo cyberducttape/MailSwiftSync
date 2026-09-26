@@ -6,6 +6,8 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Restored Dovecot service-account ownership of the sparse Maildir after
+  `doveadm expunge`, which can create or rewrite root-owned mailbox metadata.
 - Staged verifier fallback lookups now index each message by its reconciled
   mailbox, normalized date, and size, avoiding repeated cross-folder scans
   when many folders share common metadata.
