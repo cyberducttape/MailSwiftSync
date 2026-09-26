@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Startup recovery now bounds the number of active process identities it will
+  materialize and fails closed on an oversized ledger instead of allocating an
+  unbounded recovery vector.
+- Headless batch retry admission now fails closed when durable mailbox state is
+  missing, rather than silently omitting those mailbox IDs from selection.
 - Recovery schema validation now requires every runtime object to be an actual
   SQLite table, rejecting stamped ledgers that substitute views for tables.
 - Durable batch reuse now streams queue comparison and loads only mailbox IDs,

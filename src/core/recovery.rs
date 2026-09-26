@@ -1,5 +1,10 @@
 use super::*;
 
+/// A batch import is capped at 100,000 mailboxes, so this leaves room for
+/// ordinary single-run identities while keeping startup recovery bounded if a
+/// ledger is corrupted or filled by another process.
+const MAX_RECOVERY_ACTIVE_PROCESS_ROWS: u32 = 100_001;
+
 impl StateStore {
     /// A desktop restart cannot prove that a previous child process still
     /// exists. All runs belonging to an interrupted wave are therefore made
@@ -105,8 +110,18 @@ impl StateStore {
     }
 
     pub fn active_processes(&self) -> rusqlite::Result<Vec<ActiveProcess>> {
-        self.active_processes_page(i64::MAX as u32)
-            .map(|(rows, _)| rows)
+        let (rows, truncated) = self.active_processes_page(MAX_RECOVERY_ACTIVE_PROCESS_ROWS)?;
+        if truncated {
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "active process recovery exceeded the {MAX_RECOVERY_ACTIVE_PROCESS_ROWS}-row safety limit"
+                    ),
+                ),
+            )));
+        }
+        Ok(rows)
     }
 
     /// Load a bounded process-identity page for status/report projections.

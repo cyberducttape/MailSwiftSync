@@ -704,6 +704,12 @@ pub(crate) fn headless_batch_execute_selected(
         .into_iter()
         .map(|state| (state.job_id.clone(), state))
         .collect::<HashMap<_, _>>();
+    if states_by_id.len() != app.bulk_job_ids.len() {
+        return Err(
+            "restored batch is missing durable mailbox admission state; refusing partial retry selection"
+                .into(),
+        );
+    }
     let attention_reasons = app
         .store
         .mailbox_attention_reasons(project_id)
