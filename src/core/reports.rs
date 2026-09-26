@@ -59,7 +59,7 @@ impl StateStore {
 
         let mut acceptances = HashMap::new();
         let mut acceptance_statement = tx.prepare(
-            "SELECT va.job_id,va.run_id,va.operator,va.reason,va.accepted_at FROM verification_acceptances va JOIN mailbox_jobs j ON j.id=va.job_id WHERE j.project_id=?1 ORDER BY va.id ASC",
+            "SELECT va.job_id,va.run_id,va.operator,va.reason,va.accepted_at FROM verification_acceptances va JOIN mailbox_jobs j ON j.id=va.job_id WHERE j.project_id=?1 AND va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=va.job_id)",
         )?;
         for row in acceptance_statement.query_map([project_id], |row| {
             Ok(VerificationAcceptance {
@@ -76,7 +76,7 @@ impl StateStore {
 
         let mut evidence = HashMap::new();
         let mut evidence_statement = tx.prepare(
-            "SELECT eh.job_id,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 ORDER BY eh.id ASC",
+            "SELECT eh.job_id,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 AND eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=eh.job_id)",
         )?;
         for row in evidence_statement.query_map([project_id], |row| {
             Ok((
@@ -112,7 +112,7 @@ impl StateStore {
 
         let mut runs = Vec::new();
         let mut run_statement = tx.prepare(
-            "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at ASC,r.rowid ASC",
+            "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at DESC,r.rowid DESC LIMIT 20",
         )?;
         for row in run_statement.query_map([project_id], |row| {
             Ok(ReportRunSnapshot {
@@ -133,6 +133,7 @@ impl StateStore {
         })? {
             runs.push(row?);
         }
+        runs.reverse();
 
         let mailboxes = jobs
             .into_iter()
