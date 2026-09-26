@@ -8,10 +8,11 @@ use crate::{
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 use std::{io::Read, path::Path};
 
+const MAX_SIGNING_KEY_BYTES: u64 = 64 * 1024;
+
 #[cfg(unix)]
 fn read_private_signing_key(path: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-    const MAX_SIGNING_KEY_BYTES: u64 = 64 * 1024;
     let mut file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
@@ -206,10 +207,29 @@ pub(crate) fn sign_file(
     #[cfg(not(unix))]
     let key_bytes = {
         require_private_key_permissions(signing_key_path)?;
-        zeroize::Zeroizing::new(
-            std::fs::read(signing_key_path)
-                .map_err(|error| format!("could not read signing key: {error}"))?,
-        )
+        let mut file = std::fs::File::open(signing_key_path)
+            .map_err(|error| format!("could not open signing key: {error}"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("could not inspect signing key: {error}"))?;
+        if metadata.len() > MAX_SIGNING_KEY_BYTES {
+            return Err(format!(
+                "signing key exceeds the {MAX_SIGNING_KEY_BYTES}-byte limit"
+            ));
+        }
+        let mut key_bytes = zeroize::Zeroizing::new(Vec::with_capacity(
+            metadata.len().min(MAX_SIGNING_KEY_BYTES) as usize,
+        ));
+        std::io::Read::by_ref(&mut file)
+            .take(MAX_SIGNING_KEY_BYTES + 1)
+            .read_to_end(&mut key_bytes)
+            .map_err(|error| format!("could not read signing key: {error}"))?;
+        if key_bytes.len() as u64 > MAX_SIGNING_KEY_BYTES {
+            return Err(format!(
+                "signing key exceeds the {MAX_SIGNING_KEY_BYTES}-byte limit"
+            ));
+        }
+        key_bytes
     };
     let key_pair = Ed25519KeyPair::from_pkcs8(&key_bytes)
         .map_err(|_| "signing key is not a supported Ed25519 PKCS#8 key".to_owned())?;
