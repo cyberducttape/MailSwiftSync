@@ -7,9 +7,30 @@
 use crate::{atomic_artifact::write_private_atomic, reports::integrity::with_proof_digest};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
 const MAX_DETAILS: usize = 1_000;
+const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_snapshot(path: &Path, label: &str) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_SNAPSHOT_BYTES {
+        return Err(format!(
+            "{label} snapshot exceeds the {MAX_SNAPSHOT_BYTES}-byte limit"
+        ));
+    }
+    let mut text = String::new();
+    file.by_ref()
+        .take(MAX_SNAPSHOT_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|error| error.to_string())?;
+    if text.len() as u64 > MAX_SNAPSHOT_BYTES {
+        return Err(format!(
+            "{label} snapshot exceeds the {MAX_SNAPSHOT_BYTES}-byte limit"
+        ));
+    }
+    Ok(text)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuditResult {
@@ -314,12 +335,10 @@ pub(crate) fn compare_files(
     destination: &Path,
     output: &Path,
 ) -> Result<AuditResult, String> {
-    let source: Value =
-        serde_json::from_str(&fs::read_to_string(source).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("invalid source snapshot: {e}"))?;
-    let destination: Value =
-        serde_json::from_str(&fs::read_to_string(destination).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("invalid destination snapshot: {e}"))?;
+    let source: Value = serde_json::from_str(&read_snapshot(source, "source")?)
+        .map_err(|e| format!("invalid source snapshot: {e}"))?;
+    let destination: Value = serde_json::from_str(&read_snapshot(destination, "destination")?)
+        .map_err(|e| format!("invalid destination snapshot: {e}"))?;
     let result = compare(&source, &destination)?;
     let text = serde_json::to_string_pretty(&result.report).map_err(|e| e.to_string())?;
     write_private_atomic(output, &text).map_err(|e| e.to_string())?;
