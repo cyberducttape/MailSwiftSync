@@ -12,6 +12,9 @@ operator distribution archives.
 - Bounded complete project report snapshots so customer-proof and operator
   exports fail closed instead of materializing an unbounded mailbox population;
   larger projects remain available through paged status/report views.
+- Removed an unnecessary full clone of the pending single-run mismatch vector
+  before terminal persistence, reducing peak memory during large verifications
+  while preserving retry-on-durability-failure behavior.
 
 ### Documentation and release packaging
 
