@@ -45,6 +45,8 @@ required_documents=(
   SECURITY.md
   CHANGELOG.md
   CONTRIBUTING.md
+  capabilities.toml
+  scripts/provider-integration-test.sh
 )
 
 for document in "${required_documents[@]}"; do
@@ -65,19 +67,7 @@ if [[ "$binary_count" -ne 1 ]]; then
   exit 1
 fi
 
-# Public root documents use uppercase filename references both as Markdown
-# links and as operator-facing plain text. Every such reference must exist in
-# the extracted artifact, so a bundle cannot point back to files found only in
-# a Git checkout. Lowercase docs/ content is copied as one complete tree.
-while IFS= read -r reference; do
-  if ! find "$workspace" -type f -name "$reference" -print -quit | grep -q .; then
-    echo "FAIL: bundled documentation references missing $reference" >&2
-    exit 1
-  fi
-done < <(
-  find "$workspace" -type f -name '*.md' -exec grep -Eho '[A-Z][A-Z0-9_-]*\.md' {} + \
-    | grep -v '^YYYY-MM-DD\.md$' \
-    | sort -u
-)
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+python3 "$script_dir/verify-markdown-links.py" "$workspace"
 
 echo "PASS: release archive contains all bundled documentation references"

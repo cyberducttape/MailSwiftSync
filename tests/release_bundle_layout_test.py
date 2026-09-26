@@ -18,13 +18,20 @@ DOCUMENTS = (
     "SECURITY.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
+    "capabilities.toml",
+    "scripts/provider-integration-test.sh",
 )
 
 
 def make_bundle(root: Path) -> None:
     for document in DOCUMENTS:
-        (root / document).write_text("# fixture\n", encoding="utf-8")
+        path = root / document
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fixture\n", encoding="utf-8")
     (root / "mailswiftsync-test").write_text("binary fixture\n", encoding="utf-8")
+    (root / "scripts/provider-integration-test.sh").write_text(
+        "#!/usr/bin/env bash\n", encoding="utf-8"
+    )
     docs = root / "docs"
     docs.mkdir()
     (docs / "release-readiness.md").write_text("# fixture\n", encoding="utf-8")
@@ -42,8 +49,32 @@ def run_verifier(archive: Path, expected: bool) -> None:
         )
 
 
+def run_link_checker(root: Path, expected: bool) -> None:
+    result = subprocess.run(
+        ["python3", "scripts/verify-markdown-links.py", str(root)],
+        text=True,
+        capture_output=True,
+    )
+    if (result.returncode == 0) != expected:
+        raise AssertionError(
+            f"unexpected link-checker result for {root}: {result.stdout}{result.stderr}"
+        )
+
+
 with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temporary:
     workspace = Path(temporary)
+
+    links = workspace / "links"
+    (links / "docs").mkdir(parents=True)
+    (links / "README.md").write_text(
+        "[guide](docs/guide.md) [external](https://example.test/missing.md)\n",
+        encoding="utf-8",
+    )
+    (links / "docs/guide.md").write_text("# guide\n", encoding="utf-8")
+    run_link_checker(links, True)
+    (links / "README.md").write_text("[missing](docs/missing.md)\n", encoding="utf-8")
+    run_link_checker(links, False)
+
     bundle = workspace / "bundle"
     bundle.mkdir()
     make_bundle(bundle)

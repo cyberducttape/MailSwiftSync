@@ -5,7 +5,13 @@ development history is preserved in [the archived changelog](docs/history/CHANGE
 
 ## [Unreleased]
 
-No unreleased changes.
+### Documentation and release packaging
+
+- Fixed the broken bulk-migration template link and added a real local
+  Markdown-link validator for source documentation and release archives.
+- Release staging now includes linked capability metadata and the provider
+  integration script, so packaged documentation does not point outside the
+  archive.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 
