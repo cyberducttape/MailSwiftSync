@@ -19,6 +19,9 @@ operator distribution archives.
 - Moved the large core persistence test suite out of `core.rs`; the root now
   serves as a compact module index over database, state, evidence, report, and
   policy responsibilities.
+- The disposable IMAP lab now uploads bounded environment and server/controller
+  diagnostics when the product transfer fails, including failures before the
+  controller emits command output.
 - New profiles disable imapsync automapping by default so independent message
   verification can certify live migrations; headless live rejects plans that
   cannot provide required verification evidence.

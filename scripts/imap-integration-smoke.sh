@@ -13,6 +13,10 @@ if [[ "$test_engine" != "ImapSync" && "$test_engine" != "Dovecot" ]]; then
   exit 1
 fi
 
+if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+  mkdir -p -- "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
+fi
+
 if ! command -v dovecot >/dev/null 2>&1 || ! command -v imapsync >/dev/null 2>&1 || \
   ! command -v mailswiftsync >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || \
   ! command -v timeout >/dev/null 2>&1; then
@@ -31,10 +35,27 @@ imapsync_version="$(sed -n -e 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p'
   -e 's/^[[:space:]]*v\?\([0-9][0-9.]*\)[[:space:]]*$/\1/p' \
   <<<"$imapsync_version_output" | head -1)"
 if [[ "$imapsync_version" != "2.314" ]]; then
+  if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+    {
+      printf 'engine=%s\n' "$test_engine"
+      printf 'dovecot_version=%s\n' "$dovecot_version"
+      printf 'imapsync_parsed_version=%s\n' "${imapsync_version:-unknown}"
+      printf 'imapsync_version_output=%s\n' "$imapsync_version_output"
+    } > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt"
+    chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt" 2>/dev/null || true
+  fi
   echo "FAIL: product integration requires packaged imapsync 2.314; found ${imapsync_version:-unknown}" >&2
   exit 1
 fi
 echo "Using migration engine ${test_engine}, Dovecot ${dovecot_version}, and imapsync ${imapsync_version}"
+if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+  {
+    printf 'engine=%s\n' "$test_engine"
+    printf 'dovecot_version=%s\n' "$dovecot_version"
+    printf 'imapsync_version=%s\n' "$imapsync_version"
+  } > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt"
+  chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-environment.txt" 2>/dev/null || true
+fi
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
 product_log="$workspace/mailswiftsync.log"
@@ -44,6 +65,33 @@ fi
 cleanup() {
   local status=$?
   if [[ "$status" -ne 0 ]]; then
+    if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+      {
+        printf 'exit_status=%s\nengine=%s\ndovecot_version=%s\nimapsync_version=%s\n' \
+          "$status" "${test_engine:-unknown}" "${dovecot_version:-unknown}" "${imapsync_version:-unknown}"
+        if [[ -n "${binary:-}" && -f "${state:-}" ]]; then
+          echo '--- bounded durable status summary ---'
+          "$binary" status "$state" --summary 2>&1 || true
+        fi
+        for log in "${workspace:-}"/source/log/dovecot-info.log \
+          "${workspace:-}"/source/log/dovecot.log \
+          "${workspace:-}"/destination/log/dovecot-info.log \
+          "${workspace:-}"/destination/log/dovecot.log \
+          "${workspace:-}"/source/dovecot.stdout \
+          "${workspace:-}"/destination/dovecot.stdout; do
+          if [[ -f "$log" ]]; then
+            echo "--- $log (last 32 KiB) ---"
+            tail -c 32768 "$log" || true
+          fi
+        done
+        if [[ -n "${product_log:-}" && -f "${product_log:-}" ]]; then
+          echo '--- MailSwiftSync command output (last 64 KiB) ---'
+          tail -c 65536 "$product_log" || true
+        fi
+      } | sed 's/lab-password/[REDACTED]/g' | head -c 262144 \
+        > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-diagnostics.txt" || true
+      chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-diagnostics.txt" 2>/dev/null || true
+    fi
     echo "--- MailSwiftSync integration diagnostics (exit $status) ---" >&2
     if [[ -n "${binary:-}" && -f "${state:-}" ]]; then
       "$binary" status "$state" --summary >&2 || true
