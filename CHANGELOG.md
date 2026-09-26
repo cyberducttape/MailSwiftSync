@@ -69,6 +69,8 @@ operator distribution archives.
   parsing.
 - Bounded migration-assurance snapshot inputs to 256 MiB per file before
   in-memory comparison.
+- Streamed migration-assurance snapshot hashing instead of allocating a
+  second full serialized snapshot-sized buffer.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

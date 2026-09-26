@@ -7,7 +7,12 @@
 use crate::{atomic_artifact::write_private_atomic, reports::integrity::with_proof_digest};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, io::Read, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::{Read, Write},
+    path::Path,
+};
 
 const MAX_DETAILS: usize = 1_000;
 const MAX_SNAPSHOT_BYTES: u64 = 256 * 1024 * 1024;
@@ -20,7 +25,7 @@ fn read_snapshot(path: &Path, label: &str) -> Result<String, String> {
         ));
     }
     let mut text = String::new();
-    file.by_ref()
+    std::io::Read::by_ref(&mut file)
         .take(MAX_SNAPSHOT_BYTES + 1)
         .read_to_string(&mut text)
         .map_err(|error| error.to_string())?;
@@ -39,14 +44,27 @@ pub(crate) struct AuditResult {
 }
 
 fn digest(value: &Value) -> String {
-    let bytes = serde_json::to_vec(value).expect("JSON values are serializable");
     let mut hasher = Sha256::new();
-    hasher.update(bytes);
+    let mut writer = DigestWriter(&mut hasher);
+    serde_json::to_writer(&mut writer, value).expect("JSON values are serializable");
     hasher
         .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+struct DigestWriter<'a>(&'a mut Sha256);
+
+impl Write for DigestWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
