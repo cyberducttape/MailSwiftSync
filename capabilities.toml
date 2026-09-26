@@ -2,6 +2,12 @@
 schema_version = 1
 last_reviewed = "2026-09-24"
 
+[documentation]
+# Terms that must appear only under README's experimental/planned status
+# section. This keeps the machine-readable capability boundary authoritative
+# for the human-facing status layout.
+experimental_only_terms = ["native dovecot execution"]
+
 [capabilities.aggregate_evidence]
 code = "implemented"
 controller = "wired"
