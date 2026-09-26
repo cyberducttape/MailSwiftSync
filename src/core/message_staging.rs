@@ -105,7 +105,10 @@ impl MessageMetadataStage {
         self.connection_ref().execute_batch(
             "PRAGMA journal_mode=OFF;
              PRAGMA synchronous=OFF;
-             PRAGMA temp_store=FILE;
+             -- Staged mailbox metadata is sensitive. Keep SQLite's transient
+             -- sort/join structures out of the process-wide temp directory;
+             -- durable staging itself remains in the private run directory.
+             PRAGMA temp_store=MEMORY;
              CREATE TABLE staged_messages(
                  side INTEGER NOT NULL CHECK(side IN (0,1)),
                  mailbox TEXT NOT NULL,
