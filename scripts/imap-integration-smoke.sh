@@ -85,6 +85,12 @@ fi
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
 product_log="$workspace/mailswiftsync.log"
+# The disposable Dovecot fixture and the product process run under the same
+# identity selected by the integration container. Give the product a private
+# runtime directory owned by that identity rather than inheriting the image's
+# default /run/user/10001 when the privileged fixture setup runs as root.
+export XDG_RUNTIME_DIR="$workspace/runtime"
+mkdir -m 0700 -- "$XDG_RUNTIME_DIR"
 if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
   mkdir -p -- "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
 fi
