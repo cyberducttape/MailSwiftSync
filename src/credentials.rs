@@ -293,8 +293,15 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
         }
     }
     let mut contents = Vec::with_capacity(metadata.len().min(MAX_SECRET_FILE_BYTES) as usize);
-    file.read_to_end(&mut contents)
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_SECRET_FILE_BYTES + 1)
+        .read_to_end(&mut contents)
         .map_err(|error| format!("could not read secret file: {error}"))?;
+    if contents.len() as u64 > MAX_SECRET_FILE_BYTES {
+        return Err(format!(
+            "secret file exceeds the {MAX_SECRET_FILE_BYTES}-byte limit"
+        ));
+    }
     if contents.ends_with(b"\r\n") {
         contents.truncate(contents.len() - 2);
     } else if contents.ends_with(b"\n") || contents.ends_with(b"\r") {
