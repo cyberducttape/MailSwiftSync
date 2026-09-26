@@ -20,6 +20,9 @@ All notable changes to MailSwiftSync are documented here.
   `MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1`, tightened workbook preflight
   limits, removed obsolete compatibility modules, and refreshed release
   documentation.
+- Completed the explicit dependency license allowlist for the GUI stack so
+  `cargo deny check advisories bans licenses sources` passes without treating
+  bundled fonts or clipboard support as policy violations.
 
 ### Fixed
 
