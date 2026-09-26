@@ -37,6 +37,8 @@ operator distribution archives.
 - Live source and destination metadata scans now share one fetched-state
   admission budget, preventing each account from independently consuming the
   full allowance before reconciliation begins.
+- Reconciliation indexes now borrow interned mailbox names instead of cloning
+  a folder string for every message candidate.
 - Routed budgeted IMAP authentication and metadata commands through
   cancellation-aware, timeout-retrying writes with short socket I/O slices.
 
