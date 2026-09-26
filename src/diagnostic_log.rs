@@ -6,7 +6,7 @@
 
 use std::{
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -16,6 +16,11 @@ use crate::credentials::{ensure_private_directory, restrict_file_permissions};
 
 const RETAIN_FILES: usize = 20;
 const MAX_LINE_BYTES: usize = 16 * 1024;
+const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_DIRECTORY_BYTES: u64 = 128 * 1024 * 1024;
+const WRITER_CAPACITY: usize = 64 * 1024;
+const FLUSH_BYTES: usize = 64 * 1024;
+const FLUSH_LINES: usize = 64;
 
 pub(crate) struct DiagnosticLogger {
     directory: PathBuf,
@@ -24,7 +29,13 @@ pub(crate) struct DiagnosticLogger {
 
 struct FileState {
     run_id: String,
-    file: File,
+    project_id: String,
+    job_id: String,
+    part: u32,
+    file: BufWriter<File>,
+    bytes_written: usize,
+    pending_flush_bytes: usize,
+    pending_flush_lines: usize,
 }
 
 impl DiagnosticLogger {
@@ -55,29 +66,7 @@ impl DiagnosticLogger {
             .as_ref()
             .is_none_or(|current| current.run_id != run_id)
         {
-            let filename = format!(
-                "mailswiftsync-{project_id}-{run_id}.log",
-                project_id = safe_component(project_id),
-                run_id = safe_component(run_id),
-            );
-            let path = self.directory.join(filename);
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&path)
-                .map_err(|error| format!("could not create diagnostic log: {error}"))?;
-            restrict_file_permissions(&path).map_err(|error| {
-                format!("could not restrict diagnostic log permissions: {error}")
-            })?;
-            writeln!(
-                file,
-                "# MailSwiftSync diagnostic log; project_id={project_id} run_id={run_id} job_id={job_id}"
-            )
-            .map_err(|error| format!("could not initialize diagnostic log: {error}"))?;
-            *state = Some(FileState {
-                run_id: run_id.to_owned(),
-                file,
-            });
+            *state = Some(self.new_file(project_id, run_id, job_id, 0)?);
             self.prune()?;
         }
         let Some(state) = state.as_mut() else {
@@ -88,12 +77,82 @@ impl DiagnosticLogger {
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
         let bounded = truncate_line(line);
-        writeln!(state.file, "{timestamp} [{stream}] {bounded}")
-            .map_err(|error| format!("could not write diagnostic log: {error}"))?;
+        let rendered = format!("{timestamp} [{stream}] {bounded}\n");
+        if state.bytes_written > 0
+            && state.bytes_written.saturating_add(rendered.len()) > MAX_FILE_BYTES
+        {
+            state
+                .file
+                .flush()
+                .map_err(|error| format!("could not rotate diagnostic log: {error}"))?;
+            let next_part = state.part.saturating_add(1);
+            let replacement =
+                self.new_file(&state.project_id, &state.run_id, &state.job_id, next_part)?;
+            *state = replacement;
+            self.prune()?;
+        }
         state
             .file
-            .flush()
-            .map_err(|error| format!("could not flush diagnostic log: {error}"))
+            .write_all(rendered.as_bytes())
+            .map_err(|error| format!("could not write diagnostic log: {error}"))?;
+        state.bytes_written = state.bytes_written.saturating_add(rendered.len());
+        state.pending_flush_bytes = state.pending_flush_bytes.saturating_add(rendered.len());
+        state.pending_flush_lines = state.pending_flush_lines.saturating_add(1);
+        if state.pending_flush_bytes >= FLUSH_BYTES || state.pending_flush_lines >= FLUSH_LINES {
+            state
+                .file
+                .flush()
+                .map_err(|error| format!("could not flush diagnostic log: {error}"))?;
+            state.pending_flush_bytes = 0;
+            state.pending_flush_lines = 0;
+        }
+        Ok(())
+    }
+
+    fn new_file(
+        &self,
+        project_id: &str,
+        run_id: &str,
+        job_id: &str,
+        part: u32,
+    ) -> Result<FileState, String> {
+        let filename = if part == 0 {
+            format!(
+                "mailswiftsync-{project_id}-{run_id}.log",
+                project_id = safe_component(project_id),
+                run_id = safe_component(run_id),
+            )
+        } else {
+            format!(
+                "mailswiftsync-{project_id}-{run_id}-part-{part:04}.log",
+                project_id = safe_component(project_id),
+                run_id = safe_component(run_id),
+            )
+        };
+        let path = self.directory.join(filename);
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .map_err(|error| format!("could not create diagnostic log: {error}"))?;
+        restrict_file_permissions(&path)
+            .map_err(|error| format!("could not restrict diagnostic log permissions: {error}"))?;
+        let mut file = BufWriter::with_capacity(WRITER_CAPACITY, file);
+        let header = format!(
+            "# MailSwiftSync diagnostic log; project_id={project_id} run_id={run_id} job_id={job_id}\n"
+        );
+        file.write_all(header.as_bytes())
+            .map_err(|error| format!("could not initialize diagnostic log: {error}"))?;
+        Ok(FileState {
+            run_id: run_id.to_owned(),
+            project_id: project_id.to_owned(),
+            job_id: job_id.to_owned(),
+            part,
+            file,
+            bytes_written: header.len(),
+            pending_flush_bytes: header.len(),
+            pending_flush_lines: 1,
+        })
     }
 
     fn prune(&self) -> Result<(), String> {
@@ -115,11 +174,29 @@ impl DiagnosticLogger {
             })
             .collect::<Vec<_>>();
         files.sort_by(|left, right| right.0.cmp(&left.0));
-        for (_, path) in files.into_iter().skip(RETAIN_FILES) {
+        let mut retained_bytes = 0_u64;
+        for (index, (_, path)) in files.into_iter().enumerate() {
+            let size = fs::metadata(&path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            if index < RETAIN_FILES && retained_bytes.saturating_add(size) <= MAX_DIRECTORY_BYTES {
+                retained_bytes = retained_bytes.saturating_add(size);
+                continue;
+            }
             fs::remove_file(path)
                 .map_err(|error| format!("could not prune diagnostic log: {error}"))?;
         }
         Ok(())
+    }
+}
+
+impl Drop for DiagnosticLogger {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.file.lock()
+            && let Some(state) = state.as_mut()
+        {
+            let _ = state.file.flush();
+        }
     }
 }
 
@@ -162,6 +239,37 @@ mod tests {
     #[test]
     fn lines_are_bounded() {
         assert!(truncate_line(&"x".repeat(MAX_LINE_BYTES + 100)).len() < MAX_LINE_BYTES + 32);
+    }
+
+    #[test]
+    fn diagnostic_files_rotate_before_the_per_file_limit() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-diagnostic-rotation-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        let line = "x".repeat(MAX_LINE_BYTES - 32);
+        for _ in 0..((MAX_FILE_BYTES / line.len()) + 2) {
+            logger
+                .write_line("project", "run", "job", "stdout", &line)
+                .unwrap();
+        }
+        drop(logger);
+        let files = fs::read_dir(&directory)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(files.len() >= 2);
+        for entry in files {
+            assert!(entry.metadata().unwrap().len() <= MAX_FILE_BYTES as u64);
+        }
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[cfg(unix)]
