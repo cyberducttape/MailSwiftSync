@@ -32,6 +32,8 @@ operator distribution archives.
   folder-string allocations while preserving mailbox-local message identity.
 - Removed the duplicate owned UID from live metadata records; coverage now
   validates the canonical mailbox key directly.
+- Read-only and writable ledger validation now rejects orphaned foreign-key
+  rows, including records imported while SQLite foreign-key enforcement was off.
 - Routed budgeted IMAP authentication and metadata commands through
   cancellation-aware, timeout-retrying writes with short socket I/O slices.
 

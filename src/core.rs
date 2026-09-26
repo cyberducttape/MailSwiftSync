@@ -2103,6 +2103,30 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_orphaned_foreign_key_rows() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-schema-orphan-{}", Uuid::new_v4()));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO events(project_id,kind,detail) VALUES('missing-project','operator_error','orphan')",
+                [],
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn migration_removes_legacy_message_subject_column() {
         let db = StateStore::in_memory().unwrap();
         db.connection

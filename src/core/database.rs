@@ -549,6 +549,15 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        // Foreign-key enforcement protects new writes, but SQLite does not
+        // retroactively validate rows that were imported or edited while the
+        // pragma was disabled. Recovery and read-only validation must reject
+        // those orphaned records rather than presenting a partially connected
+        // ledger as trustworthy evidence.
+        let mut foreign_key_check = connection.prepare("PRAGMA foreign_key_check")?;
+        if foreign_key_check.query([])?.next()?.is_some() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         Ok(())
     }
 
