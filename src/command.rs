@@ -9,17 +9,6 @@ pub(crate) fn remove_option(args: &mut Vec<String>, option: &str) {
     }
 }
 
-pub(crate) fn shell_quote(value: &str) -> String {
-    if value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || "._/@=:-,".contains(character))
-    {
-        value.to_owned()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-}
-
 pub(crate) fn parse_shell_words(input: &str) -> Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut current = String::new();
@@ -68,12 +57,10 @@ pub(crate) fn parse_shell_words(input: &str) -> Result<Vec<String>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_shell_words, shell_quote};
+    use super::parse_shell_words;
 
     #[test]
-    fn shell_quote_and_parse_preserve_operator_values() {
-        assert_eq!(shell_quote("plain-value"), "plain-value");
-        assert_eq!(shell_quote("pa ss'word"), "'pa ss'\\''word'");
+    fn parse_shell_words_preserves_quoted_values() {
         assert_eq!(
             parse_shell_words("--foo 'two words' \"three four\"").unwrap(),
             vec!["--foo", "two words", "three four"]

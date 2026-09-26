@@ -34,7 +34,7 @@ mod webhook;
 #[cfg(test)]
 use atomic_artifact::write_private_atomic;
 #[cfg(test)]
-use command::{parse_shell_words, remove_option, shell_quote};
+use command::{parse_shell_words, remove_option};
 #[cfg(test)]
 use controller::batch_admission::apply_keyring_id;
 #[cfg(test)]
@@ -827,71 +827,15 @@ mod tests {
     }
 
     #[test]
-    fn remote_dovecot_plan_uses_batch_ssh_to_destination() {
-        let mut form = dovecot_form();
-        form.profile.dovecot_ssh_user = "migration".into();
-        let (exe, args) = form.command(true);
-        assert_eq!(exe, "ssh");
-        assert!(args.starts_with(&[
-            "-o".into(),
-            "BatchMode=yes".into(),
-            "migration@localhost".into()
-        ]));
-        assert!(
-            args.last()
-                .is_some_and(|command| command.contains("doveadm"))
-        );
-        assert!(
-            args.last()
-                .is_some_and(|command| command.contains("imapc_host=old.example"))
-        );
-    }
-
-    #[test]
-    fn remote_dovecot_execution_is_rejected_without_secret_broker() {
-        let mut form = dovecot_form();
-        form.profile.dovecot_ssh_user = "migration".into();
-        assert!(
-            form.prepared_command()
-                .err()
-                .is_some_and(|error| error.contains("not available"))
-        );
-        form.profile.allow_remote_password_in_argv = true;
-        assert!(
-            form.prepared_command()
-                .err()
-                .is_some_and(|error| error.contains("not available"))
-        );
-    }
-
-    #[test]
-    fn remote_dovecot_rejects_ssh_option_like_targets() {
-        let mut form = dovecot_form();
-        form.profile.dovecot_execution = "ssh".into();
-        form.profile.allow_remote_password_in_argv = true;
-        form.profile.destination_host = "-oProxyCommand=unsafe".into();
-        assert!(form.validate().unwrap_err().contains("SSH host"));
-        form.profile.destination_host = "mail.example".into();
-        form.profile.dovecot_ssh_user = "admin user".into();
-        assert!(form.validate().unwrap_err().contains("SSH username"));
-    }
-
-    #[test]
-    fn dovecot_execution_location_can_be_explicit() {
-        let mut form = dovecot_form();
-        form.profile.destination_host = "mail.example".into();
-        form.profile.dovecot_execution = "local".into();
+    fn dovecot_execution_is_local_only() {
+        let form = dovecot_form();
         assert!(form.local_doveadm());
-        form.profile.dovecot_execution = "ssh".into();
-        assert!(!form.local_doveadm());
-        form.profile.dovecot_execution = "invalid".into();
-        assert!(form.validate().is_err());
-    }
-
-    #[test]
-    fn remote_arguments_are_shell_quoted() {
-        assert_eq!(shell_quote("plain-value"), "plain-value");
-        assert_eq!(shell_quote("pa ss'word"), "'pa ss'\\''word'");
+        let (exe, args) = form.command(true);
+        assert_eq!(exe, form.profile.doveadm_path);
+        assert!(
+            args.iter()
+                .any(|arg| arg == "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD")
+        );
     }
 
     #[test]

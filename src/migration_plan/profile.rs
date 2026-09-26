@@ -42,16 +42,12 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) imapsync_path: String,
     pub(crate) engine: core::Engine,
     pub(crate) doveadm_path: String,
-    pub(crate) ssh_path: String,
-    pub(crate) dovecot_execution: String,
-    pub(crate) dovecot_ssh_user: String,
     pub(crate) dovecot_config: String,
     pub(crate) batch_concurrency: usize,
     pub(crate) batch_retry_count: usize,
     pub(crate) max_messages_per_second: u32,
     pub(crate) max_bytes_per_second: u64,
     pub(crate) migration_timeout_hours: u64,
-    pub(crate) allow_remote_password_in_argv: bool,
     pub(crate) automap: bool,
     pub(crate) addheader: bool,
     pub(crate) justfolders: bool,
@@ -164,12 +160,6 @@ pub(crate) struct Profile {
     pub(crate) engine: core::Engine,
     #[serde(default = "default_doveadm_path")]
     pub(crate) doveadm_path: String,
-    #[serde(default = "default_ssh_path")]
-    pub(crate) ssh_path: String,
-    #[serde(default = "default_dovecot_execution")]
-    pub(crate) dovecot_execution: String,
-    #[serde(default)]
-    pub(crate) dovecot_ssh_user: String,
     #[serde(default)]
     pub(crate) dovecot_config: String,
     #[serde(default = "default_batch_concurrency")]
@@ -182,8 +172,6 @@ pub(crate) struct Profile {
     pub(crate) max_bytes_per_second: u64,
     #[serde(default = "default_migration_timeout_hours")]
     pub(crate) migration_timeout_hours: u64,
-    #[serde(default)]
-    pub(crate) allow_remote_password_in_argv: bool,
     pub(crate) automap: bool,
     pub(crate) addheader: bool,
     pub(crate) justfolders: bool,
@@ -226,16 +214,12 @@ impl Default for Profile {
             imapsync_path: "imapsync".into(),
             engine: core::Engine::default(),
             doveadm_path: default_doveadm_path(),
-            ssh_path: default_ssh_path(),
-            dovecot_execution: default_dovecot_execution(),
-            dovecot_ssh_user: String::new(),
             dovecot_config: String::new(),
             batch_concurrency: default_batch_concurrency(),
             batch_retry_count: 0,
             max_messages_per_second: 0,
             max_bytes_per_second: 0,
             migration_timeout_hours: default_migration_timeout_hours(),
-            allow_remote_password_in_argv: false,
             automap: true,
             addheader: false,
             justfolders: false,
@@ -254,12 +238,6 @@ impl Default for Profile {
 
 pub(crate) fn default_doveadm_path() -> String {
     "doveadm".into()
-}
-pub(crate) fn default_ssh_path() -> String {
-    "ssh".into()
-}
-pub(crate) fn default_dovecot_execution() -> String {
-    "automatic".into()
 }
 pub(crate) fn default_batch_concurrency() -> usize {
     2

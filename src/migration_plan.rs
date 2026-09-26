@@ -2,7 +2,7 @@ mod credential_identity;
 mod profile;
 
 use crate::atomic_artifact::write_private_atomic;
-use crate::command::{remove_option, shell_quote};
+use crate::command::remove_option;
 use crate::imap_probe::{command_endpoint_parts, command_port};
 use crate::{
     DOVECOT_SYNC_LOCK_WAIT_SECONDS, core, create_secret_directory,
@@ -17,11 +17,14 @@ use keyring::Entry;
 pub(crate) use profile::{
     DovecotMigrationStrategy, Profile, RunPlanSnapshot, RunProfileSnapshot, auth_method_is_oauth,
     completeness, default_auth_method, default_destination_tls, default_doveadm_path,
-    default_dovecot_execution, default_migration_timeout_hours, default_source_tls,
-    default_ssh_path,
+    default_migration_timeout_hours, default_source_tls,
 };
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, thread, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 use zeroize::Zeroizing;
 
 pub(crate) fn decode_report_run_snapshot(
@@ -129,6 +132,40 @@ pub(crate) struct Form {
     pub(crate) destination_password: SecretString,
     pub(crate) dry_run: bool,
 }
+
+fn decode_saved_profile(path: &Path, text: &str) -> Result<Profile, String> {
+    let raw: toml::Value = toml::from_str(text)
+        .map_err(|error| format!("could not decode saved profile {}: {error}", path.display()))?;
+    let remote_execution = raw
+        .get("dovecot_execution")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("ssh"));
+    let automatic_remote_execution = raw
+        .get("dovecot_execution")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("automatic")
+                && !["localhost", "127.0.0.1", "::1"].contains(
+                    &raw.get("destination_host")
+                        .and_then(toml::Value::as_str)
+                        .unwrap_or_default()
+                        .trim(),
+                )
+        });
+    let remote_user = raw
+        .get("dovecot_ssh_user")
+        .and_then(toml::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    if remote_execution || automatic_remote_execution || remote_user {
+        return Err(format!(
+            "saved profile {} requests unsupported remote Dovecot execution; use local doveadm or imapsync",
+            path.display()
+        ));
+    }
+    raw.try_into()
+        .map_err(|error| format!("could not decode saved profile {}: {error}", path.display()))
+}
+
 impl Default for Form {
     fn default() -> Self {
         Self {
@@ -140,8 +177,6 @@ impl Default for Form {
                 destination_tls: default_destination_tls(),
                 destination_auth: default_auth_method(),
                 doveadm_path: default_doveadm_path(),
-                ssh_path: default_ssh_path(),
-                dovecot_execution: default_dovecot_execution(),
                 migration_timeout_hours: default_migration_timeout_hours(),
                 automap: true,
                 sync_internaldates: true,
@@ -202,9 +237,7 @@ impl Form {
             Err(error) => return Err(format!("could not read profile: {error}")),
         };
         if let Some((path, text)) = text {
-            form.profile = toml::from_str(&text).map_err(|error| {
-                format!("could not decode saved profile {}: {error}", path.display())
-            })?;
+            form.profile = decode_saved_profile(&path, &text)?;
         }
         Ok(form)
     }
@@ -652,30 +685,6 @@ impl Form {
         if !(1..=720).contains(&self.profile.migration_timeout_hours) {
             return Err("Migration timeout must be between 1 and 720 hours.".into());
         }
-        if !matches!(
-            self.profile.dovecot_execution.as_str(),
-            "automatic" | "local" | "ssh"
-        ) {
-            return Err("Dovecot execution must be automatic, local, or ssh.".into());
-        }
-        if self.engine() == core::Engine::Dovecot && !self.local_doveadm() {
-            for (label, value) in [
-                ("Dovecot SSH host", self.profile.destination_host.as_str()),
-                (
-                    "Dovecot SSH username",
-                    self.profile.dovecot_ssh_user.as_str(),
-                ),
-            ] {
-                if (!value.is_empty() && value.starts_with('-'))
-                    || value.chars().any(char::is_whitespace)
-                {
-                    return Err(format!(
-                        "{label} cannot begin with '-' or contain whitespace."
-                    ));
-                }
-            }
-            return Err("Remote Dovecot execution is not available: the current SSH compatibility path would expose the source password to destination-host process inspection. Use local doveadm or imapsync until a secret broker is implemented.".into());
-        }
         for (label, value) in required {
             if value.trim().is_empty() {
                 return Err(format!("{label} is required."));
@@ -770,23 +779,15 @@ impl Form {
         // not passed the same validator used by admission.
         self.extra_options_valid()?;
         if self.engine() == core::Engine::Dovecot {
-            if !self.local_doveadm() {
-                return Err("Remote Dovecot execution is not available: the current SSH compatibility path would expose the source password to destination-host process inspection. Use local doveadm or imapsync until a secret broker is implemented.".into());
-            }
             let (executable, args) = self.command_with_checkpoint(false, checkpoint);
-            let env = if self.local_doveadm() {
-                vec![(
-                    "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                    self.source_password.clone(),
-                )]
-            } else {
-                Vec::new()
-            };
             return Ok(PreparedCommand {
                 executable,
                 args,
                 cleanup: Vec::new(),
-                env,
+                env: vec![(
+                    "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
+                    self.source_password.clone(),
+                )],
             });
         }
         let mut args = engine::imapsync_args(&self.profile, self.dry_run, throttle_divisor);
@@ -893,8 +894,7 @@ impl Form {
             .collect::<String>();
         let profile = &self.profile;
         let execution_executable = match self.engine() {
-            core::Engine::Dovecot if self.local_doveadm() => &profile.doveadm_path,
-            core::Engine::Dovecot => &profile.ssh_path,
+            core::Engine::Dovecot => &profile.doveadm_path,
             core::Engine::ImapSync | core::Engine::Auto => &profile.imapsync_path,
         };
         let snapshot = RunPlanSnapshot {
@@ -929,16 +929,12 @@ impl Form {
                 imapsync_path: profile.imapsync_path.clone(),
                 engine: profile.engine,
                 doveadm_path: profile.doveadm_path.clone(),
-                ssh_path: profile.ssh_path.clone(),
-                dovecot_execution: profile.dovecot_execution.clone(),
-                dovecot_ssh_user: profile.dovecot_ssh_user.clone(),
                 dovecot_config: profile.dovecot_config.clone(),
                 batch_concurrency: profile.batch_concurrency,
                 batch_retry_count: profile.batch_retry_count,
                 max_messages_per_second: profile.max_messages_per_second,
                 max_bytes_per_second: profile.max_bytes_per_second,
                 migration_timeout_hours: profile.migration_timeout_hours,
-                allow_remote_password_in_argv: profile.allow_remote_password_in_argv,
                 automap: profile.automap,
                 addheader: profile.addheader,
                 justfolders: profile.justfolders,
@@ -1004,21 +1000,13 @@ impl Form {
                 self.args_with_throttle_divisor_and_mode(redact, 1, dry_run),
             );
         }
-        let password = if self.local_doveadm() {
-            "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD"
-        } else if redact {
-            "••••••••"
-        } else {
-            self.source_password.as_str()
-        };
+        let password = "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD";
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
             command_endpoint_parts(&self.profile.source_host, source_default_port);
         let source_port = command_port(&self.profile.source_port, endpoint_port);
         let mut args = Vec::new();
-        if self.local_doveadm() {
-            args.push("-k".into());
-        }
+        args.push("-k".into());
         if !self.profile.dovecot_config.trim().is_empty() {
             args.extend(["-c".into(), self.profile.dovecot_config.clone()]);
         }
@@ -1079,65 +1067,23 @@ impl Form {
                 "imapc:".into(),
             ]);
         }
-        self.wrap_dovecot(args)
-    }
-    pub(crate) fn wrap_dovecot(&self, args: Vec<String>) -> (String, Vec<String>) {
-        if self.local_doveadm() {
-            (self.profile.doveadm_path.clone(), args)
-        } else {
-            let target = if self.profile.dovecot_ssh_user.trim().is_empty() {
-                self.profile.destination_host.clone()
-            } else {
-                format!(
-                    "{}@{}",
-                    self.profile.dovecot_ssh_user, self.profile.destination_host
-                )
-            };
-            let mut command_parts = vec![self.profile.doveadm_path.clone()];
-            command_parts.extend(args);
-            let ssh_args = vec![
-                "-o".into(),
-                "BatchMode=yes".into(),
-                target,
-                command_parts
-                    .iter()
-                    .map(|argument| shell_quote(argument))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            ];
-            (self.profile.ssh_path.clone(), ssh_args)
-        }
+        (self.profile.doveadm_path.clone(), args)
     }
     pub(crate) fn local_doveadm(&self) -> bool {
-        match self.profile.dovecot_execution.as_str() {
-            "local" => true,
-            "ssh" => false,
-            _ => {
-                self.profile.dovecot_ssh_user.trim().is_empty()
-                    && ["localhost", "127.0.0.1", "::1"]
-                        .contains(&self.profile.destination_host.trim())
-            }
-        }
+        true
     }
     pub(crate) fn dovecot_verification_commands(&self, redact: bool) -> Vec<(String, Vec<String>)> {
         if self.engine() != core::Engine::Dovecot {
             return Vec::new();
         }
-        let password = if self.local_doveadm() {
-            "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD"
-        } else if redact {
-            "••••••••"
-        } else {
-            self.source_password.as_str()
-        };
+        let _ = redact;
+        let password = "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD";
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
             command_endpoint_parts(&self.profile.source_host, source_default_port);
         let source_port = command_port(&self.profile.source_port, endpoint_port);
         let mut source = Vec::new();
-        if self.local_doveadm() {
-            source.push("-k".into());
-        }
+        source.push("-k".into());
         if !self.profile.dovecot_config.trim().is_empty() {
             source.extend(["-c".into(), self.profile.dovecot_config.clone()]);
         }
@@ -1188,7 +1134,10 @@ impl Form {
             "messages,vsize".into(),
             "*".into(),
         ]);
-        vec![self.wrap_dovecot(source), self.wrap_dovecot(destination)]
+        vec![
+            (self.profile.doveadm_path.clone(), source),
+            (self.profile.doveadm_path.clone(), destination),
+        ]
     }
 
     pub(crate) fn dovecot_destination_preflight_commands(&self) -> Vec<(String, Vec<String>)> {
@@ -1210,7 +1159,10 @@ impl Form {
             "-u".into(),
             self.profile.destination_user.clone(),
         ]);
-        vec![self.wrap_dovecot(user), self.wrap_dovecot(mailboxes)]
+        vec![
+            (self.profile.doveadm_path.clone(), user),
+            (self.profile.doveadm_path.clone(), mailboxes),
+        ]
     }
 }
 
@@ -1224,15 +1176,35 @@ pub(crate) struct PreparedCommand {
 #[cfg(test)]
 mod tests {
     use super::{
-        Form, OAuthRefreshOutcome, decode_report_run_snapshot,
+        Form, OAuthRefreshOutcome, decode_report_run_snapshot, decode_saved_profile,
         persist_rotated_refresh_config_with_retry, validate_certificate_pin,
     };
     use crate::SecretString;
     use crate::oauth_refresh::OAuthRefreshConfig;
+    use std::path::Path;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn legacy_remote_dovecot_profiles_fail_closed() {
+        let result = decode_saved_profile(
+            Path::new("profile.toml"),
+            "dovecot_execution = \"ssh\"\ndovecot_ssh_user = \"migration\"\n",
+        );
+        let error = match result {
+            Ok(_) => panic!("legacy remote profile should be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("unsupported remote Dovecot execution"));
+
+        let result = decode_saved_profile(
+            Path::new("profile.toml"),
+            "dovecot_execution = \"automatic\"\ndestination_host = \"mail.example\"\n",
+        );
+        assert!(result.is_err());
+    }
 
     #[test]
     fn report_snapshot_decode_allows_empty_legacy_snapshots() {
