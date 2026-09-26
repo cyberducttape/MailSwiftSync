@@ -77,6 +77,8 @@ operator distribution archives.
   create oversized headers or evade per-file rotation limits.
 - Bounded trusted extra-option input to 64 KiB and 128 parsed tokens before
   allowlist validation and command generation.
+- Bounded branding and appearance preference reads before TOML parsing, so
+  oversized local configuration files cannot consume unbounded memory.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

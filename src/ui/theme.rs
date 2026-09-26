@@ -1,5 +1,8 @@
 use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
+use std::io::Read;
+
+const MAX_APPEARANCE_FILE_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) enum ThemeKind {
@@ -311,8 +314,18 @@ impl AppearancePreferences {
     }
 
     pub(crate) fn load() -> Self {
-        let preferences = std::fs::read_to_string(Self::path())
-            .ok()
+        let text = (|| {
+            let file = std::fs::File::open(Self::path()).ok()?;
+            if file.metadata().ok()?.len() > MAX_APPEARANCE_FILE_BYTES {
+                return None;
+            }
+            let mut text = String::new();
+            file.take(MAX_APPEARANCE_FILE_BYTES + 1)
+                .read_to_string(&mut text)
+                .ok()?;
+            (text.len() as u64 <= MAX_APPEARANCE_FILE_BYTES).then_some(text)
+        })();
+        let preferences = text
             .and_then(|text| toml::from_str::<Self>(&text).ok())
             .unwrap_or_default();
         let ui_scale = if preferences.ui_scale.is_finite() {

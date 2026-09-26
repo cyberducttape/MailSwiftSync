@@ -10,7 +10,9 @@
 //! `ui::theme::AppearancePreferences` already uses for a non-secret,
 //! per-install preference.
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{io::Read, path::PathBuf};
+
+const MAX_BRANDING_FILE_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct OperatorBranding {
@@ -32,9 +34,18 @@ impl OperatorBranding {
     }
 
     pub(crate) fn load() -> Self {
-        std::fs::read_to_string(Self::path())
-            .ok()
-            .and_then(|text| toml::from_str::<Self>(&text).ok())
+        let text = (|| {
+            let file = std::fs::File::open(Self::path()).ok()?;
+            if file.metadata().ok()?.len() > MAX_BRANDING_FILE_BYTES {
+                return None;
+            }
+            let mut text = String::new();
+            file.take(MAX_BRANDING_FILE_BYTES + 1)
+                .read_to_string(&mut text)
+                .ok()?;
+            (text.len() as u64 <= MAX_BRANDING_FILE_BYTES).then_some(text)
+        })();
+        text.and_then(|text| toml::from_str::<Self>(&text).ok())
             .unwrap_or_default()
     }
 
