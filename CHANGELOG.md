@@ -29,6 +29,8 @@ operator distribution archives.
 - Migrated existing current-version evidence tables that lacked those SQLite
   constraints, with a pre-repair backup and constraint validation on open,
   read-only, backup, and snapshot paths.
+- Extended the current-schema signature to require the evidence-history
+  foreign-key relationship used by recovery and reporting.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
