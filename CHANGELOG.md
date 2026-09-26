@@ -14,6 +14,11 @@ operator distribution archives.
 - Batch verification failures now persist an explicit verification-incomplete
   reason, and bounded status summaries/webhooks include aggregate counts by
   durable attention reason.
+- Moved the message-verification test suite into its own module file so the
+  production reconciliation implementation is easier to review independently.
+- Moved the large core persistence test suite out of `core.rs`; the root now
+  serves as a compact module index over database, state, evidence, report, and
+  policy responsibilities.
 - New profiles disable imapsync automapping by default so independent message
   verification can certify live migrations; headless live rejects plans that
   cannot provide required verification evidence.
