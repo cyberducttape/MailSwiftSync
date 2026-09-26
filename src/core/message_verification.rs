@@ -486,7 +486,7 @@ impl MessageVerification {
         run_id: &Arc<str>,
         source_messages: &'a ExtractedMessages,
         dest_messages: &'a ExtractedMessages,
-        folder_mapping: &HashMap<String, String>,
+        folder_mapping: &'a HashMap<String, String>,
         source_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
         dest_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
     ) -> ReconciliationPassResult<'a> {
@@ -507,11 +507,11 @@ impl MessageVerification {
             let dest_uids = &dest_by_message_id[message_id];
 
             let mut destination_by_metadata =
-                HashMap::<(String, MetadataFingerprint<'_>), VecDeque<&MailboxMessageKey>>::new();
+                HashMap::<(&'a str, MetadataFingerprint<'a>), VecDeque<&MailboxMessageKey>>::new();
             for dest_key in dest_uids {
                 if let Some(fingerprint) = metadata_fingerprint(&dest_messages[*dest_key]) {
                     destination_by_metadata
-                        .entry((dest_key.mailbox.to_string(), fingerprint))
+                        .entry((dest_key.mailbox.as_ref(), fingerprint))
                         .or_default()
                         .push_back(*dest_key);
                 }
@@ -533,11 +533,11 @@ impl MessageVerification {
             }
 
             // Handle metadata-mismatched but ID-matched pairs
-            let mut destination_by_folder = HashMap::<String, VecDeque<&MailboxMessageKey>>::new();
+            let mut destination_by_folder = HashMap::<&'a str, VecDeque<&MailboxMessageKey>>::new();
             for dest_key in dest_uids {
                 if !matched_dest.contains(dest_key) {
                     destination_by_folder
-                        .entry(dest_key.mailbox.to_string())
+                        .entry(dest_key.mailbox.as_ref())
                         .or_default()
                         .push_back(*dest_key);
                 }
@@ -584,7 +584,7 @@ impl MessageVerification {
         run_id: &Arc<str>,
         source_messages: &'a ExtractedMessages,
         dest_messages: &'a ExtractedMessages,
-        folder_mapping: &HashMap<String, String>,
+        folder_mapping: &'a HashMap<String, String>,
         unmatched_source: &HashSet<&MailboxMessageKey>,
         unmatched_dest: &HashSet<&MailboxMessageKey>,
         source_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
@@ -612,8 +612,8 @@ impl MessageVerification {
             // either side of its expected folder without scanning every
             // folder bucket in this Message-ID group.
             let mut dest_by_metadata: HashMap<
-                Option<MetadataFingerprint<'_>>,
-                BTreeMap<String, VecDeque<&MailboxMessageKey>>,
+                Option<MetadataFingerprint<'a>>,
+                BTreeMap<&'a str, VecDeque<&MailboxMessageKey>>,
             > = HashMap::new();
             for dest_key in dest_uids {
                 if !unmatched_dest.contains(dest_key) {
@@ -623,7 +623,7 @@ impl MessageVerification {
                 dest_by_metadata
                     .entry(metadata)
                     .or_default()
-                    .entry(dest_key.mailbox.to_string())
+                    .entry(dest_key.mailbox.as_ref())
                     .or_default()
                     .push_back(dest_key);
             }
@@ -643,17 +643,15 @@ impl MessageVerification {
                 let Some(folder_candidates) = dest_by_metadata.get_mut(&source_metadata) else {
                     continue;
                 };
-                let lower = folder_candidates.range(..expected_folder.clone()).next();
+                let lower = folder_candidates.range(..expected_folder).next();
                 let upper = folder_candidates
-                    .range((Excluded(expected_folder), Unbounded))
+                    .range::<&str, _>((Excluded(expected_folder), Unbounded))
                     .next();
                 let candidate_folder = match (lower, upper) {
-                    (Some((lower, _)), Some((upper, _))) => Some(if lower <= upper {
-                        lower.clone()
-                    } else {
-                        upper.clone()
-                    }),
-                    (Some((folder, _)), None) | (None, Some((folder, _))) => Some(folder.clone()),
+                    (Some((lower, _)), Some((upper, _))) => {
+                        Some(if lower <= upper { *lower } else { *upper })
+                    }
+                    (Some((folder, _)), None) | (None, Some((folder, _))) => Some(*folder),
                     (None, None) => None,
                 };
                 let Some(candidate_folder) = candidate_folder else {
@@ -699,7 +697,7 @@ impl MessageVerification {
         dest_messages: &'a ExtractedMessages,
         unmatched_source: &HashSet<&'a MailboxMessageKey>,
         unmatched_dest: &HashSet<&'a MailboxMessageKey>,
-        folder_mapping: &HashMap<String, String>,
+        folder_mapping: &'a HashMap<String, String>,
     ) -> (
         u64,
         HashSet<&'a MailboxMessageKey>,
@@ -1152,19 +1150,19 @@ fn unique_fingerprint_index(
 fn index_by_fingerprint<'a>(
     messages: &'a ExtractedMessages,
     eligible: &HashSet<&'a MailboxMessageKey>,
-    folder_mapping: &HashMap<String, String>,
+    folder_mapping: &'a HashMap<String, String>,
     source_side: bool,
-) -> HashMap<(String, MetadataFingerprint<'a>), Vec<&'a MailboxMessageKey>> {
+) -> HashMap<(&'a str, MetadataFingerprint<'a>), Vec<&'a MailboxMessageKey>> {
     let mut index = HashMap::new();
     for uid in eligible {
         let message = &messages[*uid];
         let Some(fingerprint) = metadata_fingerprint(message) else {
             continue;
         };
-        let folder = if source_side {
+        let folder: &'a str = if source_side {
             expected_destination_folder(uid, folder_mapping)
         } else {
-            uid.mailbox.to_string()
+            uid.mailbox.as_ref()
         };
         index
             .entry((folder, fingerprint))
@@ -1175,14 +1173,14 @@ fn index_by_fingerprint<'a>(
     index
 }
 
-fn expected_destination_folder(
-    source_key: &MailboxMessageKey,
-    folder_mapping: &HashMap<String, String>,
-) -> String {
+fn expected_destination_folder<'a>(
+    source_key: &'a MailboxMessageKey,
+    folder_mapping: &'a HashMap<String, String>,
+) -> &'a str {
     folder_mapping
         .get(source_key.mailbox.as_ref())
-        .cloned()
-        .unwrap_or_else(|| source_key.mailbox.to_string())
+        .map(String::as_str)
+        .unwrap_or_else(|| source_key.mailbox.as_ref())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
