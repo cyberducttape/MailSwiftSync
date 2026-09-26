@@ -574,6 +574,10 @@ if [[ "$test_engine" == Dovecot ]]; then
   # inspect stored messages through Dovecot rather than assuming Maildir files.
   destination_message_ids="$(doveadm -c "$workspace/destination.conf" fetch -u "$user" 'hdr.message-id' mailbox '*')"
   destination_messages="$(grep -c '^hdr.message-id:' <<<"$destination_message_ids" || true)"
+  {
+    printf 'Integration assertion: Dovecot destination message count=%s\n' "$destination_messages"
+    printf '%s\n' "$destination_message_ids"
+  } >> "$product_log"
 else
   destination_messages="$(find "$destination_maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
 fi
@@ -619,6 +623,7 @@ if [[ "$test_engine" == Dovecot ]]; then
 else
   sparse_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-sparse-" "$destination_maildir" | wc -l)"
 fi
+printf 'Integration assertion: sparse UID message count=%s\n' "$sparse_count" >> "$product_log"
 if [[ "$sparse_count" -ne 10 ]]; then
   echo "FAIL: destination retained $sparse_count sparse UID messages; expected 10" >&2
   exit 1
@@ -629,6 +634,7 @@ if [[ "$test_engine" == Dovecot ]]; then
 else
   duplicate_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-duplicate@example.test>" "$destination_maildir" | wc -l)"
 fi
+printf 'Integration assertion: duplicate Message-ID count=%s\n' "$duplicate_count" >> "$product_log"
 if [[ "$duplicate_count" -ne 2 ]]; then
   echo "FAIL: destination retained $duplicate_count duplicate-ID messages; expected 2" >&2
   exit 1

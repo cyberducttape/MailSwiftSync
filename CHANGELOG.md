@@ -33,6 +33,8 @@ operator distribution archives.
   headless pass only with an explicit `--reopen-reason`; reopening verifies
   the prior queue is fully verified and has no active run, and records the
   operator-provided reason in the ledger.
+- The Dovecot product-lab artifact now includes its bounded fetched Message-ID
+  sample and fixture counts when destination assertions fail.
 - The distributed Linux runtime now includes `procps`, which packaged
   imapsync invokes for process inspection; the product integration lab fails
   early if `ps` is missing.
