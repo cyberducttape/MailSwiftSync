@@ -15,6 +15,8 @@ operator distribution archives.
   an early bounded dimension declaration, preventing unchecked Calamine expansion.
 - Removed the obsolete string-based IMAP FETCH parser so metadata tests and live
   behavior share the byte-preserving parser.
+- Bound XOAUTH2 continuation reads, error acknowledgements, and tagged results
+  to the live verification deadline and operator cancellation signal.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable

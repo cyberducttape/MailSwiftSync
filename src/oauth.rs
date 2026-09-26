@@ -2,6 +2,7 @@ use crate::{credentials::SecretString, imap_protocol::is_tagged_response};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use std::{
     io::{Read, Write},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -11,9 +12,13 @@ fn read_auth_chunk<S: Read>(
     stream: &mut S,
     buffer: &mut [u8; 4096],
     deadline: Instant,
+    cancel: Option<&AtomicBool>,
     operation: &str,
 ) -> Result<usize, String> {
     loop {
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            return Err(format!("IMAP {operation} was cancelled by operator"));
+        }
         if Instant::now() >= deadline {
             return Err(format!("IMAP {operation} exceeded its 15-second deadline"));
         }
@@ -32,6 +37,42 @@ fn read_auth_chunk<S: Read>(
     }
 }
 
+fn write_auth_bytes<S: Write>(
+    stream: &mut S,
+    bytes: &[u8],
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
+    operation: &str,
+) -> Result<(), String> {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Relaxed)) {
+            return Err(format!("IMAP {operation} was cancelled by operator"));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("IMAP {operation} exceeded its 15-second deadline"));
+        }
+        match stream.write(&bytes[offset..]) {
+            Ok(0) => return Err(format!("IMAP {operation} connection closed")),
+            Ok(written) => offset += written,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn auth_deadline(deadline: Option<Instant>) -> Instant {
+    deadline.unwrap_or_else(|| Instant::now() + MAX_AUTH_EXCHANGE_DURATION)
+}
+
 /// Build the RFC 7628 XOAUTH2 client response. The bearer token is kept in a
 /// zeroizing intermediate and the returned encoded value remains zeroizing
 /// until it is written to the socket.
@@ -46,15 +87,27 @@ pub(crate) fn xoauth2_payload(user: &str, access_token: &str) -> SecretString {
 /// Wait for the server's SASL continuation response before sending the
 /// bearer payload. A bounded response prevents a hostile endpoint from
 /// consuming unbounded memory during readiness probing.
+#[cfg(test)]
 pub(crate) fn read_auth_continuation<S: Read + Write>(
     stream: &mut S,
     tag: &str,
     response: &mut String,
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
-    let deadline = Instant::now() + MAX_AUTH_EXCHANGE_DURATION;
+    read_auth_continuation_with_deadline(stream, tag, response, buffer, None, None)
+}
+
+pub(crate) fn read_auth_continuation_with_deadline<S: Read + Write>(
+    stream: &mut S,
+    tag: &str,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+    deadline: Option<Instant>,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    let deadline = auth_deadline(deadline);
     loop {
-        let count = read_auth_chunk(stream, buffer, deadline, "OAuth authentication")?;
+        let count = read_auth_chunk(stream, buffer, deadline, cancel, "OAuth authentication")?;
         if count == 0 {
             return Err("IMAP connection closed during OAuth authentication".into());
         }
@@ -75,8 +128,14 @@ pub(crate) fn read_auth_continuation<S: Read + Write>(
                 .strip_prefix('+')
                 .is_some_and(|value| !value.trim().is_empty())
             {
-                stream.write_all(b"\r\n").map_err(|e| e.to_string())?;
-                consume_auth_error_result(stream, tag, response, buffer)?;
+                write_auth_bytes(
+                    stream,
+                    b"\r\n",
+                    deadline,
+                    cancel,
+                    "OAuth authentication acknowledgement",
+                )?;
+                consume_auth_error_result(stream, tag, response, buffer, deadline, cancel)?;
                 return Err(format!(
                     "IMAP OAuth authentication rejected before client response for {tag}"
                 ));
@@ -94,13 +153,14 @@ fn consume_auth_error_result<S: Read>(
     tag: &str,
     response: &mut String,
     buffer: &mut [u8; 4096],
+    deadline: Instant,
+    cancel: Option<&AtomicBool>,
 ) -> Result<(), String> {
-    let deadline = Instant::now() + MAX_AUTH_EXCHANGE_DURATION;
     loop {
         if response.lines().any(|line| is_tagged_response(line, tag)) {
             return Ok(());
         }
-        let count = read_auth_chunk(stream, buffer, deadline, "OAuth authentication")?;
+        let count = read_auth_chunk(stream, buffer, deadline, cancel, "OAuth authentication")?;
         if count == 0 {
             return Err("IMAP connection closed during OAuth authentication".into());
         }
@@ -118,16 +178,28 @@ fn consume_auth_error_result<S: Read>(
 /// continuation with an empty response before the server sends the tagged
 /// `NO`. Treating the continuation as ordinary text leaves the exchange
 /// incomplete and can block until the socket timeout.
+#[cfg(test)]
 pub(crate) fn read_auth_result<S: Read + Write>(
     stream: &mut S,
     tag: &str,
     response: &mut String,
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
-    let deadline = Instant::now() + MAX_AUTH_EXCHANGE_DURATION;
+    read_auth_result_with_deadline(stream, tag, response, buffer, None, None)
+}
+
+pub(crate) fn read_auth_result_with_deadline<S: Read + Write>(
+    stream: &mut S,
+    tag: &str,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+    deadline: Option<Instant>,
+    cancel: Option<&AtomicBool>,
+) -> Result<(), String> {
+    let deadline = auth_deadline(deadline);
     let mut acknowledged_continuations = 0;
     loop {
-        let count = read_auth_chunk(stream, buffer, deadline, "OAuth authentication")?;
+        let count = read_auth_chunk(stream, buffer, deadline, cancel, "OAuth authentication")?;
         if count == 0 {
             return Err("IMAP connection closed during OAuth authentication".into());
         }
@@ -137,7 +209,13 @@ pub(crate) fn read_auth_result<S: Read + Write>(
             .filter(|line| line.trim_start().starts_with('+'))
             .count();
         while acknowledged_continuations < continuation_count {
-            stream.write_all(b"\r\n").map_err(|e| e.to_string())?;
+            write_auth_bytes(
+                stream,
+                b"\r\n",
+                deadline,
+                cancel,
+                "OAuth authentication acknowledgement",
+            )?;
             acknowledged_continuations += 1;
         }
         if response.lines().any(|line| is_tagged_response(line, tag)) {
@@ -153,6 +231,7 @@ pub(crate) fn read_auth_result<S: Read + Write>(
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::sync::atomic::AtomicBool;
 
     struct ScriptedStream {
         reads: VecDeque<Vec<u8>>,
@@ -219,5 +298,47 @@ mod tests {
         assert!(error.contains("rejected before client response"));
         assert_eq!(stream.writes, b"\r\n");
         assert!(response.contains("a002 NO"));
+    }
+
+    #[test]
+    fn oauth_continuation_honors_cancellation_budget() {
+        let mut stream = ScriptedStream {
+            reads: VecDeque::new(),
+            writes: Vec::new(),
+        };
+        let cancelled = AtomicBool::new(true);
+        let mut response = String::new();
+        let mut buffer = [0; 4096];
+        let error = read_auth_continuation_with_deadline(
+            &mut stream,
+            "a002",
+            &mut response,
+            &mut buffer,
+            Some(Instant::now() + Duration::from_secs(30)),
+            Some(&cancelled),
+        )
+        .expect_err("cancelled OAuth exchange must stop before reading");
+        assert!(error.contains("cancelled"));
+    }
+
+    #[test]
+    fn oauth_result_honors_expired_budget_before_reading_or_acknowledging() {
+        let mut stream = ScriptedStream {
+            reads: VecDeque::from([b"+\r\n".to_vec()]),
+            writes: Vec::new(),
+        };
+        let mut response = String::new();
+        let mut buffer = [0; 4096];
+        let error = read_auth_result_with_deadline(
+            &mut stream,
+            "a002",
+            &mut response,
+            &mut buffer,
+            Some(Instant::now() - Duration::from_secs(1)),
+            None,
+        )
+        .expect_err("expired OAuth exchange must stop before reading");
+        assert!(error.contains("exceeded"));
+        assert!(stream.writes.is_empty());
     }
 }
