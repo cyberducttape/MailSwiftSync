@@ -31,6 +31,8 @@ operator distribution archives.
   read-only, backup, and snapshot paths.
 - Extended the current-schema signature to require the evidence-history
   foreign-key relationship used by recovery and reporting.
+- Made SQLite snapshots copy the validated, migrated connection so restoring a
+  dirty current-version ledger cannot reinstall the unrepaired source file.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy

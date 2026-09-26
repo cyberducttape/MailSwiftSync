@@ -710,12 +710,27 @@ impl StateStore {
             source_connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if source_schema_version == CURRENT_SCHEMA_VERSION {
             Self::validate_schema_layout(&source_connection)?;
-            Self::validate_schema_constraints(&source_connection)?;
         } else if source_schema_version > CURRENT_SCHEMA_VERSION
             || !Self::has_legacy_mailbox_table(&source_connection)?
         {
             return Err(rusqlite::Error::InvalidQuery);
         }
+
+        // A read-only open may need to repair a current-version ledger in an
+        // in-memory copy (for example, duplicate active runs or missing
+        // counter constraints). Snapshot the validated connection rather than
+        // blindly copying the original file, otherwise restore would install
+        // the unrepaired source after using the copy only as a validator.
+        let repaired_source = if source_schema_version == CURRENT_SCHEMA_VERSION
+            && Self::current_schema_is_clean(&source_connection)
+        {
+            None
+        } else {
+            Some(Self::open_readonly(source)?)
+        };
+        let backup_source = repaired_source
+            .as_ref()
+            .map_or(&source_connection, |store| &store.connection);
 
         verify_database_parent(destination)
             .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -732,7 +747,7 @@ impl StateStore {
             };
         let result = (|| {
             {
-                let backup = backup::Backup::new(&source_connection, &mut destination_connection)?;
+                let backup = backup::Backup::new(backup_source, &mut destination_connection)?;
                 backup.run_to_completion(128, std::time::Duration::from_millis(1), None)?;
             }
             let integrity: String =
@@ -740,10 +755,8 @@ impl StateStore {
             if integrity != "ok" {
                 return Err(rusqlite::Error::InvalidQuery);
             }
-            if source_schema_version == CURRENT_SCHEMA_VERSION {
-                Self::validate_schema_layout(&destination_connection)?;
-                Self::validate_schema_constraints(&destination_connection)?;
-            }
+            Self::validate_schema_layout(&destination_connection)?;
+            Self::validate_schema_constraints(&destination_connection)?;
             Ok(())
         })();
         drop(destination_connection);
