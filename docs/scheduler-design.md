@@ -3,7 +3,7 @@
 ## Implementation Status
 
 **STATUS:** ✅ **PARTIALLY IMPLEMENTED**  
-**Last verified:** 2026-09-20  
+**Last verified:** 2026-09-25  
 **Commit:** See `src/maintenance_window.rs` and `supervise` command implementation
 
 ### What's Implemented
