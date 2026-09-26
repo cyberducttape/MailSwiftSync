@@ -47,6 +47,11 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Fixed
 
+- Aligned prerelease release gates with the documented technical-preview
+  policy: alpha, beta, and release-candidate tags require the local lab and
+  explicit unsupported-provider labels, while stable tags retain hosted-
+  provider evidence requirements.
+
 - Fixed egui 0.35 compatibility: updated the App trait implementation to use
   the new `ui()` method signature and wired the production workspace views,
   dialogs, navigation, and plan controls.
