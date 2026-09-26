@@ -15,6 +15,9 @@ operator distribution archives.
 - The doctor imapsync version probe now uses a five-second process timeout and
   bounded output capture, preventing a malformed executable from hanging or
   exhausting diagnostic memory.
+- CI failure annotations no longer interpolate untrusted compiler or test log
+  text into GitHub workflow commands; detailed logs remain available as
+  artifacts and step summaries.
 - Headless batch retry admission now fails closed when durable mailbox state is
   missing, rather than silently omitting those mailbox IDs from selection.
 - Recovery schema validation now requires every runtime object to be an actual

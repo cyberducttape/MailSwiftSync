@@ -145,9 +145,9 @@ jobs:
           cargo build --locked --release --all-features --target "${{ matrix.target }}" 2>&1 | tee cross-build.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "windows-latest" ]; then
-            failures=$(sed -n 's/.*error\[[A-Z0-9]*\]:[[:space:]]*//p' cross-build.log | head -5 | paste -sd '; ' -)
-            details=$(grep -E '(^error|FAILED$|panicked at|failed to find tool)' cross-build.log | tail -20 | tr '\r\n' ' ' | cut -c1-5000)
-            echo "::error title=Windows cross-build failure::${failures:-cargo build failed; inspect cross-build.log artifact} ${details}"
+            # Never interpolate compiler output into a workflow command:
+            # source-controlled build output can contain workflow-command syntax.
+            echo "::error title=Windows cross-build failure::Cargo build failed; inspect the uploaded cross-build.log artifact"
           fi
           exit "$status"
       - name: Upload cross-platform build log
@@ -200,9 +200,8 @@ jobs:
           cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture 2>&1 | tee native-test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ] && [ "${{ matrix.os }}" = "windows-latest" ]; then
-            failures=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' native-test.log | paste -sd ', ' -)
-            details=$(grep -E '(^error|FAILED$|panicked at|failed to find tool)' native-test.log | tail -20 | tr '\r\n' ' ' | cut -c1-5000)
-            echo "::error title=Windows native test failure::${failures:-cargo test failed; inspect native-test.log artifact} ${details}"
+            # Keep workflow-command data fixed; test output is untrusted.
+            echo "::error title=Windows native test failure::Cargo test failed; inspect the uploaded native-test.log artifact"
           fi
           exit "$status"
       - name: Upload Windows native test log
