@@ -1,6 +1,7 @@
 use super::*;
 
 pub(crate) const MAX_PERSISTED_PROFILE_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_TOTAL_PERSISTED_PROFILE_BYTES: usize = 256 * 1024 * 1024;
 
 pub(crate) fn normalized_destination_identity(
     destination_mailbox: &str,
