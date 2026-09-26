@@ -11,11 +11,13 @@ use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
+const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct HeadlessStatus {
     pub(crate) schema_version: i64,
     pub(crate) active_processes: Vec<core::ActiveProcess>,
+    pub(crate) active_processes_truncated: bool,
     pub(crate) returned_projects: usize,
     pub(crate) total_projects: usize,
     pub(crate) projects_truncated: bool,
@@ -47,6 +49,7 @@ pub(crate) struct HeadlessMailboxStatus {
 pub(crate) struct HeadlessStatusSummary {
     pub(crate) schema_version: i64,
     pub(crate) active_processes: Vec<core::ActiveProcess>,
+    pub(crate) active_processes_truncated: bool,
     pub(crate) returned_projects: usize,
     pub(crate) total_projects: usize,
     pub(crate) projects_truncated: bool,
@@ -144,9 +147,10 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             "recent_runs": run_values,
         }));
     }
-    let active_processes = store
-        .active_processes()
-        .map_err(|error| error.to_string())?
+    let (processes, active_processes_truncated) = store
+        .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
+        .map_err(|error| error.to_string())?;
+    let active_processes = processes
         .into_iter()
         .map(|process| {
             serde_json::json!({
@@ -166,6 +170,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             "architecture": std::env::consts::ARCH,
         },
         "active_processes": active_processes,
+        "active_processes_truncated": active_processes_truncated,
         "projects": project_values,
         "redaction": {
             "endpoints": "excluded",
@@ -256,12 +261,13 @@ pub(crate) fn headless_status(
             mailboxes,
         });
     }
-    let active_processes = store
-        .active_processes()
+    let (active_processes, active_processes_truncated) = store
+        .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
         .map_err(|error| error.to_string())?;
     Ok(HeadlessStatus {
         schema_version: core::CURRENT_SCHEMA_VERSION,
         active_processes,
+        active_processes_truncated,
         returned_projects: result.len(),
         total_projects,
         projects_truncated: result.len() < total_projects,
@@ -331,11 +337,13 @@ pub(crate) fn headless_status_summary(
             mailbox_state_counts,
         });
     }
+    let (active_processes, active_processes_truncated) = store
+        .active_processes_page(MAX_HEADLESS_ACTIVE_PROCESSES)
+        .map_err(|error| error.to_string())?;
     Ok(HeadlessStatusSummary {
         schema_version: core::CURRENT_SCHEMA_VERSION,
-        active_processes: store
-            .active_processes()
-            .map_err(|error| error.to_string())?,
+        active_processes,
+        active_processes_truncated,
         returned_projects: summaries.len(),
         total_projects,
         projects_truncated: summaries.len() < total_projects,
