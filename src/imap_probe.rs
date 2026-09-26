@@ -1453,18 +1453,46 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
 #[derive(Debug)]
 enum MailboxFetchError {
     Changed(String),
-    Other(String),
+    Control(String),
+    SessionFatal(String),
+    Folder(String),
 }
 
 impl From<String> for MailboxFetchError {
     fn from(error: String) -> Self {
-        Self::Other(error)
+        classify_mailbox_fetch_error(error)
     }
 }
 
 impl From<&str> for MailboxFetchError {
     fn from(error: &str) -> Self {
-        Self::Other(error.to_owned())
+        classify_mailbox_fetch_error(error.to_owned())
+    }
+}
+
+fn classify_mailbox_fetch_error(error: String) -> MailboxFetchError {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("cancelled")
+        || lower.contains("execution deadline")
+        || lower.contains("deadline exceeded")
+    {
+        MailboxFetchError::Control(error)
+    } else if [
+        "connection closed",
+        "connection reset",
+        "broken pipe",
+        "timed out",
+        "timeout",
+        "tls",
+        "could not read",
+        "could not write",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        MailboxFetchError::SessionFatal(error)
+    } else {
+        MailboxFetchError::Folder(error)
     }
 }
 
@@ -1656,7 +1684,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
         HashMap<crate::core::MailboxMessageKey, String>,
         u64,
     ),
-    String,
+    MailboxFetchError,
 > {
     let mut last_error = None;
     for attempt in 0..MAX_MAILBOX_STABILITY_ATTEMPTS {
@@ -1668,10 +1696,14 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
                     continue;
                 }
             }
-            Err(MailboxFetchError::Other(error)) => return Err(error),
+            Err(error @ MailboxFetchError::Control(_))
+            | Err(error @ MailboxFetchError::SessionFatal(_))
+            | Err(error @ MailboxFetchError::Folder(_)) => return Err(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| format!("{host}: mailbox {mailbox} stability check failed")))
+    Err(MailboxFetchError::Changed(last_error.unwrap_or_else(
+        || format!("{host}: mailbox {mailbox} stability check failed"),
+    )))
 }
 
 /// Enumerate bounded UID windows and hand each fetch-sized page to the caller.
@@ -1896,18 +1928,31 @@ pub(crate) fn fetch_tls_account_messages(
                     }
                 }
             }
-            Err(error) => {
+            Err(MailboxFetchError::Control(error)) => {
+                let _ = stream.write_all(b"a999 LOGOUT\r\n");
+                return Err(error);
+            }
+            Err(MailboxFetchError::SessionFatal(error)) => {
                 // Retain the folder-specific cause so the all-or-nothing
                 // account failure identifies unstable folders. Keep only a
                 // bounded sample: the total count preserves completeness of
                 // the operator signal without retaining unbounded error text.
-                let fatal_session_error = is_fatal_session_error(&error);
                 incomplete_folder_count = incomplete_folder_count.saturating_add(1);
                 if incomplete_folders.len() < MAX_FOLDER_FAILURE_DETAILS {
                     incomplete_folders.insert(mailbox, error);
                 }
-                if fatal_session_error {
-                    break;
+                break;
+            }
+            Err(MailboxFetchError::Folder(error)) => {
+                incomplete_folder_count = incomplete_folder_count.saturating_add(1);
+                if incomplete_folders.len() < MAX_FOLDER_FAILURE_DETAILS {
+                    incomplete_folders.insert(mailbox, error);
+                }
+            }
+            Err(MailboxFetchError::Changed(error)) => {
+                incomplete_folder_count = incomplete_folder_count.saturating_add(1);
+                if incomplete_folders.len() < MAX_FOLDER_FAILURE_DETAILS {
+                    incomplete_folders.insert(mailbox, error);
                 }
             }
         }
@@ -1926,22 +1971,6 @@ pub(crate) fn fetch_tls_account_messages(
         messages: all_messages,
         total_exists,
     })
-}
-
-fn is_fatal_session_error(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    [
-        "connection closed",
-        "connection reset",
-        "broken pipe",
-        "timed out",
-        "timeout",
-        "tls",
-        "could not read",
-        "could not write",
-    ]
-    .iter()
-    .any(|marker| error.contains(marker))
 }
 
 const MAX_FOLDER_FAILURE_DETAILS: usize = 16;
@@ -2376,12 +2405,13 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_ESTIMATED_FETCHED_STATE_BYTES, MessageFetchBudget, MessageStateBudget,
-        TaggedResponseScanner, authenticated_list_command, dns_resolver_pool,
-        format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
-        parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
-        parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
-        read_with_deadline, tagged_response_outside_literals, write_imap_command,
+        MAX_ESTIMATED_FETCHED_STATE_BYTES, MailboxFetchError, MessageFetchBudget,
+        MessageStateBudget, TaggedResponseScanner, authenticated_list_command,
+        classify_mailbox_fetch_error, dns_resolver_pool, format_folder_failures,
+        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_response,
+        parse_message_fetch_response_with_fingerprints, parse_message_id_header,
+        read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
+        tagged_response_outside_literals, write_imap_command,
     };
     use std::collections::HashMap;
     use std::io::{self, Cursor, Read, Write};
@@ -2702,6 +2732,22 @@ mod tests {
         let detail = format_folder_failures("imap.example", &failures, failures.len());
         assert!(detail.contains("folder-00: failure-0"));
         assert!(detail.contains("(+1 more)"));
+    }
+
+    #[test]
+    fn mailbox_failures_have_typed_control_and_session_categories() {
+        assert!(matches!(
+            classify_mailbox_fetch_error("message-level verification cancelled by operator".into()),
+            MailboxFetchError::Control(_)
+        ));
+        assert!(matches!(
+            classify_mailbox_fetch_error("imap connection reset by peer".into()),
+            MailboxFetchError::SessionFatal(_)
+        ));
+        assert!(matches!(
+            classify_mailbox_fetch_error("IMAP SELECT returned NO".into()),
+            MailboxFetchError::Folder(_)
+        ));
     }
 
     #[test]

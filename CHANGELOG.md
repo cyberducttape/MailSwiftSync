@@ -10,6 +10,9 @@ operator distribution archives.
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable
   mismatch numeric metadata, with transactional repair of older ledger tables.
+- Classified IMAP folder failures as control, session-fatal, or folder-local
+  outcomes so cancellation and unusable connections stop account enumeration
+  promptly while recoverable folder errors retain bounded diagnostics.
 - Fixed headless batch completion validation to use chunked durable mailbox
   states instead of a capped full-mailbox status read, avoiding false failures
   for batches larger than the status-page limit.
