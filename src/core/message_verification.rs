@@ -217,6 +217,15 @@ fn append_mismatch_with_budget(
 /// Core message verification engine.
 pub struct MessageVerification;
 
+type ReconciliationPassResult<'a> = Result<
+    (
+        Vec<MessageMismatch>,
+        HashSet<&'a MailboxMessageKey>,
+        HashSet<&'a MailboxMessageKey>,
+    ),
+    String,
+>;
+
 impl MessageVerification {
     /// Detect mismatches between source and destination message sets.
     ///
@@ -390,6 +399,16 @@ impl MessageVerification {
                 (destinations_by_metadata, destinations_by_content),
             );
         }
+        let mut estimated_bytes = mismatches
+            .iter()
+            .map(estimated_mismatch_bytes)
+            .sum::<usize>();
+        if estimated_bytes > MAX_ESTIMATED_MISMATCH_DETAIL_BYTES {
+            return Err(format!(
+                "verification mismatch detail exceeds the estimated {}-byte evidence budget",
+                MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
+            ));
+        }
         let mut used_dest = HashSet::new();
         for source_key in sorted_keys(&source_messages.keys().collect()) {
             let Some(source_message_id) = source_messages[source_key]
@@ -438,7 +457,7 @@ impl MessageVerification {
             );
             mismatch.source_fingerprint = Some(source_fingerprint.clone());
             mismatch.destination_fingerprint = Some(destination_fingerprint.clone());
-            mismatches.push(mismatch);
+            append_mismatch_with_budget(&mut mismatches, mismatch, &mut estimated_bytes)?;
             summary.metadata_matches = summary.metadata_matches.saturating_sub(1);
             summary.changed_count = summary.changed_count.saturating_add(1);
         }
@@ -459,12 +478,9 @@ impl MessageVerification {
         folder_mapping: &HashMap<String, String>,
         source_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
         dest_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
-    ) -> (
-        Vec<MessageMismatch>,
-        HashSet<&'a MailboxMessageKey>,
-        HashSet<&'a MailboxMessageKey>,
-    ) {
+    ) -> ReconciliationPassResult<'a> {
         let mut mismatches = Vec::new();
+        let mut estimated_bytes = 0usize;
         let mut matched_source = HashSet::new();
         let mut matched_dest = HashSet::new();
 
@@ -530,19 +546,23 @@ impl MessageVerification {
                 let dest_msg = &dest_messages[dest_key];
                 matched_source.insert(*source_key);
                 matched_dest.insert(dest_key);
-                mismatches.push(make_mismatch(
-                    job_id,
-                    run_id,
-                    MismatchType::MessageIdOnly,
-                    Some(source_key),
-                    Some(dest_key),
-                    Some(source_msg),
-                    Some(dest_msg),
-                ));
+                append_mismatch_with_budget(
+                    &mut mismatches,
+                    make_mismatch(
+                        job_id,
+                        run_id,
+                        MismatchType::MessageIdOnly,
+                        Some(source_key),
+                        Some(dest_key),
+                        Some(source_msg),
+                        Some(dest_msg),
+                    ),
+                    &mut estimated_bytes,
+                )?;
             }
         }
 
-        (mismatches, matched_source, matched_dest)
+        Ok((mismatches, matched_source, matched_dest))
     }
 
     /// Reconciliation Pass 2: Wrong-folder detection for Message-ID matches.
@@ -558,12 +578,9 @@ impl MessageVerification {
         unmatched_dest: &HashSet<&MailboxMessageKey>,
         source_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
         dest_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
-    ) -> (
-        Vec<MessageMismatch>,
-        HashSet<&'a MailboxMessageKey>,
-        HashSet<&'a MailboxMessageKey>,
-    ) {
+    ) -> ReconciliationPassResult<'a> {
         let mut mismatches = Vec::new();
+        let mut estimated_bytes = 0usize;
         let mut matched_source = HashSet::new();
         let mut matched_dest = HashSet::new();
 
@@ -645,19 +662,23 @@ impl MessageVerification {
                 }
                 matched_source.insert(*source_key);
                 matched_dest.insert(dest_key);
-                mismatches.push(make_mismatch(
-                    job_id,
-                    run_id,
-                    MismatchType::PresentWrongFolder,
-                    Some(source_key),
-                    Some(dest_key),
-                    Some(&source_messages[source_key]),
-                    Some(&dest_messages[dest_key]),
-                ));
+                append_mismatch_with_budget(
+                    &mut mismatches,
+                    make_mismatch(
+                        job_id,
+                        run_id,
+                        MismatchType::PresentWrongFolder,
+                        Some(source_key),
+                        Some(dest_key),
+                        Some(&source_messages[source_key]),
+                        Some(&dest_messages[dest_key]),
+                    ),
+                    &mut estimated_bytes,
+                )?;
             }
         }
 
-        (mismatches, matched_source, matched_dest)
+        Ok((mismatches, matched_source, matched_dest))
     }
 
     /// Reconciliation Pass 3: Fingerprint fallback for unmatched messages.
@@ -732,7 +753,7 @@ impl MessageVerification {
                 folder_mapping,
                 &source_by_message_id,
                 &dest_by_message_id,
-            );
+            )?;
         // Pass 1 returns one mismatch for each matched source that failed
         // exact metadata comparison. Counting those directly avoids scanning
         // the growing mismatch vector once per matched message.
@@ -781,7 +802,7 @@ impl MessageVerification {
                 &unmatched_dest,
                 &source_by_message_id,
                 &dest_by_message_id,
-            );
+            )?;
         estimated_detail_bytes = estimated_detail_bytes.saturating_add(
             pass2_mismatches
                 .iter()
