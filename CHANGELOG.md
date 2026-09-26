@@ -21,6 +21,8 @@ operator distribution archives.
 - Batch parent runs now retain a bounded count-and-digest plan summary while
   child runs retain their individual plans, avoiding a duplicated giant parent
   snapshot for large queues.
+- Batch project creation now rejects oversized persisted profile data before
+  inserting any durable project or mailbox rows.
 - Live IMAP metadata verification now stages source and destination records in
   a private SQLite database and reconciles them in bounded batches, avoiding
   account-sized Rust message maps while preserving bounded mismatch evidence.
