@@ -161,13 +161,61 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("could not install restored ledger: {error}"));
     }
-    restrict_file_permissions(destination).map_err(|error| {
-        format!("restored ledger was installed but could not be secured: {error}")
-    })?;
-    sync_parent_directory(parent).map_err(|error| {
-        format!("restored ledger was installed but could not be flushed: {error}")
-    })?;
+    if let Err(error) = restrict_file_permissions(destination) {
+        let rollback = rollback_restore_installation(destination, previous.as_deref());
+        return Err(format_restore_failure("secure", error, rollback));
+    }
+    if let Err(error) = sync_parent_directory(parent) {
+        let rollback = rollback_restore_installation(destination, previous.as_deref());
+        return Err(format_restore_failure("flush", error, rollback));
+    }
     Ok(previous)
+}
+
+fn rollback_restore_installation(
+    destination: &Path,
+    previous: Option<&Path>,
+) -> Result<(), String> {
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = PathBuf::from(format!("{}{}", destination.display(), suffix));
+        if sidecar.exists() {
+            std::fs::remove_file(&sidecar).map_err(|error| {
+                format!("could not remove installed SQLite sidecar {sidecar:?}: {error}")
+            })?;
+        }
+    }
+    std::fs::remove_file(destination)
+        .map_err(|error| format!("could not remove installed ledger: {error}"))?;
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    std::fs::rename(previous, destination)
+        .map_err(|error| format!("could not restore the previous ledger: {error}"))?;
+    for suffix in ["-wal", "-shm"] {
+        let preserved = PathBuf::from(format!("{}{}", previous.display(), suffix));
+        if preserved.exists() {
+            let original = PathBuf::from(format!("{}{}", destination.display(), suffix));
+            std::fs::rename(&preserved, &original).map_err(|error| {
+                format!("could not restore previous SQLite sidecar {preserved:?}: {error}")
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn format_restore_failure(
+    operation: &str,
+    error: std::io::Error,
+    rollback: Result<(), String>,
+) -> String {
+    match rollback {
+        Ok(()) => {
+            format!("could not {operation} restored ledger; previous state was restored: {error}")
+        }
+        Err(rollback_error) => format!(
+            "could not {operation} restored ledger ({error}); rollback also failed: {rollback_error}"
+        ),
+    }
 }
 
 #[cfg(unix)]
