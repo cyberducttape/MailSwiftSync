@@ -45,6 +45,8 @@ operator distribution archives.
   its intended runtime table.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
+- Corrected the active production-status document to identify the full
+  `0.1.0-alpha.1` package version used by binaries and reports.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
