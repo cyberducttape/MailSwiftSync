@@ -14,8 +14,13 @@ CORE_RS = ROOT / "src" / "core.rs"
 # These patterns identify affirmative readiness claims, not references to the
 # release gate or statements that production readiness is still outstanding.
 AFFIRMATIVE_CLAIMS = (
-    re.compile(r"^\s*#{1,6}\s*(?:✅\s*)?PRODUCTION[- ]READY\b", re.I),
-    re.compile(r"\bstatus\s*:\s*(?:✅\s*)?production[- ]ready\b", re.I),
+    re.compile(r"^\s*(?:✅\s*)?PRODUCTION[- ]READY\b", re.I),
+    re.compile(r"\bstatus\b\s*(?::|\s)\s*(?:✅\s*)?production[- ]ready\b", re.I),
+    re.compile(r"\b(?:is|are|was|were|becomes?|now)\s+(?:fully\s+)?production[- ]ready\b", re.I),
+    re.compile(r"\bfully\s+production[- ]ready\b", re.I),
+    re.compile(r"\bready\s+for\s+production\b", re.I),
+    re.compile(r"\bGA[- ]ready\b", re.I),
+    re.compile(r"\bproduction\s+supported\b", re.I),
     re.compile(r"\ball major work complete\b", re.I),
     re.compile(r"\baccounts? with\s+1\s*(?:m|million)\+?\s+messages?\s+(?:are\s+)?supported\b", re.I),
 )
@@ -28,6 +33,27 @@ UI_CAPABILITY_CLAIMS = {
     "provider_runbooks": r"(?:provider[- ]specific\s+)?runbook\s+(?:in\s+)?(?:GUI|dashboard|interface)",
     "recovery_guidance": r"(?:recovery|maintenance)\s+(?:window\s+)?(?:guidance|dashboard)\s+(?:in\s+)?(?:GUI|dashboard|interface)",
 }
+
+
+def strip_markup(text: str) -> str:
+    """Remove presentation markup while preserving prose for claim matching."""
+    # Keep link/image labels, but discard their destinations.
+    text = re.sub(r"!?(?:\[([^\]]+)\])\([^)]*\)", r"\1", text)
+    # HTML tags can split a claim (for example, <strong>production-ready</strong>).
+    text = re.sub(r"<[^>]*>", " ", text)
+    # Markdown headings, blockquotes, table separators, and emphasis/code marks
+    # do not change the semantic wording being checked.
+    text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text)
+    text = re.sub(r"^\s{0,3}>\s?", "", text)
+    text = text.replace("|", " ")
+    text = re.sub(r"[*_`~]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def contains_affirmative_claim(line: str) -> bool:
+    """Return whether a rendered Markdown line makes an unsupported claim."""
+    normalized = strip_markup(line)
+    return any(pattern.search(normalized) for pattern in AFFIRMATIVE_CLAIMS)
 
 
 def get_schema_version() -> int:
@@ -64,7 +90,7 @@ def main() -> int:
 
         for line_number, line in enumerate(content.splitlines(), 1):
             # Check for production-readiness claims on unsupported capabilities
-            if unsupported and any(pattern.search(line) for pattern in AFFIRMATIVE_CLAIMS):
+            if unsupported and contains_affirmative_claim(line):
                 violations.append(f"{relative}:{line_number}: PRODUCTION-READINESS CLAIM: {line.strip()}")
 
             # Check for schema version mismatches
