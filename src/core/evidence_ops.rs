@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 impl StateStore {
     /// Load a bounded operator-facing mismatch page for one evidence run.
@@ -24,8 +25,8 @@ impl StateStore {
             };
             mismatches.push(MessageMismatch {
                 id: row.get(0)?,
-                job_id: job_id.to_owned(),
-                run_id: run_id.to_owned(),
+                job_id: Arc::from(job_id),
+                run_id: Arc::from(run_id),
                 mismatch_type,
                 source_folder: row.get(2)?,
                 destination_folder: row.get(3)?,

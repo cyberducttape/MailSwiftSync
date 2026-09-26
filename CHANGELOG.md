@@ -18,6 +18,8 @@ operator distribution archives.
 - Added a separate 64 MiB estimated budget for accumulated mismatch detail;
   pathological mismatch-heavy verification now fails closed for operator review
   instead of growing mismatch evidence without a process-level bound.
+- Shared the immutable job/run identifiers across in-memory mismatch records,
+  removing two repeated heap allocations per detail row during reconciliation.
 
 ### Documentation and release packaging
 
