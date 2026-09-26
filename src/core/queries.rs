@@ -1,8 +1,16 @@
 use super::*;
 
 const MAX_PROJECT_LIST_ROWS: usize = 10_000;
+const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 const MAX_MAILBOX_PAGE_ROWS: u32 = 1_000;
 const MAX_MAILBOX_STATUS_ROWS: u32 = 100_000;
+
+fn durable_mailbox_limit_error() -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("durable mailbox queue exceeded the {MAX_DURABLE_MAILBOX_ROWS}-row safety limit"),
+    )))
+}
 
 impl StateStore {
     pub fn project(&self, id: &str) -> rusqlite::Result<Option<Project>> {
@@ -104,19 +112,26 @@ impl StateStore {
     }
     pub fn mailboxes(&self, project_id: &str) -> rusqlite::Result<Vec<MailboxJob>> {
         let mut statement = self.connection.prepare(
-            "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
+            "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2",
         )?;
-        statement
-            .query_map([project_id], |row| {
-                Ok(MailboxJob {
-                    id: row.get(0)?,
-                    source_mailbox: row.get(1)?,
-                    destination_mailbox: row.get(2)?,
-                    state: row.get(3)?,
-                    config: row.get(4)?,
-                })
-            })?
-            .collect()
+        let rows = statement
+            .query_map(
+                params![project_id, MAX_DURABLE_MAILBOX_ROWS as i64 + 1],
+                |row| {
+                    Ok(MailboxJob {
+                        id: row.get(0)?,
+                        source_mailbox: row.get(1)?,
+                        destination_mailbox: row.get(2)?,
+                        state: row.get(3)?,
+                        config: row.get(4)?,
+                    })
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if rows.len() > MAX_DURABLE_MAILBOX_ROWS {
+            return Err(durable_mailbox_limit_error());
+        }
+        Ok(rows)
     }
 
     /// Compare a complete imported queue without materializing its durable
@@ -151,10 +166,17 @@ impl StateStore {
     pub fn mailbox_ids(&self, project_id: &str) -> rusqlite::Result<Vec<String>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid")?;
-        statement
-            .query_map([project_id], |row| row.get(0))?
-            .collect()
+            .prepare("SELECT id FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2")?;
+        let rows = statement
+            .query_map(
+                params![project_id, MAX_DURABLE_MAILBOX_ROWS as i64 + 1],
+                |row| row.get(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if rows.len() > MAX_DURABLE_MAILBOX_ROWS {
+            return Err(durable_mailbox_limit_error());
+        }
+        Ok(rows)
     }
 
     /// Load only one presentation page. Durable callers that need every row

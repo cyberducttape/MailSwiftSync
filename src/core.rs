@@ -2939,6 +2939,8 @@ mod tests {
 
         let error = db.project_report_snapshot(&project.id).unwrap_err();
         assert!(error.to_string().contains("report exports are limited"));
+        let error = db.mailboxes(&project.id).unwrap_err();
+        assert!(error.to_string().contains("mailbox queue exceeded"));
     }
 
     #[test]

@@ -9,6 +9,8 @@ operator distribution archives.
 - Startup recovery now bounds the number of active process identities it will
   materialize and fails closed on an oversized ledger instead of allocating an
   unbounded recovery vector.
+- Full durable mailbox and ID loads now fail closed above the 100,000-row queue
+  limit instead of materializing an arbitrarily large restored ledger.
 - Headless batch retry admission now fails closed when durable mailbox state is
   missing, rather than silently omitting those mailbox IDs from selection.
 - Recovery schema validation now requires every runtime object to be an actual
