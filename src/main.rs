@@ -252,6 +252,10 @@ mod tests {
         );
         assert!(args.contains(&"sync".into()));
         assert!(args.contains(&"-1".into()));
+        let subcommand = args.iter().position(|arg| arg == "sync").unwrap();
+        assert!(subcommand < args.iter().position(|arg| arg == "-l").unwrap());
+        assert!(subcommand < args.iter().position(|arg| arg == "-s").unwrap());
+        assert!(subcommand < args.iter().position(|arg| arg == "-1").unwrap());
         assert!(args.windows(2).any(|pair| {
             pair[0] == "-l" && pair[1] == DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()
         }));
@@ -298,6 +302,9 @@ mod tests {
             assert!(args.contains(&"backup".into()));
             assert!(!args.contains(&"sync".into()));
             assert!(!args.contains(&"-1".into()));
+            let subcommand = args.iter().position(|arg| arg == "backup").unwrap();
+            assert!(subcommand < args.iter().position(|arg| arg == "-l").unwrap());
+            assert!(subcommand < args.iter().position(|arg| arg == "-s").unwrap());
         }
     }
 

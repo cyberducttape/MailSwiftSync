@@ -1081,20 +1081,17 @@ impl Form {
                 self.profile.source_user.clone(),
             ]);
         } else {
+            let preservation_sync = self.profile.dovecot_strategy.uses_preservation_sync();
+            // `-l`, `-s`, `-1`, and `-u` are dsync subcommand options, not
+            // global doveadm options. Put the sync/backup subcommand before
+            // them or Dovecot 2.3 rejects the command as invalid.
+            args.push(if preservation_sync { "sync" } else { "backup" }.into());
             args.extend(["-l".into(), DOVECOT_SYNC_LOCK_WAIT_SECONDS.to_string()]);
             // Dovecot prints a new state string when -s is supplied. An
             // empty state requests an initial stateful pass; a prior
             // committed checkpoint makes later passes incremental.
             args.extend(["-s".into(), checkpoint.unwrap_or_default().to_owned()]);
-            args.push(
-                if self.profile.dovecot_strategy.uses_preservation_sync() {
-                    "sync"
-                } else {
-                    "backup"
-                }
-                .into(),
-            );
-            if self.profile.dovecot_strategy.uses_preservation_sync() {
+            if preservation_sync {
                 args.push("-1".into());
             }
             args.extend([

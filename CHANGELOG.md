@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Fixed Dovecot live command ordering: dsync-specific `-l`, `-s`, and `-1`
+  options now follow `sync`/`backup`, avoiding a Dovecot 2.3 global-option
+  parse failure before migration starts.
 - The Dovecot integration fixture now selects `initial_mirror` explicitly, so
   its initial transfer exercises `doveadm backup` rather than inheriting the
   final-preservation `sync -1` default.
