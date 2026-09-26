@@ -93,6 +93,8 @@ operator distribution archives.
   before deserialization.
 - Bounded durable report plan-snapshot TOML parsing to 1 MiB before
   deserialization.
+- Bounded OAuth refresh-configuration JSON read from the keyring to 64 KiB
+  before deserialization.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
