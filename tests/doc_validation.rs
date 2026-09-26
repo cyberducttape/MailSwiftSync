@@ -59,6 +59,12 @@ fn production_readiness_surfaces_have_one_conservative_source() {
         archived.contains("Historical snapshot — not current status"),
         "archived readiness reports must be visibly labeled"
     );
+    for stale_fact in ["502/502", "0 clippy warnings", "28MB optimized"] {
+        assert!(
+            !archived.contains(stale_fact),
+            "archived readiness report must not hardcode volatile fact: {stale_fact}"
+        );
+    }
 }
 
 #[test]
