@@ -536,6 +536,37 @@ mod tests {
     }
 
     #[test]
+    fn mismatch_reader_rejects_negative_unsigned_fields() {
+        let db = StateStore::in_memory().unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES('p','p','s','d','planning')",
+                [],
+            )
+            .unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES('j','p','INBOX','INBOX','INBOX','queued')",
+                [],
+            )
+            .unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES('r','p','j','test','discovery','','completed')",
+                [],
+            )
+            .unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uidvalidity) VALUES('m','j','r','missing',-1)",
+                [],
+            )
+            .unwrap();
+
+        assert!(db.message_mismatches_for_run("j", "r", 10).is_err());
+    }
+
+    #[test]
     fn project_and_mailbox_creation_are_recorded_in_the_audit_ledger() {
         let db = StateStore::in_memory().unwrap();
         let project = db

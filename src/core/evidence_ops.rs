@@ -29,22 +29,17 @@ impl StateStore {
                 mismatch_type,
                 source_folder: row.get(2)?,
                 destination_folder: row.get(3)?,
-                source_uidvalidity: row
-                    .get::<_, Option<i64>>(4)?
-                    .and_then(|value| value.try_into().ok()),
+                source_uidvalidity: row.get::<_, Option<i64>>(4)?.map(sqlite_u64).transpose()?,
                 destination_uidvalidity: row
                     .get::<_, Option<i64>>(5)?
-                    .and_then(|value| value.try_into().ok()),
+                    .map(sqlite_u64)
+                    .transpose()?,
                 source_uid: row.get(6)?,
                 dest_uid: row.get(7)?,
                 source_message_id: row.get(8)?,
                 dest_message_id: row.get(9)?,
-                source_size_bytes: row
-                    .get::<_, Option<i64>>(10)?
-                    .and_then(|value| value.try_into().ok()),
-                dest_size_bytes: row
-                    .get::<_, Option<i64>>(11)?
-                    .and_then(|value| value.try_into().ok()),
+                source_size_bytes: row.get::<_, Option<i64>>(10)?.map(sqlite_u64).transpose()?,
+                dest_size_bytes: row.get::<_, Option<i64>>(11)?.map(sqlite_u64).transpose()?,
                 source_date: row.get(12)?,
                 dest_date: row.get(13)?,
                 source_fingerprint: row.get(14)?,
