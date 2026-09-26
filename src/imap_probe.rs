@@ -1031,6 +1031,8 @@ fn connect_tls_stream_inner(
         let connection = ClientConnection::new(Arc::new(config), name)
             .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
         let mut stream = StreamOwned::new(connection, tcp);
+        refresh_socket_timeout(&stream.sock, budget)
+            .map_err(|e| format!("{host}: could not set TLS handshake timeout: {e}"))?;
         stream
             .conn
             .complete_io(&mut stream.sock)
