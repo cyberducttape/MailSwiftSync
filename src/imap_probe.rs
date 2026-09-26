@@ -1234,6 +1234,24 @@ pub(crate) fn fresh_dual_imaps_authentication(form: &crate::Form) -> Result<(), 
 /// Fetch messages from a single mailbox using an existing authenticated stream.
 /// This allows connection reuse across multiple folders instead of opening a new
 /// connection for each one. Returns early on error without poisoning the stream state.
+#[derive(Debug)]
+enum MailboxFetchError {
+    Changed(String),
+    Other(String),
+}
+
+impl From<String> for MailboxFetchError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<&str> for MailboxFetchError {
+    fn from(error: &str) -> Self {
+        Self::Other(error.to_owned())
+    }
+}
+
 fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     stream: &mut S,
     host: &str,
@@ -1245,7 +1263,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
         HashMap<crate::core::MailboxMessageKey, String>,
         u64,
     ),
-    String,
+    MailboxFetchError,
 > {
     budget.check()?;
     if mailbox.trim().is_empty() {
@@ -1272,7 +1290,8 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             "v001",
             "SELECT mailbox for message verification",
             host,
-        ));
+        )
+        .into());
     }
     let (start_exists, start_uidvalidity, uidnext) =
         parse_selected_mailbox(&response, host, mailbox)?;
@@ -1357,7 +1376,8 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     if searched_uid_count != start_exists {
         return Err(format!(
             "{host}: folder {mailbox}: SEARCH coverage mismatch (EXISTS {start_exists}, validated UIDs {searched_uid_count})",
-        ));
+        )
+        .into());
     }
 
     // Re-SELECT after the bounded scan. If the folder changed while it was
@@ -1383,7 +1403,8 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             &end_tag,
             "re-select mailbox for mutation check",
             host,
-        ));
+        )
+        .into());
     }
     let (end_exists, end_uidvalidity, end_uidnext) =
         parse_selected_mailbox(&response, host, mailbox)?;
@@ -1391,9 +1412,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
         || end_uidnext != Some(uidnext)
         || end_exists != start_exists
     {
-        return Err(format!(
+        return Err(MailboxFetchError::Changed(format!(
             "{host}: mailbox {mailbox} changed during verification (UIDVALIDITY {start_uidvalidity:?}->{end_uidvalidity:?}, UIDNEXT {uidnext}->{end_uidnext:?}, message count {start_exists}->{end_exists}); retry required"
-        ));
+        )));
     }
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.
@@ -1417,13 +1438,13 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
     for attempt in 0..MAX_MAILBOX_STABILITY_ATTEMPTS {
         match fetch_mailbox_with_existing_stream(stream, host, mailbox, budget) {
             Ok(result) => return Ok(result),
-            Err(error) if error.contains("changed during verification") => {
+            Err(MailboxFetchError::Changed(error)) => {
                 last_error = Some(error);
                 if attempt + 1 < MAX_MAILBOX_STABILITY_ATTEMPTS {
                     continue;
                 }
             }
-            Err(error) => return Err(error),
+            Err(MailboxFetchError::Other(error)) => return Err(error),
         }
     }
     Err(last_error.unwrap_or_else(|| format!("{host}: mailbox {mailbox} stability check failed")))
