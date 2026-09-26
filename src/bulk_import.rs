@@ -236,7 +236,7 @@ fn validate_xlsx_sheet_layout(
                 crate::MAX_BULK_IMPORT_ROWS
             ));
         }
-        if column >= crate::MAX_BULK_IMPORT_COLUMNS as u32 {
+        if column > crate::MAX_BULK_IMPORT_COLUMNS as u32 {
             return Err(format!(
                 "The worksheet contains a cell beyond the {}-column import limit.",
                 crate::MAX_BULK_IMPORT_COLUMNS
