@@ -79,6 +79,8 @@ operator distribution archives.
   allowlist validation and command generation.
 - Bounded branding and appearance preference reads before TOML parsing, so
   oversized local configuration files cannot consume unbounded memory.
+- Capped project-browser query results so an all-projects refresh cannot turn
+  SQLite's signed LIMIT conversion into an accidental unbounded ledger load.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

@@ -4024,6 +4024,9 @@ destination_port = "000"
         assert_eq!(projects[0].name, "Second customer");
         assert_eq!(projects[0].phase, Phase::Discovery);
         assert_ne!(projects[0].id, first.id);
+
+        let all_projects = db.recent_projects(usize::MAX).unwrap();
+        assert_eq!(all_projects.len(), 2);
     }
 
     #[test]
