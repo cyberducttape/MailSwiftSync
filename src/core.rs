@@ -1804,6 +1804,42 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_repairs_dirty_current_schema_before_copying() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-snapshot-repair-{}", Uuid::new_v4()));
+        create_private_test_directory(&directory);
+        let source = directory.join("source.db");
+        let destination = directory.join("snapshot.db");
+        let store = StateStore::open(&source).unwrap();
+        let project = store
+            .create_project("snapshot-repair", "source", "destination")
+            .unwrap();
+        let _job = store
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO events(project_id,kind,detail) VALUES(?1,'run_output','temporary output')",
+                [&project.id],
+            )
+            .unwrap();
+        drop(store);
+
+        StateStore::snapshot_to(&source, &destination).unwrap();
+        let snapshot = Connection::open(&destination).unwrap();
+        let raw_output: i64 = snapshot
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE kind='run_output'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(raw_output, 0);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_current_schema_with_missing_column_or_index() {
         for missing in ["column", "index"] {
             let directory = std::env::temp_dir()
