@@ -399,11 +399,9 @@ const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
 const MESSAGE_UID_SEARCH_WINDOW_SIZE: u64 = 10_000;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
-// The current verifier intentionally remains an in-memory implementation. This
-// estimate covers fetched records only, not the full peak of both account maps
-// and every reconciliation index. It is therefore a fail-closed fetched-state
-// admission guard, not a process-wide memory guarantee. SQLite-backed streaming reconciliation
-// is required before very large MSP migrations can be production-supported.
+// This is a fail-closed bound for one fetched page's transient Rust state. Live
+// metadata is staged into SQLite immediately after parsing, so the bound is
+// released after each staged page rather than accumulating with account size.
 const MAX_ESTIMATED_FETCHED_STATE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_MAILBOX_STABILITY_ATTEMPTS: usize = 2;
 
@@ -412,9 +410,10 @@ pub(crate) struct MessageFetchBudget<'a> {
     cancel: &'a AtomicBool,
 }
 
-/// Shared admission accounting for both sides of one live verification. The
-/// verifier retains both account maps until reconciliation completes, so a
-/// separate per-account allowance would understate the live working set.
+/// Shared admission accounting for transient fetched pages on both sides of
+/// one live verification. The staged sink releases each page after SQLite
+/// insertion, while the shared budget still prevents either side from
+/// bypassing the transient-state ceiling.
 pub(crate) struct MessageStateBudget {
     estimated_bytes: AtomicUsize,
 }
@@ -465,6 +464,12 @@ impl<'a> StateReservation<'a> {
         self.budget.reserve(bytes)?;
         self.bytes = self.bytes.saturating_add(bytes);
         Ok(())
+    }
+
+    fn release(&mut self, bytes: usize) {
+        let released = bytes.min(self.bytes);
+        self.bytes -= released;
+        self.budget.release(released);
     }
 
     fn commit(mut self) {
@@ -1672,6 +1677,14 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 state_reservation.reserve(estimated_message_record_bytes(key, message, None))?;
             }
             sink.insert_batch(&page_messages)?;
+            // The live sink stages the page into SQLite. Do not retain the
+            // transient Rust estimate after durable staging succeeds.
+            state_reservation.release(
+                page_messages
+                    .iter()
+                    .map(|(key, message)| estimated_message_record_bytes(key, message, None))
+                    .sum(),
+            );
             if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
                 return Err(format!(
                     "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
@@ -2349,9 +2362,9 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 mod tests {
     use super::{
         ListInventorySummary, MAX_ESTIMATED_FETCHED_STATE_BYTES, MAX_IMAP_LIST_INVENTORY_BYTES,
-        MailboxFetchError, MessageFetchBudget, MessageStateBudget, TaggedResponseScanner,
-        authenticated_list_command, classify_mailbox_fetch_error, dns_resolver_pool,
-        format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
+        MailboxFetchError, MessageFetchBudget, MessageStateBudget, StateReservation,
+        TaggedResponseScanner, authenticated_list_command, classify_mailbox_fetch_error,
+        dns_resolver_pool, format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
         parse_message_fetch_metadata_response_bytes, parse_message_id_header,
         read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
         record_list_entry, tagged_response_outside_literals, write_imap_command,
@@ -2754,6 +2767,15 @@ mod tests {
             .reserve(MAX_ESTIMATED_FETCHED_STATE_BYTES - 1)
             .unwrap();
         assert!(budget.reserve(2).is_err());
+    }
+
+    #[test]
+    fn staged_page_reservation_can_be_released_after_insert() {
+        let budget = MessageStateBudget::new();
+        let mut reservation = StateReservation::new(&budget);
+        reservation.reserve(1024).unwrap();
+        reservation.release(1024);
+        assert!(budget.reserve(MAX_ESTIMATED_FETCHED_STATE_BYTES).is_ok());
     }
 
     #[test]

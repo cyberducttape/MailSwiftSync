@@ -19,6 +19,9 @@ operator distribution archives.
   to the live verification deadline and operator cancellation signal.
 - Added an aggregate memory bound for retained IMAP LIST folder descriptors,
   preventing many individually bounded records from exhausting verifier memory.
+- Released transient fetched-page reservations immediately after SQLite staging,
+  so large-account admission scales with bounded page memory instead of
+  accumulating the former account-sized allowance.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable
