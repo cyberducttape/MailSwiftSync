@@ -21,7 +21,8 @@ artifacts.
 
 Portable archives and the pinned container image are sufficient for the alpha
 preview. Before a stable Linux release, complete the
-[Linux packaging roadmap](distribution/linux-packaging-roadmap.md): signed
+Linux packaging beyond the portable alpha archive is tracked as repository-only
+release work: signed
 Debian/Ubuntu and RHEL-family repositories, x86_64 and ARM64 artifacts, shell
 completions, an installed man page, a dependency doctor, deterministic
 upgrade/uninstall behavior, and automated enforcement of the qualified
