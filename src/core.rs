@@ -470,7 +470,9 @@ mod tests {
         )
         .unwrap();
 
-        let stored: (i64, String, String) = db
+        // Privacy boundary: message_id is not persisted in the durable ledger for
+        // privacy reasons. Test verifies mismatch is recorded atomically with evidence.
+        let stored: (i64, String, Option<String>) = db
             .connection
             .query_row(
                 "SELECT COUNT(*),mismatch_type,source_message_id FROM message_mismatches WHERE job_id=?1 AND run_id=?2",
@@ -478,7 +480,9 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(stored, (1, "missing".into(), "<missing@example>".into()));
+        assert_eq!(stored.0, 1);
+        assert_eq!(stored.1, "missing");
+        assert_eq!(stored.2, None); // message_id omitted for privacy
         assert_eq!(db.run_status(run_id).unwrap().as_deref(), Some("completed"));
     }
 
