@@ -619,7 +619,7 @@ pub fn restrict_directory_permissions(_: &Path) -> std::io::Result<()> {
 fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
     use std::{os::windows::ffi::OsStrExt, ptr};
     use windows_sys::Win32::{
-        Foundation::{BOOL, ERROR_SUCCESS, HLOCAL, LocalFree},
+        Foundation::{ERROR_SUCCESS, HLOCAL, LocalFree},
         Security::Authorization::{
             ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
             SetNamedSecurityInfoW,
@@ -663,8 +663,8 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
     }
 
     let result = (|| {
-        let mut dacl_present: BOOL = 0;
-        let mut dacl_defaulted: BOOL = 0;
+        let mut dacl_present: i32 = 0;
+        let mut dacl_defaulted: i32 = 0;
         let mut dacl: *mut ACL = ptr::null_mut();
         let valid_dacl = unsafe {
             GetSecurityDescriptorDacl(

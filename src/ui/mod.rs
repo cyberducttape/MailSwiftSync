@@ -22,7 +22,6 @@ mod workspace;
 
 #[cfg(test)]
 pub(crate) use account::password_reveal_allowed;
-pub(crate) use account::{password_visibility_id, render_account};
 pub(crate) use app_state::App;
 pub(crate) use output::{
     contains_ascii_case_insensitive, markdown_escape, push_visible_output, redact_secrets,
@@ -30,9 +29,9 @@ pub(crate) use output::{
 };
 pub(crate) use status::{
     StatusMessage, StatusSeverity, customer_proof_ready, display_job_state, display_state_key,
-    format_elapsed, format_phase_name, job_state_badge, needs_operator_review,
-    project_health_state_counts, recommended_batch_next_action, recommended_next_action,
-    status_color, successful_run_severity, successful_run_status, workflow_step_index,
+    format_phase_name, job_state_badge, needs_operator_review, project_health_state_counts,
+    recommended_batch_next_action, recommended_next_action, status_color, successful_run_severity,
+    successful_run_status, workflow_step_index,
 };
 #[cfg(test)]
 pub(crate) use theme::contrast_ratio;
