@@ -99,11 +99,14 @@ pub(crate) fn restore_ledger(backup: &Path, destination: &Path) -> Result<Option
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("could not secure restored ledger: {error}"));
     }
-    std::fs::OpenOptions::new()
+    if let Err(error) = std::fs::OpenOptions::new()
         .write(true)
         .open(&temporary)
         .and_then(|file| file.sync_all())
-        .map_err(|error| format!("could not flush restored ledger: {error}"))?;
+    {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!("could not flush restored ledger: {error}"));
+    }
     if let Err(error) = core::StateStore::open_readonly(&temporary) {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!(
