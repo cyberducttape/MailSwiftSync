@@ -36,6 +36,8 @@ operator distribution archives.
   rows, including records imported while SQLite foreign-key enforcement was off.
 - Ledger validation now rejects semantically contradictory exact-verification
   outcomes instead of trusting a forged status label over its counters.
+- The terminal evidence write boundary now applies the same exact-outcome
+  invariant before committing a verification-difference record.
 - Live source and destination metadata scans now share one fetched-state
   admission budget, preventing each account from independently consuming the
   full allowance before reconciliation begins.

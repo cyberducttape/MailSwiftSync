@@ -739,6 +739,15 @@ impl StateStore {
         if mailbox_state == "verified" && !value.is_exact_match() {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        // An explicit exact label is a durable claim even when the terminal
+        // state is verification_difference. Do not allow a caller to persist
+        // that label with counters that describe a different result and rely
+        // on the next database reopen to discover the contradiction.
+        if value.verification_outcome == Some(VerificationOutcome::ExactMetadataMatch)
+            && !value.is_exact_match()
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         let attention_reason =
             attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
         let tx = self.connection.unchecked_transaction()?;
