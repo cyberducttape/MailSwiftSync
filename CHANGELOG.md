@@ -46,6 +46,8 @@ operator distribution archives.
   preserving the total failure count.
 - Evidence history now enforces a foreign key from each historical result to
   its recorded run, rejecting orphaned audit claims during recovery.
+- Recovery validation now rejects evidence and mismatch rows whose valid run
+  belongs to a different mailbox.
 - Live source and destination metadata scans now share one fetched-state
   admission budget, preventing each account from independently consuming the
   full allowance before reconciliation begins.

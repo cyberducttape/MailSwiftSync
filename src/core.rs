@@ -1978,6 +1978,49 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_evidence_rows_linked_to_another_mailbox_run() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-cross-mailbox-run-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        let (project, jobs) = store
+            .create_project_with_mailboxes(
+                "cross-mailbox-evidence",
+                "source",
+                "destination",
+                &[("one".into(), "one".into()), ("two".into(), "two".into())],
+            )
+            .unwrap();
+        store
+            .begin_run(&project.id, &jobs[0], "cross-run-one", "test")
+            .unwrap();
+        store
+            .begin_run(&project.id, &jobs[1], "cross-run-two", "test")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,failed_messages,source_folders,destination_folders) VALUES(?1,'cross-run-two',0,0,0,0,0,0,0)",
+                params![jobs[0]],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type) VALUES('cross-mismatch',?1,'cross-run-two','extra')",
+                params![jobs[0]],
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_current_schema_with_weakened_foreign_key_action() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-fk-action-{}", Uuid::new_v4()));
