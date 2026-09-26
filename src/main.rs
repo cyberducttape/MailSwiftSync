@@ -342,6 +342,17 @@ mod tests {
                 );
             }
         }
+        assert!(source_args.windows(2).any(|pair| {
+            pair == [
+                "-o",
+                "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD",
+            ]
+        }));
+        assert!(
+            source_args.windows(2).any(|pair| {
+                pair == ["-o", "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD"]
+            })
+        );
         assert!(
             source_args[..mailbox_status]
                 .windows(2)
@@ -596,32 +607,23 @@ mod tests {
     }
 
     #[test]
-    fn local_dovecot_credentials_use_private_file_not_process_arguments() {
+    fn local_dovecot_credentials_use_child_environment_without_process_arguments() {
         let mut form = dovecot_form();
-        form.dry_run = false;
         form.source_password = String::from("secret").into();
         let prepared = form.prepared_command().unwrap();
-        let _cleanup = credentials::CleanupGuard::new(prepared.cleanup.clone());
-        let password_file = prepared
-            .args
-            .iter()
-            .find_map(|arg| arg.strip_prefix("imapc_password= <"))
-            .expect("Dovecot password must be loaded from a private file");
         assert!(
-            !prepared
+            prepared
                 .args
                 .iter()
-                .any(|arg| arg == "imapc_password=secret")
+                .any(|arg| { arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD" })
         );
-        assert!(prepared.env.is_empty());
-        assert_eq!(std::fs::read(password_file).unwrap(), b"secret");
-        assert_eq!(prepared.verification.len(), 2);
-        assert!(
-            prepared.verification[0]
-                .1
-                .iter()
-                .any(|arg| arg == &format!("imapc_password= <{password_file}"))
-        );
+        assert!(prepared.args.iter().any(|arg| {
+            arg == "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD"
+        }));
+        assert!(!prepared.args.iter().any(|arg| arg.contains("secret")));
+        assert!(prepared.env.iter().any(|(key, value)| {
+            key == "MAILSWIFTSYNC_IMAPC_PASSWORD" && value.as_str() == "secret"
+        }));
     }
 
     #[test]
@@ -884,8 +886,11 @@ mod tests {
         assert_eq!(exe, form.profile.doveadm_path);
         assert!(
             args.iter()
-                .any(|arg| arg == "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD")
+                .any(|arg| arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD")
         );
+        assert!(args.iter().any(|arg| {
+            arg == "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD"
+        }));
     }
 
     #[test]

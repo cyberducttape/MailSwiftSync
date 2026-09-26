@@ -218,10 +218,15 @@ impl Default for Form {
         }
     }
 }
-fn dovecot_imapc_password_override(password_file: &Path) -> String {
-    // Dovecot reads the secret during config parsing; only the private file
-    // path reaches argv, never the password itself.
-    format!("imapc_password= <{}", password_file.display())
+fn dovecot_imapc_password_override() -> String {
+    // Dovecot's legacy `$ENV:name` expansion requires whitespace boundaries.
+    "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD".into()
+}
+
+fn dovecot_import_environment_override() -> String {
+    // doveadm worker processes sanitize their environment unless this
+    // variable is explicitly carried through import_environment.
+    "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD".into()
 }
 
 impl Form {
@@ -821,32 +826,15 @@ impl Form {
         // not passed the same validator used by admission.
         self.extra_options_valid()?;
         if self.engine() == core::Engine::Dovecot {
-            let secret_dir = create_secret_directory()?;
-            let source_file = secret_dir.join("source.secret");
-            if let Err(error) = write_secret_file(&source_file, self.source_password.as_str()) {
-                let _ = std::fs::remove_dir_all(&secret_dir);
-                return Err(format!(
-                    "Could not prepare temporary credential file: {error}"
-                ));
-            }
-            let password_override = dovecot_imapc_password_override(&source_file);
-            let (executable, args) = self.command_with_checkpoint_and_mode_and_password(
-                false,
-                checkpoint,
-                self.dry_run,
-                &password_override,
-            );
-            let verification = if self.dry_run {
-                Vec::new()
-            } else {
-                self.dovecot_verification_commands_with_password(false, &password_override)
-            };
+            let (executable, args) = self.command_with_checkpoint(false, checkpoint);
             return Ok(PreparedCommand {
                 executable,
                 args,
-                cleanup: vec![secret_dir],
-                env: Vec::new(),
-                verification,
+                cleanup: Vec::new(),
+                env: vec![(
+                    "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
+                    self.source_password.clone(),
+                )],
             });
         }
         let mut args = engine::imapsync_args(&self.profile, self.dry_run, throttle_divisor);
@@ -888,7 +876,6 @@ impl Form {
             args,
             cleanup: vec![secret_dir],
             env: Vec::new(),
-            verification: Vec::new(),
         })
     }
     /// A deterministic, secret-free description of the live execution plan.
@@ -1054,20 +1041,6 @@ impl Form {
         checkpoint: Option<&str>,
         dry_run: bool,
     ) -> (String, Vec<String>) {
-        self.command_with_checkpoint_and_mode_and_password(
-            redact,
-            checkpoint,
-            dry_run,
-            "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD",
-        )
-    }
-    fn command_with_checkpoint_and_mode_and_password(
-        &self,
-        redact: bool,
-        checkpoint: Option<&str>,
-        dry_run: bool,
-        password_override: &str,
-    ) -> (String, Vec<String>) {
         if self.engine() != core::Engine::Dovecot {
             return (
                 self.profile.imapsync_path.clone(),
@@ -1085,13 +1058,15 @@ impl Form {
         }
         args.extend([
             "-o".into(),
+            dovecot_import_environment_override(),
+            "-o".into(),
             format!("imapc_host={source_host}"),
             "-o".into(),
             format!("imapc_ssl={}", dovecot_ssl_mode(&self.profile.source_tls)),
             "-o".into(),
             format!("imapc_user={}", self.profile.source_user),
             "-o".into(),
-            password_override.to_owned(),
+            dovecot_imapc_password_override(),
         ]);
         append_dovecot_source_tls_policy(
             &mut args,
@@ -1139,22 +1114,10 @@ impl Form {
         }
         (self.profile.doveadm_path.clone(), args)
     }
-    #[cfg(test)]
     pub(crate) fn local_doveadm(&self) -> bool {
         true
     }
-    #[cfg(test)]
     pub(crate) fn dovecot_verification_commands(&self, redact: bool) -> Vec<(String, Vec<String>)> {
-        self.dovecot_verification_commands_with_password(
-            redact,
-            "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD",
-        )
-    }
-    fn dovecot_verification_commands_with_password(
-        &self,
-        redact: bool,
-        password_override: &str,
-    ) -> Vec<(String, Vec<String>)> {
         if self.engine() != core::Engine::Dovecot {
             return Vec::new();
         }
@@ -1170,13 +1133,15 @@ impl Form {
         }
         source.extend([
             "-o".into(),
+            dovecot_import_environment_override(),
+            "-o".into(),
             format!("imapc_host={source_host}"),
             "-o".into(),
             format!("imapc_ssl={}", dovecot_ssl_mode(&self.profile.source_tls)),
             "-o".into(),
             format!("imapc_user={}", self.profile.source_user),
             "-o".into(),
-            password_override.to_owned(),
+            dovecot_imapc_password_override(),
         ]);
         // These are global `doveadm -o` settings, so they must all precede
         // the `mailbox status` subcommand (the same rule as sync/backup).
@@ -1256,7 +1221,6 @@ pub(crate) struct PreparedCommand {
     pub(crate) args: Vec<String>,
     pub(crate) cleanup: Vec<PathBuf>,
     pub(crate) env: Vec<(String, credentials::SecretString)>,
-    pub(crate) verification: Vec<(String, Vec<String>)>,
 }
 
 #[cfg(test)]
