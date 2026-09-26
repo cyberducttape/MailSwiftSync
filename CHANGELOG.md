@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Production hardening
 
+- Replaced repeated whole-response IMAP framing scans and UTF-8 conversions
+  with an incremental literal-aware tagged-response scanner; string decoding
+  now occurs only after a complete response is received.
 - Reduced verifier peak allocations by borrowing canonical message keys across
   reconciliation partitions and moving first-pass mismatch records instead of
   cloning them; SQLite-backed streaming remains required for very large

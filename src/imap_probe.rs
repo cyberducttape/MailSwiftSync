@@ -79,6 +79,7 @@ fn read_imap_tagged_with_limit<S: Read>(
     max_bytes: usize,
 ) -> Result<(), String> {
     let mut raw_response = Vec::new();
+    let mut scanner = TaggedResponseScanner::new(tag);
     loop {
         let count = stream.read(buffer).map_err(|e| e.to_string())?;
         if count == 0 {
@@ -90,9 +91,9 @@ fn read_imap_tagged_with_limit<S: Read>(
                 "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
             ));
         }
-        response.clear();
-        response.push_str(&String::from_utf8_lossy(&raw_response));
-        if tagged_response_outside_literals(&raw_response, tag) {
+        if scanner.scan(&raw_response) {
+            response.clear();
+            response.push_str(&String::from_utf8_lossy(&raw_response));
             return Ok(());
         }
     }
@@ -107,6 +108,7 @@ fn read_imap_tagged_with_budget<S: Read>(
     budget: &MessageFetchBudget<'_>,
 ) -> Result<(), String> {
     let mut raw_response = Vec::new();
+    let mut scanner = TaggedResponseScanner::new(tag);
     let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
     loop {
         budget.check()?;
@@ -134,9 +136,9 @@ fn read_imap_tagged_with_budget<S: Read>(
                 "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
             ));
         }
-        response.clear();
-        response.push_str(&String::from_utf8_lossy(&raw_response));
-        if tagged_response_outside_literals(&raw_response, tag) {
+        if scanner.scan(&raw_response) {
+            response.clear();
+            response.push_str(&String::from_utf8_lossy(&raw_response));
             return Ok(());
         }
     }
@@ -150,6 +152,7 @@ fn read_imap_tagged_bytes_with_budget<S: Read>(
     budget: &MessageFetchBudget<'_>,
 ) -> Result<Vec<u8>, String> {
     let mut response = Vec::new();
+    let mut scanner = TaggedResponseScanner::new(tag);
     let mut no_progress_deadline = Instant::now() + Duration::from_secs(15);
     loop {
         budget.check()?;
@@ -177,54 +180,100 @@ fn read_imap_tagged_bytes_with_budget<S: Read>(
                 "IMAP response for {tag} exceeded the {max_bytes}-byte safety limit"
             ));
         }
-        if tagged_response_outside_literals(&response, tag) {
+        if scanner.scan(&response) {
             return Ok(response);
         }
     }
 }
 
+/// Incrementally locate a tagged completion line without interpreting bytes
+/// inside IMAP literals as protocol framing. The scanner owns only offsets and
+/// literal state; it never rescans bytes already consumed, so a growing FETCH
+/// response is processed in O(n) time across all socket reads.
+struct TaggedResponseScanner<'a> {
+    tag: &'a [u8],
+    cursor: usize,
+    line_start: usize,
+    literal_remaining: usize,
+}
+
+impl<'a> TaggedResponseScanner<'a> {
+    fn new(tag: &'a str) -> Self {
+        Self {
+            tag: tag.as_bytes(),
+            cursor: 0,
+            line_start: 0,
+            literal_remaining: 0,
+        }
+    }
+
+    fn scan(&mut self, response: &[u8]) -> bool {
+        while self.cursor < response.len() {
+            if self.literal_remaining > 0 {
+                let consumed = self
+                    .literal_remaining
+                    .min(response.len().saturating_sub(self.cursor));
+                self.cursor += consumed;
+                self.literal_remaining -= consumed;
+                if self.literal_remaining == 0 {
+                    // Literal bytes are payload, not part of the following
+                    // protocol line. Multiple literals may occur in one
+                    // FETCH response line, so resume line accounting here.
+                    self.line_start = self.cursor;
+                }
+                continue;
+            }
+
+            if response[self.cursor] != b'\r' {
+                self.cursor += 1;
+                continue;
+            }
+            if self.cursor + 1 >= response.len() {
+                // Keep a trailing CR for the next socket read, when the LF
+                // completing this line may arrive in a separate chunk.
+                break;
+            }
+            if response[self.cursor + 1] != b'\n' {
+                self.cursor += 1;
+                continue;
+            }
+
+            let line_end = self.cursor;
+            let line = &response[self.line_start..line_end];
+            if line.starts_with(self.tag)
+                && line
+                    .get(self.tag.len())
+                    .is_some_and(|byte| byte.is_ascii_whitespace())
+            {
+                return true;
+            }
+            self.literal_remaining = parse_imap_literal_length(line).unwrap_or(0);
+            self.cursor += 2;
+            self.line_start = self.cursor;
+        }
+        false
+    }
+}
+
+fn parse_imap_literal_length(line: &[u8]) -> Option<usize> {
+    line.strip_suffix(b"}")
+        .and_then(|line| line.iter().rposition(|byte| *byte == b'{'))
+        .and_then(|start| std::str::from_utf8(&line[start + 1..line.len() - 1]).ok())
+        .and_then(|length| {
+            length
+                .strip_suffix('+')
+                .unwrap_or(length)
+                .parse::<usize>()
+                .ok()
+        })
+}
+
 /// Locate a tagged completion line without interpreting bytes inside IMAP
 /// literals as protocol framing. Literal payloads are arbitrary octets and
 /// may contain lines that look exactly like the command tag.
+#[cfg(test)]
 fn tagged_response_outside_literals(response: &[u8], tag: &str) -> bool {
-    let tag = tag.as_bytes();
-    let mut offset = 0;
-    while offset < response.len() {
-        let Some(relative_end) = response[offset..]
-            .windows(2)
-            .position(|pair| pair == b"\r\n")
-        else {
-            return false;
-        };
-        let line_end = offset + relative_end;
-        let line = &response[offset..line_end];
-        if line.starts_with(tag)
-            && line
-                .get(tag.len())
-                .is_some_and(|byte| byte.is_ascii_whitespace())
-        {
-            return true;
-        }
-        let literal_length = line
-            .strip_suffix(b"}")
-            .and_then(|line| line.iter().rposition(|byte| *byte == b'{'))
-            .and_then(|start| std::str::from_utf8(&line[start + 1..line.len() - 1]).ok())
-            .and_then(|length| {
-                length
-                    .strip_suffix('+')
-                    .unwrap_or(length)
-                    .parse::<usize>()
-                    .ok()
-            });
-        offset = line_end + 2;
-        if let Some(length) = literal_length {
-            if response.len().saturating_sub(offset) < length {
-                return false;
-            }
-            offset += length;
-        }
-    }
-    false
+    TaggedResponseScanner::new(tag).scan(response)
 }
 
 const MAX_IMAP_LIST_LINE_BYTES: usize = 64 * 1024;
@@ -1990,10 +2039,10 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageFetchBudget, authenticated_list_command, format_folder_failures,
-        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_response,
-        parse_message_fetch_response_with_fingerprints, parse_message_id_header,
-        read_imap_list_response, read_imap_list_response_with_mailboxes,
+        MessageFetchBudget, TaggedResponseScanner, authenticated_list_command,
+        format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
+        parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
+        parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
         tagged_response_outside_literals,
     };
     use std::collections::HashMap;
@@ -2048,6 +2097,31 @@ mod tests {
             without_completion.as_bytes(),
             "v002"
         ));
+    }
+
+    #[test]
+    fn tagged_scanner_handles_split_lines_literals_and_large_payloads_incrementally() {
+        let payload = format!(
+            "{}v009 NO this is still literal data\r\n{}",
+            "x".repeat(512 * 1024),
+            "y".repeat(512 * 1024)
+        );
+        let response = format!(
+            "* 1 FETCH (BODY[] {{{}}}\r\n{} )\r\nv009 OK FETCH completed\r\n",
+            payload.len(),
+            payload
+        );
+        let mut scanner = TaggedResponseScanner::new("v009");
+        let mut accumulated = Vec::new();
+        for chunk in response.as_bytes().chunks(137) {
+            accumulated.extend_from_slice(chunk);
+            let found = scanner.scan(&accumulated);
+            if accumulated.len() < response.len() {
+                assert!(!found);
+            } else {
+                assert!(found);
+            }
+        }
     }
 
     #[test]
