@@ -26,6 +26,9 @@ operator distribution archives.
 - Added SQLite nonnegative constraints for durable counters and made signed
   integer-to-unsigned reads fail closed instead of turning negative values into
   huge evidence counts.
+- Migrated existing current-version evidence tables that lacked those SQLite
+  constraints, with a pre-repair backup and constraint validation on open,
+  read-only, backup, and snapshot paths.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
