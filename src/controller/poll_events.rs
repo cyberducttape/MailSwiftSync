@@ -134,10 +134,9 @@ impl App {
                         if !owns_line {
                             // RunLine is an asynchronous presentation event;
                             // never let a delayed or foreign worker append
-                            // output to the active migration's journal.
-                            durability_errors.push(format!(
-                                "ignored run-line event for unknown run {run_id} and job {job_id}"
-                            ));
+                            // output to the active migration's journal. Since
+                            // it is not durable state, rejecting a stale line
+                            // must not poison the migration's durability result.
                         } else {
                             // Engine output is presentation-only. It may
                             // contain subjects, folder metadata, or other

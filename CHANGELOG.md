@@ -27,6 +27,8 @@ operator distribution archives.
   field-list syntax, so 2.3 accepts the aggregate query.
 - Headless durability failures now include the latest bounded persistence
   diagnostic, so integration failures identify the failed ledger operation.
+- Late or foreign process-output events are discarded without marking the
+  durable migration result as failed; those events are presentation-only.
 - The distributed Linux runtime now includes `procps`, which packaged
   imapsync invokes for process inspection; the product integration lab fails
   early if `ps` is missing.
