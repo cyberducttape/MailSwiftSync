@@ -100,6 +100,7 @@ impl StateStore {
     /// Return the durable reason and operator action for an attention row.
     /// Unknown legacy values are deliberately surfaced as `Unknown` rather
     /// than guessed from UI text.
+    #[cfg(test)]
     pub fn mailbox_attention_reason(
         &self,
         job_id: &str,
@@ -122,7 +123,6 @@ impl StateStore {
     /// reasons are intentionally absent from the map; callers can distinguish
     /// a normal row from an explicitly classified operator-review row without
     /// issuing one query per mailbox.
-    #[cfg(test)]
     pub fn mailbox_attention_reasons(
         &self,
         project_id: &str,

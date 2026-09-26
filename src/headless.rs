@@ -7,7 +7,12 @@ use crate::{
     recorded_process_matches, secret_runtime_base, terminate_recorded_process_group,
 };
 use serde::Serialize;
-use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::atomic::Ordering,
+    thread,
+    time::Duration,
+};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
 const MAX_SUPPORT_MAILBOX_ROWS_TOTAL: usize = 100_000;
@@ -687,6 +692,22 @@ pub(crate) fn headless_batch_execute_selected(
         }
     }
     app.bulk_retry_scope = BulkRetryScope::Automation;
+    let project_id = app
+        .bulk_project_id
+        .as_deref()
+        .ok_or_else(|| "restored batch has no durable project identity".to_owned())?;
+    let durable_states = app
+        .store
+        .batch_admission_states(project_id, &app.bulk_job_ids)
+        .map_err(|error| error.to_string())?;
+    let states_by_id = durable_states
+        .into_iter()
+        .map(|state| (state.job_id.clone(), state))
+        .collect::<HashMap<_, _>>();
+    let attention_reasons = app
+        .store
+        .mailbox_attention_reasons(project_id)
+        .map_err(|error| error.to_string())?;
     let eligible_ids: HashSet<String> = app
         .bulk_job_ids
         .iter()
@@ -694,10 +715,10 @@ pub(crate) fn headless_batch_execute_selected(
             if requested_ids.is_some_and(|ids| !ids.contains(job_id)) {
                 return None;
             }
-            let state = app.store.mailbox_state(job_id).ok().flatten()?;
-            let reason = app.store.mailbox_attention_reason(job_id).ok().flatten();
+            let state = states_by_id.get(job_id)?.state.as_str();
+            let reason = attention_reasons.get(job_id).copied();
             app.bulk_retry_scope
-                .includes_automation(&state, reason)
+                .includes_automation(state, reason)
                 .then_some(job_id.clone())
         })
         .collect();
