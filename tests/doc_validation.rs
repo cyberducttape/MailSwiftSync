@@ -27,8 +27,7 @@ fn doc_files_exist() {
 fn readme_mentions_production_status() {
     let readme = fs::read_to_string("README.md").expect("Could not read README.md");
     assert!(
-        readme.contains("docs/compatibility-matrix.md")
-            && readme.contains("source repository"),
+        readme.contains("docs/compatibility-matrix.md") && readme.contains("source repository"),
         "README should identify the active compatibility and source-only qualification documents"
     );
 }
@@ -207,9 +206,24 @@ fn provider_testing_guide_exists() {
 }
 
 #[test]
+fn gmail_provider_setup_uses_valid_account_and_authentication_guidance() {
+    let guide = fs::read_to_string("docs/provider-tests/GMAIL_SETUP.md")
+        .expect("Gmail provider setup should exist");
+    let normalized = guide.to_ascii_lowercase();
+
+    assert!(!normalized.contains("gcloud identity users create"));
+    assert!(guide.contains("Google Admin console"));
+    assert!(guide.contains("Optional app-password test (eligible Google accounts)"));
+    assert!(guide.contains("OAuth/XOAUTH2 for Google Workspace IMAP qualification"));
+    assert!(!normalized.contains("workspace password"));
+    assert!(!normalized.contains("gcloud identity users delete"));
+}
+
+#[test]
 fn canonical_provider_facts_are_reflected_in_primary_surfaces() {
     let facts = fs::read_to_string("docs/provider-facts.md")
         .expect("canonical provider facts should exist");
+    assert!(facts.contains("## Google Workspace") && facts.contains("## Personal Gmail"));
     assert!(facts.contains("Metadata reconciled — message bodies not compared"));
     assert!(facts.contains("no universal 50 GB or 100 GB threshold"));
 

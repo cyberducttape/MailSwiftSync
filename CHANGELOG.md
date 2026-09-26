@@ -18,6 +18,9 @@ operator distribution archives.
   archives.
 - Removed the duplicate Native Dovecot entry from the README's stable section
   and added manifest-backed validation for experimental-only status terms.
+- Corrected Gmail qualification guidance to use the Admin console for Workspace
+  user creation and distinguish Workspace OAuth, personal Gmail OAuth, and
+  conditional app-password testing.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 
