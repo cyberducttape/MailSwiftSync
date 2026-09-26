@@ -57,6 +57,11 @@ pub(crate) fn decode_report_run_snapshot(
     if snapshot.trim().is_empty() {
         return Ok(None);
     }
+    if snapshot.len() as u64 > MAX_PROFILE_BYTES {
+        return Err(format!(
+            "The evidence run plan snapshot exceeds the {MAX_PROFILE_BYTES}-byte limit"
+        ));
+    }
     toml::from_str(snapshot)
         .map(Some)
         .map_err(|error| format!("The evidence run plan snapshot is corrupt: {error}"))
@@ -1200,8 +1205,8 @@ pub(crate) struct PreparedCommand {
 #[cfg(test)]
 mod tests {
     use super::{
-        Form, OAuthRefreshOutcome, decode_report_run_snapshot, decode_saved_profile,
-        persist_rotated_refresh_config_with_retry, validate_certificate_pin,
+        Form, MAX_PROFILE_BYTES, OAuthRefreshOutcome, decode_report_run_snapshot,
+        decode_saved_profile, persist_rotated_refresh_config_with_retry, validate_certificate_pin,
     };
     use crate::SecretString;
     use crate::oauth_refresh::OAuthRefreshConfig;
@@ -1237,6 +1242,11 @@ mod tests {
             Ok(_) => panic!("malformed report snapshot was accepted"),
             Err(error) => assert!(error.contains("plan snapshot is corrupt")),
         }
+        let oversized = "x".repeat(MAX_PROFILE_BYTES as usize + 1);
+        let error = decode_report_run_snapshot(&oversized)
+            .err()
+            .expect("oversized report snapshot must be rejected");
+        assert!(error.contains("exceeds"));
     }
 
     #[test]
