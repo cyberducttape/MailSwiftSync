@@ -30,6 +30,8 @@ operator distribution archives.
   reuse, reducing transient peak memory during reconciliation merges.
 - Interned live IMAP mailbox names across metadata-page keys, reducing repeated
   folder-string allocations while preserving mailbox-local message identity.
+- Removed the duplicate owned UID from live metadata records; coverage now
+  validates the canonical mailbox key directly.
 - Routed budgeted IMAP authentication and metadata commands through
   cancellation-aware, timeout-retrying writes with short socket I/O slices.
 
