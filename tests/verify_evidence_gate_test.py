@@ -77,7 +77,7 @@ class EvidenceGateTests(unittest.TestCase):
                 },
                 "test_dataset_digest": "d" * 64,
                 "qualification_bundle_id": "bundle-1",
-                "mailswiftsync_version": "0.1.0",
+                "mailswiftsync_version": "0.1.0-alpha.1",
                 "mailswiftsync_commit": "abc123",
                 "mailswiftsync_binary_sha256": "a" * 64,
                 "imapsync_binary_sha256": "b" * 64,

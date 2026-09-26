@@ -1,4 +1,4 @@
-# MailSwiftSync 0.1.0-alpha
+# MailSwiftSync 0.1.0-alpha.1
 
 This is a technical preview for administrators who want to test the local-first migration workflow with disposable or fully backed-up mailboxes. It is not a production-support commitment.
 
