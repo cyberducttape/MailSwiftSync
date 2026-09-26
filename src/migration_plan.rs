@@ -29,6 +29,7 @@ use std::{
 use zeroize::Zeroizing;
 
 const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
+const MAX_KEYRING_CREDENTIAL_BYTES: usize = 64 * 1024;
 
 fn read_profile_file(path: &Path) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path)?;
@@ -313,9 +314,15 @@ impl Form {
         let entry = self
             .keyring_entry(source)?
             .ok_or("Enter a keyring ID before loading a password.")?;
-        let password = SecretString::new(entry.get_password().map_err(|error| {
+        let password = entry.get_password().map_err(|error| {
             format!("Could not load the credential from the OS keyring: {error}")
-        })?);
+        })?;
+        if password.len() > MAX_KEYRING_CREDENTIAL_BYTES {
+            return Err(format!(
+                "OS keyring credential exceeds the {MAX_KEYRING_CREDENTIAL_BYTES}-byte limit"
+            ));
+        }
+        let password = SecretString::new(password);
         if source {
             self.source_password = password;
         } else {

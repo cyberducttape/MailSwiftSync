@@ -95,6 +95,8 @@ operator distribution archives.
   deserialization.
 - Bounded OAuth refresh-configuration JSON read from the keyring to 64 KiB
   before deserialization.
+- Bounded ordinary keyring credentials and OAuth access/refresh tokens to
+  64 KiB before retaining them in process memory.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

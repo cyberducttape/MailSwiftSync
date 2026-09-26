@@ -24,6 +24,7 @@ use zeroize::Zeroizing;
 /// cannot exhaust memory during an unattended refresh.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_REFRESH_CONFIG_BYTES: usize = 64 * 1024;
+const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const REFRESH_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REFRESH_TOTAL_BUDGET: Duration = Duration::from_secs(30);
 
@@ -295,7 +296,20 @@ fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken,
         .access_token
         .filter(|token| !token.is_empty())
         .ok_or_else(|| "token endpoint response did not include an access_token".to_owned())?;
+    if access_token.as_bytes().len() > MAX_TOKEN_BYTES {
+        return Err(format!(
+            "token endpoint access_token exceeds the {MAX_TOKEN_BYTES}-byte limit"
+        ));
+    }
     let refresh_token = response.refresh_token.filter(|token| !token.is_empty());
+    if refresh_token
+        .as_ref()
+        .is_some_and(|token| token.as_bytes().len() > MAX_TOKEN_BYTES)
+    {
+        return Err(format!(
+            "token endpoint refresh_token exceeds the {MAX_TOKEN_BYTES}-byte limit"
+        ));
+    }
     let expires_in = response.expires_in.and_then(ExpiresIn::into_u64);
     Ok(RefreshedToken {
         access_token,
@@ -393,6 +407,16 @@ mod tests {
         let body = r#"{"expires_in":3599}"#;
         let error = parse_token_response(status, body).unwrap_err();
         assert!(error.contains("access_token"));
+    }
+
+    #[test]
+    fn rejects_oversized_access_tokens() {
+        let body = format!(
+            r#"{{"access_token":"{}"}}"#,
+            "x".repeat(MAX_TOKEN_BYTES + 1)
+        );
+        let error = parse_token_response("HTTP/1.1 200 OK", &body).unwrap_err();
+        assert!(error.contains("access_token") && error.contains("exceeds"));
     }
 
     #[test]
