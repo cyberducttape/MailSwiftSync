@@ -100,7 +100,8 @@ impl StateStore {
                 .connection
                 .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         let current_schema_needs_repair = stored_schema_version == CURRENT_SCHEMA_VERSION
-            && !Self::current_schema_is_clean(&store.connection);
+            && (!Self::current_schema_is_clean(&store.connection)
+                || Self::validate_schema_layout(&store.connection).is_err());
         if (stored_schema_version < CURRENT_SCHEMA_VERSION || current_schema_needs_repair)
             && std::fs::metadata(path)
                 .map(|metadata| metadata.len() > 0)
@@ -1044,7 +1045,8 @@ impl StateStore {
             // manually recovered ledger may contain invalid rows. Perform a
             // small invariant probe before skipping the migration transaction
             // rather than rewriting every row on every application launch.
-            let current_schema_is_clean = Self::current_schema_is_clean(&self.connection);
+            let current_schema_is_clean = Self::current_schema_is_clean(&self.connection)
+                && Self::validate_schema_layout(&self.connection).is_ok();
             if current_schema_is_clean {
                 // A clean v12 ledger needs no launch-time data rewrite. The
                 // identity is calculated when a mailbox is created or its
