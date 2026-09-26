@@ -409,6 +409,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             let result = match prepared {
                 Ok(command) => {
                     let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
+                    let verification = command.verification.clone();
                     let prefix = format!("[{}] ", index + 1);
                     let secrets = [
                         job.form.source_password.clone(),
@@ -513,21 +514,14 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     } else {
                         result
                     };
-                    drop(cleanup_guard);
-                    if result.is_ok()
+                    let result = if result.is_ok()
                         && !job.form.dry_run
                         && job.form.engine() == core::Engine::Dovecot
                     {
-                        let verification = job.form.dovecot_verification_commands(false);
+                        // Runtime verification shares the private config and
+                        // source passfile prepared for the transfer.
                         let verification_secret = job.form.source_password.clone();
-                        let verification_env = if job.form.local_doveadm() {
-                            vec![(
-                                "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                                verification_secret.clone(),
-                            )]
-                        } else {
-                            Vec::new()
-                        };
+                        let verification_env = Vec::new();
                         result.and_then(|outcome| {
                             run_dovecot_verification(
                                 &verification,
@@ -560,7 +554,9 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         })
                     } else {
                         result
-                    }
+                    };
+                    drop(cleanup_guard);
+                    result
                 }
                 Err(error) => Err(error),
             };

@@ -6,9 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
-- Dovecot native transfers now pass source credentials through an explicitly
-  imported child environment variable and config expansion delimited by
-  whitespace on both sides, keeping the credential out of process arguments.
+- Dovecot native transfers now use a private runtime config that includes the
+  destination config and reads the source credential from an owner-only file;
+  the password stays out of process arguments and the profile.
 - Fixed Dovecot source mailbox verification command ordering so TLS and
   `-o` overrides are passed before the `mailbox status` subcommand.
 - Fixed Dovecot live command ordering: dsync-specific `-l`, `-s`, and `-1`

@@ -272,6 +272,7 @@ impl App {
         let args = prepared.args;
         let cleanup = prepared.cleanup;
         let prepared_env = prepared.env;
+        let prepared_verification = prepared.verification;
         let run_id = uuid::Uuid::new_v4().to_string();
         let worker_project_id = run_project_id.clone();
         let active_run = match admit_single_run(
@@ -324,7 +325,7 @@ impl App {
             self.form.engine().label()
         ));
         let verification = if !self.form.dry_run && self.form.engine() == core::Engine::Dovecot {
-            self.form.dovecot_verification_commands(false)
+            prepared_verification
         } else {
             Vec::new()
         };
@@ -335,14 +336,7 @@ impl App {
                 Vec::new()
             };
         let verification_secret = self.form.source_password.clone();
-        let verification_env = if self.form.local_doveadm() {
-            vec![(
-                "MAILSWIFTSYNC_IMAPC_PASSWORD".into(),
-                self.form.source_password.clone(),
-            )]
-        } else {
-            Vec::new()
-        };
+        let verification_env = Vec::new();
         let output_secrets = vec![
             self.form.source_password.clone(),
             self.form.destination_password.clone(),

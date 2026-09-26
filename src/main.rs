@@ -342,17 +342,7 @@ mod tests {
                 );
             }
         }
-        assert!(source_args.windows(2).any(|pair| {
-            pair == [
-                "-o",
-                "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD",
-            ]
-        }));
-        assert!(
-            source_args.windows(2).any(|pair| {
-                pair == ["-o", "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD "]
-            })
-        );
+        assert!(!source_args.iter().any(|arg| arg.contains("IMAPC_PASSWORD")));
         assert!(
             source_args[..mailbox_status]
                 .windows(2)
@@ -607,23 +597,38 @@ mod tests {
     }
 
     #[test]
-    fn local_dovecot_credentials_use_child_environment_without_process_arguments() {
+    fn local_dovecot_credentials_use_private_config_and_secret_files() {
         let mut form = dovecot_form();
-        form.source_password = String::from("secret").into();
+        form.profile.dovecot_config = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("Cargo.toml")
+            .to_string_lossy()
+            .into_owned();
+        form.dry_run = false;
+        form.source_password = String::from("top-secret-credential").into();
         let prepared = form.prepared_command().unwrap();
+        let _cleanup = crate::credentials::CleanupGuard::new(prepared.cleanup.clone());
+        let config_index = prepared.args.iter().position(|arg| arg == "-c").unwrap();
+        let runtime_config = &prepared.args[config_index + 1];
+        let contents = std::fs::read_to_string(runtime_config).unwrap();
+        assert!(contents.starts_with(&format!("!include {}\n", form.profile.dovecot_config)));
+        assert!(contents.contains("imapc_password = <"));
+        assert!(!contents.contains("top-secret-credential"));
+        let source_file = contents
+            .lines()
+            .find_map(|line| line.strip_prefix("imapc_password = <"))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(source_file).unwrap(),
+            "top-secret-credential"
+        );
         assert!(
-            prepared
+            !prepared
                 .args
                 .iter()
-                .any(|arg| { arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD " })
+                .any(|arg| arg.contains("top-secret-credential"))
         );
-        assert!(prepared.args.iter().any(|arg| {
-            arg == "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD"
-        }));
-        assert!(!prepared.args.iter().any(|arg| arg.contains("secret")));
-        assert!(prepared.env.iter().any(|(key, value)| {
-            key == "MAILSWIFTSYNC_IMAPC_PASSWORD" && value.as_str() == "secret"
-        }));
+        assert!(prepared.env.is_empty());
+        assert!(!prepared.verification.is_empty());
     }
 
     #[test]
@@ -884,13 +889,8 @@ mod tests {
         assert!(form.local_doveadm());
         let (exe, args) = form.command(true);
         assert_eq!(exe, form.profile.doveadm_path);
-        assert!(
-            args.iter()
-                .any(|arg| arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD ")
-        );
-        assert!(args.iter().any(|arg| {
-            arg == "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD"
-        }));
+        assert!(!args.iter().any(|arg| arg.contains("IMAPC_PASSWORD")));
+        assert!(!args.iter().any(|arg| arg.contains("top-secret-credential")));
     }
 
     #[test]
