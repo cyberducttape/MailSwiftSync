@@ -76,7 +76,7 @@ impl StateStore {
 
         let mut evidence = HashMap::new();
         let mut evidence_statement = tx.prepare(
-            "SELECT eh.job_id,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 AND eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=eh.job_id)",
+            "SELECT eh.job_id,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 AND eh.id=(SELECT latest.id FROM evidence_history latest WHERE latest.job_id=eh.job_id ORDER BY latest.captured_at DESC,latest.id DESC LIMIT 1)",
         )?;
         for row in evidence_statement.query_map([project_id], |row| {
             Ok((

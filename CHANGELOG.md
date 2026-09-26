@@ -97,6 +97,8 @@ operator distribution archives.
   before deserialization.
 - Bounded ordinary keyring credentials and OAuth access/refresh tokens to
   64 KiB before retaining them in process memory.
+- Aligned report evidence selection with the ledger's captured-time ordering,
+  including the deterministic ID tie-breaker.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
