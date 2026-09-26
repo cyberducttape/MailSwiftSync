@@ -1,6 +1,6 @@
 # MailSwiftSync Production Readiness Status
 
-**Last Updated:** September 25, 2026
+**Last Updated:** September 26, 2026
 **Test Coverage:** See the CI-generated test summary artifact for the current
 target-specific test inventory and execution result.
 **Code Maturity:** Technical Preview; several advertised subsystems remain dormant prototypes
@@ -48,7 +48,7 @@ very large accounts.
 | Source/destination message extraction | ✅ Wired for TLS imapsync | Bounded authenticated IMAP LIST/SELECT/UID FETCH path; plain IMAP fails closed |
 | Missing/extra/changed detection | ✅ Wired | Durable mismatch rows commit with terminal evidence and render in the operator verification report; GUI pagination remains limited |
 | Durable aggregate evidence storage | ✅ Wired | SQLite schema v12; aggregate and supplied message counters survive reports |
-| Plan-aware verification modes | ⚠️ Fail-closed | `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse exact message evidence until policy-aware reconciliation is implemented |
+| Plan-aware verification modes | ⚠️ Fail-closed | `automap`, `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse independent exact message evidence until policy-aware reconciliation is implemented |
 
 ### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
 | Provider | Status | Coverage |
@@ -122,8 +122,7 @@ new metadata verifier against real accounts.
 **Status:** Code paths and controller wiring verified, awaiting live provider validation
 
 ### Code Refactoring [QUALITY IMPROVEMENT]
-- [ ] core.rs modularization (3270 lines)
-- [ ] main.rs subsystem breakdown (2750 lines)
+- [ ] Continue modularizing the core and application entry point as needed; file sizes are intentionally not maintained as status claims.
 - [ ] Batch controller context structs
 
 **Status:** Functional and tested, not blocking production use
@@ -277,7 +276,7 @@ Open an issue with: `[FEATURE REQUEST]` prefix
 - **Status:** Technical Preview / Early Adoption
 - **Schema Version:** 12
 - **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; native Dovecot 2.3/2.4 CI qualification remains pending
-- **Build Date:** September 25, 2026
+- **Status snapshot date:** September 26, 2026 (not a build timestamp)
 
 ---
 

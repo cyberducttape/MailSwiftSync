@@ -202,7 +202,7 @@ The desktop runner does not persist passwords or OAuth access tokens. For imapsy
 
 ### Dovecot mode
 
-Dovecot mode configures the destination-side command using the selected migration strategy: initial/incremental mirrors use `doveadm backup`, while final preservation and destination-already-active passes use `doveadm sync -1`. The last committed state is reused for subsequent live passes, while the first pass supplies an empty state; `-l 300` gives another dsync operation up to five minutes to release the mailbox lock. A newly emitted state is committed atomically with the child result, and dry preflight remains non-stateful. Native Dovecot execution is local-only; saved profiles that request the retired remote-SSH path are rejected rather than silently converted. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Dovecot exit code 2 is retained as delta-required and the final pass should be repeated until exit code 0. Dry preflight performs a non-mutating `imapc` mailbox listing against the source plus destination user and mailbox-list checks; it is a readiness check, not proof that the full migration will succeed.
+Dovecot mode configures the destination-side command using the selected migration strategy: initial/incremental mirrors use `doveadm backup`, while final preservation and destination-already-active passes use `doveadm sync -1`. **Destination-already-active is an advanced, explicitly acknowledged mode:** Dovecot documents that `sync -1` merging does not work perfectly in every case and says its use should be limited; review conflicts and repeat final synchronization until dsync exits 0 before treating cutover as complete. Migration can impose unexpectedly high load on the source, and Dovecot does not provide a way to throttle synchronization. See the [Dovecot sync documentation](https://doc.dovecot.org/main/core/man/doveadm-sync.1.html) and [migration caveats](https://doc.dovecot.org/main/core/admin/migration.html). The last committed state is reused for subsequent live passes, while the first pass supplies an empty state; `-l 300` gives another dsync operation up to five minutes to release the mailbox lock. A newly emitted state is committed atomically with the child result, and dry preflight remains non-stateful. Native Dovecot execution is local-only; saved profiles that request the retired remote-SSH path are rejected rather than silently converted. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Dovecot exit code 2 is retained as delta-required and the final pass should be repeated until exit code 0. Dry preflight performs a non-mutating `imapc` mailbox listing against the source plus destination user and mailbox-list checks; it is a readiness check, not proof that the full migration will succeed.
 
 ## Verification
 
@@ -214,9 +214,12 @@ imapsync runs when the independent IMAP fetch succeeds. The latter compares
 Message-ID, INTERNALDATE, and RFC822.SIZE across every selectable folder; it is
 not body-content proof and is surfaced as `Metadata reconciled — message bodies not compared`, never as full message verification. A successful process
 without usable evidence is Level 0 — process completed, verification incomplete.
-The verifier fails closed for `--justfolders`, `--addheader`, disabled internal-date
-sync, or `--allowsizemismatch` plans until their semantics can be represented
-without overstating exact evidence. It also enforces a conservative estimated
+The verifier fails closed for `--automap`, `--justfolders`, `--addheader`,
+disabled internal-date sync, or `--allowsizemismatch` plans until their
+semantics can be represented without overstating exact evidence. New profiles
+default to automapping off; live runs using automap are rejected before transfer
+because the engine's resolved mapping is not yet persisted as an immutable
+verification input. It also enforces a conservative estimated
 bounded UID-window enumeration; it no longer materializes a mailbox-wide
 `UID SEARCH ALL` response. Fetched metadata is staged in a private SQLite
 database and reconciled in bounded batches, so the live path does not retain

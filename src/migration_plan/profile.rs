@@ -220,7 +220,10 @@ impl Default for Profile {
             max_messages_per_second: 0,
             max_bytes_per_second: 0,
             migration_timeout_hours: default_migration_timeout_hours(),
-            automap: true,
+            // Keep the default plan eligible for independent metadata
+            // verification. imapsync's automapping cannot currently be
+            // replayed from an immutable mapping snapshot.
+            automap: false,
             addheader: false,
             justfolders: false,
             sync_internaldates: default_sync_internaldates(),

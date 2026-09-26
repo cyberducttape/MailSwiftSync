@@ -74,6 +74,10 @@ pub(crate) fn message_verification_enabled(form: &crate::Form) -> bool {
         && !form.profile.allowsizemismatch
 }
 
+pub(crate) fn automap_blocks_live_certification(form: &crate::Form) -> bool {
+    form.engine() == core::Engine::ImapSync && form.profile.automap
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalEvidenceSource {
     Independent,
@@ -1204,7 +1208,8 @@ pub(crate) fn run_dovecot_verification(
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        TerminalEvidenceSource, automap_folder_kind, infer_automap_folder_mapping,
+        TerminalEvidenceSource, automap_blocks_live_certification, automap_folder_kind,
+        infer_automap_folder_mapping, message_verification_enabled,
         persist_engine_identity_before_launch, resolve_imapsync_identity, terminal_evidence_source,
         validate_destination_folder_policy,
     };
@@ -1273,13 +1278,33 @@ mod tests {
 
     #[test]
     fn automap_never_claims_independent_message_verification_without_engine_mapping() {
-        let form = unsuitable_live_form();
+        let mut form = unsuitable_live_form();
+        form.profile.automap = true;
         assert!(form.profile.automap);
         assert!(!super::message_verification_enabled(&form));
         assert_eq!(
             terminal_evidence_source(&form, true, false),
             TerminalEvidenceSource::Unavailable
         );
+    }
+
+    #[test]
+    fn default_profile_can_provide_headless_live_terminal_evidence() {
+        let form = crate::Form::default();
+        assert!(message_verification_enabled(&form));
+        assert!(!automap_blocks_live_certification(&form));
+        assert_eq!(
+            terminal_evidence_source(&form, true, true),
+            TerminalEvidenceSource::Independent
+        );
+    }
+
+    #[test]
+    fn imapsync_automap_is_rejected_before_live_certification() {
+        let mut form = crate::Form::default();
+        form.profile.automap = true;
+        assert!(automap_blocks_live_certification(&form));
+        assert!(!message_verification_enabled(&form));
     }
 
     #[test]

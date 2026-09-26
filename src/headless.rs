@@ -553,6 +553,10 @@ pub(crate) fn headless_execute_with_credentials(
         );
     }
 
+    if live && crate::runner::automap_blocks_live_certification(&app.form) {
+        return Err("headless live requires independent message-verification evidence; imapsync automapping is not replayable from an immutable mapping snapshot. Disable automap and retry".into());
+    }
+
     app.form.dry_run = true;
     app.start();
     wait_for_headless_controller(&mut app)?;

@@ -207,6 +207,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         let mut completed = false;
         let mut delta_required = false;
         let mut claimed = false;
+        let mut verification_failure: Option<String> = None;
         for attempt in 0..=retry_count {
             if !launch_limiter.acquire(&cancel) {
                 break;
@@ -453,6 +454,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                     .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
                                 }
                                 Err(error) => {
+                                    let safe = crate::ui::redact_secrets(
+                                        &error,
+                                        [
+                                            job.form.source_password.as_str(),
+                                            job.form.destination_password.as_str(),
+                                        ],
+                                    );
+                                    verification_failure = Some(
+                                        safe.chars().take(2048).collect::<String>(),
+                                    );
                                     let _ = tx.send(Event::RunLine {
                                         run_id: child_run_id.clone(),
                                         job_id: job_id.clone(),
@@ -666,7 +677,10 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 if delta_required {
                     "Dovecot reports that another delta pass is required".into()
                 } else {
-                    "process completed".into()
+                    verification_failure.map_or_else(
+                        || "process completed".into(),
+                        |reason| format!("message-level verification incomplete: {reason}"),
+                    )
                 },
                 if job.form.dry_run {
                     Some(job.form.credential_binding_fingerprint())
