@@ -1695,12 +1695,22 @@ fn parse_message_fetch_response_with_fingerprints(
     ),
     String,
 > {
-    let starts = fetch_record_starts(response);
     let mut messages = HashMap::new();
     let mut content_fingerprints = HashMap::new();
-    for (index, start) in starts.iter().copied().enumerate() {
-        let end = starts.get(index + 1).copied().unwrap_or(response.len());
-        let record = &response[start..end];
+    let mut offset = 0;
+    while offset < response.len() {
+        let Some(relative_line_end) = response[offset..].find("\r\n") else {
+            break;
+        };
+        let line_end = offset + relative_line_end;
+        let line = &response[offset..line_end];
+        let next_line = line_end + 2;
+        if !is_fetch_record_line(line) {
+            offset = next_fetch_record_start(response, offset);
+            continue;
+        }
+        let record_end = next_fetch_record_start(response, next_line);
+        let record = &response[offset..record_end.min(response.len())];
         let first_line_end = record
             .find("\r\n")
             .ok_or_else(|| "IMAP FETCH record had no line terminator".to_owned())?;
@@ -1735,6 +1745,7 @@ fn parse_message_fetch_response_with_fingerprints(
         if let (Some(key), Some(fingerprint)) = (fingerprint_key, fingerprint) {
             content_fingerprints.insert(key, fingerprint);
         }
+        offset = record_end;
     }
     Ok((messages, content_fingerprints))
 }
@@ -1746,11 +1757,24 @@ fn parse_message_fetch_metadata_response_bytes(
     mailbox: &str,
     uidvalidity: Option<u64>,
 ) -> Result<crate::core::ExtractedMessages, String> {
-    let starts = fetch_record_starts_bytes(response);
     let mut messages = HashMap::new();
-    for (index, start) in starts.iter().copied().enumerate() {
-        let end = starts.get(index + 1).copied().unwrap_or(response.len());
-        let record = &response[start..end];
+    let mut offset = 0;
+    while offset < response.len() {
+        let Some(relative_line_end) = response[offset..]
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+        else {
+            break;
+        };
+        let line_end = offset + relative_line_end;
+        let line = &response[offset..line_end];
+        let next_line = line_end + 2;
+        if !is_fetch_record_line_bytes(line) {
+            offset = next_fetch_record_start_bytes(response, offset);
+            continue;
+        }
+        let record_end = next_fetch_record_start_bytes(response, next_line);
+        let record = &response[offset..record_end.min(response.len())];
         let first_line_end = record
             .windows(2)
             .position(|pair| pair == b"\r\n")
@@ -1778,59 +1802,43 @@ fn parse_message_fetch_metadata_response_bytes(
                 return Err(format!("duplicate FETCH UID {}", entry.key().uid));
             }
         }
+        offset = record_end;
     }
     Ok(messages)
 }
 
-/// Locate untagged FETCH record boundaries while skipping every IMAP literal.
-/// A raw message body is arbitrary octets and can itself contain lines that
-/// look like `* n FETCH`; treating those bytes as protocol framing would
-/// silently hash or report the wrong message.
 #[cfg(test)]
-fn fetch_record_starts(response: &str) -> Vec<usize> {
-    let bytes = response.as_bytes();
-    let mut starts = Vec::new();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        let Some(line_end) = response[offset..].find("\r\n") else {
-            break;
+fn next_fetch_record_start(response: &str, mut offset: usize) -> usize {
+    while offset < response.len() {
+        let Some(relative_line_end) = response[offset..].find("\r\n") else {
+            return response.len();
         };
-        let absolute_end = offset + line_end;
-        let line = &response[offset..absolute_end];
+        let line_end = offset + relative_line_end;
+        let line = &response[offset..line_end];
         if is_fetch_record_line(line) {
-            starts.push(offset);
+            return offset;
         }
-        let next_line = absolute_end + 2;
-        if let Some(literal_size) = imap_literal_size(line) {
-            offset = next_line.saturating_add(literal_size);
-        } else {
-            offset = next_line;
-        }
+        offset = (line_end + 2).saturating_add(imap_literal_size(line).unwrap_or(0));
     }
-    starts
+    response.len()
 }
 
-fn fetch_record_starts_bytes(response: &[u8]) -> Vec<usize> {
-    let mut starts = Vec::new();
-    let mut offset = 0;
+fn next_fetch_record_start_bytes(response: &[u8], mut offset: usize) -> usize {
     while offset < response.len() {
-        let Some(relative_end) = response[offset..]
+        let Some(relative_line_end) = response[offset..]
             .windows(2)
             .position(|pair| pair == b"\r\n")
         else {
-            break;
+            return response.len();
         };
-        let line_end = offset + relative_end;
+        let line_end = offset + relative_line_end;
         let line = &response[offset..line_end];
         if is_fetch_record_line_bytes(line) {
-            starts.push(offset);
+            return offset;
         }
-        offset = line_end + 2;
-        if let Some(literal_size) = imap_literal_size_bytes(line) {
-            offset = offset.saturating_add(literal_size);
-        }
+        offset = (line_end + 2).saturating_add(imap_literal_size_bytes(line).unwrap_or(0));
     }
-    starts
+    response.len()
 }
 
 fn is_fetch_record_line(line: &str) -> bool {

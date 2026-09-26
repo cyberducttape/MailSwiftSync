@@ -42,6 +42,8 @@ All notable changes to MailSwiftSync are documented here.
   instead of cloning every key into the UID/folder lookup index.
 - Removed redundant per-page FETCH UID sets; duplicate detection now uses the
   authoritative message-map insertion path.
+- Made FETCH parsers process record boundaries incrementally instead of
+  retaining a separate offset vector for every response record.
 
 ### Fixed
 

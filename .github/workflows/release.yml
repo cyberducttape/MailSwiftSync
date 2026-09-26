@@ -128,7 +128,7 @@ jobs:
           chmod 0755 bundle/mailswiftsync-${{ matrix.target }}
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
           if [[ "$RUNNER_OS" == "macOS" ]]; then
-            ditto -c -k --keepParent bundle "dist/mailswiftsync-${{ matrix.target }}.zip"
+            (cd bundle && ditto -c -k . "../dist/mailswiftsync-${{ matrix.target }}.zip")
             scripts/verify-release-bundle.sh "dist/mailswiftsync-${{ matrix.target }}.zip"
             (cd dist && shasum -a 256 mailswiftsync-${{ matrix.target }}.zip) > dist/mailswiftsync-${{ matrix.target }}.zip.sha256
           else

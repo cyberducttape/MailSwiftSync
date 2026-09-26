@@ -58,6 +58,13 @@ if [[ ! -d "$workspace/docs" ]]; then
   exit 1
 fi
 
+binary_count=$(find "$workspace" -mindepth 1 -maxdepth 1 -type f \
+  \( -name 'mailswiftsync-*' -o -name 'mailswiftsync-*.exe' \) -print | wc -l | tr -d ' ')
+if [[ "$binary_count" -ne 1 ]]; then
+  echo "FAIL: release archive must contain exactly one root-level mailswiftsync binary" >&2
+  exit 1
+fi
+
 # Public root documents use uppercase filename references both as Markdown
 # links and as operator-facing plain text. Every such reference must exist in
 # the extracted artifact, so a bundle cannot point back to files found only in

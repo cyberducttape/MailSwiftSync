@@ -36,6 +36,8 @@ jobs:
       - name: Verify documentation claims against capability manifest
         run: python3 scripts/verify-capability-claims.py
       - run: bash -n scripts/*.sh
+      - name: Verify release archive root layout
+        run: python3 tests/release_bundle_layout_test.py
       - name: Install provider evidence validator
         run: python3 -m pip install --disable-pip-version-check --requirement tests/provider-evidence/requirements.txt
       - run: python3 tests/provider_evidence_generator_test.py
