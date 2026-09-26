@@ -4,7 +4,7 @@
 
 **STATUS:** 🟡 **METADATA RECONCILIATION AND MISMATCH PERSISTENCE WIRED; CONTENT/SCALE DESIGN PENDING**
 **Priority:** 🚨 **CRITICAL — Largest Product-Level Trust Gap**  
-**Last verified:** 2026-09-20
+**Last verified:** 2026-09-25
 
 The independent metadata verifier closes the selective-loss gap for encrypted
 imapsync runs, but it does not prove body-content equality. Aggregate counts can
