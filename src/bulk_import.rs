@@ -432,39 +432,69 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
 
 fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), String> {
     const MAX_DIMENSION_PREFIX_BYTES: usize = 128 * 1024;
-    let mut prefix = Vec::with_capacity(128 * 1024);
-    let mut chunk = [0_u8; 8192];
-    while prefix.len() < MAX_DIMENSION_PREFIX_BYTES {
-        let count = entry
-            .read(&mut chunk)
-            .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        prefix.extend_from_slice(&chunk[..count]);
-        if prefix
-            .windows(b"<sheetData".len())
-            .any(|window| window == b"<sheetData")
-        {
-            break;
+    let mut bounded = entry.take(MAX_DIMENSION_PREFIX_BYTES as u64 + 1);
+    let mut xml = XmlReader::from_reader(BufReader::new(&mut bounded));
+    xml.config_mut().trim_text(false);
+    let mut buffer = Vec::with_capacity(1024);
+    let mut consumed_dimension = None;
+    loop {
+        buffer.clear();
+        let event = xml
+            .read_event_into(&mut buffer)
+            .map_err(|error| format!("The worksheet XML is malformed: {error}"))?;
+        let (element, empty) = match &event {
+            XmlEvent::Start(element) => (Some(element), false),
+            XmlEvent::Empty(element) => (Some(element), true),
+            XmlEvent::Eof => (None, false),
+            _ => continue,
+        };
+        let Some(element) = element else {
+            return Err("The worksheet contains no early sheetData element; refusing to materialize an unbounded sheet.".into());
+        };
+        let local_name = element.local_name();
+        if local_name.as_ref() == b"dimension" {
+            if consumed_dimension.is_some() {
+                return Err("The worksheet contains duplicate dimension elements.".into());
+            }
+            let mut reference = None;
+            for attribute in element.attributes() {
+                let attribute = attribute.map_err(|error| {
+                    format!("The worksheet dimension has a malformed attribute: {error}")
+                })?;
+                if attribute.key.local_name().as_ref() == b"ref" {
+                    if reference.is_some() {
+                        return Err("The worksheet dimension has duplicate ref attributes.".into());
+                    }
+                    reference = Some(
+                        std::str::from_utf8(attribute.value.as_ref())
+                            .map_err(|_| {
+                                "The worksheet dimension reference is not UTF-8.".to_owned()
+                            })?
+                            .to_owned(),
+                    );
+                }
+            }
+            consumed_dimension = Some(
+                reference
+                    .ok_or_else(|| "The worksheet dimension has no ref attribute.".to_owned())?,
+            );
+        } else if local_name.as_ref() == b"sheetData" {
+            if empty {
+                if let Some(reference) = consumed_dimension.as_deref() {
+                    validate_xlsx_dimension_reference(reference)?;
+                }
+                return Ok(());
+            }
+            let reference = consumed_dimension.as_deref().ok_or_else(|| {
+                "The worksheet does not declare a bounded early dimension; refusing to materialize it.".to_owned()
+            })?;
+            validate_xlsx_dimension_reference(reference)?;
+            return Ok(());
         }
     }
-    let text = std::str::from_utf8(&prefix)
-        .map_err(|_| "The worksheet dimension prefix is not valid UTF-8.".to_owned())?;
-    let Some(start) = find_xlsx_dimension_element(text)? else {
-        let nonempty_sheet_data = text.find("<sheetData").is_some_and(|offset| {
-            let remainder = &text[offset..];
-            !remainder.starts_with("<sheetData/>") && !remainder.starts_with("<sheetData />")
-        });
-        if nonempty_sheet_data || prefix.len() >= MAX_DIMENSION_PREFIX_BYTES {
-            return Err(
-                "The worksheet does not declare a bounded early dimension; refusing to materialize it."
-                    .into(),
-            );
-        }
-        return Ok(());
-    };
-    let reference = xlsx_dimension_reference(text, start)?;
+}
+
+fn validate_xlsx_dimension_reference(reference: &str) -> Result<(), String> {
     let mut endpoints = reference.split(':');
     let (start_columns, start_rows) = parse_xlsx_cell_reference(
         endpoints
@@ -493,142 +523,6 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
         ));
     }
     Ok(())
-}
-
-fn find_xlsx_dimension_element(text: &str) -> Result<Option<usize>, String> {
-    let mut offset = 0;
-    while let Some(relative_start) = text[offset..].find('<') {
-        let start = offset + relative_start;
-        let rest = &text[start..];
-        if rest.starts_with("<!--") {
-            let end = rest
-                .find("-->")
-                .ok_or_else(|| "The worksheet has an unterminated XML comment.".to_owned())?;
-            offset = start + end + 3;
-            continue;
-        }
-        if rest.starts_with("<?") {
-            let end = rest.find("?>").ok_or_else(|| {
-                "The worksheet has an unterminated XML processing instruction.".to_owned()
-            })?;
-            offset = start + end + 2;
-            continue;
-        }
-        if rest.starts_with("<![CDATA[") {
-            let end = rest
-                .find("]]>")
-                .ok_or_else(|| "The worksheet has an unterminated CDATA section.".to_owned())?;
-            offset = start + end + 3;
-            continue;
-        }
-        if rest.starts_with("<!") {
-            return Err("The worksheet contains an unsupported XML declaration.".into());
-        }
-        let name_start = usize::from(rest.starts_with("</")) + 1;
-        let name_end = rest[name_start..]
-            .find(|character: char| {
-                character.is_ascii_whitespace() || matches!(character, '/' | '>')
-            })
-            .map(|end| name_start + end)
-            .unwrap_or(rest.len());
-        if name_end == name_start {
-            return Err("The worksheet contains a malformed XML tag.".into());
-        }
-        let name = &rest[name_start..name_end];
-        if !rest.starts_with("</") && name == "dimension" {
-            return Ok(Some(start));
-        }
-        if !rest.starts_with("</") && name == "sheetData" {
-            return Ok(None);
-        }
-        let mut quote = None;
-        let mut end = None;
-        for (index, byte) in rest.as_bytes().iter().copied().enumerate().skip(name_end) {
-            match (quote, byte) {
-                (Some(expected), actual) if expected == actual => quote = None,
-                (Some(_), _) => {}
-                (None, b'\'' | b'"') => quote = Some(byte),
-                (None, b'>') => {
-                    end = Some(index);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        offset = start
-            + end.ok_or_else(|| "The worksheet contains an incomplete XML tag.".to_owned())?
-            + 1;
-    }
-    Ok(None)
-}
-
-fn xlsx_dimension_reference(text: &str, start: usize) -> Result<&str, String> {
-    let tag = &text[start..];
-    if !tag.starts_with("<dimension")
-        || !tag
-            .as_bytes()
-            .get("<dimension".len())
-            .is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
-    {
-        return Err("The worksheet has a malformed dimension element.".into());
-    }
-    let bytes = tag.as_bytes();
-    let mut quote = None;
-    let mut tag_end = None;
-    for (index, byte) in bytes.iter().copied().enumerate().skip("<dimension".len()) {
-        match (quote, byte) {
-            (Some(expected), actual) if expected == actual => quote = None,
-            (Some(_), _) => {}
-            (None, b'\'' | b'"') => quote = Some(byte),
-            (None, b'>') => {
-                tag_end = Some(index);
-                break;
-            }
-            _ => {}
-        }
-    }
-    let tag_end =
-        tag_end.ok_or_else(|| "The worksheet dimension element is incomplete.".to_owned())?;
-    let mut attributes = tag["<dimension".len()..tag_end].trim();
-    let mut dimension_reference = None;
-    while !attributes.is_empty() {
-        attributes = attributes.trim_start();
-        if attributes.is_empty() || attributes.starts_with('/') {
-            break;
-        }
-        let name_end = attributes
-            .find(|character: char| {
-                character.is_ascii_whitespace() || matches!(character, '=' | '/')
-            })
-            .unwrap_or(attributes.len());
-        if name_end == 0 {
-            return Err("The worksheet dimension has malformed attributes.".into());
-        }
-        let name = &attributes[..name_end];
-        attributes = attributes[name_end..].trim_start();
-        let Some(after_equals) = attributes.strip_prefix('=') else {
-            return Err("The worksheet dimension has a malformed attribute.".into());
-        };
-        attributes = after_equals.trim_start();
-        let Some(quote) = attributes
-            .as_bytes()
-            .first()
-            .copied()
-            .filter(|byte| matches!(byte, b'\'' | b'"'))
-        else {
-            return Err("The worksheet dimension has an unquoted attribute.".into());
-        };
-        attributes = &attributes[1..];
-        let Some(value_end) = attributes.as_bytes().iter().position(|byte| *byte == quote) else {
-            return Err("The worksheet dimension has an unterminated attribute.".into());
-        };
-        let value = &attributes[..value_end];
-        if name == "ref" && dimension_reference.replace(value).is_some() {
-            return Err("The worksheet dimension has duplicate ref attributes.".into());
-        }
-        attributes = &attributes[value_end + 1..];
-    }
-    dimension_reference.ok_or_else(|| "The worksheet dimension has no ref attribute.".into())
 }
 
 fn parse_xlsx_cell_reference(reference: &str) -> Result<(usize, u32), String> {
@@ -977,6 +871,10 @@ mod tests {
             ))
             .is_err()
         );
+        validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(
+            b"<x:worksheet xmlns:x='urn:test'><x:dimension x:ref='A1:B10'/><x:sheetData><x:row/></x:sheetData></x:worksheet>",
+        ))
+        .expect("namespace-qualified OOXML elements and attributes use local names");
         assert!(
             validate_xlsx_sheet_entry_dimensions(&mut Cursor::new(
                 b"<worksheet><dimension ref='XFD100000:A1'/><sheetData/></worksheet>",

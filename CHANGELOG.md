@@ -6,6 +6,13 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- New profiles disable imapsync automapping by default so independent message
+  verification can certify live migrations; headless live rejects plans that
+  cannot provide required verification evidence.
+- Batch migrations now persist verification-incomplete detail with the
+  durable terminal result instead of reducing the reason to an output line.
+- XLSX early-dimension inspection now uses a bounded streaming XML parser and
+  resolves namespace-qualified OOXML element and attribute names by local name.
 - Startup recovery now bounds the number of active process identities it will
   materialize and fails closed on an oversized ledger instead of allocating an
   unbounded recovery vector.

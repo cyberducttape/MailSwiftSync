@@ -3892,6 +3892,13 @@ destination_port = "000"
             ),
             Some(AttentionReason::TransportFailed)
         );
+        assert_eq!(
+            attention_reason_for(
+                "attention",
+                "message-level verification incomplete: IMAP metadata fetch timed out",
+            ),
+            Some(AttentionReason::VerificationIncomplete)
+        );
     }
 
     #[test]

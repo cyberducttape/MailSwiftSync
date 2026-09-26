@@ -208,7 +208,7 @@ impl Default for Form {
                 destination_auth: default_auth_method(),
                 doveadm_path: default_doveadm_path(),
                 migration_timeout_hours: default_migration_timeout_hours(),
-                automap: true,
+                automap: false,
                 sync_internaldates: true,
                 ..Default::default()
             },
@@ -1288,7 +1288,7 @@ mod tests {
     fn profile_rust_default_matches_serde_runtime_defaults() {
         let profile = crate::migration_plan::profile::Profile::default();
         assert_eq!(profile.batch_concurrency, 2);
-        assert!(profile.automap);
+        assert!(!profile.automap);
         assert!(profile.sync_internaldates);
         assert_eq!(profile.source_tls, "imaps");
         assert_eq!(profile.destination_tls, "imaps");

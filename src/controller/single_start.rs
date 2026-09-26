@@ -57,6 +57,13 @@ impl App {
             self.set_status(e, StatusSeverity::Error);
             return;
         }
+        if !self.form.dry_run && crate::runner::automap_blocks_live_certification(&self.form) {
+            self.set_status(
+                "Live migration blocked: imapsync automapping has no immutable mapping snapshot for independent verification. Disable automap and run a new preflight before migrating.",
+                StatusSeverity::Error,
+            );
+            return;
+        }
         if let (Some(project_id), Some(job_id)) = (self.project_id.clone(), self.job_id.clone()) {
             let identity_matches = match (
                 self.store.project(&project_id),
