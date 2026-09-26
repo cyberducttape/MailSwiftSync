@@ -1,12 +1,18 @@
+#![cfg_attr(not(test), allow(dead_code))]
+
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset};
+use rusqlite::{OptionalExtension, params};
 
 use super::{
     evidence::VerificationOutcome,
     message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey},
+    message_staging::{
+        MessageMetadataStage, StagedMessage, StagedMessageSide, staged_message_from_row,
+    },
 };
 
 /// Conservative admission budget for the combined source/destination state
@@ -256,25 +262,6 @@ impl MessageVerification {
             source_messages,
             dest_messages,
             &HashMap::new(),
-        )
-    }
-
-    /// Metadata-only reconciliation used by the live IMAP adapter. Content
-    /// verification has a separate API so callers cannot accidentally claim
-    /// body-hash evidence while supplying empty fingerprint maps.
-    pub fn detect_mismatches_with_metadata(
-        job_id: &str,
-        run_id: &str,
-        source_messages: &ExtractedMessages,
-        dest_messages: &ExtractedMessages,
-        folder_mapping: &HashMap<String, String>,
-    ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
-        Self::detect_mismatches_with_folder_mapping(
-            job_id,
-            run_id,
-            source_messages,
-            dest_messages,
-            folder_mapping,
         )
     }
 
@@ -1002,6 +989,410 @@ impl MessageVerification {
 
         Ok((all_mismatches, summary))
     }
+
+    /// Reconcile metadata staged in SQLite. The live adapter uses this path
+    /// for large accounts so only one bounded batch and one candidate row are
+    /// resident in Rust at a time.
+    pub(crate) fn detect_mismatches_from_stage(
+        job_id: &str,
+        run_id: &str,
+        stage: &MessageMetadataStage,
+        folder_mapping: &HashMap<String, String>,
+    ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        let connection = stage.connection();
+        connection
+            .execute_batch(
+                "CREATE TEMP TABLE staged_matched(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
+                 CREATE TEMP TABLE staged_folder_mapping(source TEXT PRIMARY KEY, destination TEXT NOT NULL);",
+            )
+            .map_err(|error| format!("could not initialize staged reconciliation: {error}"))?;
+        for (source, destination) in folder_mapping {
+            connection
+                .execute(
+                    "INSERT INTO staged_folder_mapping(source,destination) VALUES(?1,?2)",
+                    params![source, destination],
+                )
+                .map_err(|error| format!("could not stage folder mapping: {error}"))?;
+        }
+
+        let job_context: Arc<str> = Arc::from(job_id);
+        let run_context: Arc<str> = Arc::from(run_id);
+        let mut mismatches = Vec::new();
+        let mut estimated_bytes = 0usize;
+        let mut metadata_matches = 0_u64;
+        let mut probable_matches = 0_u64;
+        let mut missing_count = 0_u64;
+        let mut extra_count = 0_u64;
+        let mut duplicated_count = 0_u64;
+        let mut changed_count = 0_u64;
+
+        // Message-ID + exact metadata matching.
+        let mut after_rowid = 0_i64;
+        loop {
+            let batch = stage
+                .batch(StagedMessageSide::Source, after_rowid, true, true)
+                .map_err(|error| format!("could not read staged source metadata: {error}"))?;
+            if batch.is_empty() {
+                break;
+            }
+            after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
+            for source in batch {
+                let expected = expected_destination_folder(&source.key, folder_mapping);
+                let Some(destination) = stage_candidate(
+                    connection,
+                    "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.message_id=?1 AND d.mailbox=?2 AND d.date_key=?3 AND d.size_bytes=?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox,d.uidvalidity,d.uid LIMIT 1",
+                    params![
+                        source.message.message_id,
+                        expected,
+                        source.date_key,
+                        sqlite_stage_size(&source)?
+                    ],
+                )?
+                else {
+                    continue;
+                };
+                mark_stage_matched(connection, StagedMessageSide::Source, &source)?;
+                mark_stage_matched(connection, StagedMessageSide::Destination, &destination)?;
+                metadata_matches = metadata_matches.saturating_add(1);
+            }
+        }
+
+        // Remaining Message-ID matches in the expected folder are changes.
+        after_rowid = 0;
+        loop {
+            let batch = stage
+                .batch(StagedMessageSide::Source, after_rowid, true, false)
+                .map_err(|error| format!("could not read staged source IDs: {error}"))?;
+            if batch.is_empty() {
+                break;
+            }
+            after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
+            for source in batch {
+                let expected = expected_destination_folder(&source.key, folder_mapping);
+                let Some(destination) = stage_candidate(
+                    connection,
+                    "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.message_id=?1 AND d.mailbox=?2 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox,d.uidvalidity,d.uid LIMIT 1",
+                    params![source.message.message_id, expected],
+                )?
+                else {
+                    continue;
+                };
+                mark_stage_matched(connection, StagedMessageSide::Source, &source)?;
+                mark_stage_matched(connection, StagedMessageSide::Destination, &destination)?;
+                append_stage_mismatch(
+                    &mut mismatches,
+                    make_mismatch(
+                        &job_context,
+                        &run_context,
+                        MismatchType::MessageIdOnly,
+                        Some(&source.key),
+                        Some(&destination.key),
+                        Some(&source.message),
+                        Some(&destination.message),
+                    ),
+                    &mut estimated_bytes,
+                )?;
+                changed_count = changed_count.saturating_add(1);
+            }
+        }
+
+        // Same Message-ID and metadata in a wrong folder.
+        after_rowid = 0;
+        loop {
+            let batch = stage
+                .batch(StagedMessageSide::Source, after_rowid, true, true)
+                .map_err(|error| format!("could not read staged source metadata: {error}"))?;
+            if batch.is_empty() {
+                break;
+            }
+            after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
+            for source in batch {
+                let expected = expected_destination_folder(&source.key, folder_mapping);
+                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox< ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox DESC,d.uidvalidity,d.uid LIMIT 1";
+                let lower = stage_candidate(
+                    connection,
+                    query,
+                    params![
+                        source.message.message_id,
+                        source.date_key,
+                        sqlite_stage_size(&source)?,
+                        expected
+                    ],
+                )?;
+                let query = "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.message_id=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND d.mailbox> ?4 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) ORDER BY d.mailbox,d.uidvalidity,d.uid LIMIT 1";
+                let upper = stage_candidate(
+                    connection,
+                    query,
+                    params![
+                        source.message.message_id,
+                        source.date_key,
+                        sqlite_stage_size(&source)?,
+                        expected
+                    ],
+                )?;
+                let destination = match (lower, upper) {
+                    (Some(lower), Some(upper)) => {
+                        if lower.key.mailbox <= upper.key.mailbox {
+                            lower
+                        } else {
+                            upper
+                        }
+                    }
+                    (Some(row), None) | (None, Some(row)) => row,
+                    (None, None) => continue,
+                };
+                mark_stage_matched(connection, StagedMessageSide::Source, &source)?;
+                mark_stage_matched(connection, StagedMessageSide::Destination, &destination)?;
+                append_stage_mismatch(
+                    &mut mismatches,
+                    make_mismatch(
+                        &job_context,
+                        &run_context,
+                        MismatchType::PresentWrongFolder,
+                        Some(&source.key),
+                        Some(&destination.key),
+                        Some(&source.message),
+                        Some(&destination.message),
+                    ),
+                    &mut estimated_bytes,
+                )?;
+                changed_count = changed_count.saturating_add(1);
+            }
+        }
+
+        // Unique date/size candidates are probable matches. Buckets are held
+        // in SQLite, not in a Rust HashSet proportional to account size.
+        connection
+            .execute_batch("CREATE TEMP TABLE staged_fingerprint_buckets(folder TEXT NOT NULL,date_key TEXT NOT NULL,size_bytes INTEGER NOT NULL,PRIMARY KEY(folder,date_key,size_bytes));")
+            .map_err(|error| format!("could not initialize staged fingerprint buckets: {error}"))?;
+        after_rowid = 0;
+        loop {
+            let batch = stage
+                .batch(StagedMessageSide::Source, after_rowid, false, true)
+                .map_err(|error| format!("could not read staged fallback metadata: {error}"))?;
+            if batch.is_empty() {
+                break;
+            }
+            after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
+            for source in batch {
+                let expected = expected_destination_folder(&source.key, folder_mapping);
+                let inserted = connection
+                    .execute(
+                        "INSERT OR IGNORE INTO staged_fingerprint_buckets(folder,date_key,size_bytes) VALUES(?1,?2,?3)",
+                        params![expected, source.date_key, sqlite_stage_size(&source)?],
+                    )
+                    .map_err(|error| format!("could not stage fingerprint bucket: {error}"))?;
+                if inserted == 0 {
+                    continue;
+                }
+                let source_count: i64 = connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM staged_messages s LEFT JOIN staged_folder_mapping f ON f.source=s.mailbox WHERE s.side=0 AND COALESCE(f.destination,s.mailbox)=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid)",
+                        params![expected, source.date_key, sqlite_stage_size(&source)?],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| format!("could not count staged source bucket: {error}"))?;
+                let destination_count: i64 = connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM staged_messages d WHERE d.side=1 AND d.mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid)",
+                        params![expected, source.date_key, sqlite_stage_size(&source)?],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| format!("could not count staged destination bucket: {error}"))?;
+                if source_count != 1 || destination_count != 1 {
+                    continue;
+                }
+                let source_row = stage_candidate(
+                    connection,
+                    "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes FROM staged_messages s LEFT JOIN staged_folder_mapping f ON f.source=s.mailbox WHERE s.side=0 AND COALESCE(f.destination,s.mailbox)=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid) LIMIT 1",
+                    params![expected, source.date_key, sqlite_stage_size(&source)?],
+                )?;
+                let destination_row = stage_candidate(
+                    connection,
+                    "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) LIMIT 1",
+                    params![expected, source.date_key, sqlite_stage_size(&source)?],
+                )?;
+                if let (Some(source_row), Some(destination_row)) = (source_row, destination_row) {
+                    mark_stage_matched(connection, StagedMessageSide::Source, &source_row)?;
+                    mark_stage_matched(
+                        connection,
+                        StagedMessageSide::Destination,
+                        &destination_row,
+                    )?;
+                    probable_matches = probable_matches.saturating_add(1);
+                }
+            }
+        }
+
+        // Remaining rows become bounded mismatch evidence.
+        after_rowid = 0;
+        loop {
+            let batch = stage
+                .batch(StagedMessageSide::Source, after_rowid, false, false)
+                .map_err(|error| error.to_string())?;
+            if batch.is_empty() {
+                break;
+            }
+            after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
+            for source in batch {
+                append_stage_mismatch(
+                    &mut mismatches,
+                    make_mismatch(
+                        &job_context,
+                        &run_context,
+                        MismatchType::Missing,
+                        Some(&source.key),
+                        None,
+                        Some(&source.message),
+                        None,
+                    ),
+                    &mut estimated_bytes,
+                )?;
+                missing_count = missing_count.saturating_add(1);
+            }
+        }
+        connection.execute_batch("CREATE TEMP TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0;").map_err(|error| error.to_string())?;
+        after_rowid = 0;
+        loop {
+            let batch = stage
+                .batch(StagedMessageSide::Destination, after_rowid, false, false)
+                .map_err(|error| error.to_string())?;
+            if batch.is_empty() {
+                break;
+            }
+            after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
+            for destination in batch {
+                let duplicated = match destination.message.message_id.as_deref() {
+                    Some(id) => connection
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM staged_duplicate_ids WHERE message_id=?1)",
+                            [id],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .map_err(|error| {
+                            format!("could not classify staged duplicate message: {error}")
+                        })?,
+                    None => false,
+                };
+                let mismatch_type = if duplicated {
+                    MismatchType::Duplicated
+                } else {
+                    MismatchType::Extra
+                };
+                append_stage_mismatch(
+                    &mut mismatches,
+                    make_mismatch(
+                        &job_context,
+                        &run_context,
+                        mismatch_type,
+                        None,
+                        Some(&destination.key),
+                        None,
+                        Some(&destination.message),
+                    ),
+                    &mut estimated_bytes,
+                )?;
+                if duplicated {
+                    duplicated_count = duplicated_count.saturating_add(1);
+                } else {
+                    extra_count = extra_count.saturating_add(1);
+                }
+            }
+        }
+
+        let total_source = stage
+            .count(StagedMessageSide::Source)
+            .map_err(|error| error.to_string())?;
+        let total_destination = stage
+            .count(StagedMessageSide::Destination)
+            .map_err(|error| error.to_string())?;
+        if total_source
+            != metadata_matches
+                .saturating_add(probable_matches)
+                .saturating_add(missing_count)
+                .saturating_add(changed_count)
+            || total_destination
+                != metadata_matches
+                    .saturating_add(probable_matches)
+                    .saturating_add(extra_count)
+                    .saturating_add(duplicated_count)
+                    .saturating_add(changed_count)
+        {
+            return Err(
+                "staged reconciliation accounting did not partition both message populations"
+                    .into(),
+            );
+        }
+        Ok((
+            mismatches,
+            VerificationSummary {
+                total_source,
+                total_destination,
+                metadata_matches,
+                probable_matches,
+                missing_count,
+                extra_count,
+                duplicated_count,
+                changed_count,
+            },
+        ))
+    }
+}
+
+fn sqlite_stage_size(message: &StagedMessage) -> Result<i64, String> {
+    message
+        .message
+        .size_bytes
+        .ok_or_else(|| "staged metadata is missing RFC822.SIZE".to_owned())
+        .and_then(|value| {
+            i64::try_from(value).map_err(|_| "staged RFC822.SIZE exceeds SQLite range".to_owned())
+        })
+}
+
+fn stage_candidate<P: rusqlite::Params>(
+    connection: &rusqlite::Connection,
+    sql: &str,
+    parameters: P,
+) -> Result<Option<StagedMessage>, String> {
+    connection
+        .query_row(sql, parameters, staged_message_from_row)
+        .optional()
+        .map_err(|error| format!("could not query staged reconciliation candidate: {error}"))
+}
+
+fn mark_stage_matched(
+    connection: &rusqlite::Connection,
+    side: StagedMessageSide,
+    message: &StagedMessage,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO staged_matched(side,mailbox,uidvalidity,uid) VALUES(?1,?2,?3,?4)",
+            params![
+                side.as_i64(),
+                message.key.mailbox.as_ref(),
+                message
+                    .key
+                    .uidvalidity
+                    .map(|value| {
+                        i64::try_from(value)
+                            .map_err(|_| "staged UIDVALIDITY exceeds SQLite range".to_owned())
+                    })
+                    .transpose()?
+                    .unwrap_or(-1),
+                message.key.uid,
+            ],
+        )
+        .map(|_| ())
+        .map_err(|error| format!("could not mark staged message as matched: {error}"))
+}
+
+fn append_stage_mismatch(
+    mismatches: &mut Vec<MessageMismatch>,
+    mismatch: MessageMismatch,
+    estimated_bytes: &mut usize,
+) -> Result<(), String> {
+    append_mismatch_with_budget(mismatches, mismatch, estimated_bytes)
 }
 
 /// Validate that reconciliation accounting is consistent and complete.
@@ -2236,5 +2627,105 @@ mod tests {
             summary(950, 0, 0, 1, 0, 0).evidence_level(),
             EvidenceLevel::Unexpected
         );
+    }
+
+    #[test]
+    fn staged_reconciliation_matches_in_memory_accounting() {
+        let message = |id: Option<&str>, uid: &str, size: u64, date: &str| ExtractedMessage {
+            message_id: id.map(str::to_owned),
+            uid: Some(uid.to_owned()),
+            size_bytes: Some(size),
+            internal_date: Some(date.to_owned()),
+        };
+        let source = ExtractedMessages::from([
+            (
+                MailboxMessageKey::new("INBOX", "1"),
+                message(Some("<a>"), "1", 10, "01-Jan-2024 00:00:00 +0000"),
+            ),
+            (
+                MailboxMessageKey::new("INBOX", "2"),
+                message(Some("<b>"), "2", 20, "01-Jan-2024 00:00:00 +0000"),
+            ),
+            (
+                MailboxMessageKey::new("INBOX", "3"),
+                message(None, "3", 30, "01-Jan-2024 00:00:00 +0000"),
+            ),
+            (
+                MailboxMessageKey::new("INBOX", "4"),
+                message(Some("<missing>"), "4", 40, "01-Jan-2024 00:00:00 +0000"),
+            ),
+        ]);
+        let destination = ExtractedMessages::from([
+            (
+                MailboxMessageKey::new("INBOX", "11"),
+                message(Some("<a>"), "11", 10, "01-Jan-2024 00:00:00 +0000"),
+            ),
+            (
+                MailboxMessageKey::new("INBOX", "12"),
+                message(Some("<b>"), "12", 21, "01-Jan-2024 00:00:00 +0000"),
+            ),
+            (
+                MailboxMessageKey::new("INBOX", "13"),
+                message(None, "13", 30, "01-Jan-2024 00:00:00 +0000"),
+            ),
+            (
+                MailboxMessageKey::new("INBOX", "14"),
+                message(Some("<extra>"), "14", 50, "01-Jan-2024 00:00:00 +0000"),
+            ),
+        ]);
+        let folder_mapping = HashMap::new();
+        let (expected_mismatches, expected_summary) = MessageVerification::detect_mismatches(
+            "job-staged",
+            "run-staged-map",
+            &source,
+            &destination,
+        )
+        .unwrap();
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage
+            .insert_messages(StagedMessageSide::Source, &source)
+            .unwrap();
+        stage
+            .insert_messages(StagedMessageSide::Destination, &destination)
+            .unwrap();
+        let (staged_mismatches, staged_summary) =
+            MessageVerification::detect_mismatches_from_stage(
+                "job-staged",
+                "run-staged-stage",
+                &stage,
+                &folder_mapping,
+            )
+            .unwrap();
+        assert_eq!(staged_summary.total_source, expected_summary.total_source);
+        assert_eq!(
+            staged_summary.total_destination,
+            expected_summary.total_destination
+        );
+        assert_eq!(
+            staged_summary.metadata_matches,
+            expected_summary.metadata_matches
+        );
+        assert_eq!(
+            staged_summary.probable_matches,
+            expected_summary.probable_matches
+        );
+        assert_eq!(staged_summary.missing_count, expected_summary.missing_count);
+        assert_eq!(staged_summary.extra_count, expected_summary.extra_count);
+        assert_eq!(
+            staged_summary.duplicated_count,
+            expected_summary.duplicated_count
+        );
+        assert_eq!(staged_summary.changed_count, expected_summary.changed_count);
+        let mut expected_types = expected_mismatches
+            .iter()
+            .map(|mismatch| mismatch.mismatch_type.clone())
+            .collect::<Vec<_>>();
+        let mut staged_types = staged_mismatches
+            .iter()
+            .map(|mismatch| mismatch.mismatch_type.clone())
+            .collect::<Vec<_>>();
+        expected_types.sort_by_key(MismatchType::as_str);
+        staged_types.sort_by_key(MismatchType::as_str);
+        assert_eq!(staged_types, expected_types);
     }
 }

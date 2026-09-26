@@ -479,11 +479,43 @@ impl Drop for StateReservation<'_> {
     }
 }
 
-pub(crate) struct FetchedAccountMessages {
+pub(crate) struct FetchedAccountSummary {
     pub(crate) mailboxes: HashSet<String>,
     pub(crate) mailbox_details: Vec<MailboxDescriptor>,
-    pub(crate) messages: crate::core::ExtractedMessages,
     pub(crate) total_exists: u64,
+}
+
+trait MessageSink {
+    fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String>;
+    fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
+    fn len(&self) -> usize;
+}
+
+struct StageMessageSink<'a> {
+    stage: &'a mut crate::core::MessageMetadataStage,
+    side: crate::core::StagedMessageSide,
+    count: usize,
+}
+
+impl MessageSink for StageMessageSink<'_> {
+    fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String> {
+        self.stage.insert_messages(self.side, messages)?;
+        self.count = self.count.saturating_add(messages.len());
+        Ok(())
+    }
+
+    fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String> {
+        self.stage.delete_mailbox(self.side, mailbox)?;
+        self.count = self
+            .stage
+            .count(self.side)
+            .map_err(|error| error.to_string())? as usize;
+        Ok(())
+    }
+
+    fn len(&self) -> usize {
+        self.count
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1496,20 +1528,14 @@ fn classify_mailbox_fetch_error(error: String) -> MailboxFetchError {
     }
 }
 
-fn fetch_mailbox_with_existing_stream<S: Read + Write>(
+fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     stream: &mut S,
     host: &str,
     mailbox: &str,
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
-) -> Result<
-    (
-        crate::core::ExtractedMessages,
-        HashMap<crate::core::MailboxMessageKey, String>,
-        u64,
-    ),
-    MailboxFetchError,
-> {
+    sink: &mut C,
+) -> Result<u64, MailboxFetchError> {
     budget.check()?;
     if mailbox.trim().is_empty() {
         return Err("message-level verification requires a non-empty mailbox".into());
@@ -1551,7 +1577,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     let uidnext = uidnext.ok_or_else(|| {
         format!("{host}: SELECT {mailbox} did not return UIDNEXT; bounded UID enumeration is unavailable")
     })?;
-    let mut messages = HashMap::new();
     let mut state_reservation = StateReservation::new(state_budget);
     let mut page_number = 0usize;
     let mailbox_context: std::sync::Arc<str> = std::sync::Arc::from(mailbox);
@@ -1603,18 +1628,14 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
                 Some(start_uidvalidity),
             )?;
             validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
-            for (key, message) in page_messages {
-                state_reservation.reserve(estimated_message_record_bytes(&key, &message, None))?;
-                if messages.insert(key, message).is_some() {
-                    return Err(format!(
-                        "{host}: folder {mailbox}: duplicate message identity"
-                    ));
-                }
-                if messages.len() > MAX_MESSAGE_FETCH_RECORDS {
-                    return Err(format!(
-                        "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
-                    ));
-                }
+            for (key, message) in &page_messages {
+                state_reservation.reserve(estimated_message_record_bytes(key, message, None))?;
+            }
+            sink.insert_batch(&page_messages)?;
+            if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
+                return Err(format!(
+                    "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
+                ));
             }
             Ok(())
         },
@@ -1669,28 +1690,26 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     state_reservation.commit();
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.
-    Ok((messages, HashMap::new(), start_exists))
+    Ok(start_exists)
 }
 
-fn fetch_mailbox_with_stability_retry<S: Read + Write>(
+fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
     stream: &mut S,
     host: &str,
     mailbox: &str,
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
-) -> Result<
-    (
-        crate::core::ExtractedMessages,
-        HashMap<crate::core::MailboxMessageKey, String>,
-        u64,
-    ),
-    MailboxFetchError,
-> {
+    sink: &mut C,
+) -> Result<u64, MailboxFetchError> {
     let mut last_error = None;
     for attempt in 0..MAX_MAILBOX_STABILITY_ATTEMPTS {
-        match fetch_mailbox_with_existing_stream(stream, host, mailbox, budget, state_budget) {
+        match fetch_mailbox_with_existing_stream(stream, host, mailbox, budget, state_budget, sink)
+        {
             Ok(result) => return Ok(result),
             Err(MailboxFetchError::Changed(error)) => {
+                if let Err(rollback) = sink.rollback_mailbox(mailbox) {
+                    return Err(MailboxFetchError::Folder(rollback));
+                }
                 last_error = Some(error);
                 if attempt + 1 < MAX_MAILBOX_STABILITY_ATTEMPTS {
                     continue;
@@ -1698,7 +1717,12 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
             }
             Err(error @ MailboxFetchError::Control(_))
             | Err(error @ MailboxFetchError::SessionFatal(_))
-            | Err(error @ MailboxFetchError::Folder(_)) => return Err(error),
+            | Err(error @ MailboxFetchError::Folder(_)) => {
+                if let Err(rollback) = sink.rollback_mailbox(mailbox) {
+                    return Err(MailboxFetchError::Folder(rollback));
+                }
+                return Err(error);
+            }
         }
     }
     Err(MailboxFetchError::Changed(last_error.unwrap_or_else(
@@ -1836,7 +1860,7 @@ fn validate_fetch_page_coverage(
 /// successful results therefore always contain every selectable folder.
 /// The folder count and every message record remain bounded by the LIST/FETCH limits.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fetch_tls_account_messages(
+fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     host: &str,
     user: &str,
     credential: &str,
@@ -1846,7 +1870,8 @@ pub(crate) fn fetch_tls_account_messages(
     certificate_pin_sha256: &str,
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
-) -> Result<FetchedAccountMessages, String> {
+    sink: &mut C,
+) -> Result<FetchedAccountSummary, String> {
     budget.check()?;
     if transport == "plain" {
         return Err(
@@ -1900,7 +1925,6 @@ pub(crate) fn fetch_tls_account_messages(
     mailboxes.sort();
     mailboxes.dedup();
     let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
-    let mut all_messages = HashMap::new();
     let mut total_exists = 0_u64;
     let mut incomplete_folders = HashMap::new();
     let mut incomplete_folder_count = 0_usize;
@@ -1909,23 +1933,21 @@ pub(crate) fn fetch_tls_account_messages(
     // This avoids opening 200 separate TLS connections for a 200-folder account.
     for mailbox in mailboxes {
         budget.check()?;
-        match fetch_mailbox_with_stability_retry(&mut stream, host, &mailbox, budget, state_budget)
-        {
-            Ok((folder_messages, _folder_fingerprints, folder_exists)) => {
+        match fetch_mailbox_with_stability_retry(
+            &mut stream,
+            host,
+            &mailbox,
+            budget,
+            state_budget,
+            sink,
+        ) {
+            Ok(folder_exists) => {
                 total_exists = total_exists.saturating_add(folder_exists);
-                for (key, message) in folder_messages {
-                    if all_messages.insert(key, message).is_some() {
-                        let _ = stream.write_all(b"a999 LOGOUT\r\n");
-                        return Err(format!(
-                            "{host}: folder inventory produced duplicate message identity"
-                        ));
-                    }
-                    if all_messages.len() > MAX_MESSAGE_FETCH_RECORDS {
-                        let _ = stream.write_all(b"a999 LOGOUT\r\n");
-                        return Err(format!(
-                            "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
-                        ));
-                    }
+                if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
+                    let _ = stream.write_all(b"a999 LOGOUT\r\n");
+                    return Err(format!(
+                        "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
+                    ));
                 }
             }
             Err(MailboxFetchError::Control(error)) => {
@@ -1965,12 +1987,41 @@ pub(crate) fn fetch_tls_account_messages(
             incomplete_folder_count,
         ));
     }
-    Ok(FetchedAccountMessages {
+    Ok(FetchedAccountSummary {
         mailboxes: mailbox_inventory,
         mailbox_details,
-        messages: all_messages,
         total_exists,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fetch_tls_account_messages_to_stage(
+    host: &str,
+    user: &str,
+    credential: &str,
+    auth_method: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+    budget: &MessageFetchBudget<'_>,
+    state_budget: &MessageStateBudget,
+    stage: &mut crate::core::MessageMetadataStage,
+    side: crate::core::StagedMessageSide,
+) -> Result<FetchedAccountSummary, String> {
+    let count = stage.count(side).map_err(|error| error.to_string())? as usize;
+    let mut sink = StageMessageSink { stage, side, count };
+    fetch_tls_account_messages_with_sink(
+        host,
+        user,
+        credential,
+        auth_method,
+        transport,
+        ca_bundle,
+        certificate_pin_sha256,
+        budget,
+        state_budget,
+        &mut sink,
+    )
 }
 
 const MAX_FOLDER_FAILURE_DETAILS: usize = 16;

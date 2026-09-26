@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Live IMAP metadata verification now stages source and destination records in
+  a private SQLite database and reconciles them in bounded batches, avoiding
+  account-sized Rust message maps while preserving bounded mismatch evidence.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable
