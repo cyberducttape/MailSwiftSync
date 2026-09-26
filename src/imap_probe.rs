@@ -248,17 +248,11 @@ pub(crate) struct MessageFetchBudget<'a> {
     cancel: &'a AtomicBool,
 }
 
-#[allow(dead_code)]
 pub(crate) struct FetchedAccountMessages {
     pub(crate) mailboxes: HashSet<String>,
     pub(crate) mailbox_details: Vec<MailboxDescriptor>,
     pub(crate) messages: crate::core::ExtractedMessages,
     pub(crate) total_exists: u64,
-    pub(crate) content_fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
-    /// Folder failures collected while building the account result. A
-    /// non-empty map is never returned in a successful result: account
-    /// verification is all-or-nothing and callers receive the error instead.
-    pub(crate) incomplete_folders: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,7 +304,7 @@ fn read_imap_list_response<S: Read>(
     read_imap_list_response_inner(stream, tag, buffer, None, None)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn read_imap_list_response_with_mailboxes<S: Read>(
     stream: &mut S,
     tag: &str,
@@ -362,7 +356,10 @@ fn read_imap_list_response_inner<S: Read>(
         if last_read.elapsed() > MAX_INTER_READ_STALL {
             return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
         }
-        let read_deadline = (last_read + MAX_INTER_READ_STALL).min(deadline);
+        let budget_deadline = budget.map_or(deadline, |budget| budget.deadline);
+        let read_deadline = (last_read + MAX_INTER_READ_STALL)
+            .min(deadline)
+            .min(budget_deadline);
         let count = read_with_deadline(stream, buffer, read_deadline)?;
         last_read = Instant::now();
         if count == 0 {
@@ -686,6 +683,32 @@ pub(crate) fn connect_tls_stream(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
 ) -> Result<(StreamOwned<ClientConnection, TcpStream>, String), String> {
+    connect_tls_stream_inner(host, transport, ca_bundle, certificate_pin_sha256, None)
+}
+
+fn connect_tls_stream_with_budget(
+    host: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+    budget: &MessageFetchBudget<'_>,
+) -> Result<(StreamOwned<ClientConnection, TcpStream>, String), String> {
+    connect_tls_stream_inner(
+        host,
+        transport,
+        ca_bundle,
+        certificate_pin_sha256,
+        Some(budget),
+    )
+}
+
+fn connect_tls_stream_inner(
+    host: &str,
+    transport: &str,
+    ca_bundle: &str,
+    certificate_pin_sha256: &str,
+    budget: Option<&MessageFetchBudget<'_>>,
+) -> Result<(StreamOwned<ClientConnection, TcpStream>, String), String> {
     let (server_name, port) = crate::endpoint::parts(host, crate::default_imap_port(transport))
         .map_err(|error| format!("Invalid IMAP host {host}: {error}"))?;
     let address = if server_name.contains(':') {
@@ -701,17 +724,37 @@ pub(crate) fn connect_tls_stream(
                 .map(|iter| iter.collect::<Vec<_>>()),
         );
     });
-    let sockets = resolver
-        .recv_timeout(Duration::from_secs(8))
-        .map_err(|_| format!("{host}: DNS resolution timed out"))?
-        .map_err(|error| format!("{host}: {error}"))?;
+    let dns_deadline = budget
+        .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
+    let sockets = loop {
+        if budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(format!("{host}: DNS resolution cancelled"));
+        }
+        let remaining = dns_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!("{host}: DNS resolution timed out"));
+        }
+        match resolver.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            Ok(result) => break result.map_err(|error| format!("{host}: {error}"))?,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(format!("{host}: DNS resolver stopped unexpectedly"));
+            }
+        }
+    };
     if sockets.is_empty() {
         return Err(format!("{host}: no address found"));
     }
     let mut last_error = None;
     let mut tcp = None;
-    let connect_deadline = Instant::now() + Duration::from_secs(8);
+    let connect_deadline = budget
+        .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
     for socket in sockets {
+        if budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(format!("{host}: connection cancelled"));
+        }
         let remaining = connect_deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
@@ -732,9 +775,20 @@ pub(crate) fn connect_tls_stream(
                 .unwrap_or_else(|| "unknown connection error".into())
         )
     })?;
-    tcp.set_read_timeout(Some(Duration::from_secs(8)))
+    let io_timeout = budget
+        .map(|budget| {
+            budget
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(8))
+        })
+        .unwrap_or_else(|| Duration::from_secs(8));
+    if io_timeout.is_zero() {
+        return Err(format!("{host}: connection deadline exceeded"));
+    }
+    tcp.set_read_timeout(Some(io_timeout))
         .map_err(|e| e.to_string())?;
-    tcp.set_write_timeout(Some(Duration::from_secs(8)))
+    tcp.set_write_timeout(Some(io_timeout))
         .map_err(|e| e.to_string())?;
     let mut roots = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if !ca_bundle.trim().is_empty() {
@@ -784,14 +838,8 @@ pub(crate) fn connect_tls_stream(
             .conn
             .complete_io(&mut stream.sock)
             .map_err(|error| format!("{host}: TLS handshake failed: {error}"))?;
-        stream
-            .sock
-            .set_read_timeout(Some(Duration::from_secs(8)))
-            .map_err(|e| format!("{host}: could not set TLS read timeout: {e}"))?;
-        stream
-            .sock
-            .set_write_timeout(Some(Duration::from_secs(8)))
-            .map_err(|e| format!("{host}: could not set TLS write timeout: {e}"))?;
+        refresh_socket_timeout(&stream.sock, budget)
+            .map_err(|e| format!("{host}: could not set TLS I/O timeout: {e}"))?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
         return Ok((stream, greeting));
     }
@@ -799,17 +847,34 @@ pub(crate) fn connect_tls_stream(
     let connection = ClientConnection::new(Arc::new(config), name)
         .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
     let mut stream = StreamOwned::new(connection, tcp);
-    stream
-        .sock
-        .set_read_timeout(Some(Duration::from_secs(8)))
-        .map_err(|e| format!("{host}: could not set TLS read timeout: {e}"))?;
-    stream
-        .sock
-        .set_write_timeout(Some(Duration::from_secs(8)))
-        .map_err(|e| format!("{host}: could not set TLS write timeout: {e}"))?;
+    refresh_socket_timeout(&stream.sock, budget)
+        .map_err(|e| format!("{host}: could not set TLS I/O timeout: {e}"))?;
     let greeting = read_imap_greeting(&mut stream, host)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
     Ok((stream, greeting))
+}
+
+fn refresh_socket_timeout(
+    stream: &TcpStream,
+    budget: Option<&MessageFetchBudget<'_>>,
+) -> std::io::Result<()> {
+    let timeout = budget
+        .map(|budget| {
+            budget
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(8))
+        })
+        .unwrap_or_else(|| Duration::from_secs(8));
+    if timeout.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "message fetch deadline exceeded",
+        ));
+    }
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    Ok(())
 }
 
 pub(crate) fn probe_tls_capabilities_with_transport(
@@ -1257,40 +1322,6 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
     Err(last_error.unwrap_or_else(|| format!("{host}: mailbox {mailbox} stability check failed")))
 }
 
-#[allow(clippy::too_many_arguments, dead_code)]
-pub(crate) fn fetch_tls_mailbox_messages(
-    host: &str,
-    user: &str,
-    credential: &str,
-    auth_method: &str,
-    transport: &str,
-    ca_bundle: &str,
-    certificate_pin_sha256: &str,
-    budget: &MessageFetchBudget<'_>,
-    mailbox: &str,
-) -> Result<
-    (
-        crate::core::ExtractedMessages,
-        HashMap<crate::core::MailboxMessageKey, String>,
-    ),
-    String,
-> {
-    budget.check()?;
-    if transport == "plain" {
-        return Err(
-            "message-level verification requires TLS; refusing to inspect a plain IMAP session"
-                .into(),
-        );
-    }
-    let (stream, greeting) =
-        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
-    let (mut stream, _) =
-        authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
-    let (messages, fingerprints, _) =
-        fetch_mailbox_with_existing_stream(&mut stream, host, mailbox, budget)?;
-    Ok((messages, fingerprints))
-}
-
 /// Enumerate bounded UID windows and hand each fetch-sized page to the caller.
 /// No response contains the entire mailbox UID set, and no all-mailbox UID
 /// vector is retained between windows.
@@ -1429,7 +1460,7 @@ pub(crate) fn fetch_tls_account_messages(
         );
     }
     let (stream, greeting) =
-        connect_tls_stream(host, transport, ca_bundle, certificate_pin_sha256)?;
+        connect_tls_stream_with_budget(host, transport, ca_bundle, certificate_pin_sha256, budget)?;
     let (mut stream, post_auth_response) =
         authenticate_imap_stream(stream, host, user, credential, auth_method, greeting)?;
     stream
@@ -1468,7 +1499,6 @@ pub(crate) fn fetch_tls_account_messages(
     mailboxes.dedup();
     let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
     let mut all_messages = HashMap::new();
-    let mut all_fingerprints = HashMap::new();
     let mut total_exists = 0_u64;
     let mut estimated_state_bytes = 0usize;
     let mut incomplete_folders = HashMap::new();
@@ -1478,17 +1508,11 @@ pub(crate) fn fetch_tls_account_messages(
     for mailbox in mailboxes {
         budget.check()?;
         match fetch_mailbox_with_stability_retry(&mut stream, host, &mailbox, budget) {
-            Ok((folder_messages, folder_fingerprints, folder_exists)) => {
+            Ok((folder_messages, _folder_fingerprints, folder_exists)) => {
                 total_exists = total_exists.saturating_add(folder_exists);
                 for (key, message) in folder_messages {
-                    estimated_state_bytes =
-                        estimated_state_bytes.saturating_add(estimated_message_record_bytes(
-                            &key,
-                            &message,
-                            folder_fingerprints
-                                .get(&key)
-                                .or_else(|| all_fingerprints.get(&key)),
-                        ));
+                    estimated_state_bytes = estimated_state_bytes
+                        .saturating_add(estimated_message_record_bytes(&key, &message, None));
                     if all_messages.insert(key, message).is_some() {
                         let _ = stream.write_all(b"a999 LOGOUT\r\n");
                         return Err(format!(
@@ -1508,7 +1532,6 @@ pub(crate) fn fetch_tls_account_messages(
                         ));
                     }
                 }
-                all_fingerprints.extend(folder_fingerprints);
             }
             Err(error) => {
                 // Retain the folder-specific cause so the all-or-nothing
@@ -1530,8 +1553,6 @@ pub(crate) fn fetch_tls_account_messages(
         mailbox_details,
         messages: all_messages,
         total_exists,
-        content_fingerprints: all_fingerprints,
-        incomplete_folders,
     })
 }
 
@@ -1566,6 +1587,17 @@ fn format_folder_failures(host: &str, failures: &HashMap<String, String>) -> Str
                 .map(String::as_str)
                 .unwrap_or("unknown failure");
             let reason = reason
+                .chars()
+                .map(|character| {
+                    if character.is_control() {
+                        ' '
+                    } else {
+                        character
+                    }
+                })
+                .take(MAX_REASON_CHARS)
+                .collect::<String>();
+            let folder = folder
                 .chars()
                 .map(|character| {
                     if character.is_control() {
@@ -1642,7 +1674,7 @@ fn parse_selected_mailbox(
     Ok((exists, uidvalidity, uidnext))
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn parse_message_fetch_response(
     response: &str,
     mailbox: &str,
@@ -1651,6 +1683,7 @@ fn parse_message_fetch_response(
     Ok(parse_message_fetch_response_with_fingerprints(response, mailbox, uidvalidity)?.0)
 }
 
+#[cfg(test)]
 fn parse_message_fetch_response_with_fingerprints(
     response: &str,
     mailbox: &str,
@@ -1751,6 +1784,7 @@ fn parse_message_fetch_metadata_response_bytes(
 /// A raw message body is arbitrary octets and can itself contain lines that
 /// look like `* n FETCH`; treating those bytes as protocol framing would
 /// silently hash or report the wrong message.
+#[cfg(test)]
 fn fetch_record_starts(response: &str) -> Vec<usize> {
     let bytes = response.as_bytes();
     let mut starts = Vec::new();
@@ -1810,6 +1844,7 @@ fn is_fetch_record_line_bytes(line: &[u8]) -> bool {
     std::str::from_utf8(line).is_ok_and(is_fetch_record_line)
 }
 
+#[cfg(test)]
 fn imap_literal_size(line: &str) -> Option<usize> {
     let close = line.strip_suffix('}')?;
     let open = close.rfind('{')?;
@@ -1822,6 +1857,7 @@ fn imap_literal_size_bytes(line: &[u8]) -> Option<usize> {
     std::str::from_utf8(&line[start + 1..]).ok()?.parse().ok()
 }
 
+#[cfg(test)]
 fn fetch_content_fingerprint(record: &str) -> Option<String> {
     let marker_start = find_ascii_case_insensitive(record, "BODY[]")? + "BODY[]".len();
     let literal = record[marker_start..].trim_start();
@@ -1870,6 +1906,7 @@ fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
         .position(|part| part.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
+#[cfg(test)]
 fn fetch_message_id(record: &str) -> Option<String> {
     let marker = "BODY[HEADER.FIELDS (MESSAGE-ID)]";
     let marker_start = find_ascii_case_insensitive(record, marker)? + marker.len();

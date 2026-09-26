@@ -1,23 +1,7 @@
-#![allow(dead_code)]
-
-use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use std::time::Duration;
 
-/// Recovery state after an interrupted migration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecoveryState {
-    pub job_id: String,
-    pub run_id: String,
-    pub interrupted_at: String,
-    pub last_successful_uid: Option<String>,
-    pub messages_processed: u64,
-    pub messages_failed: u64,
-    pub reason: InterruptionReason,
-    pub recovery_guidance: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptionReason {
     /// User explicitly stopped the migration
     UserInitiated,
@@ -60,25 +44,6 @@ impl InterruptionReason {
             Self::Unknown => "unknown",
         }
     }
-}
-
-/// Recovery dashboard for the UI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecoveryDashboard {
-    pub has_interrupted_jobs: bool,
-    pub interrupted_jobs: Vec<RecoveryJobSummary>,
-    pub total_messages_to_resume: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecoveryJobSummary {
-    pub job_id: String,
-    pub mailbox: String,
-    pub interrupted_at: String,
-    pub messages_processed: u64,
-    pub messages_remaining_estimate: u64,
-    pub reason: String,
-    pub recommended_action: String,
 }
 
 /// Recovery guidance generator.
@@ -138,6 +103,7 @@ impl RecoveryPlanner {
     }
 
     /// Estimate time to resume based on messages remaining and provider throughput.
+    #[cfg(test)]
     pub fn estimate_resume_duration(
         messages_remaining: u64,
         messages_per_second: f64,
@@ -156,6 +122,7 @@ impl RecoveryPlanner {
     ///
     /// This function cannot prove that an endpoint or provider has recovered;
     /// callers must run the endpoint preflight before declaring resume safe.
+    #[cfg(test)]
     pub fn is_safe_to_resume(
         reason: InterruptionReason,
         time_since_interruption: Duration,
@@ -194,6 +161,7 @@ impl RecoveryPlanner {
     /// Return a positive resume decision only when the caller supplies a
     /// successful current endpoint revalidation result. The actual DNS/TCP/
     /// TLS/auth/IMAP probe belongs to the controller's endpoint probe path.
+    #[cfg(test)]
     pub fn is_safe_to_resume_after_revalidation(
         reason: InterruptionReason,
         time_since_interruption: Duration,

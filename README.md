@@ -221,7 +221,7 @@ sync, or `--allowsizemismatch` plans until their semantics can be represented
 without overstating exact evidence. It also enforces a conservative estimated
 bounded UID-window enumeration; it no longer materializes a mailbox-wide
 `UID SEARCH ALL` response. The reconciliation records themselves remain
-in-memory and are still subject to the conservative estimated state budget;
+in-memory and are still subject to the conservative estimated fetched-state admission budget;
 SQLite streaming reconciliation remains future work for very large accounts.
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:

@@ -75,6 +75,12 @@ impl App {
                 } else {
                     "No active run"
                 });
+                if let Some(started_at) = self.run_started_at {
+                    ui.label(format!(
+                        "Elapsed {}",
+                        crate::ui::format_elapsed(started_at.elapsed())
+                    ));
+                }
                 ui.label(
                     RichText::new(&self.status.text)
                         .color(status_color(self.status.severity, self.theme_colors())),

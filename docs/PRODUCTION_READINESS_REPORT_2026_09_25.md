@@ -24,7 +24,7 @@ MailSwiftSync has completed comprehensive production readiness verification. All
 - **File Operations:** O_NOFOLLOW symlink hardening implemented
 - **TLS Transport:** Rustls with certificate and hostname validation
 - **OS Keyring:** Secrets stored securely, not in files
-- **Dependency Audit:** No critical vulnerabilities (2 allowed: paste, ttf-parser - documented as unmaintained transitive deps)
+- **Dependency Audit:** No critical vulnerabilities; the current scan reports only `ttf-parser` as an unmaintained transitive dependency, documented for upstream replacement.
 
 ### Release Engineering ✅
 - **Windows Signing:** Authenticode code signing implemented and verified in CI
