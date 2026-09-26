@@ -392,6 +392,13 @@ doveadm -c "$workspace/source.conf" expunge -u "$user" mailbox Sparse uid 1:90
 # preparing the sparse-UID fixture. Restore service-account ownership before
 # the migration process accesses the mailbox over IMAP.
 chown -R "$mail_uid:$mail_gid" "$workspace/source/mail/$user/Maildir"
+sparse_mailbox="$workspace/source/mail/$user/Maildir/.Sparse"
+sparse_owner="$(stat -c '%u' "$sparse_mailbox")"
+sparse_mode="$(stat -c '%a' "$sparse_mailbox")"
+if [[ "$sparse_owner" != "$mail_uid" ]] || (( (8#$sparse_mode & 0200) == 0 )); then
+  echo "FAIL: sparse mailbox must be owned by uid $mail_uid and owner-writable; got uid $sparse_owner mode $sparse_mode" >&2
+  exit 1
+fi
 
 binary="$(command -v mailswiftsync)"
 imapsync_path="$(command -v imapsync)"

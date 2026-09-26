@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- The Dovecot integration fixture now asserts sparse-mailbox ownership and
+  owner-write permission before transfer, failing immediately with the actual
+  UID and mode instead of timing out later in the migration.
 - Expanded `make check` to include documentation-claim fixtures, local Markdown
   link validation, release-channel and archive-layout tests, and the same
   preview compatibility gate used by CI.
