@@ -8,7 +8,11 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn snapshot_sha256(snapshot: &str) -> String {
-    format!("{:x}", Sha256::digest(snapshot.as_bytes()))
+    let digest = Sha256::digest(snapshot.as_bytes());
+    digest
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect::<String>()
 }
 
 pub(crate) fn fingerprint_digest(fingerprint: &str) -> String {
@@ -39,7 +43,14 @@ fn resolve_executable(executable: &str) -> Option<PathBuf> {
 
 fn file_content_identity(path: &Path) -> String {
     match std::fs::read(path) {
-        Ok(contents) => format!("sha256:{:x}", Sha256::digest(contents)),
+        Ok(contents) => {
+            let digest = Sha256::digest(contents);
+            let hex = digest
+                .iter()
+                .map(|byte| format!("{:02x}", byte))
+                .collect::<String>();
+            format!("sha256:{}", hex)
+        }
         Err(error) => format!("unavailable:{:?}", error.kind()),
     }
 }

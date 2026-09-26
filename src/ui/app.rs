@@ -56,8 +56,8 @@ impl eframe::App for App {
                     .fill(colors.window)
                     .inner_margin(egui::Margin::symmetric(24, 15)),
             )
-            .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
+            .show(ctx, |ui: &mut egui::Ui| {
+                ui.horizontal_wrapped(|ui: &mut egui::Ui| {
                     ui.label(
                         RichText::new("MAILSWIFTSYNC")
                             .strong()
@@ -120,7 +120,7 @@ impl eframe::App for App {
                     if ui.button("⚙ Settings").clicked() {
                         self.settings_open = true;
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui: &mut egui::Ui| {
                         if self.ui_snapshot.is_stale() {
                             ui.label(
                                 RichText::new("⚠ DURABLE VIEW STALE")
@@ -176,7 +176,7 @@ impl eframe::App for App {
                     .fill(colors.panel)
                     .inner_margin(egui::Margin::same(16)),
             )
-            .show(ctx, |ui| {
+            .show(ctx, |ui: &mut egui::Ui| {
                 ui.label(
                     RichText::new("WORKSPACE")
                         .size(11.0)
@@ -210,7 +210,7 @@ impl eframe::App for App {
                     .fill(colors.background)
                     .inner_margin(egui::Margin::same(24)),
             )
-            .show(ctx, |ui| {
+            .show(ctx, |ui: &mut egui::Ui| {
                 if let Some(notice) = self.ui_snapshot.stale_notice() {
                     ui.colored_label(colors.warning, format!("⚠ {notice}"));
                     ui.add_space(8.0);
