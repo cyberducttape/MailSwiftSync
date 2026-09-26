@@ -122,6 +122,7 @@ impl StateStore {
     /// reasons are intentionally absent from the map; callers can distinguish
     /// a normal row from an explicitly classified operator-review row without
     /// issuing one query per mailbox.
+    #[cfg(test)]
     pub fn mailbox_attention_reasons(
         &self,
         project_id: &str,
