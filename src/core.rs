@@ -1961,7 +1961,7 @@ mod tests {
             .connection
             .execute(
                 "UPDATE mailbox_jobs SET config=?1 WHERE id=?2",
-                params!["x".repeat(MAX_PERSISTED_PROFILE_BYTES + 1), job],
+                params!["é".repeat(MAX_PERSISTED_PROFILE_BYTES / 2 + 1), job],
             )
             .unwrap();
         drop(store);
