@@ -119,6 +119,9 @@ operator distribution archives.
   avoid rescanning every folder for each duplicate Message-ID candidate.
 - Indexed duplicate Message-ID content and metadata matching with per-group
   queues, avoiding repeated linear scans of large duplicate groups.
+- Capped core mailbox pages at 1,000 rows, mailbox status exports at 100,000
+  rows, and verification/run-list pages at 1,000 rows before passing limits
+  to SQLite.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 

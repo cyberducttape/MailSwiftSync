@@ -1,5 +1,7 @@
 use super::*;
 
+const MAX_REPORT_PAGE_ROWS: u32 = 1_000;
+
 impl StateStore {
     pub fn project_report_snapshot(
         &self,
@@ -171,6 +173,7 @@ impl StateStore {
         offset: u32,
         limit: u32,
     ) -> rusqlite::Result<Vec<ReportMailboxSnapshot>> {
+        let limit = limit.min(MAX_REPORT_PAGE_ROWS);
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare(
             "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence_history eh ON eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=j.id) WHERE j.project_id=?1 ORDER BY j.rowid LIMIT ?2 OFFSET ?3",
@@ -247,6 +250,7 @@ impl StateStore {
         project_id: &str,
         limit: u32,
     ) -> rusqlite::Result<Vec<RunListItem>> {
+        let limit = limit.min(MAX_REPORT_PAGE_ROWS);
         let mut statement = self.connection.prepare(
             "SELECT r.id,r.job_id,r.parent_run_id,j.source_mailbox,j.destination_mailbox,r.engine,r.phase_at_start,r.status,r.started_at,r.finished_at,r.detail FROM runs r LEFT JOIN mailbox_jobs j ON j.id=r.job_id AND j.project_id=r.project_id WHERE r.project_id=?1 ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?2",
         )?;
