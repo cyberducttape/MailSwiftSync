@@ -650,6 +650,21 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        // Batch profiles are decoded into operator-facing jobs during restore.
+        // Enforce both the per-row parser limit and an aggregate bound at the
+        // ledger boundary so a crafted large queue cannot turn startup into an
+        // unbounded allocation before admission has a chance to run.
+        let profile_budget_exceeded: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE config IS NOT NULL AND length(config) > ?1) OR COALESCE((SELECT SUM(length(config)) FROM mailbox_jobs WHERE config IS NOT NULL), 0) > ?2",
+            rusqlite::params![
+                MAX_PERSISTED_PROFILE_BYTES as i64,
+                MAX_TOTAL_PERSISTED_PROFILE_BYTES as i64
+            ],
+            |row| row.get(0),
+        )?;
+        if profile_budget_exceeded {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         // Persisted wire values are part of the application schema too. Do
         // not let readers silently map an unknown value to a default enum
         // variant and present corrupted state as an ordinary ledger.

@@ -63,8 +63,8 @@ pub use state::{AttentionReason, MailboxState, Phase};
 pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 pub(crate) use policy::{
-    MAX_PERSISTED_PROFILE_BYTES, attention_reason_for, normalized_destination_identity,
-    valid_dovecot_checkpoint, valid_mailbox_transition,
+    MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES, attention_reason_for,
+    normalized_destination_identity, valid_dovecot_checkpoint, valid_mailbox_transition,
 };
 
 pub(crate) fn sqlite_i64(value: u64) -> rusqlite::Result<i64> {
@@ -1934,6 +1934,34 @@ mod tests {
             .execute_batch(
                 "ALTER TABLE projects RENAME TO projects_table;
                  CREATE VIEW projects AS SELECT id,name,source_endpoint,destination_endpoint,phase,created_at FROM projects_table;",
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn readonly_rejects_an_oversized_persisted_batch_profile() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-profile-budget-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        let project = store
+            .create_project("profile-budget", "source", "destination")
+            .unwrap();
+        let job = store
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "UPDATE mailbox_jobs SET config=?1 WHERE id=?2",
+                params!["x".repeat(MAX_PERSISTED_PROFILE_BYTES + 1), job],
             )
             .unwrap();
         drop(store);
