@@ -386,6 +386,7 @@ done
 
 # Select/expunge through Dovecot so the Maildir fixture is tested with actual
 # UID assignment rather than relying on filename order.
+chown -R "$mail_uid:$mail_gid" "$workspace/source/mail/$user/Maildir"
 doveadm -c "$workspace/source.conf" expunge -u "$user" mailbox Sparse uid 1:90
 
 binary="$(command -v mailswiftsync)"

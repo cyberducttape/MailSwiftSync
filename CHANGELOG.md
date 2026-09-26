@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Fixed the sparse-UID Dovecot fixture ownership after creating its Maildir
+  tree, so the Dovecot service user can assign UIDs and expunge the fixture
+  messages during integration setup.
 - Schema validation now parses actual SQLite `CHECK` expressions instead of
   accepting matching text embedded in defaults or comments; writable repair
   and read-only validation use the same strict constraint signature.
