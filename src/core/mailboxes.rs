@@ -148,11 +148,11 @@ impl StateStore {
     pub fn mailbox_attention_reason_counts(
         &self,
         project_id: &str,
-    ) -> rusqlite::Result<HashMap<String, usize>> {
+    ) -> rusqlite::Result<std::collections::BTreeMap<String, usize>> {
         let mut statement = self.connection.prepare(
             "SELECT attention_reason,COUNT(*) FROM mailbox_jobs WHERE project_id=?1 AND attention_reason IS NOT NULL GROUP BY attention_reason",
         )?;
-        let mut counts = HashMap::new();
+        let mut counts = std::collections::BTreeMap::new();
         for row in statement.query_map([project_id], |row| {
             Ok((row.get::<_, String>(0)?, super::sqlite_usize(row.get(1)?)?))
         })? {

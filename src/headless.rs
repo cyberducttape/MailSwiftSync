@@ -73,7 +73,7 @@ pub(crate) struct HeadlessProjectSummary {
     pub(crate) destination_endpoint: String,
     pub(crate) phase: String,
     pub(crate) mailbox_state_counts: core::MailboxStateCounts,
-    pub(crate) attention_reason_counts: std::collections::HashMap<String, usize>,
+    pub(crate) attention_reason_counts: std::collections::BTreeMap<String, usize>,
 }
 
 pub(crate) struct HeadlessCredentials {

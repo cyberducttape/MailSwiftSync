@@ -3733,7 +3733,7 @@ fn project_attention_reasons_are_loaded_as_one_read_model() {
     );
     assert_eq!(
         db.mailbox_attention_reason_counts(&project.id).unwrap(),
-        HashMap::from([
+        std::collections::BTreeMap::from([
             ("authentication_failed".to_owned(), 1),
             ("capacity_limited".to_owned(), 1),
         ])
