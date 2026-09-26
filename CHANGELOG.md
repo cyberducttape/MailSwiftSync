@@ -40,6 +40,8 @@ All notable changes to MailSwiftSync are documented here.
   maps before reconciliation indexes and classification sets are constructed.
 - Reduced verifier peak memory by indexing canonical mailbox keys by reference
   instead of cloning every key into the UID/folder lookup index.
+- Removed redundant per-page FETCH UID sets; duplicate detection now uses the
+  authoritative message-map insertion path.
 
 ### Fixed
 
