@@ -43,6 +43,8 @@ operator distribution archives.
   avoiding assumptions about worksheet-part numbering before Calamine parsing.
 - Schema index validation now also verifies each required index is attached to
   its intended runtime table.
+- Hardened XLSX dimension parsing against overflowing column references before
+  applying worksheet size limits.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full

@@ -285,7 +285,11 @@ fn parse_xlsx_cell_reference(reference: &str) -> Result<(usize, u32), String> {
         if !character.is_ascii_alphabetic() {
             return Err("The worksheet dimension has an invalid column.".into());
         }
-        columns = columns * 26 + (character.to_ascii_uppercase() as usize - 'A' as usize + 1);
+        let value = character.to_ascii_uppercase() as usize - 'A' as usize + 1;
+        columns = columns
+            .checked_mul(26)
+            .and_then(|columns| columns.checked_add(value))
+            .ok_or_else(|| "The worksheet dimension column is too large.".to_owned())?;
     }
     let rows = digits
         .parse::<u32>()
@@ -541,6 +545,7 @@ mod tests {
         assert_eq!(parse_xlsx_cell_reference("BL100001").unwrap(), (64, 100001));
         assert!(parse_xlsx_cell_reference("XFD1048576").is_ok());
         assert!(parse_xlsx_cell_reference("A").is_err());
+        assert!(parse_xlsx_cell_reference(&format!("{}1", "X".repeat(256))).is_err());
     }
 
     #[test]
