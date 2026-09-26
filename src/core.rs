@@ -1946,6 +1946,38 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_orphaned_evidence_history_run_reference() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-history-run-orphan-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        let project = store
+            .create_project("orphan-history-run", "source", "destination")
+            .unwrap();
+        let job = store
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA foreign_keys=OFF;")
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO evidence_history(job_id,run_id,source_messages,destination_messages,source_bytes,destination_bytes,failed_messages,source_folders,destination_folders) VALUES(?1,'missing-run',0,0,0,0,0,0,0)",
+                params![job],
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_current_schema_with_weakened_foreign_key_action() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-fk-action-{}", Uuid::new_v4()));

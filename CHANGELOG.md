@@ -44,6 +44,8 @@ operator distribution archives.
   only parent and child column names.
 - IMAP folder-failure reporting now retains only a bounded cause sample while
   preserving the total failure count.
+- Evidence history now enforces a foreign key from each historical result to
+  its recorded run, rejecting orphaned audit claims during recovery.
 - Live source and destination metadata scans now share one fetched-state
   admission budget, preventing each account from independently consuming the
   full allowance before reconciliation begins.
