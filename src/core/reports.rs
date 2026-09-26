@@ -83,8 +83,11 @@ impl StateStore {
                 row.get::<_, String>(0)?,
                 MailboxEvidence {
                     verification_method: VerificationMethod::parse(&row.get::<_, String>(2)?)
-                        .unwrap_or(VerificationMethod::AggregateEngine),
-                    verification_outcome: VerificationOutcome::parse(&row.get::<_, String>(3)?),
+                        .ok_or(rusqlite::Error::InvalidQuery)?,
+                    verification_outcome: Some(
+                        VerificationOutcome::parse(&row.get::<_, String>(3)?)
+                            .ok_or(rusqlite::Error::InvalidQuery)?,
+                    ),
                     source_messages: sqlite_u64(row.get(4)?)?,
                     destination_messages: sqlite_u64(row.get(5)?)?,
                     source_bytes: sqlite_u64(row.get(6)?)?,
@@ -194,9 +197,10 @@ impl StateStore {
                                 verification_method: VerificationMethod::parse(
                                     &row.get::<_, String>(10)?,
                                 )
-                                .unwrap_or(VerificationMethod::AggregateEngine),
-                                verification_outcome: VerificationOutcome::parse(
-                                    &row.get::<_, String>(11)?,
+                                .ok_or(rusqlite::Error::InvalidQuery)?,
+                                verification_outcome: Some(
+                                    VerificationOutcome::parse(&row.get::<_, String>(11)?)
+                                        .ok_or(rusqlite::Error::InvalidQuery)?,
                                 ),
                                 source_messages: sqlite_u64(row.get(12)?)?,
                                 destination_messages: sqlite_u64(row.get(13)?)?,

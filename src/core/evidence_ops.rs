@@ -107,7 +107,7 @@ impl StateStore {
     }
     #[cfg(test)]
     pub fn evidence(&self, job_id: &str) -> rusqlite::Result<Option<MailboxEvidence>> {
-        self.connection.query_row("SELECT verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { verification_method: VerificationMethod::parse(&r.get::<_, String>(0)?).unwrap_or(VerificationMethod::AggregateEngine), verification_outcome: VerificationOutcome::parse(&r.get::<_, String>(1)?), source_messages: sqlite_u64(r.get(2)?)?, destination_messages: sqlite_u64(r.get(3)?)?, source_bytes: sqlite_u64(r.get(4)?)?, destination_bytes: sqlite_u64(r.get(5)?)?, unmatched_messages: sqlite_optional_u64(r.get(6)?)?, failed_messages: sqlite_u64(r.get(7)?)?, source_folders: sqlite_u64(r.get(8)?)?, destination_folders: sqlite_u64(r.get(9)?)?, authoritative:r.get::<_, i64>(10)? != 0, missing_messages: sqlite_u64(r.get(11)?)?, extra_messages: sqlite_u64(r.get(12)?)?, modified_messages: sqlite_u64(r.get(13)?)?, probable_messages: sqlite_u64(r.get(14)?)? })).optional()
+        self.connection.query_row("SELECT verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages FROM evidence WHERE job_id=?1", [job_id], |r| Ok(MailboxEvidence { verification_method: VerificationMethod::parse(&r.get::<_, String>(0)?).ok_or(rusqlite::Error::InvalidQuery)?, verification_outcome: Some(VerificationOutcome::parse(&r.get::<_, String>(1)?).ok_or(rusqlite::Error::InvalidQuery)?), source_messages: sqlite_u64(r.get(2)?)?, destination_messages: sqlite_u64(r.get(3)?)?, source_bytes: sqlite_u64(r.get(4)?)?, destination_bytes: sqlite_u64(r.get(5)?)?, unmatched_messages: sqlite_optional_u64(r.get(6)?)?, failed_messages: sqlite_u64(r.get(7)?)?, source_folders: sqlite_u64(r.get(8)?)?, destination_folders: sqlite_u64(r.get(9)?)?, authoritative:r.get::<_, i64>(10)? != 0, missing_messages: sqlite_u64(r.get(11)?)?, extra_messages: sqlite_u64(r.get(12)?)?, modified_messages: sqlite_u64(r.get(13)?)?, probable_messages: sqlite_u64(r.get(14)?)? })).optional()
     }
     #[cfg(test)]
     pub fn latest_evidence_for_run(
@@ -122,8 +122,8 @@ impl StateStore {
                     Ok((
                         row.get(0)?,
                         MailboxEvidence {
-                            verification_method: VerificationMethod::parse(&row.get::<_, String>(1)?).unwrap_or(VerificationMethod::AggregateEngine),
-                            verification_outcome: VerificationOutcome::parse(&row.get::<_, String>(2)?),
+                            verification_method: VerificationMethod::parse(&row.get::<_, String>(1)?).ok_or(rusqlite::Error::InvalidQuery)?,
+                            verification_outcome: Some(VerificationOutcome::parse(&row.get::<_, String>(2)?).ok_or(rusqlite::Error::InvalidQuery)?),
                             source_messages: sqlite_u64(row.get(3)?)?,
                             destination_messages: sqlite_u64(row.get(4)?)?,
                             source_bytes: sqlite_u64(row.get(5)?)?,
