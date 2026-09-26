@@ -1,6 +1,36 @@
 use crate::{credentials::SecretString, imap_protocol::is_tagged_response};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    time::{Duration, Instant},
+};
+
+const MAX_AUTH_EXCHANGE_DURATION: Duration = Duration::from_secs(15);
+
+fn read_auth_chunk<S: Read>(
+    stream: &mut S,
+    buffer: &mut [u8; 4096],
+    deadline: Instant,
+    operation: &str,
+) -> Result<usize, String> {
+    loop {
+        if Instant::now() >= deadline {
+            return Err(format!("IMAP {operation} exceeded its 15-second deadline"));
+        }
+        match stream.read(buffer) {
+            Ok(count) => return Ok(count),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
 
 /// Build the RFC 7628 XOAUTH2 client response. The bearer token is kept in a
 /// zeroizing intermediate and the returned encoded value remains zeroizing
@@ -22,8 +52,9 @@ pub(crate) fn read_auth_continuation<S: Read + Write>(
     response: &mut String,
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
+    let deadline = Instant::now() + MAX_AUTH_EXCHANGE_DURATION;
     loop {
-        let count = stream.read(buffer).map_err(|e| e.to_string())?;
+        let count = read_auth_chunk(stream, buffer, deadline, "OAuth authentication")?;
         if count == 0 {
             return Err("IMAP connection closed during OAuth authentication".into());
         }
@@ -64,11 +95,12 @@ fn consume_auth_error_result<S: Read>(
     response: &mut String,
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
+    let deadline = Instant::now() + MAX_AUTH_EXCHANGE_DURATION;
     loop {
         if response.lines().any(|line| is_tagged_response(line, tag)) {
             return Ok(());
         }
-        let count = stream.read(buffer).map_err(|e| e.to_string())?;
+        let count = read_auth_chunk(stream, buffer, deadline, "OAuth authentication")?;
         if count == 0 {
             return Err("IMAP connection closed during OAuth authentication".into());
         }
@@ -92,9 +124,10 @@ pub(crate) fn read_auth_result<S: Read + Write>(
     response: &mut String,
     buffer: &mut [u8; 4096],
 ) -> Result<(), String> {
+    let deadline = Instant::now() + MAX_AUTH_EXCHANGE_DURATION;
     let mut acknowledged_continuations = 0;
     loop {
-        let count = stream.read(buffer).map_err(|e| e.to_string())?;
+        let count = read_auth_chunk(stream, buffer, deadline, "OAuth authentication")?;
         if count == 0 {
             return Err("IMAP connection closed during OAuth authentication".into());
         }
