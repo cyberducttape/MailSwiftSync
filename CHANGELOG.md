@@ -38,6 +38,8 @@ operator distribution archives.
   outcomes instead of trusting a forged status label over its counters.
 - The terminal evidence write boundary now applies the same exact-outcome
   invariant before committing a verification-difference record.
+- Explicit exact aggregate-engine evidence now also requires the
+  engine-authoritative marker.
 - Live source and destination metadata scans now share one fetched-state
   admission budget, preventing each account from independently consuming the
   full allowance before reconciliation begins.
