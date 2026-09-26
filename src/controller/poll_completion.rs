@@ -27,7 +27,6 @@ impl App {
             // as a fallback, because that would bypass the profile invariant
             // and could promote incomplete output.
             let terminal_evidence = self.pending_evidence.clone();
-            let terminal_mismatches = self.pending_mismatches.clone();
             let terminal_checkpoint = if !was_bulk_run && succeeded {
                 self.pending_checkpoint.clone()
             } else {
@@ -118,7 +117,7 @@ impl App {
                                     state,
                                     &detail,
                                     evidence,
-                                    &terminal_mismatches,
+                                    &self.pending_mismatches,
                                     terminal_checkpoint.as_deref(),
                                 )
                         } else {
