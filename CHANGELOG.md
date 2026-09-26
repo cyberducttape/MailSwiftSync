@@ -91,6 +91,8 @@ operator distribution archives.
   read path; those consumers only need mailbox identity and state.
 - Bounded persisted batch-profile TOML parsing and identity extraction to 1 MiB
   before deserialization.
+- Bounded durable report plan-snapshot TOML parsing to 1 MiB before
+  deserialization.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
