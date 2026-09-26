@@ -145,8 +145,9 @@ fn read_imap_tagged_with_limit<S: Read>(
 ) -> Result<(), String> {
     let mut raw_response = Vec::new();
     let mut scanner = TaggedResponseScanner::new(tag);
+    let deadline = Instant::now() + MAX_IMAP_COMMAND_DURATION;
     loop {
-        let count = stream.read(buffer).map_err(|e| e.to_string())?;
+        let count = read_with_deadline(stream, buffer, deadline, None)?;
         if count == 0 {
             return Err(format!("IMAP connection closed before {tag} completed"));
         }
@@ -345,6 +346,7 @@ const MAX_IMAP_LIST_LINE_BYTES: usize = 64 * 1024;
 const MAX_IMAP_LIST_LITERAL_BYTES: usize = 1024 * 1024;
 const MAX_IMAP_LIST_MAILBOXES: usize = 100_000;
 const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
+const MAX_IMAP_COMMAND_DURATION: Duration = Duration::from_secs(15);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
 const MESSAGE_UID_SEARCH_WINDOW_SIZE: u64 = 10_000;
