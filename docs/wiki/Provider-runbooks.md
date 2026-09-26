@@ -17,16 +17,19 @@ mailbox first, and Preflight before Live migration every time.
 | --- | --- | --- |
 | Host | `imap.gmail.com` | `outlook.office365.com` |
 | Port / TLS | 993, implicit IMAPS | 993, implicit IMAPS |
-| Auth | OAuth 2.0 / XOAUTH2 (Google no longer accepts plain-password IMAP login) | OAuth 2.0 / XOAUTH2 (Microsoft retired Basic Auth for IMAP) |
+| Auth | OAuth 2.0 / XOAUTH2 preferred; eligible Google accounts may use an app password only for a controlled compatibility test | OAuth 2.0 / XOAUTH2 (Microsoft retired Basic Auth for IMAP) |
 
-- **Both ends require OAuth.** Select **OAuth 2.0 / XOAUTH2** on both source
-  and destination in the plan; there is no password fallback for either
-  provider on a normal account. Register an app in each provider's console
-  (Google Cloud Console for Gmail; Entra ID / Azure AD app registration for
-  Microsoft 365) with IMAP scope, obtain an access token (and a refresh token
-  if you want MailSwiftSync's automatic-refresh keyring entry, described in
-  [Profiles, passwords, and security](Security-and-profiles.md)), and enter it
-  or a keyring reference in the plan.
+- **Authentication differs by provider and account type.** Use OAuth 2.0 /
+  XOAUTH2 for Google Workspace and personal Gmail by default. A personal or
+  other eligible Google account may use an app password for a deliberately
+  scoped compatibility test when Google exposes that option; never use an
+  ordinary account password. Microsoft 365 IMAP requires OAuth 2.0 /
+  XOAUTH2. Register an app in each provider's console (Google Cloud Console
+  for Gmail; Entra ID / Azure AD app registration for Microsoft 365) with IMAP
+  scope, obtain an access token (and a refresh token if you want
+  MailSwiftSync's automatic-refresh keyring entry, described in [Profiles,
+  passwords, and security](Security-and-profiles.md)), and enter it or a
+  keyring reference in the plan.
 - **Folders.** Gmail exposes labels as IMAP folders under a namespace that
   includes `[Gmail]/All Mail`, `[Gmail]/Sent Mail`, `[Gmail]/Trash`, etc.
   `--automap` maps the common ones, but a message with multiple Gmail labels
@@ -47,10 +50,12 @@ mailbox first, and Preflight before Live migration every time.
 | --- | --- | --- |
 | Host | `outlook.office365.com` | `imap.gmail.com` |
 | Port / TLS | 993, implicit IMAPS | 993, implicit IMAPS |
-| Auth | OAuth 2.0 / XOAUTH2 | OAuth 2.0 / XOAUTH2 |
+| Auth | OAuth 2.0 / XOAUTH2 (required) | OAuth 2.0 / XOAUTH2 preferred; eligible Google accounts may use an app password only for a controlled compatibility test |
 
-- Mirror image of the pairing above: OAuth on both ends, same app-registration
-  requirement on each side.
+- Microsoft 365 requires OAuth. For Google Workspace or personal Gmail,
+  prefer OAuth; an app password is a conditional Google-account fallback only
+  when the account is eligible and the test intentionally covers password IMAP.
+  The same app-registration requirement applies to OAuth on each side.
 - **Folders.** Microsoft 365's special folders (`Sent Items`, `Deleted Items`,
   `Junk Email`) do not share Gmail's names; confirm the automap result in
   Preflight rather than assuming a 1:1 match, and check that Gmail's IMAP
@@ -96,9 +101,10 @@ IMAP server, another hosting panel):
    STARTTLS vs. — rare and not recommended — plaintext) from the source
    host's own documentation or support. Do not guess; a wrong TLS mode fails
    fast in Preflight, but a wrong port can hang until timeout.
-2. Confirm the destination's OAuth requirement (both Microsoft 365 and
-   Google Workspace require it; a source provider may still accept a plain
-   password or an app-specific password).
+2. Confirm the destination's OAuth requirement. Microsoft 365 requires OAuth;
+   Google Workspace and personal Gmail should use OAuth by default, while an
+   eligible Google account may be tested with an app password. Never assume a
+   regular account password is accepted by either provider.
 3. Run Preflight and read the folder mapping before assuming automap did the
    right thing — a source with a nonstandard folder naming scheme (anything
    outside `INBOX`/`Sent`/`Trash`/`Drafts`/`Junk`) is exactly what automap
