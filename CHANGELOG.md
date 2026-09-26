@@ -36,6 +36,8 @@ All notable changes to MailSwiftSync are documented here.
   persistence boundary instead of allowing counters or byte totals to wrap.
 - Made report and evidence readers fail closed on unknown persisted enum values
   instead of silently substituting a different verification method or outcome.
+- Added an aggregate verifier-state admission budget covering both account
+  maps before reconciliation indexes and classification sets are constructed.
 
 ### Fixed
 
