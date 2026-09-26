@@ -1332,7 +1332,7 @@ impl Form {
             "-u".into(),
             self.profile.source_user.clone(),
             "-t".into(),
-            "messages,vsize".into(),
+            "messages vsize".into(),
             "*".into(),
         ]);
         let mut destination = Vec::new();
@@ -1347,7 +1347,7 @@ impl Form {
             "-u".into(),
             self.profile.destination_user.clone(),
             "-t".into(),
-            "messages,vsize".into(),
+            "messages vsize".into(),
             "*".into(),
         ]);
         vec![
@@ -1465,6 +1465,11 @@ mod tests {
                     .iter()
                     .any(|argument| argument == unexpected)
             );
+            assert!(verification.iter().all(|(_, arguments)| {
+                arguments
+                    .iter()
+                    .any(|argument| argument == "messages vsize")
+            }));
         }
     }
 
