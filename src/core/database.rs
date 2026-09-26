@@ -2,7 +2,14 @@ use super::*;
 
 type SchemaColumn = (&'static str, &'static str, bool, i64);
 type SchemaTable = (&'static str, &'static [SchemaColumn]);
-type ForeignKey = (&'static str, &'static str, &'static str);
+type ForeignKey = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+);
 type ForeignKeyTable = (&'static str, &'static [ForeignKey]);
 
 #[cfg(unix)]
@@ -316,33 +323,127 @@ impl StateStore {
             }
         }
         const FOREIGN_KEYS: &[ForeignKeyTable] = &[
-            ("mailbox_jobs", &[("projects", "project_id", "id")]),
-            ("evidence", &[("mailbox_jobs", "job_id", "id")]),
-            ("evidence_history", &[("mailbox_jobs", "job_id", "id")]),
+            (
+                "mailbox_jobs",
+                &[(
+                    "projects",
+                    "project_id",
+                    "id",
+                    "NO ACTION",
+                    "NO ACTION",
+                    "NONE",
+                )],
+            ),
+            (
+                "evidence",
+                &[(
+                    "mailbox_jobs",
+                    "job_id",
+                    "id",
+                    "NO ACTION",
+                    "NO ACTION",
+                    "NONE",
+                )],
+            ),
+            (
+                "evidence_history",
+                &[(
+                    "mailbox_jobs",
+                    "job_id",
+                    "id",
+                    "NO ACTION",
+                    "NO ACTION",
+                    "NONE",
+                )],
+            ),
             (
                 "runs",
                 &[
-                    ("projects", "project_id", "id"),
-                    ("mailbox_jobs", "job_id", "id"),
-                    ("runs", "parent_run_id", "id"),
+                    (
+                        "projects",
+                        "project_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    (
+                        "runs",
+                        "parent_run_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
                 ],
             ),
             (
                 "active_processes",
-                &[("runs", "run_id", "id"), ("mailbox_jobs", "job_id", "id")],
+                &[
+                    ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                ],
             ),
             (
                 "events",
-                &[("projects", "project_id", "id"), ("runs", "run_id", "id")],
+                &[
+                    (
+                        "projects",
+                        "project_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                ],
             ),
             (
                 "verification_acceptances",
-                &[("mailbox_jobs", "job_id", "id"), ("runs", "run_id", "id")],
+                &[
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                ],
             ),
-            ("engine_versions", &[("runs", "run_id", "id")]),
+            (
+                "engine_versions",
+                &[("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE")],
+            ),
             (
                 "message_mismatches",
-                &[("mailbox_jobs", "job_id", "id"), ("runs", "run_id", "id")],
+                &[
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                ],
             ),
         ];
         for (table, expected) in FOREIGN_KEYS {
@@ -353,15 +454,25 @@ impl StateStore {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             if actual.len() != expected.len()
-                || !expected.iter().all(|(parent, from, to)| {
-                    actual
-                        .iter()
-                        .any(|(a, b, c)| a == parent && b == from && c == to)
-                })
+                || !expected
+                    .iter()
+                    .all(|(parent, from, to, on_update, on_delete, match_type)| {
+                        actual.iter().any(|(a, b, c, d, e, f)| {
+                            a == parent
+                                && b == from
+                                && c == to
+                                && d == on_update
+                                && e == on_delete
+                                && f == match_type
+                        })
+                    })
             {
                 return Err(rusqlite::Error::InvalidQuery);
             }
