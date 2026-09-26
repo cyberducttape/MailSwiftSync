@@ -30,6 +30,8 @@ operator distribution archives.
 - Bounded headless status and support projections of active process identities,
   with explicit truncation reporting; full recovery scans remain unbounded only
   where inspecting every recorded process is required for safety.
+- Added an aggregate mailbox-row budget to detailed headless status so many
+  projects cannot combine their per-project pages into an oversized response.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable
