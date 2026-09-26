@@ -23,6 +23,9 @@ operator distribution archives.
   and bounded mismatch report reads.
 - Enforced the mismatch-detail budget inside each reconciliation pass, preventing
   an individual pass from exceeding the bound before its results are merged.
+- Expanded the verifier admission estimate to include reconciliation indexes and
+  classification sets, so expensive in-memory structures are budgeted before
+  they are constructed.
 
 ### Documentation and release packaging
 

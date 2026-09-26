@@ -14,6 +14,12 @@ use super::{
 /// guarantee: hash tables, indexes, classification sets, and mismatch
 /// evidence can have allocator overhead beyond the per-record estimate.
 const MAX_ESTIMATED_VERIFIER_STATE_BYTES: usize = 256 * 1024 * 1024;
+// Each fetched record participates in several borrowed indexes and
+// classification sets during reconciliation. This is deliberately
+// conservative: it accounts for hash-table entries, references, and
+// temporary membership bookkeeping that are not represented by the record
+// estimate itself.
+const ESTIMATED_RECONCILIATION_INDEX_BYTES_PER_RECORD: usize = 128;
 /// Bound the owned mismatch evidence retained before the durable SQLite
 /// transaction. This is separate from fetched-state admission because a
 /// mismatch-heavy account owns additional strings for every detail row.
@@ -157,13 +163,17 @@ fn estimated_verifier_state_bytes(
     source_messages: &ExtractedMessages,
     dest_messages: &ExtractedMessages,
 ) -> usize {
-    source_messages
+    let record_bytes = source_messages
         .iter()
         .chain(dest_messages)
         .map(|(key, message)| estimated_verifier_record_bytes(key, message))
         .fold(0usize, |total, record| {
             total.saturating_add(record.saturating_mul(2))
-        })
+        });
+    let record_count = source_messages.len().saturating_add(dest_messages.len());
+    record_bytes.saturating_add(
+        record_count.saturating_mul(ESTIMATED_RECONCILIATION_INDEX_BYTES_PER_RECORD),
+    )
 }
 
 fn enforce_verifier_state_budget(estimated_state_bytes: usize) -> Result<(), String> {
