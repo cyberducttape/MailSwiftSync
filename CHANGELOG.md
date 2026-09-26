@@ -9,6 +9,9 @@ All notable changes to MailSwiftSync are documented here.
 - Hardened the capability-claims drift gate to normalize Markdown and HTML
   presentation and detect affirmative production, GA, and support claims in
   headings, tables, blockquotes, and formatted text; added adversarial tests.
+- Removed hardcoded test counts, warning counts, and binary-size claims from
+  the archived readiness report; CI artifacts are now the source for per-run
+  test and build results.
 - Archived the dated production-readiness report and made the active status
   surfaces consistently identify the product as technical-preview only until
   the documented provider, scale, and recovery gates are met.
