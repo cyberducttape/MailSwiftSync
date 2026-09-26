@@ -27,6 +27,9 @@ operator distribution archives.
   permissions and crash cleanup boundaries.
 - Capped DNS address results before connection attempts so hostile or malformed
   resolver responses cannot create an unbounded socket-address vector.
+- Bounded headless status and support projections of active process identities,
+  with explicit truncation reporting; full recovery scans remain unbounded only
+  where inspecting every recorded process is required for safety.
 - Recovery validation now rejects cross-owner links among runs, events, active
   processes, verification acceptances, and evidence records.
 - Added SQLite nonnegative constraints for process identity fields and durable

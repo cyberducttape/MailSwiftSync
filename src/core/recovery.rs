@@ -105,9 +105,22 @@ impl StateStore {
     }
 
     pub fn active_processes(&self) -> rusqlite::Result<Vec<ActiveProcess>> {
-        self.connection
-            .prepare("SELECT run_id,job_id,pid,start_ticks,process_group,session_id,executable FROM active_processes")?
-            .query_map([], |row| {
+        self.active_processes_page(i64::MAX as u32)
+            .map(|(rows, _)| rows)
+    }
+
+    /// Load a bounded process-identity page for status/report projections.
+    /// Recovery uses `active_processes()` because it must inspect every
+    /// recorded owner before changing durable state.
+    pub fn active_processes_page(
+        &self,
+        limit: u32,
+    ) -> rusqlite::Result<(Vec<ActiveProcess>, bool)> {
+        let mut statement = self.connection.prepare(
+            "SELECT run_id,job_id,pid,start_ticks,process_group,session_id,executable FROM active_processes ORDER BY started_at,rowid LIMIT ?1",
+        )?;
+        let mut rows = statement
+            .query_map([i64::from(limit).saturating_add(1)], |row| {
                 let pid: i64 = row.get(2)?;
                 let pid = u32::try_from(pid)
                     .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, pid))?;
@@ -120,15 +133,24 @@ impl StateStore {
                     pid,
                     start_ticks: sqlite_optional_u64(start_ticks)?,
                     process_group: process_group
-                        .map(|value| u32::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery))
+                        .map(|value| {
+                            u32::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
+                        })
                         .transpose()?,
                     session_id: session_id
-                        .map(|value| u32::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery))
+                        .map(|value| {
+                            u32::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
+                        })
                         .transpose()?,
                     executable: row.get(6)?,
                 })
             })?
-            .collect()
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let truncated = rows.len() > limit as usize;
+        if truncated {
+            rows.truncate(limit as usize);
+        }
+        Ok((rows, truncated))
     }
 
     pub fn clear_processes(&self, run_id: &str) -> rusqlite::Result<()> {
