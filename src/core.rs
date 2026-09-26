@@ -2103,6 +2103,42 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_contradictory_exact_evidence() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-evidence-semantics-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES('p','p','s','d','discovery')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES('j','p','INBOX','INBOX','INBOX','completed')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES('j','metadata_reconciliation','exact_metadata_match',2,1,20,10,0,0,1,1,0,0,0,0,0)",
+                [],
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_orphaned_foreign_key_rows() {
         let directory =
             std::env::temp_dir().join(format!("mailswiftsync-schema-orphan-{}", Uuid::new_v4()));
