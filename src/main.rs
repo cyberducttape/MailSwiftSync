@@ -350,7 +350,7 @@ mod tests {
         }));
         assert!(
             source_args.windows(2).any(|pair| {
-                pair == ["-o", "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD"]
+                pair == ["-o", "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD "]
             })
         );
         assert!(
@@ -615,7 +615,7 @@ mod tests {
             prepared
                 .args
                 .iter()
-                .any(|arg| { arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD" })
+                .any(|arg| { arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD " })
         );
         assert!(prepared.args.iter().any(|arg| {
             arg == "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD"
@@ -886,7 +886,7 @@ mod tests {
         assert_eq!(exe, form.profile.doveadm_path);
         assert!(
             args.iter()
-                .any(|arg| arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD")
+                .any(|arg| arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD ")
         );
         assert!(args.iter().any(|arg| {
             arg == "import_environment= $import_environment MAILSWIFTSYNC_IMAPC_PASSWORD"

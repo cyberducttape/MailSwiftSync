@@ -219,8 +219,10 @@ impl Default for Form {
     }
 }
 fn dovecot_imapc_password_override() -> String {
-    // Dovecot's legacy `$ENV:name` expansion requires whitespace boundaries.
-    "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD".into()
+    // Dovecot 2.3 expands `$ENV:name` only when whitespace-delimited on both
+    // sides. Keep the trailing delimiter; the option remains a single argv
+    // value, and the secret itself is supplied through the child environment.
+    "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD ".into()
 }
 
 fn dovecot_import_environment_override() -> String {
