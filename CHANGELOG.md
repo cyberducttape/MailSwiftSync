@@ -6,6 +6,9 @@ All notable changes to MailSwiftSync are documented here.
 
 ### Production hardening
 
+- Removed dormant remote-Dovecot SSH configuration and command generation;
+  native Dovecot execution is explicitly local-only until a secret broker
+  exists, and legacy profiles requesting SSH now fail closed when loaded.
 - Replaced per-probe detached DNS resolver threads with a four-worker,
   32-request bounded resolver pool; resolver timeouts no longer accumulate an
   unbounded number of orphaned lookup threads.

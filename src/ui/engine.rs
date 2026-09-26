@@ -29,29 +29,6 @@ impl App {
                     if self.form.profile.engine == core::Engine::Dovecot {
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            ui.label("doveadm execution").on_hover_text(
-                                "Local doveadm is supported. Remote execution remains disabled until a secret-safe broker is available.",
-                            );
-                            egui::ComboBox::from_id_salt("dovecot_execution")
-                                .selected_text(match self.form.profile.dovecot_execution.as_str() {
-                                    "local" => "Local machine",
-                                    "ssh" => "Unavailable (secret broker required)",
-                                    _ => "Automatic (local-only inference)",
-                                })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut self.form.profile.dovecot_execution,
-                                        "local".into(),
-                                        "Local machine",
-                                    );
-                                    ui.selectable_value(
-                                        &mut self.form.profile.dovecot_execution,
-                                        "automatic".into(),
-                                        "Automatic (local-only inference)",
-                                    );
-                                });
-                        });
-                        ui.horizontal(|ui| {
                             ui.label("doveadm");
                             ui.text_edit_singleline(&mut self.form.profile.doveadm_path);
                         });
@@ -59,7 +36,7 @@ impl App {
                             ui.label("Config");
                             ui.text_edit_singleline(&mut self.form.profile.dovecot_config);
                         });
-                        ui.label(RichText::new("Remote Dovecot execution is unavailable until a secret-safe broker is implemented. Use local doveadm or imapsync.").size(11.0).color(self.theme_colors().danger));
+                        ui.label(RichText::new("Native Dovecot execution is local-only until a secret-safe broker is implemented.").size(11.0).color(self.theme_colors().text_secondary));
                         ui.label(RichText::new("Dry mode only lists the destination mailbox. Native Dovecot uses the selected migration strategy; backup and sync -1 have different merge behavior.").size(11.0).color(self.theme_colors().text_secondary));
                     }
                 });

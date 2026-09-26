@@ -128,7 +128,7 @@ Choose native Dovecot tooling directly when you already have a well-tested serve
 
 MailSwiftSync does not bundle or operate a remote sync service. Install the engine appropriate to the destination:
 
-- **Dovecot destination:** provide `doveadm` on the local controller host. Remote Dovecot execution is unavailable until a secret-safe broker is implemented; the destination administrator must permit the `imapc` source connection.
+- **Dovecot destination:** provide `doveadm` on the local controller host. Native Dovecot execution is local-only until a secret-safe broker is implemented; the destination administrator must permit the `imapc` source connection.
 - **Arbitrary IMAP destination:** install `imapsync` locally.
 
 MailSwiftSync's trusted imapsync verification contract is qualified only for
@@ -204,7 +204,7 @@ The desktop runner does not persist passwords or OAuth access tokens. For imapsy
 
 ### Dovecot mode
 
- Dovecot mode configures the destination-side command using the selected migration strategy: initial/incremental mirrors use `doveadm backup`, while final preservation and destination-already-active passes use `doveadm sync -1`. The last committed state is reused for subsequent live passes, while the first pass supplies an empty state; `-l 300` gives another dsync operation up to five minutes to release the mailbox lock. A newly emitted state is committed atomically with the child result, and dry preflight remains non-stateful. The Dovecot engine dialog supports local `doveadm`; legacy remote-SSH profiles are shown as unavailable and cannot be promoted until secret-safe brokering exists. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Dovecot exit code 2 is retained as delta-required and the final pass should be repeated until exit code 0. Dry preflight performs a non-mutating `imapc` mailbox listing against the source plus destination user and mailbox-list checks; it is a readiness check, not proof that the full migration will succeed.
+Dovecot mode configures the destination-side command using the selected migration strategy: initial/incremental mirrors use `doveadm backup`, while final preservation and destination-already-active passes use `doveadm sync -1`. The last committed state is reused for subsequent live passes, while the first pass supplies an empty state; `-l 300` gives another dsync operation up to five minutes to release the mailbox lock. A newly emitted state is committed atomically with the child result, and dry preflight remains non-stateful. Native Dovecot execution is local-only; saved profiles that request the retired remote-SSH path are rejected rather than silently converted. After a live run, MailSwiftSync queries both sides with `doveadm mailbox status` and stores aggregate folder/message/virtual-size evidence. Dovecot exit code 2 is retained as delta-required and the final pass should be repeated until exit code 0. Dry preflight performs a non-mutating `imapc` mailbox listing against the source plus destination user and mailbox-list checks; it is a readiness check, not proof that the full migration will succeed.
 
 ## Verification
 
