@@ -34,6 +34,8 @@ All notable changes to MailSwiftSync are documented here.
   malformed signed integers cannot be silently dropped or treated as true.
 - Rejected lossy signed/unsigned conversions at the evidence and process
   persistence boundary instead of allowing counters or byte totals to wrap.
+- Made report and evidence readers fail closed on unknown persisted enum values
+  instead of silently substituting a different verification method or outcome.
 
 ### Fixed
 
