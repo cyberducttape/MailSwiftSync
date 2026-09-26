@@ -42,6 +42,8 @@ operator distribution archives.
   engine-authoritative marker.
 - Schema validation now verifies foreign-key actions and match modes, not
   only parent and child column names.
+- IMAP folder-failure reporting now retains only a bounded cause sample while
+  preserving the total failure count.
 - Live source and destination metadata scans now share one fetched-state
   admission budget, preventing each account from independently consuming the
   full allowance before reconciliation begins.
