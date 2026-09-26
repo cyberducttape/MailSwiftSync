@@ -97,35 +97,30 @@ pub struct VerificationMembership {
 
 fn build_uid_folder_index(
     messages: &ExtractedMessages,
-) -> HashMap<(Option<u64>, String, String), MailboxMessageKey> {
+) -> HashMap<(Option<u64>, String, String), &MailboxMessageKey> {
     messages
         .keys()
-        .map(|key| {
-            (
-                (key.uidvalidity, key.uid.clone(), key.mailbox.clone()),
-                key.clone(),
-            )
-        })
+        .map(|key| ((key.uidvalidity, key.uid.clone(), key.mailbox.clone()), key))
         .collect()
 }
 
-fn mismatch_source_key(
+fn mismatch_source_key<'a>(
     mismatch: &MessageMismatch,
-    index: &HashMap<(Option<u64>, String, String), MailboxMessageKey>,
-) -> Option<MailboxMessageKey> {
+    index: &HashMap<(Option<u64>, String, String), &'a MailboxMessageKey>,
+) -> Option<&'a MailboxMessageKey> {
     let (uid, folder) = mismatch
         .source_uid
         .as_ref()
         .zip(mismatch.source_folder.as_ref())?;
     index
         .get(&(mismatch.source_uidvalidity, uid.clone(), folder.clone()))
-        .cloned()
+        .copied()
 }
 
-fn mismatch_destination_key(
+fn mismatch_destination_key<'a>(
     mismatch: &MessageMismatch,
-    index: &HashMap<(Option<u64>, String, String), MailboxMessageKey>,
-) -> Option<MailboxMessageKey> {
+    index: &HashMap<(Option<u64>, String, String), &'a MailboxMessageKey>,
+) -> Option<&'a MailboxMessageKey> {
     let (uid, folder) = mismatch
         .dest_uid
         .as_ref()
@@ -136,7 +131,7 @@ fn mismatch_destination_key(
             uid.clone(),
             folder.clone(),
         ))
-        .cloned()
+        .copied()
 }
 
 fn estimated_verifier_record_bytes(key: &MailboxMessageKey, message: &ExtractedMessage) -> usize {
@@ -247,11 +242,14 @@ impl MessageVerification {
         let mut mismatch_by_destination = HashMap::<MailboxMessageKey, HashSet<usize>>::new();
         for (index, mismatch) in mismatches.iter().enumerate() {
             if let Some(key) = mismatch_source_key(mismatch, &source_index) {
-                mismatch_by_source.entry(key).or_default().insert(index);
+                mismatch_by_source
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(index);
             }
             if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
                 mismatch_by_destination
-                    .entry(key)
+                    .entry(key.clone())
                     .or_default()
                     .insert(index);
             }
@@ -758,28 +756,28 @@ impl MessageVerification {
                 MismatchType::Missing => {
                     missing_count += 1;
                     if let Some(key) = mismatch_source_key(mismatch, &source_index) {
-                        missing_source.insert(key);
+                        missing_source.insert(key.clone());
                     }
                 }
                 MismatchType::Extra => {
                     extra_count += 1;
                     if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-                        extra_destination.insert(key);
+                        extra_destination.insert(key.clone());
                     }
                 }
                 MismatchType::Duplicated => {
                     duplicated_count += 1;
                     if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-                        duplicated_destination.insert(key);
+                        duplicated_destination.insert(key.clone());
                     }
                 }
                 MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder => {
                     changed_count += 1;
                     if let Some(key) = mismatch_source_key(mismatch, &source_index) {
-                        changed_source.insert(key);
+                        changed_source.insert(key.clone());
                     }
                     if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-                        changed_destination.insert(key);
+                        changed_destination.insert(key.clone());
                     }
                 }
             }
