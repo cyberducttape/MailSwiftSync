@@ -87,32 +87,35 @@ pub struct VerificationMembership {
     pub changed_destination: HashSet<MailboxMessageKey>,
 }
 
+fn build_uid_folder_index(
+    messages: &ExtractedMessages,
+) -> HashMap<(String, String), MailboxMessageKey> {
+    messages
+        .keys()
+        .map(|key| ((key.uid.clone(), key.mailbox.clone()), key.clone()))
+        .collect()
+}
+
 fn mismatch_source_key(
     mismatch: &MessageMismatch,
-    messages: &ExtractedMessages,
+    index: &HashMap<(String, String), MailboxMessageKey>,
 ) -> Option<MailboxMessageKey> {
     let (uid, folder) = mismatch
         .source_uid
         .as_ref()
         .zip(mismatch.source_folder.as_ref())?;
-    messages
-        .keys()
-        .find(|key| key.uid == *uid && key.mailbox == *folder)
-        .cloned()
+    index.get(&(uid.clone(), folder.clone())).cloned()
 }
 
 fn mismatch_destination_key(
     mismatch: &MessageMismatch,
-    messages: &ExtractedMessages,
+    index: &HashMap<(String, String), MailboxMessageKey>,
 ) -> Option<MailboxMessageKey> {
     let (uid, folder) = mismatch
         .dest_uid
         .as_ref()
         .zip(mismatch.destination_folder.as_ref())?;
-    messages
-        .keys()
-        .find(|key| key.uid == *uid && key.mailbox == *folder)
-        .cloned()
+    index.get(&(uid.clone(), folder.clone())).cloned()
 }
 
 /// Core message verification engine.
@@ -690,6 +693,9 @@ impl MessageVerification {
                 .count() as u64,
         };
 
+        let source_index = build_uid_folder_index(source_messages);
+        let dest_index = build_uid_folder_index(dest_messages);
+
         let changed_source = all_mismatches
             .iter()
             .filter(|m| {
@@ -698,7 +704,7 @@ impl MessageVerification {
                     MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
                 )
             })
-            .filter_map(|m| mismatch_source_key(m, source_messages))
+            .filter_map(|m| mismatch_source_key(m, &source_index))
             .collect::<HashSet<_>>();
         let changed_destination = all_mismatches
             .iter()
@@ -708,7 +714,7 @@ impl MessageVerification {
                     MismatchType::MessageIdOnly | MismatchType::PresentWrongFolder
                 )
             })
-            .filter_map(|m| mismatch_destination_key(m, dest_messages))
+            .filter_map(|m| mismatch_destination_key(m, &dest_index))
             .collect::<HashSet<_>>();
         let membership = VerificationMembership {
             matched_source: pass1_matched_src
@@ -724,17 +730,17 @@ impl MessageVerification {
             missing_source: all_mismatches
                 .iter()
                 .filter(|m| m.mismatch_type == MismatchType::Missing)
-                .filter_map(|m| mismatch_source_key(m, source_messages))
+                .filter_map(|m| mismatch_source_key(m, &source_index))
                 .collect(),
             extra_destination: all_mismatches
                 .iter()
                 .filter(|m| m.mismatch_type == MismatchType::Extra)
-                .filter_map(|m| mismatch_destination_key(m, dest_messages))
+                .filter_map(|m| mismatch_destination_key(m, &dest_index))
                 .collect(),
             duplicated_destination: all_mismatches
                 .iter()
                 .filter(|m| m.mismatch_type == MismatchType::Duplicated)
-                .filter_map(|m| mismatch_destination_key(m, dest_messages))
+                .filter_map(|m| mismatch_destination_key(m, &dest_index))
                 .collect(),
             changed_source,
             changed_destination,
@@ -818,10 +824,13 @@ pub fn validate_verification_summary(
         ],
     )?;
 
+    let source_index = build_uid_folder_index(source_messages);
+    let dest_index = build_uid_folder_index(dest_messages);
+
     let mut seen_source = HashSet::new();
     let mut seen_destination = HashSet::new();
     for mismatch in mismatches {
-        if let Some(key) = mismatch_source_key(mismatch, source_messages) {
+        if let Some(key) = mismatch_source_key(mismatch, &source_index) {
             if !seen_source.insert(key.clone()) {
                 return Err(format!(
                     "source mismatch identity {:?} appears more than once",
@@ -829,7 +838,7 @@ pub fn validate_verification_summary(
                 ));
             }
         }
-        if let Some(key) = mismatch_destination_key(mismatch, dest_messages) {
+        if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
             if !seen_destination.insert(key.clone()) {
                 return Err(format!(
                     "destination mismatch identity {:?} appears more than once",
