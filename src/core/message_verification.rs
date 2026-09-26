@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Bound::{Excluded, Unbounded};
+use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset};
 
@@ -66,8 +67,8 @@ impl MismatchType {
 #[derive(Debug, Clone)]
 pub struct MessageMismatch {
     pub id: String,
-    pub job_id: String,
-    pub run_id: String,
+    pub job_id: Arc<str>,
+    pub run_id: Arc<str>,
     pub mismatch_type: MismatchType,
     pub source_folder: Option<String>,
     pub destination_folder: Option<String>,
@@ -272,6 +273,8 @@ impl MessageVerification {
         dest_fingerprints: &HashMap<MailboxMessageKey, String>,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        let job_context: Arc<str> = Arc::from(job_id);
+        let run_context: Arc<str> = Arc::from(run_id);
         let (mut mismatches, mut summary) = Self::detect_mismatches_with_folder_mapping(
             job_id,
             run_id,
@@ -425,8 +428,8 @@ impl MessageVerification {
                 continue;
             }
             let mut mismatch = make_mismatch(
-                job_id,
-                run_id,
+                &job_context,
+                &run_context,
                 MismatchType::MessageIdOnly,
                 Some(source_key),
                 Some(dest_key),
@@ -449,8 +452,8 @@ impl MessageVerification {
     /// Reconciliation Pass 1: Message-ID + exact metadata matching.
     /// Returns (mismatches created, source keys matched, dest keys matched).
     fn pass_1_message_id_exact_metadata<'a>(
-        job_id: &str,
-        run_id: &str,
+        job_id: &Arc<str>,
+        run_id: &Arc<str>,
         source_messages: &'a ExtractedMessages,
         dest_messages: &'a ExtractedMessages,
         folder_mapping: &HashMap<String, String>,
@@ -546,8 +549,8 @@ impl MessageVerification {
     /// Finds messages with identical Message-ID and metadata but in unexpected folders.
     #[allow(clippy::too_many_arguments)]
     fn pass_2_wrong_folder_detection<'a>(
-        job_id: &str,
-        run_id: &str,
+        job_id: &Arc<str>,
+        run_id: &Arc<str>,
         source_messages: &'a ExtractedMessages,
         dest_messages: &'a ExtractedMessages,
         folder_mapping: &HashMap<String, String>,
@@ -709,6 +712,8 @@ impl MessageVerification {
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
         let estimated_state_bytes = estimated_verifier_state_bytes(source_messages, dest_messages);
         enforce_verifier_state_budget(estimated_state_bytes)?;
+        let job_id: Arc<str> = Arc::from(job_id);
+        let run_id: Arc<str> = Arc::from(run_id);
         let mut all_mismatches = Vec::new();
         let mut estimated_detail_bytes = 0usize;
         let mut total_metadata_matches = 0_u64;
@@ -720,8 +725,8 @@ impl MessageVerification {
         // Pass 1: Message-ID + exact metadata matching
         let (pass1_mismatches, pass1_matched_src, pass1_matched_dst) =
             Self::pass_1_message_id_exact_metadata(
-                job_id,
-                run_id,
+                &job_id,
+                &run_id,
                 source_messages,
                 dest_messages,
                 folder_mapping,
@@ -767,8 +772,8 @@ impl MessageVerification {
         // Pass 2: Wrong-folder detection for Message-ID matches
         let (pass2_mismatches, pass2_matched_src, pass2_matched_dst) =
             Self::pass_2_wrong_folder_detection(
-                job_id,
-                run_id,
+                &job_id,
+                &run_id,
                 source_messages,
                 dest_messages,
                 folder_mapping,
@@ -822,8 +827,8 @@ impl MessageVerification {
             append_mismatch_with_budget(
                 &mut all_mismatches,
                 make_mismatch(
-                    job_id,
-                    run_id,
+                    &job_id,
+                    &run_id,
                     MismatchType::Missing,
                     Some(source_uid),
                     None,
@@ -853,8 +858,8 @@ impl MessageVerification {
             append_mismatch_with_budget(
                 &mut all_mismatches,
                 make_mismatch(
-                    job_id,
-                    run_id,
+                    &job_id,
+                    &run_id,
                     MismatchType::Duplicated,
                     None,
                     Some(&dest_uid),
@@ -872,8 +877,8 @@ impl MessageVerification {
             append_mismatch_with_budget(
                 &mut all_mismatches,
                 make_mismatch(
-                    job_id,
-                    run_id,
+                    &job_id,
+                    &run_id,
                     MismatchType::Extra,
                     None,
                     Some(dest_uid),
@@ -1189,8 +1194,8 @@ fn normalize_internal_date(value: &str) -> NormalizedInternalDate<'_> {
 }
 
 fn make_mismatch(
-    job_id: &str,
-    run_id: &str,
+    job_id: &Arc<str>,
+    run_id: &Arc<str>,
     mismatch_type: MismatchType,
     source_key: Option<&MailboxMessageKey>,
     dest_key: Option<&MailboxMessageKey>,
@@ -1204,8 +1209,8 @@ fn make_mismatch(
             mismatch_type.as_str(),
             uuid::Uuid::new_v4()
         ),
-        job_id: job_id.to_owned(),
-        run_id: run_id.to_owned(),
+        job_id: Arc::clone(job_id),
+        run_id: Arc::clone(run_id),
         mismatch_type,
         source_folder: source_key.map(|key| key.mailbox.clone()),
         destination_folder: dest_key.map(|key| key.mailbox.clone()),

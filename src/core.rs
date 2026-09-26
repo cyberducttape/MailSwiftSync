@@ -487,8 +487,8 @@ mod tests {
         };
         let mismatch = MessageMismatch {
             id: "message-detail-mismatch".into(),
-            job_id: job.clone(),
-            run_id: run_id.into(),
+            job_id: std::sync::Arc::from(job.clone()),
+            run_id: std::sync::Arc::from(run_id),
             mismatch_type: message_verification::MismatchType::Missing,
             source_folder: Some("INBOX".into()),
             destination_folder: None,
