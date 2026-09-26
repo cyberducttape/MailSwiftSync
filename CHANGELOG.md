@@ -13,6 +13,9 @@ operator distribution archives.
   durable terminal result instead of reducing the reason to an output line.
 - XLSX early-dimension inspection now uses a bounded streaming XML parser and
   resolves namespace-qualified OOXML element and attribute names by local name.
+- The disposable IMAP integration artifact now retains MailSwiftSync command
+  output when a smoke run fails, enabling diagnosis without retaining fixture
+  credentials or private server keys.
 - Startup recovery now bounds the number of active process identities it will
   materialize and fails closed on an oversized ledger instead of allocating an
   unbounded recovery vector.

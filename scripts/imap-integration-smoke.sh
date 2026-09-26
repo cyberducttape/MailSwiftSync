@@ -37,6 +37,10 @@ fi
 echo "Using migration engine ${test_engine}, Dovecot ${dovecot_version}, and imapsync ${imapsync_version}"
 
 workspace="$(mktemp -d "${TMPDIR:-/tmp}/mailswiftsync-imap-lab.XXXXXX")"
+product_log="$workspace/mailswiftsync.log"
+if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" ]]; then
+  mkdir -p -- "$MAILSWIFTSYNC_EVIDENCE_OUTPUT"
+fi
 cleanup() {
   local status=$?
   if [[ "$status" -ne 0 ]]; then
@@ -55,6 +59,11 @@ cleanup() {
         tail -120 "$log" >&2 || true
       fi
     done
+    if [[ -n "${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-}" && -f "${product_log:-}" ]]; then
+      sed 's/lab-password/[REDACTED]/g' "$product_log" \
+        > "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-product.log" || true
+      chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-product.log" 2>/dev/null || true
+    fi
   fi
   if [[ -n "${source_pid:-}" ]]; then kill "$source_pid" 2>/dev/null || true; fi
   if [[ -n "${destination_pid:-}" ]]; then kill "$destination_pid" 2>/dev/null || true; fi
@@ -359,7 +368,20 @@ chmod 0600 "$source_secret" "$destination_secret"
 run_product() {
   # A broken engine, fixture, or controller must produce a bounded release
   # failure rather than consuming an unattended CI runner indefinitely.
-  timeout --foreground 180 "$binary" "$@"
+  timeout --foreground 180 "$binary" "$@" 2>&1 | LC_ALL=C awk -v path="$product_log" '
+    {
+      print
+      fflush()
+      if (saved < 4 * 1024 * 1024) {
+        line = $0 ORS
+        remaining = 4 * 1024 * 1024 - saved
+        if (length(line) > remaining) line = substr(line, 1, remaining)
+        printf "%s", line >> path
+        saved += length(line)
+      }
+    }
+    END { close(path) }
+  '
 }
 
 assert_mailbox_state() {
