@@ -6,9 +6,9 @@
 //! result application.
 
 use crate::{Form, SecretString};
-use calamine::{Reader, Xls, open_workbook, open_workbook_auto};
+use calamine::{Reader, Sheets, Xls, Xlsx, open_workbook_from_rs};
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -138,8 +138,7 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
 }
 
 pub(crate) fn workbook_sheets(path: &Path) -> Result<Vec<String>, String> {
-    validate_workbook_input(path)?;
-    let book = open_workbook_auto(path).map_err(|error| error.to_string())?;
+    let book = open_import_workbook(path)?;
     let sheets = book.sheet_names().to_vec();
     if sheets.is_empty() {
         Err("The workbook has no worksheets.".into())
@@ -153,9 +152,7 @@ pub(crate) fn read_sheet(
     base: &Form,
     sheet_index: usize,
 ) -> Result<Vec<BulkJob>, String> {
-    validate_workbook_input(path)?;
-    validate_xlsx_sheet_dimensions(path, sheet_index)?;
-    let mut book = open_workbook_auto(path).map_err(|error| error.to_string())?;
+    let mut book = open_import_workbook(path)?;
     let range = book
         .worksheet_range_at(sheet_index)
         .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?
@@ -208,23 +205,18 @@ pub(crate) fn read_sheet(
 /// Reject obviously oversized XLSX worksheets before Calamine expands the
 /// sheet into a cell matrix. The worksheet dimension is near the start of the
 /// XML part, so this bounded probe does not materialize the workbook entry.
-fn validate_xlsx_sheet_dimensions(path: &Path, _sheet_index: usize) -> Result<(), String> {
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.eq_ignore_ascii_case("xlsx"))
-        != Some(true)
-    {
-        return Ok(());
-    }
-    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<(), String> {
+    let entry_count = archive.len();
+    validate_workbook_container_limits(entry_count, 0)?;
+    let mut uncompressed_bytes = 0_u64;
     let mut worksheet_found = false;
-    for index in 0..archive.len() {
+    for index in 0..entry_count {
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
         let entry_name = entry.name().to_owned();
+        uncompressed_bytes = uncompressed_bytes.saturating_add(entry.size());
+        validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
         if !entry_name.starts_with("xl/worksheets/") || !entry_name.ends_with(".xml") {
             continue;
         }
@@ -232,7 +224,7 @@ fn validate_xlsx_sheet_dimensions(path: &Path, _sheet_index: usize) -> Result<()
         validate_xlsx_sheet_entry_dimensions(&mut entry)?;
     }
     if !worksheet_found {
-        return Ok(());
+        return Err("The XLSX archive contains no worksheets.".into());
     }
     Ok(())
 }
@@ -453,6 +445,7 @@ pub(crate) fn validate_headers(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn validate_bulk_import_file(path: &Path) -> Result<(), String> {
     let size = open_import_file(path)
         .map_err(|error| format!("Could not inspect import file: {error}"))?
@@ -514,60 +507,62 @@ pub(crate) fn validate_workbook_container_limits(
     Ok(())
 }
 
-fn validate_xlsx_container(path: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("Could not open XLSX import file: {error}"))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| format!("The XLSX archive is invalid: {error}"))?;
-    let entry_count = archive.len();
-    validate_workbook_container_limits(entry_count, 0)?;
-    let mut uncompressed_bytes = 0_u64;
-    for index in 0..entry_count {
-        let entry_size = archive
-            .by_index(index)
-            .map_err(|error| format!("Could not inspect XLSX archive entry: {error}"))?
-            .size();
-        uncompressed_bytes = uncompressed_bytes.saturating_add(entry_size);
-        validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
-    }
-    Ok(())
+#[cfg(test)]
+fn validate_workbook_input(path: &Path) -> Result<(), String> {
+    open_import_workbook(path).map(drop)
 }
 
-fn validate_workbook_input(path: &Path) -> Result<(), String> {
-    validate_bulk_import_file(path)?;
-    match path
+fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>, String> {
+    let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
         .unwrap_or_default()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "xlsx" => validate_xlsx_container(path),
-        "xls" => validate_legacy_xls_header(path),
+        .to_ascii_lowercase();
+    let file = open_import_file(path)?;
+    match extension.as_str() {
+        "xlsx" => {
+            let mut archive = zip::ZipArchive::new(file)
+                .map_err(|error| format!("The XLSX archive is invalid: {error}"))?;
+            validate_xlsx_archive(&mut archive)?;
+            let mut file = archive.into_inner();
+            if file
+                .metadata()
+                .map_err(|error| format!("Could not inspect XLSX import file: {error}"))?
+                .len()
+                > crate::MAX_BULK_IMPORT_BYTES
+            {
+                return Err(format!(
+                    "The XLSX import file exceeds the {}-byte limit.",
+                    crate::MAX_BULK_IMPORT_BYTES
+                ));
+            }
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| format!("Could not rewind XLSX import: {error}"))?;
+            open_workbook_from_rs::<Xlsx<_>, _>(BufReader::new(file))
+                .map(Sheets::Xlsx)
+                .map_err(|error| format!("The XLSX workbook could not be parsed: {error}"))
+        }
+        "xls" => {
+            const OLE_HEADER: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+            let mut file = file;
+            let mut header = [0; OLE_HEADER.len()];
+            file.read_exact(&mut header)
+                .map_err(|error| format!("Could not read XLS import header: {error}"))?;
+            if header != OLE_HEADER {
+                return Err("The XLS workbook is not a valid legacy BIFF/OLE file.".into());
+            }
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| format!("Could not rewind XLS import: {error}"))?;
+            open_workbook_from_rs::<Xls<_>, _>(BufReader::new(file))
+                .map(Sheets::Xls)
+                .map_err(|error| {
+                    format!(
+                        "The XLS workbook could not be parsed as a legacy BIFF workbook: {error}"
+                    )
+                })
+        }
         _ => Err("Choose a .xls or .xlsx workbook.".into()),
     }
-}
-
-/// Legacy BIFF workbooks are OLE compound files, not ZIP archives.  The
-/// existing file-size limit still bounds the input before calamine opens it.
-/// Check both the container signature and the actual BIFF parser here so an
-/// invalid legacy workbook fails during validation with a useful error rather
-/// than reaching the asynchronous import worker and failing later.
-fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
-    const OLE_HEADER: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-    let mut file = std::fs::File::open(path)
-        .map_err(|error| format!("Could not open XLS import file: {error}"))?;
-    let mut header = [0_u8; OLE_HEADER.len()];
-    file.read_exact(&mut header)
-        .map_err(|error| format!("Could not read XLS import header: {error}"))?;
-    if header != OLE_HEADER {
-        return Err("The XLS workbook is not a valid legacy BIFF/OLE file.".into());
-    }
-    open_workbook::<Xls<_>, _>(path)
-        .map(|_| ())
-        .map_err(|error| {
-            format!("The XLS workbook could not be parsed as a legacy BIFF workbook: {error}")
-        })
 }
 
 #[cfg(test)]
@@ -577,8 +572,42 @@ mod tests {
         validate_workbook_input, validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
+    use calamine::{DataType, Reader};
     use std::collections::HashMap;
     use std::io::Cursor;
+    use zip::write::SimpleFileOptions;
+
+    fn write_minimal_xlsx(path: &std::path::Path) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        for (name, contents) in [
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/workbook.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Mailboxes" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>source_host</t></is></c></row></sheetData></worksheet>"#,
+            ),
+        ] {
+            archive.start_file(name, options).unwrap();
+            std::io::Write::write_all(&mut archive, contents.as_bytes()).unwrap();
+        }
+        archive.finish().unwrap();
+    }
 
     #[test]
     fn plaintext_secret_switch_requires_exactly_one() {
@@ -629,6 +658,23 @@ mod tests {
         let error = validate_workbook_input(&path).expect_err("header-only input must be rejected");
         assert!(error.contains("could not be parsed as a legacy BIFF workbook"));
 
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn xlsx_validation_and_calamine_reads_the_same_open_file() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-snapshot-{}.xlsx",
+            uuid::Uuid::new_v4()
+        ));
+        write_minimal_xlsx(&path);
+        assert_eq!(super::workbook_sheets(&path).unwrap(), vec!["Mailboxes"]);
+        let mut workbook = super::open_import_workbook(&path).unwrap();
+        let worksheet = workbook.worksheet_range_at(0).unwrap().unwrap();
+        assert_eq!(
+            worksheet.get((0, 0)).and_then(|cell| cell.get_string()),
+            Some("source_host")
+        );
         std::fs::remove_file(path).unwrap();
     }
 
