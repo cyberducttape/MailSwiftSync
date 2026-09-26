@@ -11,7 +11,7 @@ categories = ["command-line-utilities", "gui", "network-programming"]
 
 [dependencies]
 base64 = "0.23"
-eframe = "0.35"
+eframe = { version = "0.35", features = ["default"] }
 egui_extras = "0.35"
 rfd = "0.17"
 dirs-next = "2"

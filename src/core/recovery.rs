@@ -46,9 +46,9 @@ impl StateStore {
                 params![
                     process.run_id,
                     process.job_id,
-                    process.pid,
-                    process.start_ticks,
-                    process.process_group,
+                    i64::from(process.pid),
+                    process.start_ticks.map(|value| value as i64),
+                    process.process_group.map(i64::from),
                     process.session_id,
                     process.executable,
                 ],

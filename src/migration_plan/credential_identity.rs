@@ -17,7 +17,8 @@ impl Form {
         digest.update(self.source_password.as_bytes());
         digest.update([0]);
         digest.update(self.destination_password.as_bytes());
-        format!("{:x}", digest.finalize())
+        let result = digest.finalize();
+        result.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
     }
 
     /// A process-local identity for the credentials approved during
@@ -78,12 +79,14 @@ impl Form {
             &self.destination_password,
             false,
         );
-        format!("{:x}", digest.finalize())
+        let result = digest.finalize();
+        result.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
     }
 
     fn material_fingerprint(&self, password: &SecretString) -> String {
         let mut digest = Sha256::new();
         digest.update(password.as_bytes());
-        format!("{:x}", digest.finalize())
+        let result = digest.finalize();
+        result.iter().map(|byte| format!("{:02x}", byte)).collect::<String>()
     }
 }
