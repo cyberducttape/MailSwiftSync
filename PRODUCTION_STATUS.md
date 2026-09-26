@@ -47,7 +47,7 @@ very large accounts.
 | Multi-factor matching | ✅ Wired for TLS imapsync | Message-ID plus metadata fallback runs against independently fetched source/destination records |
 | Source/destination message extraction | ✅ Wired for TLS imapsync | Bounded authenticated IMAP LIST/SELECT/UID FETCH path; plain IMAP fails closed |
 | Missing/extra/changed detection | ✅ Wired | Durable mismatch rows commit with terminal evidence and render in the operator verification report; GUI pagination remains limited |
-| Durable aggregate evidence storage | ✅ Wired | SQLite schema v10; aggregate and supplied message counters survive reports |
+| Durable aggregate evidence storage | ✅ Wired | SQLite schema v12; aggregate and supplied message counters survive reports |
 | Plan-aware verification modes | ⚠️ Fail-closed | `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse exact message evidence until policy-aware reconciliation is implemented |
 
 ### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
@@ -73,7 +73,7 @@ very large accounts.
 | Network timeouts | ✅ | Process and webhook timeout paths are wired |
 | Authentication failures | ✅ | Clear error with remediation steps |
 | Connection exhaustion | ⚠️ Partial | Generic bounded concurrency and failure handling; no provider-specific connection-pool controller |
-| Provider unavailability | ⚠️ Partial | Generic failure classification exists; provider intelligence module is dormant |
+| Provider unavailability | ⚠️ Partial | Generic failure classification wired in controller; provider-specific intelligence not yet integrated |
 
 ### Recovery & Durability ✅ DURABLE CORE; DASHBOARD PROTOTYPE
 | Feature | Status | Implementation |
@@ -237,13 +237,13 @@ new metadata verifier against real accounts.
 1. Run test suite: `cargo test --locked --all-targets --all-features`
 2. Review PROVIDER_SETUP.md and OAUTH_SETUP.md
 3. Check provider_runbooks.rs for setup requirements
-4. Review verification_details.rs for mismatch types
+4. Examine message_verification.rs for mismatch detection logic
 5. Examine recovery_dashboard.rs for interruption handling
-6. Read architecture.md and message-level-verification-design.md
+6. Read architecture.md for system design overview
 
 ### For Operators
 1. Start with test/disposable mailboxes
-2. Follow provider-specific runbook in GUI
+2. Use CLI `mailswiftsync runbook <source-provider> <destination-provider>` for setup guidance
 3. Monitor MailSwiftSync logs during migration
 4. Review verification report after completion
 5. Accept exceptions as needed
@@ -275,7 +275,7 @@ Open an issue with: `[FEATURE REQUEST]` prefix
 
 - **Product:** MailSwiftSync v0.1.0-alpha
 - **Status:** Technical Preview / Early Adoption
-- **Schema Version:** 10
+- **Schema Version:** 12
 - **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; native Dovecot 2.3/2.4 CI qualification remains pending
 - **Build Date:** September 25, 2026
 

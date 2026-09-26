@@ -1,10 +1,13 @@
 # MailSwiftSync Scheduler Design
 
+⚠️ **HISTORICAL DESIGN DOCUMENT** — This document describes planned features and design direction. See actual CLI documentation for current implemented syntax.
+
 ## Implementation Status
 
-**STATUS:** ✅ **PARTIALLY IMPLEMENTED**  
+**STATUS:** ⚠️ **PARTIALLY IMPLEMENTED; EXAMPLES BELOW MARKED PROPOSED**  
 **Last verified:** 2026-09-25  
-**Commit:** See `src/maintenance_window.rs` and `supervise` command implementation
+**Actual CLI syntax:** `supervise <state.db> [poll-seconds] [idle-polls] [maintenance-window]`  
+**Note:** Flags like `--maintenance-window`, `--config` shown below are PROPOSED, not implemented.
 
 ### What's Implemented
 - ✅ Maintenance window CLI support (`supervise <state> [poll] [n] [window]`)
@@ -33,26 +36,32 @@ Current `supervise` is foreground-only:
 
 ### Phase 1: CLI Enhancements (MVP)
 
-Extend `supervise` to accept maintenance window config:
+**Current implementation (positional arguments):**
 
 ```bash
-# Current (foreground): run until 10 consecutive idle polls
-mailswiftsync supervise /var/lib/state.db 30 10
+# Current (implemented): run until 10 consecutive idle polls, respecting maintenance window
+mailswiftsync supervise /var/lib/state.db 30 10 "02:00-04:00"
+#                                          ^  ^  ^
+#                                       poll idle window
+```
 
-# Enhanced: accept maintenance window constraints
+**PROPOSED enhancements (not yet implemented):**
+
+```bash
+# PROPOSED: accept flag-based maintenance window config
 mailswiftsync supervise /var/lib/state.db \
   --maintenance-window "02:00-04:00" \
   --max-duration 3600 \
   --retry-on-incomplete
 
-# With config file (planned)
+# PROPOSED: With config file (planned for v0.3+)
 # mailswiftsync supervise /var/lib/state.db \
 #   --config /etc/mailswiftsync/scheduler.toml
 ```
 
-### Phase 2: Config File
+### Phase 2: Config File (PROPOSED, not yet implemented)
 
-`/etc/mailswiftsync/scheduler.toml`:
+`/etc/mailswiftsync/scheduler.toml` — PROPOSED FORMAT for v0.3+:
 
 ```toml
 [scheduler]
@@ -82,10 +91,10 @@ notify_on = ["failure", "incomplete"]
 
 ### Phase 3: Service Integration
 
-#### systemd timer (Linux)
+#### systemd timer (Linux) — PROPOSED, service file may differ
 
 ```ini
-# /etc/systemd/system/mailswiftsync-supervise.timer
+# PROPOSED: /etc/systemd/system/mailswiftsync-supervise.timer
 [Unit]
 Description=MailSwiftSync nightly migration supervisor
 After=network-online.target
@@ -104,7 +113,8 @@ WantedBy=timers.target
 ```
 
 ```ini
-# /etc/systemd/system/mailswiftsync-supervise.service
+# PROPOSED: /etc/systemd/system/mailswiftsync-supervise.service
+# Note: --config flag not yet implemented; use positional window format instead
 [Unit]
 Description=MailSwiftSync supervised migration controller
 PartOf=mailswiftsync-supervise.timer
@@ -112,24 +122,23 @@ PartOf=mailswiftsync-supervise.timer
 [Service]
 Type=oneshot
 User=mailswiftsync
-ExecStart=/usr/local/bin/mailswiftsync supervise /var/lib/mailswiftsync/state.db \
-  --config /etc/mailswiftsync/scheduler.toml
+# Actual implementation uses positional args, not flags
+ExecStart=/usr/local/bin/mailswiftsync supervise /var/lib/mailswiftsync/state.db 30 10 "02:00-04:00"
 TimeoutStartSec=3h
 StandardOutput=journal
 StandardError=journal
 ```
 
-#### cron (any system)
+#### cron (any system) — Actual implementation
 
 ```cron
-# Run at 2am every day
-0 2 * * * /usr/local/bin/mailswiftsync supervise /var/lib/mailswiftsync/state.db \
-  --config /etc/mailswiftsync/scheduler.toml >> /var/log/mailswiftsync/supervise.log 2>&1
+# Run at 2am every day (actual syntax; --config not implemented)
+0 2 * * * /usr/local/bin/mailswiftsync supervise /var/lib/mailswiftsync/state.db 30 10 "02:00-04:00" >> /var/log/mailswiftsync/supervise.log 2>&1
 ```
 
-### Phase 4: Optional REST API
+### Phase 4: Optional REST API (PROPOSED, not yet implemented)
 
-For advanced scheduling (not MVP):
+For advanced scheduling (not MVP, future consideration):
 
 ```bash
 # Schedule a maintenance window to start now
