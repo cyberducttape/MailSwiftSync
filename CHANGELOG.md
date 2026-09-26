@@ -73,6 +73,8 @@ operator distribution archives.
   second full serialized snapshot-sized buffer.
 - Made customer-proof aggregate counters saturating so malformed extreme
   evidence values cannot wrap into misleading totals.
+- Bounded diagnostic-log filename components so oversized durable IDs cannot
+  create oversized headers or evade per-file rotation limits.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
