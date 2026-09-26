@@ -1705,11 +1705,20 @@ fn validate_fetch_page_coverage(
     mailbox: &str,
 ) -> Result<(), String> {
     let parsed_uids = messages
-        .values()
-        .filter_map(|message| message.uid.as_deref())
-        .map(|uid| {
-            uid.parse::<u64>()
-                .map_err(|_| format!("{host}: folder {mailbox}: FETCH returned invalid UID {uid}"))
+        .keys()
+        .map(|key| {
+            if key.mailbox.as_ref() != mailbox {
+                return Err(format!(
+                    "{host}: folder {mailbox}: FETCH returned a record for mailbox {}",
+                    key.mailbox
+                ));
+            }
+            key.uid.parse::<u64>().map_err(|_| {
+                format!(
+                    "{host}: folder {mailbox}: FETCH returned invalid UID {}",
+                    key.uid
+                )
+            })
         })
         .collect::<Result<HashSet<_>, _>>()?;
     let requested_uids = requested_uids.iter().copied().collect::<HashSet<_>>();
@@ -2100,7 +2109,9 @@ fn parse_message_fetch_metadata_response_bytes_with_mailbox(
             Entry::Vacant(entry) => {
                 entry.insert(crate::core::ExtractedMessage {
                     message_id: fetch_message_id_bytes(record).filter(|value| !value.is_empty()),
-                    uid: Some(uid),
+                    // UID is already the canonical key; retaining a second
+                    // owned copy would materially inflate large live scans.
+                    uid: None,
                     size_bytes: fetch_number(&first_line, "RFC822.SIZE"),
                     internal_date: fetch_quoted(&first_line, "INTERNALDATE"),
                 });
