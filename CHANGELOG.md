@@ -26,6 +26,8 @@ All notable changes to MailSwiftSync are documented here.
 - Fixed the scheduled dependency-audit workflow to use the supported
   `cargo-audit` invocation instead of passing it Cargo's unsupported
   `--locked` flag.
+- Hardened ledger validation against negative SQLite values in unsigned
+  evidence counters, byte sizes, retry counts, and message identity fields.
 
 ### Fixed
 

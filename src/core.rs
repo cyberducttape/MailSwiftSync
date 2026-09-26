@@ -1776,6 +1776,40 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_negative_unsigned_evidence_values() {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-schema-negative-{}", Uuid::new_v4()));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO projects(id,name,source_endpoint,destination_endpoint,phase) VALUES('p','p','s','d','planning')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES('j','p','INBOX','INBOX','INBOX','queued')",
+                [],
+            )
+            .unwrap();
+        store
+            .connection
+            .execute(
+                "INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,failed_messages) VALUES('j',-1,0,0,0,0)",
+                [],
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn migration_removes_legacy_message_subject_column() {
         let db = StateStore::in_memory().unwrap();
         db.connection
