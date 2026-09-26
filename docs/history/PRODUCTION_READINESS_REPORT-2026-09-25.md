@@ -1,6 +1,16 @@
 # MailSwiftSync Production Readiness Report
+
+> **Historical snapshot — not current status.** This report is retained for
+> audit history only. Its “production-ready” wording describes technical-preview
+> deployment readiness and must not be read as GA approval. Use
+> [`PRODUCTION_STATUS.md`](../../PRODUCTION_STATUS.md),
+> [`CAPABILITY_MANIFEST.md`](../../CAPABILITY_MANIFEST.md),
+> [`compatibility-matrix.md`](../compatibility-matrix.md), and
+> [`release-readiness.md`](../release-readiness.md) for current product and
+> release status.
+
 **Date:** September 25, 2026  
-**Status:** ✅ PRODUCTION-READY (Technical Preview / Early Adoption)
+**Snapshot status:** ✅ TECHNICAL-PREVIEW READY (historical)
 
 ## Executive Summary
 
