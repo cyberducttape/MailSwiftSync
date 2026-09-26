@@ -23,6 +23,8 @@ operator distribution archives.
   snapshot for large queues.
 - Batch project creation now rejects oversized persisted profile data before
   inserting any durable project or mailbox rows.
+- Headless batch retry selection now uses chunked durable state reads instead
+  of issuing per-mailbox state and attention queries for large queues.
 - Live IMAP metadata verification now stages source and destination records in
   a private SQLite database and reconciles them in bounded batches, avoiding
   account-sized Rust message maps while preserving bounded mismatch evidence.
