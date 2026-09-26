@@ -13,6 +13,18 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
+fn plaintext_secrets_allowed(value: Option<&str>) -> bool {
+    matches!(value, Some("1"))
+}
+
+fn allow_plaintext_secrets() -> bool {
+    plaintext_secrets_allowed(
+        std::env::var("MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS")
+            .ok()
+            .as_deref(),
+    )
+}
+
 #[derive(Clone)]
 pub(crate) struct BulkJob {
     pub(crate) label: String,
@@ -21,18 +33,23 @@ pub(crate) struct BulkJob {
 }
 
 pub(crate) struct PendingSheetImport {
+    #[allow(dead_code)]
     pub(crate) path: PathBuf,
+    #[allow(dead_code)]
     pub(crate) sheets: Vec<String>,
 }
 
 pub(crate) enum BulkImportResult {
+    #[allow(dead_code)]
     Jobs(Vec<BulkJob>),
+    #[allow(dead_code)]
     Workbook { path: PathBuf, sheets: Vec<String> },
 }
 
 /// Start a bounded/validated mailbox-file import away from the egui thread.
 /// The caller receives only the future result; file-format dispatch and
 /// parser ownership remain with the import domain.
+#[allow(dead_code)]
 pub(crate) fn spawn_import(
     path: PathBuf,
     base: Form,
@@ -81,9 +98,7 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .collect::<Vec<_>>();
-    let allow_plaintext_secrets = std::env::var("MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
+    let allow_plaintext_secrets = allow_plaintext_secrets();
     validate_headers(&headers, allow_plaintext_secrets)?;
     if headers.len() > crate::MAX_BULK_IMPORT_COLUMNS {
         return Err(format!(
@@ -132,6 +147,7 @@ pub(crate) fn read_sheet(
     sheet_index: usize,
 ) -> Result<Vec<BulkJob>, String> {
     validate_workbook_input(path)?;
+    validate_xlsx_sheet_dimensions(path, sheet_index)?;
     let mut book = open_workbook_auto(path).map_err(|error| error.to_string())?;
     let range = book
         .worksheet_range_at(sheet_index)
@@ -150,9 +166,7 @@ pub(crate) fn read_sheet(
             crate::MAX_BULK_IMPORT_COLUMNS
         ));
     }
-    let allow_plaintext_secrets = std::env::var("MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
+    let allow_plaintext_secrets = allow_plaintext_secrets();
     validate_headers(&headers, allow_plaintext_secrets)?;
     let mut jobs = Vec::new();
     for (index, row) in rows.enumerate() {
@@ -182,6 +196,86 @@ pub(crate) fn read_sheet(
         return Err("The worksheet has no migration rows.".into());
     }
     Ok(jobs)
+}
+
+/// Reject obviously oversized XLSX worksheets before Calamine expands the
+/// sheet into a cell matrix. The worksheet dimension is near the start of the
+/// XML part, so this bounded probe does not materialize the workbook entry.
+fn validate_xlsx_sheet_dimensions(path: &Path, sheet_index: usize) -> Result<(), String> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("xlsx"))
+        != Some(true)
+    {
+        return Ok(());
+    }
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|error| error.to_string())?;
+    let entry_name = format!("xl/worksheets/sheet{}.xml", sheet_index + 1);
+    let Ok(mut entry) = archive.by_name(&entry_name) else {
+        return Ok(());
+    };
+    let mut prefix = Vec::with_capacity(128 * 1024);
+    let mut chunk = [0_u8; 8192];
+    while prefix.len() < 128 * 1024 {
+        let count = entry
+            .read(&mut chunk)
+            .map_err(|error| format!("Could not inspect worksheet dimensions: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        prefix.extend_from_slice(&chunk[..count]);
+        if prefix.windows(9).any(|window| window == b"<sheetData") {
+            break;
+        }
+    }
+    let text = String::from_utf8_lossy(&prefix);
+    let Some(start) = text.find("<dimension") else {
+        return Ok(());
+    };
+    let Some(reference_start) = text[start..].find("ref=") else {
+        return Ok(());
+    };
+    let reference = text[start + reference_start + 4..].trim_start();
+    let reference = reference
+        .strip_prefix('"')
+        .or_else(|| reference.strip_prefix('\''))
+        .unwrap_or(reference);
+    let end = reference.find(['"', '\'']).unwrap_or(reference.len());
+    let endpoint = reference[..end].split(':').next_back().unwrap_or("");
+    let (columns, rows) = parse_xlsx_cell_reference(endpoint)?;
+    if columns > crate::MAX_BULK_IMPORT_COLUMNS {
+        return Err(format!(
+            "The worksheet declares {columns} columns; the limit is {}.",
+            crate::MAX_BULK_IMPORT_COLUMNS
+        ));
+    }
+    if rows > crate::MAX_BULK_IMPORT_ROWS as u32 + 1 {
+        return Err(format!(
+            "The worksheet declares {rows} rows; the limit is {}.",
+            crate::MAX_BULK_IMPORT_ROWS
+        ));
+    }
+    Ok(())
+}
+
+fn parse_xlsx_cell_reference(reference: &str) -> Result<(usize, u32), String> {
+    let split = reference
+        .find(|character: char| character.is_ascii_digit())
+        .ok_or_else(|| "The worksheet dimension has no row number.".to_owned())?;
+    let (letters, digits) = reference.split_at(split);
+    let mut columns = 0_usize;
+    for character in letters.chars() {
+        if !character.is_ascii_alphabetic() {
+            return Err("The worksheet dimension has an invalid column.".into());
+        }
+        columns = columns * 26 + (character.to_ascii_uppercase() as usize - 'A' as usize + 1);
+    }
+    let rows = digits
+        .parse::<u32>()
+        .map_err(|_| "The worksheet dimension has an invalid row.".to_owned())?;
+    Ok((columns, rows))
 }
 
 fn record_values<I>(
@@ -412,9 +506,27 @@ fn validate_legacy_xls_header(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{job_from_values, validate_workbook_input};
+    use super::{
+        job_from_values, parse_xlsx_cell_reference, plaintext_secrets_allowed,
+        validate_workbook_input,
+    };
     use crate::migration_plan::Form;
     use std::collections::HashMap;
+
+    #[test]
+    fn plaintext_secret_switch_requires_exactly_one() {
+        for value in [None, Some(""), Some("0"), Some("false"), Some("no")] {
+            assert!(!plaintext_secrets_allowed(value));
+        }
+        assert!(plaintext_secrets_allowed(Some("1")));
+    }
+
+    #[test]
+    fn xlsx_dimension_parser_enforces_cell_coordinates() {
+        assert_eq!(parse_xlsx_cell_reference("BL100001").unwrap(), (64, 100001));
+        assert!(parse_xlsx_cell_reference("XFD1048576").is_ok());
+        assert!(parse_xlsx_cell_reference("A").is_err());
+    }
 
     #[test]
     fn legacy_xls_input_must_be_a_parseable_biff_workbook() {
