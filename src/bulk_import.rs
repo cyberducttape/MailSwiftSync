@@ -7,6 +7,8 @@
 
 use crate::{Form, SecretString};
 use calamine::{Reader, Sheets, Xlsx, open_workbook_from_rs};
+use quick_xml::Reader as XmlReader;
+use quick_xml::events::Event as XmlEvent;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -283,6 +285,22 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
         let entry_name = entry.name().to_owned();
         uncompressed_bytes = uncompressed_bytes.saturating_add(entry.size());
         validate_workbook_container_limits(entry_count, uncompressed_bytes)?;
+        if entry_name.ends_with("sharedStrings.xml") {
+            if entry.size() > crate::MAX_BULK_IMPORT_SHARED_STRING_BYTES {
+                return Err(format!(
+                    "The XLSX shared-string table exceeds the {}-byte limit.",
+                    crate::MAX_BULK_IMPORT_SHARED_STRING_BYTES
+                ));
+            }
+            validate_xlsx_shared_strings(&mut entry)?;
+        }
+        if entry_name.ends_with("styles.xml") && entry.size() > crate::MAX_BULK_IMPORT_STYLES_BYTES
+        {
+            return Err(format!(
+                "The XLSX style table exceeds the {}-byte limit.",
+                crate::MAX_BULK_IMPORT_STYLES_BYTES
+            ));
+        }
         if !entry_name.starts_with("xl/worksheets/") || !entry_name.ends_with(".xml") {
             continue;
         }
@@ -291,6 +309,123 @@ fn validate_xlsx_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Re
     }
     if !worksheet_found {
         return Err("The XLSX archive contains no worksheets.".into());
+    }
+    Ok(())
+}
+
+fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
+    let mut xml = XmlReader::from_reader(BufReader::new(entry));
+    xml.config_mut().trim_text(false);
+    let mut buffer = Vec::with_capacity(1024);
+    let mut string_count = 0_usize;
+    let mut in_string = false;
+    let mut string_bytes = 0_usize;
+    let mut total_string_bytes = 0_u64;
+    loop {
+        buffer.clear();
+        match xml
+            .read_event_into(&mut buffer)
+            .map_err(|error| format!("The XLSX shared-string table is malformed: {error}"))?
+        {
+            XmlEvent::Start(element) if element.local_name().as_ref() == b"sst" => {
+                let mut declared_count = None;
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        format!("The XLSX shared-string table has a malformed attribute: {error}")
+                    })?;
+                    if attribute.key.local_name().as_ref() == b"uniqueCount" {
+                        if declared_count.is_some() {
+                            return Err(
+                                "The XLSX shared-string table has duplicate uniqueCount attributes."
+                                    .into(),
+                            );
+                        }
+                        let count = std::str::from_utf8(attribute.value.as_ref())
+                            .ok()
+                            .and_then(|value| value.parse::<usize>().ok())
+                            .ok_or_else(|| "The XLSX shared-string count is invalid.".to_owned())?;
+                        declared_count = Some(count);
+                    }
+                }
+                if declared_count.is_some_and(|count| count > crate::MAX_BULK_IMPORT_SHARED_STRINGS)
+                {
+                    return Err(format!(
+                        "The XLSX shared-string table declares more than the {}-string limit.",
+                        crate::MAX_BULK_IMPORT_SHARED_STRINGS
+                    ));
+                }
+            }
+            XmlEvent::Start(element) if element.local_name().as_ref() == b"si" => {
+                if in_string {
+                    return Err("The XLSX shared-string table has nested entries.".into());
+                }
+                string_count = string_count.saturating_add(1);
+                if string_count > crate::MAX_BULK_IMPORT_SHARED_STRINGS {
+                    return Err(format!(
+                        "The XLSX shared-string table exceeds the {}-string limit.",
+                        crate::MAX_BULK_IMPORT_SHARED_STRINGS
+                    ));
+                }
+                in_string = true;
+                string_bytes = 0;
+            }
+            XmlEvent::Empty(element) if element.local_name().as_ref() == b"si" => {
+                string_count = string_count.saturating_add(1);
+                if string_count > crate::MAX_BULK_IMPORT_SHARED_STRINGS {
+                    return Err(format!(
+                        "The XLSX shared-string table exceeds the {}-string limit.",
+                        crate::MAX_BULK_IMPORT_SHARED_STRINGS
+                    ));
+                }
+            }
+            XmlEvent::Text(text) if in_string => {
+                let raw_text: &[u8] = text.as_ref();
+                let byte_count = raw_text.len();
+                string_bytes = string_bytes.saturating_add(byte_count);
+                total_string_bytes = total_string_bytes.saturating_add(byte_count as u64);
+                if string_bytes > crate::MAX_BULK_IMPORT_CELL_BYTES {
+                    return Err(format!(
+                        "An XLSX shared string exceeds the {}-byte cell limit.",
+                        crate::MAX_BULK_IMPORT_CELL_BYTES
+                    ));
+                }
+                if total_string_bytes > crate::MAX_BULK_IMPORT_SHARED_STRING_BYTES {
+                    return Err(format!(
+                        "The XLSX shared-string contents exceed the {}-byte limit.",
+                        crate::MAX_BULK_IMPORT_SHARED_STRING_BYTES
+                    ));
+                }
+            }
+            XmlEvent::CData(text) if in_string => {
+                let raw_text: &[u8] = text.as_ref();
+                let byte_count = raw_text.len();
+                string_bytes = string_bytes.saturating_add(byte_count);
+                total_string_bytes = total_string_bytes.saturating_add(byte_count as u64);
+                if string_bytes > crate::MAX_BULK_IMPORT_CELL_BYTES {
+                    return Err(format!(
+                        "An XLSX shared string exceeds the {}-byte cell limit.",
+                        crate::MAX_BULK_IMPORT_CELL_BYTES
+                    ));
+                }
+                if total_string_bytes > crate::MAX_BULK_IMPORT_SHARED_STRING_BYTES {
+                    return Err(format!(
+                        "The XLSX shared-string contents exceed the {}-byte limit.",
+                        crate::MAX_BULK_IMPORT_SHARED_STRING_BYTES
+                    ));
+                }
+            }
+            XmlEvent::End(element) if element.local_name().as_ref() == b"si" => {
+                if !in_string {
+                    return Err("The XLSX shared-string table has an unmatched entry end.".into());
+                }
+                in_string = false;
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    if in_string {
+        return Err("The XLSX shared-string table has an incomplete entry.".into());
     }
     Ok(())
 }
@@ -307,7 +442,10 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
             break;
         }
         prefix.extend_from_slice(&chunk[..count]);
-        if prefix.windows(9).any(|window| window == b"<sheetData") {
+        if prefix
+            .windows(b"<sheetData".len())
+            .any(|window| window == b"<sheetData")
+        {
             break;
         }
     }
@@ -757,7 +895,8 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
 mod tests {
     use super::{
         job_from_values, open_import_workbook, parse_xlsx_cell_reference,
-        plaintext_secrets_allowed, validate_xlsx_sheet_entry_dimensions,
+        plaintext_secrets_allowed, validate_xlsx_shared_strings,
+        validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
     use calamine::{DataType, Reader};
@@ -844,6 +983,27 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn xlsx_shared_string_reservations_and_values_are_bounded_before_calamine() {
+        let error =
+            validate_xlsx_shared_strings(&mut Cursor::new(br#"<sst uniqueCount="1000001"></sst>"#))
+                .unwrap_err();
+        assert!(error.contains("string limit"));
+
+        let oversized_string = format!(
+            "<sst uniqueCount=\"1\"><si><t>{}</t></si></sst>",
+            "x".repeat(crate::MAX_BULK_IMPORT_CELL_BYTES + 1)
+        );
+        let error = validate_xlsx_shared_strings(&mut Cursor::new(oversized_string.as_bytes()))
+            .unwrap_err();
+        assert!(error.contains("cell limit"));
+
+        validate_xlsx_shared_strings(&mut Cursor::new(
+            br#"<sst uniqueCount="0"><si><t>first</t></si><si><t>second</t></si></sst>"#,
+        ))
+        .expect("actual shared strings are counted even if uniqueCount lies low");
     }
 
     #[test]
