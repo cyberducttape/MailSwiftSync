@@ -98,7 +98,28 @@ impl StateStore {
         let extra_messages = sqlite_i64(value.extra_messages)?;
         let modified_messages = sqlite_i64(value.modified_messages)?;
         let probable_messages = sqlite_i64(value.probable_messages)?;
-        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![job_id, run_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
+        let persisted_run_id = if run_id == "legacy" {
+            if let Some(existing_run_id) = tx
+                .query_row(
+                    "SELECT id FROM runs WHERE job_id=?1 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+                    [job_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+            {
+                existing_run_id
+            } else {
+                let legacy_run_id = format!("legacy-{job_id}");
+                tx.execute(
+                    "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status,finished_at,detail) SELECT ?1,project_id,id,'test','discovery','','completed',CURRENT_TIMESTAMP,'legacy test evidence' FROM mailbox_jobs WHERE id=?2",
+                    params![legacy_run_id, job_id],
+                )?;
+                legacy_run_id
+            }
+        } else {
+            run_id.to_owned()
+        };
+        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![job_id, persisted_run_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
         tx.execute("INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(job_id) DO UPDATE SET verification_method=excluded.verification_method,verification_outcome=excluded.verification_outcome,source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,probable_messages=excluded.probable_messages,captured_at=CURRENT_TIMESTAMP", params![job_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
         tx.commit()?;
         Ok(())
