@@ -1031,12 +1031,7 @@ fn connect_tls_stream_inner(
         let connection = ClientConnection::new(Arc::new(config), name)
             .map_err(|e| format!("{host}: TLS configuration failed: {e}"))?;
         let mut stream = StreamOwned::new(connection, tcp);
-        refresh_socket_timeout(&stream.sock, budget)
-            .map_err(|e| format!("{host}: could not set TLS handshake timeout: {e}"))?;
-        stream
-            .conn
-            .complete_io(&mut stream.sock)
-            .map_err(|error| format!("{host}: TLS handshake failed: {error}"))?;
+        complete_tls_handshake(&mut stream, host, budget)?;
         refresh_socket_timeout(&stream.sock, budget)
             .map_err(|e| format!("{host}: could not set TLS I/O timeout: {e}"))?;
         verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
@@ -1051,6 +1046,34 @@ fn connect_tls_stream_inner(
     let greeting = read_imap_greeting(&mut stream, host, budget)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
     Ok((stream, greeting))
+}
+
+fn complete_tls_handshake(
+    stream: &mut StreamOwned<ClientConnection, TcpStream>,
+    host: &str,
+    budget: Option<&MessageFetchBudget<'_>>,
+) -> Result<(), String> {
+    loop {
+        if let Some(budget) = budget {
+            budget.check()?;
+            refresh_socket_timeout(&stream.sock, Some(budget))
+                .map_err(|error| format!("{host}: could not set TLS handshake timeout: {error}"))?;
+        }
+        match stream.conn.complete_io(&mut stream.sock) {
+            Ok(_) if !stream.conn.is_handshaking() => return Ok(()),
+            Ok(_) => continue,
+            Err(error)
+                if budget.is_some()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(format!("{host}: TLS handshake failed: {error}")),
+        }
+    }
 }
 
 fn refresh_socket_timeout(
