@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::ops::Bound::{Excluded, Unbounded};
 
 use chrono::{DateTime, FixedOffset};
 
@@ -508,20 +509,25 @@ impl MessageVerification {
                 continue;
             };
 
-            // Build index of remaining unmatched destinations by folder and metadata
-            let mut dest_by_folder_metadata: BTreeMap<
-                (String, Option<MetadataFingerprint>),
-                Vec<&MailboxMessageKey>,
-            > = BTreeMap::new();
+            // Build an ordered folder index for each metadata fingerprint. A
+            // source message can select the nearest deterministic folder on
+            // either side of its expected folder without scanning every
+            // folder bucket in this Message-ID group.
+            let mut dest_by_metadata: HashMap<
+                Option<MetadataFingerprint<'_>>,
+                BTreeMap<String, VecDeque<&MailboxMessageKey>>,
+            > = HashMap::new();
             for dest_key in dest_uids {
                 if !unmatched_dest.contains(dest_key) {
                     continue;
                 }
                 let metadata = metadata_fingerprint(&dest_messages[dest_key]);
-                dest_by_folder_metadata
-                    .entry((dest_key.mailbox.clone(), metadata))
+                dest_by_metadata
+                    .entry(metadata)
                     .or_default()
-                    .push(dest_key);
+                    .entry(dest_key.mailbox.clone())
+                    .or_default()
+                    .push_back(dest_key);
             }
 
             // For each unmatched source with this Message-ID, try to find it in a wrong folder
@@ -532,26 +538,49 @@ impl MessageVerification {
                 let expected_folder = expected_destination_folder(source_key, folder_mapping);
                 let source_metadata = metadata_fingerprint(&source_messages[source_key]);
 
-                // Try to find in any wrong folder with matching metadata
-                for ((folder, metadata), candidates) in dest_by_folder_metadata.iter_mut() {
-                    if folder == &expected_folder || metadata != &source_metadata {
-                        continue;
-                    }
-                    if let Some(dest_key) = candidates.pop() {
-                        matched_source.insert(*source_key);
-                        matched_dest.insert(dest_key);
-                        mismatches.push(make_mismatch(
-                            job_id,
-                            run_id,
-                            MismatchType::PresentWrongFolder,
-                            Some(source_key),
-                            Some(dest_key),
-                            Some(&source_messages[source_key]),
-                            Some(&dest_messages[dest_key]),
-                        ));
-                        break;
-                    }
+                // Try to find in any wrong folder with matching metadata.
+                // The range lookup is O(log F), where F is the number of
+                // folders in this duplicate-ID group, instead of O(F) for
+                // every source candidate.
+                let Some(folder_candidates) = dest_by_metadata.get_mut(&source_metadata) else {
+                    continue;
+                };
+                let candidate_folder = folder_candidates
+                    .range(..expected_folder.clone())
+                    .next_back()
+                    .map(|(folder, _)| folder.clone())
+                    .or_else(|| {
+                        folder_candidates
+                            .range((Excluded(expected_folder), Unbounded))
+                            .next()
+                            .map(|(folder, _)| folder.clone())
+                    });
+                let Some(candidate_folder) = candidate_folder else {
+                    continue;
+                };
+                let Some(dest_key) = folder_candidates
+                    .get_mut(&candidate_folder)
+                    .and_then(VecDeque::pop_front)
+                else {
+                    continue;
+                };
+                if folder_candidates
+                    .get(&candidate_folder)
+                    .is_some_and(VecDeque::is_empty)
+                {
+                    folder_candidates.remove(&candidate_folder);
                 }
+                matched_source.insert(*source_key);
+                matched_dest.insert(dest_key);
+                mismatches.push(make_mismatch(
+                    job_id,
+                    run_id,
+                    MismatchType::PresentWrongFolder,
+                    Some(source_key),
+                    Some(dest_key),
+                    Some(&source_messages[source_key]),
+                    Some(&dest_messages[dest_key]),
+                ));
             }
         }
 
