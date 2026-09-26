@@ -26,6 +26,8 @@ operator distribution archives.
 - Added SQLite nonnegative constraints for durable counters and made signed
   integer-to-unsigned reads fail closed instead of turning negative values into
   huge evidence counts.
+- Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
+  per-file rotation, and a total diagnostic-directory size cap.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 
