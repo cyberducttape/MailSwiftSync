@@ -18,6 +18,8 @@ operator distribution archives.
 - CI failure annotations no longer interpolate untrusted compiler or test log
   text into GitHub workflow commands; detailed logs remain available as
   artifacts and step summaries.
+- Ledger validation now rejects projects whose durable mailbox queues exceed
+  the runtime's 100,000-row admission and restore limit.
 - Headless batch retry admission now fails closed when durable mailbox state is
   missing, rather than silently omitting those mailbox IDs from selection.
 - Recovery schema validation now requires every runtime object to be an actual

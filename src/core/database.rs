@@ -714,6 +714,18 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        // A project queue larger than the admission/readback limit cannot be
+        // restored as an executable batch. Reject that inconsistent durable
+        // state at open time instead of accepting it and failing later in UI
+        // restore or batch retry.
+        let oversized_mailbox_queue: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs GROUP BY project_id HAVING COUNT(*) > ?1)",
+            [MAX_DURABLE_MAILBOX_ROWS as i64],
+            |row| row.get(0),
+        )?;
+        if oversized_mailbox_queue {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         // Foreign-key enforcement protects new writes, but SQLite does not
         // retroactively validate rows that were imported or edited while the
         // pragma was disabled. Recovery and read-only validation must reject
