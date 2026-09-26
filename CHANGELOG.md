@@ -41,6 +41,8 @@ operator distribution archives.
   outcome so transport and protocol failures are not retried as mailbox churn.
 - Hardened XLSX dimension preflight to inspect every worksheet XML part,
   avoiding assumptions about worksheet-part numbering before Calamine parsing.
+- Schema index validation now also verifies each required index is attached to
+  its intended runtime table.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
