@@ -318,6 +318,7 @@ impl StateStore {
         const FOREIGN_KEYS: &[ForeignKeyTable] = &[
             ("mailbox_jobs", &[("projects", "project_id", "id")]),
             ("evidence", &[("mailbox_jobs", "job_id", "id")]),
+            ("evidence_history", &[("mailbox_jobs", "job_id", "id")]),
             (
                 "runs",
                 &[
