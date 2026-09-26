@@ -549,6 +549,19 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        // The outcome is a claim about the counters, not an independent label
+        // that may be edited without changing them. In particular, never let
+        // a forged exact outcome survive read-only recovery validation.
+        const SEMANTIC_CHECKS: &[&str] = &[
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome='exact_metadata_match' AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome='exact_metadata_match' AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0))",
+        ];
+        for sql in SEMANTIC_CHECKS {
+            let contradictory: bool = connection.query_row(sql, [], |row| row.get(0))?;
+            if contradictory {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         // Foreign-key enforcement protects new writes, but SQLite does not
         // retroactively validate rows that were imported or edited while the
         // pragma was disabled. Recovery and read-only validation must reject
