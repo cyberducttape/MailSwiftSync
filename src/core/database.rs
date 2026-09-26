@@ -444,6 +444,26 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        // Persisted wire values are part of the application schema too. Do
+        // not let readers silently map an unknown value to a default enum
+        // variant and present corrupted state as an ordinary ledger.
+        const ENUM_CHECKS: &[&str] = &[
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE phase NOT IN ('discovery','preflight','pilot','seed','catch_up','final_delta','verification','complete','attention'))",
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE state NOT IN ('imported','queued','preflight','ready','running','completed','verified','verified_with_exceptions','failed','cancelled','attention','delta_required','verification_difference'))",
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE status NOT IN ('queued','running','completed','failed','cancelled','abandoned','verification_failed'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_method NOT IN ('aggregate_engine','metadata_reconciliation','body_hash','native_dovecot'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome NOT IN ('exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_method NOT IN ('aggregate_engine','metadata_reconciliation','body_hash','native_dovecot'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome NOT IN ('exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
+            "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE mismatch_type NOT IN ('message_id_only','message_present_wrong_folder','missing','extra','duplicated'))",
+            "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE attention_reason IS NOT NULL AND attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))",
+        ];
+        for sql in ENUM_CHECKS {
+            let has_unknown: bool = connection.query_row(sql, [], |row| row.get(0))?;
+            if has_unknown {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         Ok(())
     }
 
