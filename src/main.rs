@@ -610,7 +610,10 @@ mod tests {
         let config_index = prepared.args.iter().position(|arg| arg == "-c").unwrap();
         let runtime_config = &prepared.args[config_index + 1];
         let contents = std::fs::read_to_string(runtime_config).unwrap();
-        assert!(contents.starts_with(&format!("!include {}\n", form.profile.dovecot_config)));
+        let canonical_base = std::path::PathBuf::from(&form.profile.dovecot_config)
+            .canonicalize()
+            .unwrap();
+        assert!(contents.starts_with(&format!("!include {}\n", canonical_base.display())));
         assert!(contents.contains("imapc_password = <"));
         assert!(!contents.contains("top-secret-credential"));
         let source_file = contents
