@@ -33,6 +33,8 @@ operator distribution archives.
   foreign-key relationship used by recovery and reporting.
 - Made SQLite snapshots copy the validated, migrated connection so restoring a
   dirty current-version ledger cannot reinstall the unrepaired source file.
+- Strengthened the v12 schema signature to verify runtime index columns,
+  uniqueness, and partial-index properties rather than names alone.
 - Bounded opt-in diagnostic transcripts with buffered checkpoint flushing,
   per-file rotation, and a total diagnostic-directory size cap.
 - Applied the pinned cargo-deny advisories, bans, licenses, and sources policy
