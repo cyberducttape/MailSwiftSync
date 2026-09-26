@@ -11,7 +11,7 @@ use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     io::{Read, Write},
     net::{SocketAddr, TcpStream, ToSocketAddrs},
-    sync::atomic::AtomicBool,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     sync::{Arc, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
 };
@@ -409,6 +409,74 @@ const MAX_MAILBOX_STABILITY_ATTEMPTS: usize = 2;
 pub(crate) struct MessageFetchBudget<'a> {
     deadline: Instant,
     cancel: &'a AtomicBool,
+}
+
+/// Shared admission accounting for both sides of one live verification. The
+/// verifier retains both account maps until reconciliation completes, so a
+/// separate per-account allowance would understate the live working set.
+pub(crate) struct MessageStateBudget {
+    estimated_bytes: AtomicUsize,
+}
+
+impl MessageStateBudget {
+    pub(crate) fn new() -> Self {
+        Self {
+            estimated_bytes: AtomicUsize::new(0),
+        }
+    }
+
+    fn reserve(&self, bytes: usize) -> Result<(), String> {
+        let reserved =
+            self.estimated_bytes
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    let next = current.checked_add(bytes)?;
+                    (next <= MAX_ESTIMATED_FETCHED_STATE_BYTES).then_some(next)
+                });
+        if reserved.is_err() {
+            return Err(format!(
+                "account pair exceeded the estimated {MAX_ESTIMATED_FETCHED_STATE_BYTES}-byte fetched-state admission budget"
+            ));
+        }
+        Ok(())
+    }
+
+    fn release(&self, bytes: usize) {
+        self.estimated_bytes.fetch_sub(bytes, Ordering::AcqRel);
+    }
+}
+
+struct StateReservation<'a> {
+    budget: &'a MessageStateBudget,
+    bytes: usize,
+    committed: bool,
+}
+
+impl<'a> StateReservation<'a> {
+    fn new(budget: &'a MessageStateBudget) -> Self {
+        Self {
+            budget,
+            bytes: 0,
+            committed: false,
+        }
+    }
+
+    fn reserve(&mut self, bytes: usize) -> Result<(), String> {
+        self.budget.reserve(bytes)?;
+        self.bytes = self.bytes.saturating_add(bytes);
+        Ok(())
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for StateReservation<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.budget.release(self.bytes);
+        }
+    }
 }
 
 pub(crate) struct FetchedAccountMessages {
@@ -1405,6 +1473,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
     host: &str,
     mailbox: &str,
     budget: &MessageFetchBudget<'_>,
+    state_budget: &MessageStateBudget,
 ) -> Result<
     (
         crate::core::ExtractedMessages,
@@ -1455,7 +1524,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
         format!("{host}: SELECT {mailbox} did not return UIDNEXT; bounded UID enumeration is unavailable")
     })?;
     let mut messages = HashMap::new();
-    let mut estimated_state_bytes = 0usize;
+    let mut state_reservation = StateReservation::new(state_budget);
     let mut page_number = 0usize;
     let mailbox_context: std::sync::Arc<str> = std::sync::Arc::from(mailbox);
     let searched_uid_count = enumerate_uid_pages(
@@ -1507,8 +1576,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             )?;
             validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
             for (key, message) in page_messages {
-                estimated_state_bytes = estimated_state_bytes
-                    .saturating_add(estimated_message_record_bytes(&key, &message, None));
+                state_reservation.reserve(estimated_message_record_bytes(&key, &message, None))?;
                 if messages.insert(key, message).is_some() {
                     return Err(format!(
                         "{host}: folder {mailbox}: duplicate message identity"
@@ -1517,11 +1585,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
                 if messages.len() > MAX_MESSAGE_FETCH_RECORDS {
                     return Err(format!(
                         "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
-                    ));
-                }
-                if estimated_state_bytes > MAX_ESTIMATED_FETCHED_STATE_BYTES {
-                    return Err(format!(
-                        "{host}: folder {mailbox}: message data exceeds memory budget"
                     ));
                 }
             }
@@ -1575,6 +1638,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write>(
             "{host}: mailbox {mailbox} changed during verification (UIDVALIDITY {start_uidvalidity:?}->{end_uidvalidity:?}, UIDNEXT {uidnext}->{end_uidnext:?}, message count {start_exists}->{end_exists}); retry required"
         )));
     }
+    state_reservation.commit();
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.
     Ok((messages, HashMap::new(), start_exists))
@@ -1585,6 +1649,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
     host: &str,
     mailbox: &str,
     budget: &MessageFetchBudget<'_>,
+    state_budget: &MessageStateBudget,
 ) -> Result<
     (
         crate::core::ExtractedMessages,
@@ -1595,7 +1660,7 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write>(
 > {
     let mut last_error = None;
     for attempt in 0..MAX_MAILBOX_STABILITY_ATTEMPTS {
-        match fetch_mailbox_with_existing_stream(stream, host, mailbox, budget) {
+        match fetch_mailbox_with_existing_stream(stream, host, mailbox, budget, state_budget) {
             Ok(result) => return Ok(result),
             Err(MailboxFetchError::Changed(error)) => {
                 last_error = Some(error);
@@ -1748,6 +1813,7 @@ pub(crate) fn fetch_tls_account_messages(
     ca_bundle: &str,
     certificate_pin_sha256: &str,
     budget: &MessageFetchBudget<'_>,
+    state_budget: &MessageStateBudget,
 ) -> Result<FetchedAccountMessages, String> {
     budget.check()?;
     if transport == "plain" {
@@ -1804,19 +1870,17 @@ pub(crate) fn fetch_tls_account_messages(
     let mailbox_inventory = mailboxes.iter().cloned().collect::<HashSet<_>>();
     let mut all_messages = HashMap::new();
     let mut total_exists = 0_u64;
-    let mut estimated_state_bytes = 0usize;
     let mut incomplete_folders = HashMap::new();
 
     // Process all folders using the same authenticated connection (performance optimization).
     // This avoids opening 200 separate TLS connections for a 200-folder account.
     for mailbox in mailboxes {
         budget.check()?;
-        match fetch_mailbox_with_stability_retry(&mut stream, host, &mailbox, budget) {
+        match fetch_mailbox_with_stability_retry(&mut stream, host, &mailbox, budget, state_budget)
+        {
             Ok((folder_messages, _folder_fingerprints, folder_exists)) => {
                 total_exists = total_exists.saturating_add(folder_exists);
                 for (key, message) in folder_messages {
-                    estimated_state_bytes = estimated_state_bytes
-                        .saturating_add(estimated_message_record_bytes(&key, &message, None));
                     if all_messages.insert(key, message).is_some() {
                         let _ = stream.write_all(b"a999 LOGOUT\r\n");
                         return Err(format!(
@@ -1827,12 +1891,6 @@ pub(crate) fn fetch_tls_account_messages(
                         let _ = stream.write_all(b"a999 LOGOUT\r\n");
                         return Err(format!(
                             "{host}: account exceeded the {MAX_MESSAGE_FETCH_RECORDS}-message verification limit"
-                        ));
-                    }
-                    if estimated_state_bytes > MAX_ESTIMATED_FETCHED_STATE_BYTES {
-                        let _ = stream.write_all(b"a999 LOGOUT\r\n");
-                        return Err(format!(
-                            "{host}: account exceeded the estimated {MAX_ESTIMATED_FETCHED_STATE_BYTES}-byte fetched-state admission budget"
                         ));
                     }
                 }
@@ -2308,7 +2366,8 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageFetchBudget, TaggedResponseScanner, authenticated_list_command, dns_resolver_pool,
+        MAX_ESTIMATED_FETCHED_STATE_BYTES, MessageFetchBudget, MessageStateBudget,
+        TaggedResponseScanner, authenticated_list_command, dns_resolver_pool,
         format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
         parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
         parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
@@ -2657,6 +2716,15 @@ mod tests {
         let with_fingerprint =
             super::estimated_message_record_bytes(&key, &message, Some(&"a".repeat(64)));
         assert_eq!(with_fingerprint - without_fingerprint, 64);
+    }
+
+    #[test]
+    fn shared_state_budget_rejects_combined_account_overflow() {
+        let budget = MessageStateBudget::new();
+        budget
+            .reserve(MAX_ESTIMATED_FETCHED_STATE_BYTES - 1)
+            .unwrap();
+        assert!(budget.reserve(2).is_err());
     }
 
     #[test]

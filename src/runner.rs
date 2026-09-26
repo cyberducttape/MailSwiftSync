@@ -126,6 +126,7 @@ pub(crate) fn run_imap_message_verification(
         Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
         cancel,
     );
+    let state_budget = crate::imap_probe::MessageStateBudget::new();
     let source_host = crate::imap_probe::endpoint_for_probe(
         &form.profile.source_host,
         &form.profile.source_port,
@@ -143,6 +144,7 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.source_ca_bundle,
         &form.profile.source_certificate_pin_sha256,
         &budget,
+        &state_budget,
     )?;
     let destination = crate::imap_probe::fetch_tls_account_messages(
         &destination_host,
@@ -153,6 +155,7 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_ca_bundle,
         &form.profile.destination_certificate_pin_sha256,
         &budget,
+        &state_budget,
     )?;
     if (source.total_exists > 0 && source.messages.is_empty())
         || (destination.total_exists > 0 && destination.messages.is_empty())
