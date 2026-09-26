@@ -1972,6 +1972,39 @@ mod tests {
     }
 
     #[test]
+    fn readonly_rejects_a_project_queue_over_the_durable_mailbox_limit() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-schema-mailbox-limit-{}",
+            Uuid::new_v4()
+        ));
+        let path = directory.join("state.db");
+        create_private_test_directory(&directory);
+        let store = StateStore::open(&path).unwrap();
+        store
+            .create_project("mailbox-limit", "source", "destination")
+            .unwrap();
+        store
+            .connection
+            .execute_batch(
+                "WITH RECURSIVE mailbox(n) AS (
+                    VALUES(1)
+                    UNION ALL SELECT n + 1 FROM mailbox WHERE n < 100001
+                 )
+                 INSERT INTO mailbox_jobs
+                    (id,project_id,source_mailbox,destination_mailbox,destination_identity,state)
+                 SELECT 'job-' || n, (SELECT id FROM projects LIMIT 1),
+                        'source-' || n, 'destination-' || n,
+                        'destination-' || n, 'queued'
+                 FROM mailbox;",
+            )
+            .unwrap();
+        drop(store);
+
+        assert!(StateStore::open_readonly(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn readonly_rejects_current_schema_with_missing_evidence_history_foreign_key() {
         let directory = std::env::temp_dir().join(format!(
             "mailswiftsync-schema-history-fk-{}",
