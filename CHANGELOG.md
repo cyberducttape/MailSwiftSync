@@ -53,6 +53,7 @@ operator distribution archives.
   including slow-drip peers during STARTTLS setup.
 - Added an absolute per-command deadline to non-verification tagged IMAP
   responses so preflight/authentication reads cannot be extended by slow drips.
+- Applied the same absolute deadline to XOAUTH2 continuation and result reads.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
