@@ -12,7 +12,9 @@ operator distribution archives.
   private permissions before handing ownership to the container user.
 - The disposable Dovecot integration lab now explicitly runs its fixture
   provisioning as root and creates a matching private runtime directory;
-  the distributed image still defaults to its unprivileged service account.
+  product state, configuration, secrets, and proof outputs live under that
+  private directory, and the distributed image still defaults to its
+  unprivileged service account.
 - Recovery schema validation now checks the `WHERE` predicates of partial
   unique run indexes, rejecting same-named indexes that do not enforce active
   run ownership; writable recovery backs up and rebuilds malformed indexes.

@@ -395,8 +395,9 @@ dovecot_config=""
 if [[ "$test_engine" == "Dovecot" ]]; then
   dovecot_config="$workspace/destination.conf"
 fi
-state="$workspace/state.db"
-export XDG_CONFIG_HOME="$workspace/config"
+app_runtime="$XDG_RUNTIME_DIR"
+state="$app_runtime/state.db"
+export XDG_CONFIG_HOME="$app_runtime/config"
 mkdir -p "$XDG_CONFIG_HOME/mailswiftsync"
 chmod 0700 "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/mailswiftsync"
 cat > "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" <<EOF
@@ -439,8 +440,8 @@ allowsizemismatch = false
 delete2 = false
 extra_options = ""
 EOF
-source_secret="$workspace/source.secret"
-destination_secret="$workspace/destination.secret"
+source_secret="$app_runtime/source.secret"
+destination_secret="$app_runtime/destination.secret"
 printf '%s' "$password" > "$source_secret"
 printf '%s' "$password" > "$destination_secret"
 chmod 0600 "$source_secret" "$destination_secret"
@@ -490,7 +491,7 @@ if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions
 fi
 echo "PASS: durable ledger records a verified terminal state"
 
-proof="$workspace/customer-proof.json"
+proof="$app_runtime/customer-proof.json"
 run_product customer-proof "$state" "$proof" \
   --source-provider generic_imap --destination-provider generic_imap \
   --source-auth password --destination-auth password --fixture-id packaged-generic-imap \
