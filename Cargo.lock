@@ -2370,6 +2370,7 @@ dependencies = [
  "fs2",
  "keyring",
  "libc",
+ "quick-xml",
  "reqwest",
  "rfd",
  "ring",
