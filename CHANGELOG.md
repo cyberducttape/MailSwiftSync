@@ -40,6 +40,8 @@ operator distribution archives.
   invariant before committing a verification-difference record.
 - Explicit exact aggregate-engine evidence now also requires the
   engine-authoritative marker.
+- Schema validation now verifies foreign-key actions and match modes, not
+  only parent and child column names.
 - Live source and destination metadata scans now share one fetched-state
   admission budget, preventing each account from independently consuming the
   full allowance before reconciliation begins.
