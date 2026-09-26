@@ -549,21 +549,34 @@ if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions
 fi
 echo "PASS: incremental orchestration preserved verified terminal state"
 
-destination_messages="$(find "$workspace/destination/mail/$user/Maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
+destination_maildir="$workspace/destination/mail/$user/Maildir"
+destination_message_ids=""
+if [[ "$test_engine" == Dovecot ]]; then
+  # The native-engine fixture uses mdbox to support exact backup semantics;
+  # inspect stored messages through Dovecot rather than assuming Maildir files.
+  destination_message_ids="$(doveadm -c "$workspace/destination.conf" fetch -u "$user" 'hdr.message-id' mailbox '*')"
+  destination_messages="$(grep -c '^hdr.message-id:' <<<"$destination_message_ids" || true)"
+else
+  destination_messages="$(find "$destination_maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) | wc -l)"
+fi
+destination_has_message_id() {
+  local message_id="$1"
+  if [[ "$test_engine" == Dovecot ]]; then
+    grep -F -q -- "$message_id" <<<"$destination_message_ids"
+  else
+    grep -R -F -q -- "Message-ID: <$message_id>" "$destination_maildir"
+  fi
+}
 if [[ "$destination_messages" -lt 1 ]]; then
-  echo "FAIL: ${test_engine} reported success but destination Maildir has no fixture message" >&2
+  echo "FAIL: ${test_engine} reported success but destination has no fixture message" >&2
   exit 1
 fi
-if ! grep -R -F -l -- "Message-ID: <mailswiftsync-integration-fixture@example.test>" \
-  "$workspace/destination/mail/$user/Maildir/cur" \
-  "$workspace/destination/mail/$user/Maildir/new" >/dev/null 2>&1; then
-  echo "FAIL: destination Maildir is missing the fixture Message-ID" >&2
+if ! destination_has_message_id "mailswiftsync-integration-fixture@example.test"; then
+  echo "FAIL: destination is missing the fixture Message-ID" >&2
   exit 1
 fi
 echo "PASS: destination retained the fixture Message-ID"
-if [[ "$destination_messages" -lt 17 ]] || ! grep -R -F -l -- "Message-ID: <mailswiftsync-incremental-fixture@example.test>" \
-  "$workspace/destination/mail/$user/Maildir/cur" \
-  "$workspace/destination/mail/$user/Maildir/new" >/dev/null 2>&1; then
+if [[ "$destination_messages" -lt 17 ]] || ! destination_has_message_id "mailswiftsync-incremental-fixture@example.test"; then
   echo "FAIL: destination is missing the incremental fixture Message-ID" >&2
   exit 1
 fi
@@ -572,31 +585,35 @@ for message_id in \
   mailswiftsync-literal-framing@example.test \
   mailswiftsync-non-utf8@example.test \
   mailswiftsync-renamed-special-use@example.test; do
-  if ! grep -R -F -l -- "Message-ID: <$message_id>" \
-    "$workspace/destination/mail/$user/Maildir" >/dev/null 2>&1; then
+  if ! destination_has_message_id "$message_id"; then
     echo "FAIL: destination is missing edge-case fixture Message-ID <$message_id>" >&2
     exit 1
   fi
 done
 for index in 1 100; do
-  if ! grep -R -F -l -- "Message-ID: <mailswiftsync-sparse-$index@example.test>" \
-    "$workspace/destination/mail/$user/Maildir" >/dev/null 2>&1; then
+  if ! destination_has_message_id "mailswiftsync-sparse-$index@example.test"; then
     echo "FAIL: destination is missing sparse UID fixture message $index" >&2
     exit 1
   fi
 done
-sparse_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-sparse-" \
-  "$workspace/destination/mail/$user/Maildir" | wc -l)"
+if [[ "$test_engine" == Dovecot ]]; then
+  sparse_count="$(grep -c '^hdr.message-id: <mailswiftsync-sparse-' <<<"$destination_message_ids" || true)"
+else
+  sparse_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-sparse-" "$destination_maildir" | wc -l)"
+fi
 if [[ "$sparse_count" -ne 10 ]]; then
   echo "FAIL: destination retained $sparse_count sparse UID messages; expected 10" >&2
   exit 1
 fi
 echo "PASS: destination retained sparse-UID fixture endpoints"
-duplicate_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-duplicate@example.test>" \
-  "$workspace/destination/mail/$user/Maildir" | wc -l)"
+if [[ "$test_engine" == Dovecot ]]; then
+  duplicate_count="$(grep -c '^hdr.message-id: <mailswiftsync-duplicate@example.test>' <<<"$destination_message_ids" || true)"
+else
+  duplicate_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-duplicate@example.test>" "$destination_maildir" | wc -l)"
+fi
 if [[ "$duplicate_count" -ne 2 ]]; then
   echo "FAIL: destination retained $duplicate_count duplicate-ID messages; expected 2" >&2
   exit 1
 fi
 echo "PASS: destination retained literal, non-UTF-8, renamed special-use, and duplicate-ID fixtures"
-echo "PASS: MailSwiftSync product integration copied $destination_messages message(s) through ${test_engine}"
+echo "PASS: MailSwiftSync product integration verified $destination_messages message(s) through ${test_engine}"

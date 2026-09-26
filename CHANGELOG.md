@@ -8,7 +8,8 @@ operator distribution archives.
 
 - The native Dovecot integration lab now uses mdbox for its destination
   mailbox store. Initial `doveadm backup` must reconcile an already-opened
-  destination INBOX, which Maildir cannot delete and recreate.
+  destination INBOX, which Maildir cannot delete and recreate; fixture
+  messages are verified through `doveadm fetch` instead of Maildir filenames.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
