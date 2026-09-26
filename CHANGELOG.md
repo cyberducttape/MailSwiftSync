@@ -65,6 +65,8 @@ operator distribution archives.
 - Switched executable and trust-bundle identity hashing to fixed-size chunks,
   avoiding whole-file allocations during plan validation.
 - Bounded current and legacy saved-profile reads to 1 MiB before TOML parsing.
+- Bounded migration-proof reads to 32 MiB before signing or verification JSON
+  parsing.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
