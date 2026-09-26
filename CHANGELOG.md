@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Schema validation now parses actual SQLite `CHECK` expressions instead of
+  accepting matching text embedded in defaults or comments; writable repair
+  and read-only validation use the same strict constraint signature.
 - Closed SQLite handles before removing temporary database fixtures, fixing
   Windows test failures caused by platform-specific file locking.
 - Fixed integration artifact-directory setup so the host runner applies

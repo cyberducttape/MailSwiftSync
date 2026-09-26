@@ -12,6 +12,138 @@ type ForeignKey = (
 );
 type ForeignKeyTable = (&'static str, &'static [ForeignKey]);
 
+/// Extract CHECK expressions from SQLite's stored table DDL. Looking for a
+/// CHECK-looking substring is unsafe here: the same text can appear in a
+/// default string or a comment without enforcing any constraint.
+fn sqlite_check_expressions(sql: &str) -> Vec<String> {
+    fn skip_quoted(bytes: &[u8], mut index: usize, quote: u8) -> usize {
+        index += 1;
+        while index < bytes.len() {
+            if bytes[index] == quote {
+                if bytes.get(index + 1) == Some(&quote) {
+                    index += 2;
+                    continue;
+                }
+                return index + 1;
+            }
+            index += 1;
+        }
+        bytes.len()
+    }
+
+    fn skip_comment(bytes: &[u8], index: usize) -> usize {
+        if bytes.get(index..index + 2) == Some(b"--") {
+            bytes[index + 2..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(bytes.len(), |offset| index + 2 + offset + 1)
+        } else if bytes.get(index..index + 2) == Some(b"/*") {
+            bytes[index + 2..]
+                .windows(2)
+                .position(|pair| pair == b"*/")
+                .map_or(bytes.len(), |offset| index + 2 + offset + 2)
+        } else {
+            index
+        }
+    }
+
+    let bytes = sql.as_bytes();
+    let mut checks = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' | b'"' | b'`' => index = skip_quoted(bytes, index, bytes[index]),
+            b'[' => {
+                index = bytes[index + 1..]
+                    .iter()
+                    .position(|byte| *byte == b']')
+                    .map_or(bytes.len(), |offset| index + offset + 2);
+            }
+            b'-' | b'/' => {
+                let next = skip_comment(bytes, index);
+                index = if next == index { index + 1 } else { next };
+            }
+            byte if byte.eq_ignore_ascii_case(&b'C')
+                && bytes
+                    .get(index..index + 5)
+                    .is_some_and(|token| token.eq_ignore_ascii_case(b"check"))
+                && (index == 0 || !is_sql_identifier(bytes[index - 1]))
+                && bytes
+                    .get(index + 5)
+                    .is_none_or(|byte| !is_sql_identifier(*byte)) =>
+            {
+                let mut open = index + 5;
+                while bytes.get(open).is_some_and(u8::is_ascii_whitespace) {
+                    open += 1;
+                }
+                if bytes.get(open) != Some(&b'(') {
+                    index += 5;
+                    continue;
+                }
+                let mut depth = 1usize;
+                let mut cursor = open + 1;
+                let mut expression = Vec::new();
+                while cursor < bytes.len() && depth > 0 {
+                    match bytes[cursor] {
+                        b'\'' | b'"' | b'`' => {
+                            let end = skip_quoted(bytes, cursor, bytes[cursor]);
+                            expression.extend_from_slice(&bytes[cursor..end]);
+                            cursor = end;
+                        }
+                        b'[' => {
+                            let end = bytes[cursor + 1..]
+                                .iter()
+                                .position(|byte| *byte == b']')
+                                .map_or(bytes.len(), |offset| cursor + offset + 2);
+                            expression.extend_from_slice(&bytes[cursor..end]);
+                            cursor = end;
+                        }
+                        b'-' | b'/' => {
+                            let end = skip_comment(bytes, cursor);
+                            if end == cursor {
+                                expression.push(bytes[cursor]);
+                                cursor += 1;
+                            } else {
+                                cursor = end;
+                            }
+                        }
+                        b'(' => {
+                            depth += 1;
+                            expression.push(b'(');
+                            cursor += 1;
+                        }
+                        b')' => {
+                            depth -= 1;
+                            if depth > 0 {
+                                expression.push(b')');
+                            }
+                            cursor += 1;
+                        }
+                        byte => {
+                            if !byte.is_ascii_whitespace() {
+                                expression.push(byte.to_ascii_lowercase());
+                            }
+                            cursor += 1;
+                        }
+                    }
+                }
+                if depth == 0 {
+                    checks.push(String::from_utf8_lossy(&expression).into_owned());
+                    index = cursor;
+                } else {
+                    index = bytes.len();
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    checks
+}
+
+fn is_sql_identifier(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
 #[cfg(unix)]
 type DatabaseIdentity = (u64, u64);
 #[cfg(not(unix))]
@@ -774,55 +906,55 @@ impl StateStore {
             (
                 "evidence",
                 &[
-                    "check(source_messages>=0)",
-                    "check(destination_messages>=0)",
-                    "check(source_bytes>=0)",
-                    "check(destination_bytes>=0)",
-                    "check(unmatched_messagesisnullorunmatched_messages>=0)",
-                    "check(failed_messages>=0)",
-                    "check(source_folders>=0)",
-                    "check(destination_folders>=0)",
-                    "check(authoritativein(0,1))",
-                    "check(missing_messages>=0)",
-                    "check(extra_messages>=0)",
-                    "check(modified_messages>=0)",
-                    "check(probable_messages>=0)",
+                    "source_messages>=0",
+                    "destination_messages>=0",
+                    "source_bytes>=0",
+                    "destination_bytes>=0",
+                    "unmatched_messagesisnullorunmatched_messages>=0",
+                    "failed_messages>=0",
+                    "source_folders>=0",
+                    "destination_folders>=0",
+                    "authoritativein(0,1)",
+                    "missing_messages>=0",
+                    "extra_messages>=0",
+                    "modified_messages>=0",
+                    "probable_messages>=0",
                 ],
             ),
             (
                 "evidence_history",
                 &[
-                    "check(source_messages>=0)",
-                    "check(destination_messages>=0)",
-                    "check(source_bytes>=0)",
-                    "check(destination_bytes>=0)",
-                    "check(unmatched_messagesisnullorunmatched_messages>=0)",
-                    "check(failed_messages>=0)",
-                    "check(source_folders>=0)",
-                    "check(destination_folders>=0)",
-                    "check(authoritativein(0,1))",
-                    "check(missing_messages>=0)",
-                    "check(extra_messages>=0)",
-                    "check(modified_messages>=0)",
-                    "check(probable_messages>=0)",
+                    "source_messages>=0",
+                    "destination_messages>=0",
+                    "source_bytes>=0",
+                    "destination_bytes>=0",
+                    "unmatched_messagesisnullorunmatched_messages>=0",
+                    "failed_messages>=0",
+                    "source_folders>=0",
+                    "destination_folders>=0",
+                    "authoritativein(0,1)",
+                    "missing_messages>=0",
+                    "extra_messages>=0",
+                    "modified_messages>=0",
+                    "probable_messages>=0",
                 ],
             ),
             (
                 "active_processes",
                 &[
-                    "check(pid>=0)",
-                    "check(start_ticksisnullorstart_ticks>=0)",
-                    "check(process_groupisnullorprocess_group>=0)",
-                    "check(session_idisnullorsession_id>=0)",
+                    "pid>=0",
+                    "start_ticksisnullorstart_ticks>=0",
+                    "process_groupisnullorprocess_group>=0",
+                    "session_idisnullorsession_id>=0",
                 ],
             ),
             (
                 "message_mismatches",
                 &[
-                    "check(source_size_bytesisnullorsource_size_bytes>=0)",
-                    "check(dest_size_bytesisnullordest_size_bytes>=0)",
-                    "check(source_uidvalidityisnullorsource_uidvalidity>=0)",
-                    "check(destination_uidvalidityisnullordestination_uidvalidity>=0)",
+                    "source_size_bytesisnullorsource_size_bytes>=0",
+                    "dest_size_bytesisnullordest_size_bytes>=0",
+                    "source_uidvalidityisnullorsource_uidvalidity>=0",
+                    "destination_uidvalidityisnullordestination_uidvalidity>=0",
                 ],
             ),
         ];
@@ -832,14 +964,10 @@ impl StateStore {
                 [*table],
                 |row| row.get(0),
             )?;
-            let normalized = sql
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|character| !character.is_ascii_whitespace())
-                .collect::<String>();
+            let checks = sqlite_check_expressions(&sql);
             if required_checks
                 .iter()
-                .any(|required| !normalized.contains(required))
+                .any(|required| !checks.iter().any(|check| check == required))
             {
                 return Err(rusqlite::Error::InvalidQuery);
             }
@@ -1459,27 +1587,25 @@ impl StateStore {
                 [table],
                 |row| row.get(0),
             )?;
-            let normalized = sql
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|character| !character.is_ascii_whitespace())
-                .collect::<String>();
+            let checks = sqlite_check_expressions(&sql);
             let required = [
-                "check(source_messages>=0)",
-                "check(destination_messages>=0)",
-                "check(source_bytes>=0)",
-                "check(destination_bytes>=0)",
-                "check(unmatched_messagesisnullorunmatched_messages>=0)",
-                "check(failed_messages>=0)",
-                "check(source_folders>=0)",
-                "check(destination_folders>=0)",
-                "check(authoritativein(0,1))",
-                "check(missing_messages>=0)",
-                "check(extra_messages>=0)",
-                "check(modified_messages>=0)",
-                "check(probable_messages>=0)",
+                "source_messages>=0",
+                "destination_messages>=0",
+                "source_bytes>=0",
+                "destination_bytes>=0",
+                "unmatched_messagesisnullorunmatched_messages>=0",
+                "failed_messages>=0",
+                "source_folders>=0",
+                "destination_folders>=0",
+                "authoritativein(0,1)",
+                "missing_messages>=0",
+                "extra_messages>=0",
+                "modified_messages>=0",
+                "probable_messages>=0",
             ];
-            Ok(required.iter().all(|check| normalized.contains(check)))
+            Ok(required
+                .iter()
+                .all(|required| checks.iter().any(|check| check == required)))
         };
         if has_constraints("evidence")? && has_constraints("evidence_history")? {
             return Ok(());
@@ -1544,18 +1670,16 @@ impl StateStore {
                 [table],
                 |row| row.get(0),
             )?;
-            let normalized = sql
-                .to_ascii_lowercase()
-                .chars()
-                .filter(|character| !character.is_ascii_whitespace())
-                .collect::<String>();
-            Ok(required.iter().all(|check| normalized.contains(check)))
+            let checks = sqlite_check_expressions(&sql);
+            Ok(required
+                .iter()
+                .all(|required| checks.iter().any(|check| check == required)))
         };
         let process_checks = [
-            "check(pid>=0)",
-            "check(start_ticksisnullorstart_ticks>=0)",
-            "check(process_groupisnullorprocess_group>=0)",
-            "check(session_idisnullorsession_id>=0)",
+            "pid>=0",
+            "start_ticksisnullorstart_ticks>=0",
+            "process_groupisnullorprocess_group>=0",
+            "session_idisnullorsession_id>=0",
         ];
         if !has_checks("active_processes", &process_checks)? {
             tx.execute_batch(
@@ -1567,10 +1691,10 @@ impl StateStore {
             )?;
         }
         let mismatch_checks = [
-            "check(source_size_bytesisnullorsource_size_bytes>=0)",
-            "check(dest_size_bytesisnullordest_size_bytes>=0)",
-            "check(source_uidvalidityisnullorsource_uidvalidity>=0)",
-            "check(destination_uidvalidityisnullordestination_uidvalidity>=0)",
+            "source_size_bytesisnullorsource_size_bytes>=0",
+            "dest_size_bytesisnullordest_size_bytes>=0",
+            "source_uidvalidityisnullorsource_uidvalidity>=0",
+            "destination_uidvalidityisnullordestination_uidvalidity>=0",
         ];
         if !has_checks("message_mismatches", &mismatch_checks)? {
             tx.execute_batch(
@@ -1727,5 +1851,35 @@ impl StateStore {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod schema_check_expression_tests {
+    use super::sqlite_check_expressions;
+
+    #[test]
+    fn extracts_real_nested_checks_but_ignores_literals_and_comments() {
+        let ddl = r#"CREATE TABLE evidence (
+            note TEXT DEFAULT 'CHECK(source_messages >= 0)',
+            other TEXT DEFAULT "CHECK(destination_messages >= 0)",
+            /* CHECK(source_bytes >= 0) */
+            source_messages INTEGER CHECK (source_messages >= 0),
+            CHECK(unmatched_messages IS NULL OR unmatched_messages >= 0),
+            CHECK(length(')') > 0)
+        )"#;
+        let checks = sqlite_check_expressions(ddl);
+        assert!(checks.contains(&"source_messages>=0".to_owned()));
+        assert!(checks.contains(&"unmatched_messagesisnullorunmatched_messages>=0".to_owned()));
+        assert!(checks.contains(&"length(')')>0".to_owned()));
+        assert!(!checks.contains(&"destination_messages>=0".to_owned()));
+        assert!(!checks.contains(&"source_bytes>=0".to_owned()));
+    }
+
+    #[test]
+    fn ignores_check_text_in_identifier_names_and_line_comments() {
+        let ddl =
+            "CREATE TABLE t ([CHECK(source_messages >= 0)] TEXT) -- CHECK(source_messages >= 0)\n";
+        assert!(sqlite_check_expressions(ddl).is_empty());
     }
 }
