@@ -676,6 +676,16 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        const OWNERSHIP_CHECKS: &[&str] = &[
+            "SELECT EXISTS(SELECT 1 FROM evidence_history h JOIN runs r ON r.id=h.run_id WHERE r.job_id IS NULL OR r.job_id<>h.job_id)",
+            "SELECT EXISTS(SELECT 1 FROM message_mismatches m JOIN runs r ON r.id=m.run_id WHERE r.job_id IS NULL OR r.job_id<>m.job_id)",
+        ];
+        for sql in OWNERSHIP_CHECKS {
+            let mismatched_owner: bool = connection.query_row(sql, [], |row| row.get(0))?;
+            if mismatched_owner {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
         // Foreign-key enforcement protects new writes, but SQLite does not
         // retroactively validate rows that were imported or edited while the
         // pragma was disabled. Recovery and read-only validation must reject
