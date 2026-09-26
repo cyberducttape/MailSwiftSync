@@ -386,6 +386,7 @@ impl StateStore {
         ) {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let detail = bounded_event_detail(detail);
         let tx = self.connection.unchecked_transaction()?;
         let project_id: String = tx.query_row(
             "SELECT project_id FROM runs WHERE id=?1 AND status='running'",
@@ -525,6 +526,7 @@ impl StateStore {
         }
         let attention_reason =
             attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
+        let detail = bounded_event_detail(detail);
         let tx = self.connection.unchecked_transaction()?;
         let current: String = tx.query_row(
             "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",
@@ -752,6 +754,7 @@ impl StateStore {
         }
         let attention_reason =
             attention_reason_for(mailbox_state, detail).map(AttentionReason::as_str);
+        let detail = bounded_event_detail(detail);
         let tx = self.connection.unchecked_transaction()?;
         let current: String = tx.query_row(
             "SELECT state FROM mailbox_jobs WHERE id=?1 AND project_id=?2",

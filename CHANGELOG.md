@@ -16,6 +16,8 @@ operator distribution archives.
 - Ledger validation now bounds both individual and aggregate persisted batch
   profile sizes, preventing oversized queues from causing unbounded startup
   allocations during durable-state restore; the checks use UTF-8 byte length.
+- Terminal run details now use the durable event-size bound for both run and
+  event records, preventing oversized provider errors from bloating the ledger.
 - Live IMAP metadata verification now stages source and destination records in
   a private SQLite database and reconciles them in bounded batches, avoiding
   account-sized Rust message maps while preserving bounded mismatch evidence.

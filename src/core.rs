@@ -4317,6 +4317,26 @@ destination_port = "000"
             .unwrap();
         assert!(stored_direct.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
         assert!(stored_direct.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
+
+        db.finish_run(run_id, "failed", oversized.as_str()).unwrap();
+        let stored_run_detail: String = db
+            .connection
+            .query_row("SELECT detail FROM runs WHERE id=?1", [run_id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(stored_run_detail.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
+        assert!(stored_run_detail.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
+        let stored_finished_detail: String = db
+            .connection
+            .query_row(
+                "SELECT detail FROM events WHERE run_id=?1 AND kind='run_finished'",
+                [run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stored_finished_detail.len() <= MAX_DURABLE_EVENT_DETAIL_BYTES);
+        assert!(stored_finished_detail.ends_with(DURABLE_EVENT_TRUNCATION_SUFFIX));
     }
 
     #[test]
