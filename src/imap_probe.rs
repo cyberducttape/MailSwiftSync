@@ -8,7 +8,7 @@ use rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::Entry},
     io::{Read, Write},
     net::{TcpStream, ToSocketAddrs},
     sync::Arc,
@@ -1697,7 +1697,6 @@ fn parse_message_fetch_response_with_fingerprints(
 > {
     let starts = fetch_record_starts(response);
     let mut messages = HashMap::new();
-    let mut parsed_uids = HashSet::new();
     let mut content_fingerprints = HashMap::new();
     for (index, start) in starts.iter().copied().enumerate() {
         let end = starts.get(index + 1).copied().unwrap_or(response.len());
@@ -1712,25 +1711,28 @@ fn parse_message_fetch_response_with_fingerprints(
         let internal_date = fetch_quoted(first_line, "INTERNALDATE");
         let message_id = fetch_message_id(record).filter(|value| !value.is_empty());
         let uid = uid.to_string();
-        if !parsed_uids.insert(uid.clone()) {
-            return Err(format!("duplicate FETCH UID {uid}"));
-        }
         let key = match uidvalidity {
             Some(value) => {
                 crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
             }
             None => crate::core::MailboxMessageKey::new(mailbox, uid.clone()),
         };
-        messages.insert(
-            key.clone(),
-            crate::core::ExtractedMessage {
-                message_id,
-                uid: Some(uid),
-                size_bytes,
-                internal_date,
-            },
-        );
-        if let Some(fingerprint) = fetch_content_fingerprint(record) {
+        let fingerprint = fetch_content_fingerprint(record);
+        let fingerprint_key = fingerprint.as_ref().map(|_| key.clone());
+        match messages.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(crate::core::ExtractedMessage {
+                    message_id,
+                    uid: Some(uid),
+                    size_bytes,
+                    internal_date,
+                });
+            }
+            Entry::Occupied(entry) => {
+                return Err(format!("duplicate FETCH UID {}", entry.key().uid));
+            }
+        }
+        if let (Some(key), Some(fingerprint)) = (fingerprint_key, fingerprint) {
             content_fingerprints.insert(key, fingerprint);
         }
     }
@@ -1746,7 +1748,6 @@ fn parse_message_fetch_metadata_response_bytes(
 ) -> Result<crate::core::ExtractedMessages, String> {
     let starts = fetch_record_starts_bytes(response);
     let mut messages = HashMap::new();
-    let mut parsed_uids = HashSet::new();
     for (index, start) in starts.iter().copied().enumerate() {
         let end = starts.get(index + 1).copied().unwrap_or(response.len());
         let record = &response[start..end];
@@ -1758,24 +1759,25 @@ fn parse_message_fetch_metadata_response_bytes(
         let uid = fetch_number(&first_line, "UID")
             .ok_or_else(|| "IMAP FETCH record omitted UID".to_owned())?
             .to_string();
-        if !parsed_uids.insert(uid.clone()) {
-            return Err(format!("duplicate FETCH UID {uid}"));
-        }
         let key = match uidvalidity {
             Some(value) => {
                 crate::core::MailboxMessageKey::with_uidvalidity(mailbox, value, uid.clone())
             }
             None => crate::core::MailboxMessageKey::new(mailbox, uid.clone()),
         };
-        messages.insert(
-            key,
-            crate::core::ExtractedMessage {
-                message_id: fetch_message_id_bytes(record).filter(|value| !value.is_empty()),
-                uid: Some(uid),
-                size_bytes: fetch_number(&first_line, "RFC822.SIZE"),
-                internal_date: fetch_quoted(&first_line, "INTERNALDATE"),
-            },
-        );
+        match messages.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(crate::core::ExtractedMessage {
+                    message_id: fetch_message_id_bytes(record).filter(|value| !value.is_empty()),
+                    uid: Some(uid),
+                    size_bytes: fetch_number(&first_line, "RFC822.SIZE"),
+                    internal_date: fetch_quoted(&first_line, "INTERNALDATE"),
+                });
+            }
+            Entry::Occupied(entry) => {
+                return Err(format!("duplicate FETCH UID {}", entry.key().uid));
+            }
+        }
     }
     Ok(messages)
 }
