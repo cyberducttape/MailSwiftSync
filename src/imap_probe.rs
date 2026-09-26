@@ -242,6 +242,21 @@ fn read_imap_tagged_with_budget<S: Read>(
     }
 }
 
+fn read_imap_tagged_with_optional_budget<S: Read>(
+    stream: &mut S,
+    tag: &str,
+    response: &mut String,
+    buffer: &mut [u8; 4096],
+    budget: Option<&MessageFetchBudget<'_>>,
+) -> Result<(), String> {
+    match budget {
+        Some(budget) => {
+            read_imap_tagged_with_budget(stream, tag, response, buffer, 1_048_576, budget)
+        }
+        None => read_imap_tagged(stream, tag, response, buffer),
+    }
+}
+
 fn read_imap_tagged_bytes_with_budget<S: Read>(
     stream: &mut S,
     tag: &str,
@@ -985,7 +1000,13 @@ fn connect_tls_stream_inner(
             budget,
             "could not write CAPABILITY",
         )?;
-        read_imap_tagged(&mut tcp, "s001", &mut response, &mut buffer)?;
+        read_imap_tagged_with_optional_budget(
+            &mut tcp,
+            "s001",
+            &mut response,
+            &mut buffer,
+            budget,
+        )?;
         if !imap_command_succeeded(&response, "s001")
             || !advertises_capability(&response, "STARTTLS")
         {
@@ -997,7 +1018,13 @@ fn connect_tls_stream_inner(
             budget,
             "could not write STARTTLS",
         )?;
-        read_imap_tagged(&mut tcp, "s002", &mut response, &mut buffer)?;
+        read_imap_tagged_with_optional_budget(
+            &mut tcp,
+            "s002",
+            &mut response,
+            &mut buffer,
+            budget,
+        )?;
         if !imap_command_succeeded(&response, "s002") {
             return Err(format!("{host}: STARTTLS negotiation failed"));
         }
@@ -1137,7 +1164,7 @@ fn authenticate_imap_stream<S: Read + Write>(
         budget,
         "could not write pre-auth CAPABILITY",
     )?;
-    read_imap_tagged(&mut stream, "a001", &mut response, &mut buffer)?;
+    read_imap_tagged_with_optional_budget(&mut stream, "a001", &mut response, &mut buffer, budget)?;
     if !imap_command_succeeded(&response, "a001") {
         return Err(imap_command_failure(
             &response,
@@ -1188,7 +1215,13 @@ fn authenticate_imap_stream<S: Read + Write>(
                 budget,
                 "could not write IMAP authentication",
             )?;
-            read_imap_tagged(&mut stream, "a002", &mut response, &mut buffer)?;
+            read_imap_tagged_with_optional_budget(
+                &mut stream,
+                "a002",
+                &mut response,
+                &mut buffer,
+                budget,
+            )?;
         }
         if !imap_command_succeeded(&response, "a002") {
             return Err(imap_command_failure(
@@ -1208,7 +1241,13 @@ fn authenticate_imap_stream<S: Read + Write>(
         "could not write post-auth CAPABILITY",
     )?;
     let mut post_auth_response = String::new();
-    read_imap_tagged(&mut stream, "a003", &mut post_auth_response, &mut buffer)?;
+    read_imap_tagged_with_optional_budget(
+        &mut stream,
+        "a003",
+        &mut post_auth_response,
+        &mut buffer,
+        budget,
+    )?;
     if !imap_command_succeeded(&post_auth_response, "a003") {
         return Err(imap_command_failure(
             &post_auth_response,
