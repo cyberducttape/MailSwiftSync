@@ -11,6 +11,7 @@ use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
 const MAX_HEADLESS_DETAIL_MAILBOXES: u32 = 10_000;
+const MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL: usize = 100_000;
 const MAX_HEADLESS_ACTIVE_PROCESSES: u32 = 1_000;
 
 #[derive(Debug, Serialize)]
@@ -228,6 +229,7 @@ pub(crate) fn headless_status(
             .collect::<Vec<_>>()
     };
     let mut result = Vec::with_capacity(projects.len());
+    let mut remaining_mailbox_rows = MAX_HEADLESS_DETAIL_MAILBOXES_TOTAL;
     for project in projects {
         let mailbox_count = store
             .mailbox_state_counts(&project.id)
@@ -237,7 +239,10 @@ pub(crate) fn headless_status(
             .project_has_mailbox_configs(&project.id)
             .map_err(|error| error.to_string())?;
         let mut mailboxes = Vec::new();
-        let mailbox_limit = MAX_HEADLESS_DETAIL_MAILBOXES;
+        let mailbox_limit = remaining_mailbox_rows
+            .min(MAX_HEADLESS_DETAIL_MAILBOXES as usize)
+            .try_into()
+            .unwrap_or(0);
         for (mailbox, attention_reason) in store
             .mailbox_status_page(&project.id, 0, mailbox_limit)
             .map_err(|error| error.to_string())?
@@ -250,6 +255,7 @@ pub(crate) fn headless_status(
                 state: mailbox.state,
             });
         }
+        remaining_mailbox_rows = remaining_mailbox_rows.saturating_sub(mailboxes.len());
         result.push(HeadlessProjectStatus {
             id: project.id,
             name: project.name,
