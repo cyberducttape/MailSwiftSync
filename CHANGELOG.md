@@ -34,6 +34,9 @@ operator distribution archives.
   validates the canonical mailbox key directly.
 - Read-only and writable ledger validation now rejects orphaned foreign-key
   rows, including records imported while SQLite foreign-key enforcement was off.
+- Live source and destination metadata scans now share one fetched-state
+  admission budget, preventing each account from independently consuming the
+  full allowance before reconciliation begins.
 - Routed budgeted IMAP authentication and metadata commands through
   cancellation-aware, timeout-retrying writes with short socket I/O slices.
 
