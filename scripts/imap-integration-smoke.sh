@@ -210,8 +210,16 @@ EOF
     2.4.*)
       version_setting="dovecot_config_version = 2.4.0
 dovecot_storage_version = $dovecot_semver"
-      mail_settings="mail_driver = maildir
+      if [[ "$name" == destination && "$test_engine" == Dovecot ]]; then
+        # The native backup strategy must reconcile a previously-created
+        # destination INBOX. Maildir cannot delete/recreate INBOX, so use
+        # mdbox for the native target fixture while keeping Maildir as source.
+        mail_settings="mail_driver = mdbox
+mail_path = ~/mdbox"
+      else
+        mail_settings="mail_driver = maildir
 mail_path = ~/Maildir"
+      fi
       auth_settings="passdb passwd-file {
   passwd_file_path = $root/passwd
 }
@@ -226,7 +234,11 @@ userdb passwd-file {
       ;;
     2.3.*)
       version_setting=""
-      mail_settings="mail_location = maildir:~/Maildir"
+      if [[ "$name" == destination && "$test_engine" == Dovecot ]]; then
+        mail_settings="mail_location = mdbox:~/mdbox"
+      else
+        mail_settings="mail_location = maildir:~/Maildir"
+      fi
       auth_settings="passdb {
   driver = passwd-file
   args = $root/passwd
