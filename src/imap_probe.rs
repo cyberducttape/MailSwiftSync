@@ -710,10 +710,10 @@ fn read_with_deadline<S: Read>(
 ) -> Result<usize, String> {
     loop {
         if cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed)) {
-            return Err("IMAP LIST response cancelled by operator".into());
+            return Err("IMAP read cancelled by operator".into());
         }
         if Instant::now() >= deadline {
-            return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
+            return Err("IMAP read deadline exceeded".into());
         }
         match stream.read(buffer) {
             Ok(count) => return Ok(count),
@@ -744,11 +744,23 @@ fn authenticated_list_command(request_special_use: bool) -> &'static [u8] {
     }
 }
 
-fn read_imap_greeting<S: Read>(stream: &mut S, host: &str) -> Result<String, String> {
+fn read_imap_greeting<S: Read>(
+    stream: &mut S,
+    host: &str,
+    budget: Option<&MessageFetchBudget<'_>>,
+) -> Result<String, String> {
     let mut response = String::new();
     let mut buffer = [0; 4096];
+    let deadline = budget
+        .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
+        .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
     loop {
-        let count = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+        let count = read_with_deadline(
+            stream,
+            &mut buffer,
+            deadline,
+            budget.map(|budget| budget.cancel),
+        )?;
         if count == 0 {
             break;
         }
@@ -932,7 +944,7 @@ fn connect_tls_stream_inner(
     if transport == "starttls" {
         let mut response = String::new();
         let mut buffer = [0; 4096];
-        let greeting = read_imap_greeting(&mut tcp, host)?;
+        let greeting = read_imap_greeting(&mut tcp, host, budget)?;
         tcp.write_all(b"s001 CAPABILITY\r\n")
             .map_err(|e| e.to_string())?;
         read_imap_tagged(&mut tcp, "s001", &mut response, &mut buffer)?;
@@ -965,7 +977,7 @@ fn connect_tls_stream_inner(
     let mut stream = StreamOwned::new(connection, tcp);
     refresh_socket_timeout(&stream.sock, budget)
         .map_err(|e| format!("{host}: could not set TLS I/O timeout: {e}"))?;
-    let greeting = read_imap_greeting(&mut stream, host)?;
+    let greeting = read_imap_greeting(&mut stream, host, budget)?;
     verify_certificate_pin(&stream, host, certificate_pin_sha256)?;
     Ok((stream, greeting))
 }

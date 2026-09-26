@@ -49,6 +49,8 @@ operator distribution archives.
   server responses cannot be silently deduplicated.
 - Made IMAP LIST read retries observe operator cancellation while waiting on
   transient socket timeouts or nonblocking reads.
+- Applied an absolute eight-second connection budget to IMAP greeting reads,
+  including slow-drip peers during STARTTLS setup.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
