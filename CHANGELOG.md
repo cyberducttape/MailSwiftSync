@@ -35,6 +35,8 @@ operator distribution archives.
   operator-provided reason in the ledger.
 - The Dovecot product-lab artifact now includes its bounded fetched Message-ID
   sample and fixture counts when destination assertions fail.
+- Sparse-UID lab fixtures now use zero-padded Maildir filenames so Dovecot's
+  lexical scan order matches numeric fixture order before expunging UIDs.
 - The distributed Linux runtime now includes `procps`, which packaged
   imapsync invokes for process inspection; the product integration lab fails
   early if `ps` is missing.

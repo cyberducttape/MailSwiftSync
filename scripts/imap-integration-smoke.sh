@@ -397,7 +397,10 @@ done
 # consequently 10 while the surviving UIDs are high (typically 91..100).
 mkdir -p "$workspace/source/mail/$user/Maildir/.Sparse"/{cur,new,tmp}
 for index in $(seq 1 100); do
-  cat > "$workspace/source/mail/$user/Maildir/.Sparse/new/sparse-$index.eml" <<EOF
+  # Dovecot assigns UIDs in Maildir's lexical filename order. Zero-padding
+  # keeps that order numeric so expunging UIDs 1..90 leaves fixture IDs 91..100.
+  printf -v sparse_filename 'sparse-%03d.eml' "$index"
+  cat > "$workspace/source/mail/$user/Maildir/.Sparse/new/$sparse_filename" <<EOF
 From: migration-lab@example.test
 To: lab@example.test
 Subject: sparse UID fixture $index
