@@ -89,6 +89,8 @@ operator distribution archives.
   mailbox and the 20 runs rendered by operator reports.
 - Kept headless status and completion checks off the full mailbox configuration
   read path; those consumers only need mailbox identity and state.
+- Bounded persisted batch-profile TOML parsing and identity extraction to 1 MiB
+  before deserialization.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
