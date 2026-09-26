@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn mismatch_reader_rejects_negative_unsigned_fields() {
+    fn mismatch_storage_rejects_negative_unsigned_fields() {
         let db = StateStore::in_memory().unwrap();
         db.connection
             .execute(
@@ -556,14 +556,13 @@ mod tests {
                 [],
             )
             .unwrap();
-        db.connection
+        let insert = db.connection
             .execute(
                 "INSERT INTO message_mismatches(id,job_id,run_id,mismatch_type,source_uidvalidity) VALUES('m','j','r','missing',-1)",
                 [],
             )
-            .unwrap();
-
-        assert!(db.message_mismatches_for_run("j", "r", 10).is_err());
+            .unwrap_err();
+        assert!(matches!(insert, rusqlite::Error::SqliteFailure(_, _)));
     }
 
     #[test]
