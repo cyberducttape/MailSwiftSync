@@ -604,7 +604,7 @@ mod tests {
             prepared
                 .args
                 .iter()
-                .any(|arg| { arg == "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD" })
+                .any(|arg| { arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD " })
         );
         assert!(!prepared.args.iter().any(|arg| arg.contains("secret")));
         assert_eq!(
@@ -876,7 +876,7 @@ mod tests {
         assert_eq!(exe, form.profile.doveadm_path);
         assert!(
             args.iter()
-                .any(|arg| arg == "imapc_password=$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD")
+                .any(|arg| arg == "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD ")
         );
     }
 

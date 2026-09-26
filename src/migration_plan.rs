@@ -218,6 +218,13 @@ impl Default for Form {
         }
     }
 }
+fn dovecot_imapc_password_override() -> String {
+    // Dovecot's legacy `$ENV:name` expansion requires the token to be
+    // whitespace-delimited. Keep the value out of argv while ensuring
+    // Dovecot expands it instead of treating the token literally.
+    "imapc_password= $ENV:MAILSWIFTSYNC_IMAPC_PASSWORD ".into()
+}
+
 impl Form {
     pub(crate) const KEYRING_SERVICE: &'static str = "com.mailswiftsync.mailbox";
     /// Deliberately a distinct keyring service from `KEYRING_SERVICE`, even
@@ -1036,7 +1043,6 @@ impl Form {
                 self.args_with_throttle_divisor_and_mode(redact, 1, dry_run),
             );
         }
-        let password = "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD";
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
             command_endpoint_parts(&self.profile.source_host, source_default_port);
@@ -1054,7 +1060,7 @@ impl Form {
             "-o".into(),
             format!("imapc_user={}", self.profile.source_user),
             "-o".into(),
-            format!("imapc_password={password}"),
+            dovecot_imapc_password_override(),
         ]);
         append_dovecot_source_tls_policy(
             &mut args,
@@ -1110,7 +1116,6 @@ impl Form {
             return Vec::new();
         }
         let _ = redact;
-        let password = "$ENV:MAILSWIFTSYNC_IMAPC_PASSWORD";
         let source_default_port = default_imap_port(&self.profile.source_tls);
         let (source_host, endpoint_port) =
             command_endpoint_parts(&self.profile.source_host, source_default_port);
@@ -1128,7 +1133,7 @@ impl Form {
             "-o".into(),
             format!("imapc_user={}", self.profile.source_user),
             "-o".into(),
-            format!("imapc_password={password}"),
+            dovecot_imapc_password_override(),
         ]);
         // These are global `doveadm -o` settings, so they must all precede
         // the `mailbox status` subcommand (the same rule as sync/backup).
