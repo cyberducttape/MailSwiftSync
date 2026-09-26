@@ -23,6 +23,9 @@ operator distribution archives.
   conditional app-password testing.
 - Replaced fixed Google and Microsoft refresh-token lifetime claims with
   provider-linked lifecycle guidance and explicit reauthorization behavior.
+- Added SQLite nonnegative constraints for durable counters and made signed
+  integer-to-unsigned reads fail closed instead of turning negative values into
+  huge evidence counts.
 
 ## [0.1.0-alpha.1] - 2026-09-25
 

@@ -73,6 +73,10 @@ pub(crate) fn sqlite_u64(value: i64) -> rusqlite::Result<u64> {
     u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
 }
 
+pub(crate) fn sqlite_usize(value: i64) -> rusqlite::Result<usize> {
+    usize::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery)
+}
+
 pub(crate) fn sqlite_optional_i64(value: Option<u64>) -> rusqlite::Result<Option<i64>> {
     value.map(sqlite_i64).transpose()
 }
@@ -348,6 +352,39 @@ mod tests {
             db.project(&project.id).unwrap().unwrap().phase,
             Phase::Verification
         );
+    }
+
+    #[test]
+    fn sqlite_rejects_negative_evidence_counters_and_readers_fail_closed() {
+        let db = StateStore::in_memory().unwrap();
+        let project = db
+            .create_project("counter-integrity", "old.example", "new.example")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "a@example", "a@example")
+            .unwrap();
+
+        let error = db
+            .connection
+            .execute(
+                "INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,failed_messages) VALUES(?1,-1,0,0,0,0)",
+                [&job],
+            )
+            .unwrap_err();
+        assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
+
+        // Exercise the deserialization boundary independently of SQLite's
+        // CHECK constraint. This models a malformed legacy/manual ledger.
+        db.connection
+            .execute_batch("PRAGMA ignore_check_constraints=ON;")
+            .unwrap();
+        db.connection
+            .execute(
+                "INSERT INTO evidence(job_id,source_messages,destination_messages,source_bytes,destination_bytes,failed_messages) VALUES(?1,-1,0,0,0,0)",
+                [&job],
+            )
+            .unwrap();
+        assert!(db.evidence(&job).is_err());
     }
 
     #[test]
@@ -1811,6 +1848,10 @@ mod tests {
                 "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES('j','p','INBOX','INBOX','INBOX','queued')",
                 [],
             )
+            .unwrap();
+        store
+            .connection
+            .execute_batch("PRAGMA ignore_check_constraints=ON;")
             .unwrap();
         store
             .connection
