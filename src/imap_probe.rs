@@ -474,7 +474,12 @@ fn read_imap_list_response_inner<S: Read>(
         let read_deadline = (last_read + MAX_INTER_READ_STALL)
             .min(deadline)
             .min(budget_deadline);
-        let count = read_with_deadline(stream, buffer, read_deadline)?;
+        let count = read_with_deadline(
+            stream,
+            buffer,
+            read_deadline,
+            budget.map(|budget| budget.cancel),
+        )?;
         last_read = Instant::now();
         if count == 0 {
             return Err(format!("IMAP connection closed before {tag} completed"));
@@ -701,8 +706,12 @@ fn read_with_deadline<S: Read>(
     stream: &mut S,
     buffer: &mut [u8],
     deadline: Instant,
+    cancel: Option<&AtomicBool>,
 ) -> Result<usize, String> {
     loop {
+        if cancel.is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err("IMAP LIST response cancelled by operator".into());
+        }
         if Instant::now() >= deadline {
             return Err("IMAP LIST response stalled (no data received for 15 seconds)".into());
         }
@@ -2121,7 +2130,7 @@ mod tests {
         format_folder_failures, parse_list_delimiter, parse_list_mailbox_name,
         parse_message_fetch_response, parse_message_fetch_response_with_fingerprints,
         parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
-        tagged_response_outside_literals,
+        read_with_deadline, tagged_response_outside_literals,
     };
     use std::collections::HashMap;
     use std::io::{self, Cursor, Read};
@@ -2237,6 +2246,21 @@ mod tests {
         let mut buffer = [0_u8; 4096];
         let summary = read_imap_list_response(&mut stream, "a005", &mut buffer).unwrap();
         assert_eq!(summary.mailbox_count, 1);
+    }
+
+    #[test]
+    fn list_read_deadline_honors_cancellation_before_waiting_for_data() {
+        let cancel = AtomicBool::new(true);
+        let mut stream = Cursor::new(Vec::<u8>::new());
+        let mut buffer = [0_u8; 16];
+        let error = read_with_deadline(
+            &mut stream,
+            &mut buffer,
+            std::time::Instant::now() + Duration::from_secs(30),
+            Some(&cancel),
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled by operator"));
     }
 
     #[test]

@@ -47,6 +47,8 @@ operator distribution archives.
   applying worksheet size limits.
 - Preserved duplicate IMAP SEARCH UIDs until coverage validation so malformed
   server responses cannot be silently deduplicated.
+- Made IMAP LIST read retries observe operator cancellation while waiting on
+  transient socket timeouts or nonblocking reads.
 - Restore failures while flushing a temporary snapshot now remove the
   temporary ledger before returning an error.
 - Corrected the active production-status document to identify the full
