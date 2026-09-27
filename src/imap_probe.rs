@@ -2516,6 +2516,37 @@ mod tests {
     }
 
     #[test]
+    fn parser_property_inputs_never_panic_and_list_unicode_round_trips() {
+        let names = ["Café", "受信箱", "📬", r#"Café\"quoted"/受信箱📬"#];
+        for name in names {
+            let quoted = name.replace('\\', "\\\\").replace('"', "\\\"");
+            let parsed = super::parse_list_tokens(&format!("() \"/\" \"{quoted}\""));
+            assert_eq!(parsed.unwrap().last().map(String::as_str), Some(name));
+        }
+
+        // Deterministic arbitrary-byte property corpus. This complements unit
+        // examples by exercising malformed UTF-8 and framing at many offsets.
+        let mut state = 0x4d53_5753_u32;
+        for length in 0..512 {
+            let mut bytes = Vec::with_capacity(length);
+            for _ in 0..length {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                bytes.push(state as u8);
+            }
+            let text = String::from_utf8_lossy(&bytes);
+            let _ = super::parse_list_tokens(&text);
+            let _ = super::parse_message_fetch_metadata_response_bytes(
+                &bytes,
+                "property-test",
+                Some(1),
+            );
+            let _ = tagged_response_outside_literals(&bytes, "v001");
+        }
+    }
+
+    #[test]
     fn tagged_scanner_handles_split_lines_literals_and_large_payloads_incrementally() {
         let payload = format!(
             "{}v009 NO this is still literal data\r\n{}",

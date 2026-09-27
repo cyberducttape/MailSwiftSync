@@ -493,7 +493,11 @@ mod tests {
         let output = directory.join("support.json");
         let store = core::StateStore::open(&state).unwrap();
         let project = store
-            .create_project("Support fixture", "source.internal", "destination.internal")
+            .create_project(
+                "Acme Corp Exchange Migration",
+                "source.internal",
+                "destination.internal",
+            )
             .unwrap();
         for index in 0..2 {
             let mailbox = format!("user-{index}@example.test");
@@ -507,6 +511,9 @@ mod tests {
         assert_eq!(value["format"], "mailswiftsync-support-bundle");
         assert!(!text.contains("source.internal"));
         assert!(!text.contains("destination.internal"));
+        assert!(!text.contains("Acme Corp Exchange Migration"));
+        assert!(value["projects"][0].get("project_name").is_none());
+        assert_eq!(value["redaction"]["project_names"], "excluded");
         assert_eq!(value["redaction"]["credentials"], "excluded");
         assert_eq!(value["redaction"]["diagnostic_text"], "excluded");
         assert_eq!(value["projects"][0]["mailbox_count"], 2);

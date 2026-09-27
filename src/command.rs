@@ -67,4 +67,19 @@ mod tests {
         );
         assert!(parse_shell_words("--broken '").is_err());
     }
+
+    #[test]
+    fn arbitrary_shell_option_strings_never_panic() {
+        let mut state = 0x5348_454c_u32;
+        for length in 0..512 {
+            let mut input = String::with_capacity(length);
+            for _ in 0..length {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                input.push(char::from(state as u8));
+            }
+            let _ = parse_shell_words(&input);
+        }
+    }
 }

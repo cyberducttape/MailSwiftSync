@@ -147,7 +147,6 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             .collect::<Result<Vec<_>, String>>()?;
         project_values.push(serde_json::json!({
             "project_id": project.id,
-            "project_name": project.name,
             "phase": project.phase.as_str(),
             "mailbox_count": counts.total,
             "mailbox_sample_limit": sample_limit,
@@ -190,6 +189,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
         "redaction": {
             "endpoints": "excluded",
             "credentials": "excluded",
+            "project_names": "excluded",
             "plan_snapshots": "excluded",
             "command_paths": "excluded",
             "mail_content": "excluded",

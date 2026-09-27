@@ -6,6 +6,10 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Support bundles no longer include customer-controlled project names; their
+  redaction metadata explicitly records that project names are excluded.
+- Added deterministic property-style parser tests for arbitrary IMAP response,
+  endpoint, and shell-option inputs, plus UTF-8 quoted LIST-name round trips.
 - Aligned the in-memory reconciliation reference with SQLite's deterministic
   wrong-folder candidate selection and expanded staged parity checks to compare
   full source/destination folder and UID evidence.

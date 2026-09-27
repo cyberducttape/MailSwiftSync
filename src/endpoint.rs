@@ -119,6 +119,21 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_endpoint_strings_never_panic() {
+        let mut state = 0x454e_4450_u32;
+        for length in 0..512 {
+            let mut input = String::with_capacity(length);
+            for _ in 0..length {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                input.push(char::from(state as u8));
+            }
+            let _ = parts(&input, 993);
+        }
+    }
+
+    #[test]
     fn destination_identity_is_shared_and_canonical() {
         assert_eq!(
             canonical_destination_identity("User@example.test", "MAIL.example.test.", "imaps", "")
