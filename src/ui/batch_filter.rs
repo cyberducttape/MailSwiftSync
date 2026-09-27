@@ -61,6 +61,18 @@ impl App {
         }
         let normalized_search = raw_search.to_ascii_lowercase();
         self.bulk_visible_indices.clear();
+        // The default mailbox view is already the complete queue. Avoid
+        // walking and re-evaluating every row after each durable state update
+        // while a large batch is running; egui still virtualizes the table.
+        if normalized_search.is_empty()
+            && (self.bulk_state_filter.is_empty() || self.bulk_state_filter == "all")
+        {
+            self.bulk_visible_indices.extend(0..self.bulk_jobs.len());
+            self.bulk_filter_cache_search = raw_search;
+            self.bulk_filter_cache_state = self.bulk_state_filter.clone();
+            self.bulk_filter_cache_generation = self.bulk_jobs_generation;
+            return;
+        }
         for (index, job) in self.bulk_jobs.iter().enumerate() {
             let state = display_state_key(&job.state);
             let state_matches = self.bulk_state_filter.is_empty()

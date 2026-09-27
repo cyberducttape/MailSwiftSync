@@ -241,6 +241,14 @@ and require the corresponding integration run.
 
 ## Required before calling it production-ready
 
+- **100k-row desktop scale gate:** the importer accepts up to 100,000 rows,
+  but the current GUI still holds queue forms in memory. The default unfiltered
+  mailbox view now avoids a full predicate scan after state updates, while
+  search/state filtering and import remain linear in the queue size. Before a
+  1.0 claim at this ceiling, publish reproducible 1k/10k/100k CSV and
+  10k/100k XLSX latency, memory, first-render, keystroke-filter, selection,
+  state-update, and reload measurements, then move the queue read model toward
+  indexed SQLite paging if those budgets are not met.
 - Provider consent flows and equivalent unattended secret-broker delivery
   remain outstanding: MailSwiftSync still does not implement an OAuth
   authorization flow, so an operator must register their own application and
