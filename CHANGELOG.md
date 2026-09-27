@@ -60,7 +60,8 @@ operator distribution archives.
   proof without mislabeling it as provider-qualification evidence.
 - The disposable destination storage-fault fixture now runs with the
   privileges required to prepare Dovecot-owned test mail storage and locates
-  the Dovecot worker without aborting on absent library directories.
+  the Dovecot worker without aborting on absent library directories. Controller
+  state and runtime files now live in an owner-matched private subdirectory.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
