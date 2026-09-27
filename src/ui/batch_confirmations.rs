@@ -139,6 +139,12 @@ impl App {
             .as_ref()
             .cloned()
             .expect("confirmation summary is initialized above");
+        let selected_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
+        let visible_selected = self.bulk_jobs.iter().enumerate().filter(|(index, _)| {
+            self.bulk_job_ids.get(*index).is_some_and(|id| self.bulk_selected_ids.contains(id))
+                && self.mailbox_matches_filter(&self.bulk_jobs[*index])
+        }).count();
+        let hidden_selected = self.bulk_selected_ids.len().saturating_sub(visible_selected);
 
         let stored_identity = self.bulk_confirmation_identity.clone();
         let mut open = self.bulk_live_confirm_open;
@@ -154,6 +160,22 @@ impl App {
                         .color(self.theme_colors().danger),
                 );
                 ui.label(format!("{} mailboxes selected", summary.eligible_count));
+                ui.label(format!("Selected scope: {} explicit · {} visible · {} hidden by current filter", selected_ids.len(), visible_selected, hidden_selected));
+                ui.label(RichText::new("Sample of selected mailboxes:").strong());
+                for job_id in selected_ids.iter().take(5) {
+                    if let Some(index) = self.bulk_job_ids.iter().position(|id| id == job_id) {
+                        let profile = &self.bulk_jobs[index].form.profile;
+                        ui.label(format!("• {}: {} → {}", self.bulk_jobs[index].label, profile.source_user, profile.destination_user));
+                    }
+                }
+                if selected_ids.len() > 5 {
+                    ui.label(format!("… plus {} more selected", selected_ids.len() - 5));
+                }
+                if hidden_selected > 0 && ui.button("View all selected").clicked() {
+                    self.bulk_search.clear();
+                    self.bulk_state_filter = "all".into();
+                    close = true;
+                }
                 if let Some(error) = &summary.durable_state_error {
                     ui.label(RichText::new(error).color(self.theme_colors().danger));
                 }

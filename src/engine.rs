@@ -22,6 +22,17 @@ pub(crate) fn imapsync_preview_args(
     imapsync_args_with_placeholders(profile, dry_run, throttle_divisor, true)
 }
 
+/// Preview generation has the same validation boundary as execution. Callers
+/// that present a plan to an operator must not receive a partial argv list.
+pub(crate) fn try_imapsync_preview_args(
+    profile: &Profile,
+    dry_run: bool,
+    throttle_divisor: usize,
+) -> Result<Vec<String>, String> {
+    canonical_extra_options(&profile.extra_options)?;
+    Ok(imapsync_preview_args(profile, dry_run, throttle_divisor))
+}
+
 fn imapsync_args_with_placeholders(
     profile: &Profile,
     dry_run: bool,

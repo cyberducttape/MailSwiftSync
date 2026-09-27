@@ -180,6 +180,26 @@ impl App {
                     .color(self.theme_colors().warning),
                 );
             }
+            egui::CollapsingHeader::new(format!("Review selected ({})", self.bulk_selected_ids.len()))
+                .default_open(true)
+                .show(ui, |ui| {
+                    if self.bulk_selected_ids.is_empty() {
+                        ui.label(RichText::new("No mailboxes selected.").color(self.theme_colors().text_secondary));
+                    } else {
+                        for (index, job) in self.bulk_jobs.iter().enumerate() {
+                            let Some(job_id) = self.bulk_job_ids.get(index) else { continue };
+                            if !self.bulk_selected_ids.contains(job_id) { continue; }
+                            let profile = &job.form.profile;
+                            let destructive = if profile.delete2 { "DESTRUCTIVE: destination deletion enabled" } else { "destination deletion disabled" };
+                            ui.group(|ui| {
+                                ui.label(RichText::new(&job.label).strong());
+                                ui.label(format!("{} → {}", profile.source_user, profile.destination_user));
+                                ui.label(format!("{} → {}", profile.source_host, profile.destination_host));
+                                ui.label(format!("State: {} · {}", display_state_key(&job.state), destructive));
+                            });
+                        }
+                    }
+                });
             let has_selection = !self.bulk_selected_ids.is_empty();
             let mut run_preflight = false;
             let mut run_live = false;
@@ -337,7 +357,7 @@ impl App {
                     });
                 });
             self.bulk_visible_indices = visible_indices;
-            ui.label(RichText::new("When a selection is present, batch actions apply only to selected rows. With no selection, the chosen retry scope applies to all matching rows.").color(self.theme_colors().text_secondary));
+            ui.label(RichText::new("Batch actions apply only to explicitly selected rows. Use Select unresolved or Select visible to create a selection.").color(self.theme_colors().text_secondary));
         }
     }
     pub(crate) fn bulk_dialog(&mut self, ctx: &egui::Context) {
@@ -411,8 +431,7 @@ impl App {
                     if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new("Export selected set…")).clicked() { self.bulk_message = match self.export_bulk_selection() { Ok(()) => "Selected batch rows exported without credentials or engine options.".into(), Err(error) => error }; }
                     let selected_or_all: Vec<usize> = (0..self.bulk_jobs.len())
                         .filter(|index| {
-                            self.bulk_selected_ids.is_empty()
-                                || self.bulk_job_ids
+                            self.bulk_job_ids
                                     .get(*index)
                                     .is_some_and(|id| self.bulk_selected_ids.contains(id))
                         })

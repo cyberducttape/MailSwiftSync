@@ -9,11 +9,9 @@ use crate::ui::display_state_key;
 
 impl App {
     pub(crate) fn bulk_row_is_selected(&self, index: usize) -> bool {
-        self.bulk_selected_ids.is_empty()
-            || self
-                .bulk_job_ids
-                .get(index)
-                .is_some_and(|job_id| self.bulk_selected_ids.contains(job_id))
+        self.bulk_job_ids
+            .get(index)
+            .is_some_and(|job_id| self.bulk_selected_ids.contains(job_id))
     }
 
     pub(crate) fn select_bulk_state_set(&mut self, set: BulkStateSet) {

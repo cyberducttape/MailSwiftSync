@@ -335,7 +335,7 @@ impl App {
                     .color(colors.text_secondary),
                 );
 
-                let validation_result = crate::engine::canonical_extra_options(&self.form.profile.extra_options);
+                let validation_result = crate::engine::try_imapsync_preview_args(&self.form.profile, true, 1);
                 if let Err(validation_error) = &validation_result {
                     ui.label(
                         RichText::new(format!("⚠ Execution plan validation failed: {}", validation_error))
