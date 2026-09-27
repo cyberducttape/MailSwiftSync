@@ -71,6 +71,29 @@ impl UiLanguage {
             "Confirm live batch migration" => "Live-Stapel-Migration bestätigen",
             "This will change destination mailboxes" => "Dies ändert Zielpostfächer",
             "I understand — start batch" => "Verstanden — Stapel starten",
+            "Sample of selected mailboxes:" => "Beispiel der ausgewählten Postfächer:",
+            "View all selected" => "Alle ausgewählten anzeigen",
+            "{} eligible of {} explicitly selected · {} blocked" => {
+                "{} berechtigt von {} ausdrücklich ausgewählt · {} blockiert"
+            }
+            "Selected scope: {} explicit · {} visible · {} hidden by current filter" => {
+                "Auswahlumfang: {} ausdrücklich · {} sichtbar · {} durch aktuellen Filter verborgen"
+            }
+            "Worker concurrency: {}" => "Gleichzeitige Arbeitsprozesse: {}",
+            "Destination deletion: {}" => "Löschen am Ziel: {}",
+            "ENABLED ⚠" => "AKTIVIERT ⚠",
+            "disabled" => "deaktiviert",
+            "Each mailbox must already have a matching successful preflight. Source mail is not deleted by default." => {
+                "Für jedes Postfach muss bereits eine passende erfolgreiche Vorabprüfung vorliegen. Quellnachrichten werden standardmäßig nicht gelöscht."
+            }
+            "Review the queue, concurrency, throttles, and exact plans before continuing." => {
+                "Prüfen Sie Warteschlange, Parallelität, Drosselungen und exakte Pläne, bevor Sie fortfahren."
+            }
+            "Plan identity: {}" => "Planidentität: {}",
+            "Scope: {}." => "Umfang: {}.",
+            "Confirmation stale: concurrency, scope, or settings changed while dialog was open. Review the queue and try again." => {
+                "Bestätigung veraltet: Parallelität, Umfang oder Einstellungen wurden während des Dialogs geändert. Prüfen Sie die Warteschlange und versuchen Sie es erneut."
+            }
             "Clear mailbox queue?" => "Postfachwarteschlange leeren?",
             "Discard the current queue?" => "Aktuelle Warteschlange verwerfen?",
             "Keep queue" => "Warteschlange behalten",
@@ -199,6 +222,9 @@ impl UiLanguage {
             "Select unresolved" => "Offene auswählen",
             "Select attention" => "Prüfbedürftige auswählen",
             "Clear selection" => "Auswahl aufheben",
+            "Run preflight ({})" => "Vorabprüfung ausführen ({})",
+            "Run live migration ({})" => "Live-Migration ausführen ({})",
+            "Run final delta ({})" => "Finales Delta ausführen ({})",
             "Selected mailbox actions" => "Aktionen für ausgewählte Postfächer",
             "Batch migration queue" => "Stapel-Migrationswarteschlange",
             "Import → review → validate" => "Importieren → prüfen → validieren",
@@ -409,6 +435,10 @@ mod tests {
             "I understand — start migration",
             "Confirm live batch migration",
             "I understand — start batch",
+            "Sample of selected mailboxes:",
+            "View all selected",
+            "Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.",
+            "Confirmation stale: concurrency, scope, or settings changed while dialog was open. Review the queue and try again.",
             "Clear mailbox queue?",
             "Advanced migration options",
             "Review verification",

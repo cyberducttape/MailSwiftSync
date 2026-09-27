@@ -145,21 +145,30 @@ impl App {
                     RichText::new(self.language.text("This will change destination mailboxes"))
                         .color(self.theme_colors().danger),
                 );
-                ui.label(format!(
-                    "{} eligible of {} explicitly selected · {} blocked",
-                    summary.eligible_count,
-                    summary.explicit_selection_count,
-                    summary.blocked_count
-                ));
-                ui.label(format!(
-                    "Selected scope: {} explicit · {} visible · {} hidden by current filter",
-                    summary.explicit_selection_count,
-                    summary
-                        .explicit_selection_count
-                        .saturating_sub(summary.hidden_selection_count),
-                    summary.hidden_selection_count
-                ));
-                ui.label(RichText::new("Sample of selected mailboxes:").strong());
+                ui.label(
+                    self.language
+                        .text("{} eligible of {} explicitly selected · {} blocked")
+                        .replace("{}", &summary.eligible_count.to_string())
+                        .replacen("{}", &summary.explicit_selection_count.to_string(), 1)
+                        .replacen("{}", &summary.blocked_count.to_string(), 1),
+                );
+                ui.label(
+                    self.language
+                        .text("Selected scope: {} explicit · {} visible · {} hidden by current filter")
+                        .replace("{}", &summary.explicit_selection_count.to_string())
+                        .replacen(
+                            "{}",
+                            &summary
+                                .explicit_selection_count
+                                .saturating_sub(summary.hidden_selection_count)
+                                .to_string(),
+                            1,
+                        )
+                        .replacen("{}", &summary.hidden_selection_count.to_string(), 1),
+                );
+                ui.label(
+                    RichText::new(self.language.text("Sample of selected mailboxes:")).strong(),
+                );
                 for job_id in selected_ids.iter().take(5) {
                     if let Some(index) = self.bulk_job_ids.iter().position(|id| id == job_id) {
                         let profile = &self.bulk_jobs[index].form.profile;
@@ -169,7 +178,11 @@ impl App {
                 if selected_ids.len() > 5 {
                     ui.label(format!("… plus {} more selected", selected_ids.len() - 5));
                 }
-                if summary.hidden_selection_count > 0 && ui.button("View all selected").clicked() {
+                if summary.hidden_selection_count > 0
+                    && ui
+                        .button(self.language.text("View all selected"))
+                        .clicked()
+                {
                     self.bulk_search.clear();
                     self.bulk_state_filter = "all".into();
                     close = true;
@@ -177,24 +190,48 @@ impl App {
                 for reason in &summary.blocked_reasons {
                     ui.label(RichText::new(reason).color(self.theme_colors().danger));
                 }
-                ui.label(format!("Worker concurrency: {}", summary.concurrency));
                 ui.label(
-                    RichText::new(format!(
-                        "Destination deletion: {}",
-                        if summary.destructive_count > 0 { "ENABLED ⚠" } else { "disabled" }
-                    ))
+                    self.language
+                        .text("Worker concurrency: {}")
+                        .replace("{}", &summary.concurrency.to_string()),
+                );
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("Destination deletion: {}")
+                            .replace(
+                                "{}",
+                                self.language.text(if summary.destructive_count > 0 {
+                                    "ENABLED ⚠"
+                                } else {
+                                    "disabled"
+                                }),
+                            ),
+                    )
                     .color(if summary.destructive_count > 0 {
                         self.theme_colors().danger
                     } else {
                         self.theme_colors().text_secondary
                     }),
                 );
-                ui.label(format!("Scope: {}.", summary.retry_scope.label()));
-                ui.label(format!("Plan identity: {}", summary.identity_hash));
-                ui.label("Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.");
+                ui.label(
+                    self.language
+                        .text("Scope: {}.")
+                        .replace("{}", summary.retry_scope.label()),
+                );
+                ui.label(
+                    self.language
+                        .text("Plan identity: {}")
+                        .replace("{}", &summary.identity_hash),
+                );
+                ui.label(self.language.text(
+                    "Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.",
+                ));
                 ui.label(
                     RichText::new(
-                        "Review the queue, concurrency, throttles, and exact plans before continuing.",
+                        self.language.text(
+                            "Review the queue, concurrency, throttles, and exact plans before continuing.",
+                        ),
                     )
                     .color(self.theme_colors().text_secondary),
                 );
@@ -227,7 +264,10 @@ impl App {
                             self.start_bulk();
                         } else {
                             close = true;
-                            self.bulk_message = "Confirmation stale: concurrency, scope, or settings changed while dialog was open. Review the queue and try again.".into();
+                            self.bulk_message = self
+                                .language
+                                .text("Confirmation stale: concurrency, scope, or settings changed while dialog was open. Review the queue and try again.")
+                                .into();
                             self.bulk_confirmation_identity = None;
                         }
                     }

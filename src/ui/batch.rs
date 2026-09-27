@@ -285,10 +285,11 @@ impl App {
                 if ui
                     .add_enabled(
                         has_selection && !self.running(),
-                        egui::Button::new(format!(
-                            "Run preflight ({})",
-                            preflight_plan.eligible_count
-                        )),
+                        egui::Button::new(
+                            self.language
+                                .text("Run preflight ({})")
+                                .replace("{}", &preflight_plan.eligible_count.to_string()),
+                        ),
                     )
                     .clicked()
                 {
@@ -298,10 +299,11 @@ impl App {
                     .add_enabled(
                         has_selection && !self.running(),
                         egui::Button::new(
-                            RichText::new(format!(
-                                "Run live migration ({})",
-                                live_plan.eligible_count
-                            ))
+                            RichText::new(
+                                self.language
+                                    .text("Run live migration ({})")
+                                    .replace("{}", &live_plan.eligible_count.to_string()),
+                            )
                             .color(Color32::WHITE),
                         )
                         .fill(self.theme_colors().danger),
@@ -313,10 +315,11 @@ impl App {
                 if ui
                     .add_enabled(
                         has_selection && !self.running(),
-                        egui::Button::new(format!(
-                            "Run final delta ({})",
-                            delta_plan.eligible_count
-                        )),
+                        egui::Button::new(
+                            self.language
+                                .text("Run final delta ({})")
+                                .replace("{}", &delta_plan.eligible_count.to_string()),
+                        ),
                     )
                     .clicked()
                 {
