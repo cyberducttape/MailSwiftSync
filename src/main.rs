@@ -36,6 +36,8 @@ use atomic_artifact::write_private_atomic;
 #[cfg(test)]
 use command::{parse_shell_words, remove_option};
 #[cfg(test)]
+use controller::SelectionScope;
+#[cfg(test)]
 use controller::batch_admission::apply_keyring_id;
 #[cfg(test)]
 use controller::batch_admission::canonical_destination_identity;
@@ -1230,7 +1232,7 @@ mod tests {
             form,
             state: "failed".into(),
         }];
-        let value = selection_value(&jobs, &HashSet::new(), &[]);
+        let value = selection_value(&jobs, &SelectionScope::all_matching(), &[]);
         let text = serde_json::to_string(&value).unwrap();
         assert!(text.contains("source@example"));
         assert!(text.contains("failed"));

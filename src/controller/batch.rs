@@ -56,6 +56,36 @@ pub(crate) enum BatchExecutionMode {
     Live,
 }
 
+/// The operator's selection intent. An empty explicit selection is empty; it
+/// is never interpreted as an implicit all-rows request.
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionScope {
+    AllMatching { filter: String, state: String },
+    Explicit(HashSet<String>),
+}
+
+impl SelectionScope {
+    #[allow(dead_code)]
+    pub(crate) fn all_matching() -> Self {
+        Self::AllMatching {
+            filter: String::new(),
+            state: "all".to_owned(),
+        }
+    }
+
+    pub(crate) fn contains(&self, job_id: Option<&str>) -> bool {
+        match self {
+            Self::AllMatching { .. } => true,
+            Self::Explicit(ids) => job_id.is_some_and(|id| ids.contains(id)),
+        }
+    }
+
+    pub(crate) fn is_explicit(&self) -> bool {
+        matches!(self, Self::Explicit(_))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BatchStartBlock {
     StaleDurableView,
@@ -230,15 +260,12 @@ pub(crate) fn selected_batch_indices(
     job_count: usize,
     job_ids: &[String],
     durable_states: &[Option<String>],
-    selected_ids: &HashSet<String>,
+    selection_scope: &SelectionScope,
     retry_scope: BulkRetryScope,
 ) -> Vec<usize> {
     (0..job_count)
         .filter(|index| {
-            let selected = selected_ids.is_empty()
-                || job_ids
-                    .get(*index)
-                    .is_some_and(|id| selected_ids.contains(id));
+            let selected = selection_scope.contains(job_ids.get(*index).map(String::as_str));
             selected
                 && durable_states
                     .get(*index)
@@ -252,8 +279,8 @@ pub(crate) fn selected_batch_indices(
 mod tests {
     use super::{
         BatchActionRow, BatchExecutionMode, BatchStartBlock, BatchStartContext, BatchStartDecision,
-        BulkJob, BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
-        batch_start_decision, build_batch_action_plan, selected_batch_indices,
+        BulkJob, BulkQueueSummary, BulkRetryScope, SelectionScope, batch_mailbox_state,
+        batch_run_status, batch_start_decision, build_batch_action_plan, selected_batch_indices,
         suggested_batch_project_name,
     };
     use crate::core::{MailboxEvidence, VerificationMethod};
@@ -423,12 +450,34 @@ mod tests {
         let selected = HashSet::from(["one".into(), "two".into()]);
 
         assert_eq!(
-            selected_batch_indices(3, &ids, &states, &selected, BulkRetryScope::Unresolved,),
+            selected_batch_indices(
+                3,
+                &ids,
+                &states,
+                &SelectionScope::Explicit(selected.clone()),
+                BulkRetryScope::Unresolved,
+            ),
             vec![0]
         );
         assert_eq!(
-            selected_batch_indices(3, &ids, &states, &HashSet::new(), BulkRetryScope::All),
+            selected_batch_indices(
+                3,
+                &ids,
+                &states,
+                &SelectionScope::all_matching(),
+                BulkRetryScope::All,
+            ),
             vec![0, 1, 2]
+        );
+        assert!(
+            selected_batch_indices(
+                3,
+                &ids,
+                &states,
+                &SelectionScope::Explicit(HashSet::new()),
+                BulkRetryScope::All,
+            )
+            .is_empty()
         );
     }
 

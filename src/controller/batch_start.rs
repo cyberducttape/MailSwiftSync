@@ -2,7 +2,7 @@
 
 use crate::controller::{
     BatchExecutionContext, BatchLaunchRequest, BatchStartContext, BatchStartDecision,
-    admit_batch_launch, launch_batch_worker,
+    SelectionScope, admit_batch_launch, launch_batch_worker,
 };
 use crate::{App, StatusSeverity};
 use std::time::Instant;
@@ -51,12 +51,13 @@ impl App {
         self.pending_batch_mismatches.clear();
         self.pending_batch_checkpoints.clear();
         let run_id = uuid::Uuid::new_v4().to_string();
+        let selection_scope = SelectionScope::Explicit(self.bulk_selected_ids.clone());
         let admission = match admit_batch_launch(BatchLaunchRequest {
             store: &self.store,
             requested_project_id: self.bulk_project_id.as_deref(),
             source_jobs: &self.bulk_jobs,
             queue_job_ids: &self.bulk_job_ids,
-            selected_ids: &self.bulk_selected_ids,
+            selection_scope: &selection_scope,
             retry_scope: self.bulk_retry_scope,
             mode,
             fallback_profile: &self.form.profile,

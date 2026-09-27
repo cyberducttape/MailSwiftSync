@@ -1,7 +1,7 @@
 //! Batch admission and queue policy shared by GUI and headless callers.
 
 use super::batch::BatchExecutionMode;
-use super::batch::{BatchActionRow, BulkRetryScope, build_batch_action_plan};
+use super::batch::{BatchActionRow, BulkRetryScope, SelectionScope, build_batch_action_plan};
 use super::run::{ActiveRunContext, RunKind};
 use crate::core::{MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES};
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
@@ -38,7 +38,7 @@ pub(crate) struct BatchLaunchRequest<'a> {
     pub(crate) requested_project_id: Option<&'a str>,
     pub(crate) source_jobs: &'a [BulkJob],
     pub(crate) queue_job_ids: &'a [String],
-    pub(crate) selected_ids: &'a HashSet<String>,
+    pub(crate) selection_scope: &'a SelectionScope,
     pub(crate) retry_scope: BulkRetryScope,
     pub(crate) mode: BatchExecutionMode,
     pub(crate) fallback_profile: &'a Profile,
@@ -78,7 +78,7 @@ pub(crate) fn admit_batch_launch(
         requested_project_id,
         source_jobs,
         queue_job_ids,
-        selected_ids,
+        selection_scope,
         retry_scope,
         mode,
         fallback_profile,
@@ -117,7 +117,7 @@ pub(crate) fn admit_batch_launch(
                     .unwrap_or("<missing>"),
                 selected: queue_job_ids
                     .get(index)
-                    .is_some_and(|id| selected_ids.contains(id)),
+                    .is_some_and(|id| selection_scope.contains(Some(id))),
                 visible: true,
                 durable_state: durable_states[index].as_deref(),
                 destructive: job.form.profile.delete2,
@@ -135,7 +135,7 @@ pub(crate) fn admit_batch_launch(
         source_jobs.len(),
         queue_job_ids,
         &durable_states,
-        selected_ids,
+        selection_scope,
         retry_scope,
     );
     if selected_indices.is_empty() {
@@ -144,7 +144,7 @@ pub(crate) fn admit_batch_launch(
             retry_scope.label()
         ));
     }
-    if !selected_ids.is_empty() && queue_job_ids.len() != source_jobs.len() {
+    if selection_scope.is_explicit() && queue_job_ids.len() != source_jobs.len() {
         return Err(
             "Explicit batch selection cannot be resolved because the queue has no complete durable identity; create or restore the batch project first."
                 .into(),
@@ -273,18 +273,13 @@ pub(crate) fn durable_batch_profile_config(profile: &Profile) -> Result<String, 
 #[cfg(test)]
 pub(crate) fn selection_value(
     jobs: &[BulkJob],
-    selected_ids: &HashSet<String>,
+    selection_scope: &SelectionScope,
     job_ids: &[String],
 ) -> serde_json::Value {
     let rows = jobs
         .iter()
         .enumerate()
-        .filter(|(index, _)| {
-            selected_ids.is_empty()
-                || job_ids
-                    .get(*index)
-                    .is_some_and(|job_id| selected_ids.contains(job_id))
-        })
+        .filter(|(index, _)| selection_scope.contains(job_ids.get(*index).map(String::as_str)))
         .map(|(_, job)| {
             serde_json::json!({
                 "label": job.label,
@@ -712,6 +707,7 @@ mod tests {
         batch_project_identity, decode_persisted_batch_profile, prepare_batch_run,
         prepare_selected_batch_jobs,
     };
+    use crate::controller::SelectionScope;
     use crate::core::MAX_PERSISTED_PROFILE_BYTES;
     use crate::{bulk_import::BulkJob, migration_plan::Form};
     use std::collections::HashSet;
@@ -793,7 +789,7 @@ mod tests {
             requested_project_id: None,
             source_jobs: &[],
             queue_job_ids: &[],
-            selected_ids: &HashSet::new(),
+            selection_scope: &SelectionScope::all_matching(),
             retry_scope: super::BulkRetryScope::All,
             mode: BatchExecutionMode::Preflight,
             fallback_profile: &profile,
@@ -859,12 +855,17 @@ mod tests {
                 .iter()
                 .map(|&index| queue_job_ids[index].clone())
                 .collect::<HashSet<_>>();
+            let selection_scope = if selected_positions.is_empty() {
+                SelectionScope::all_matching()
+            } else {
+                SelectionScope::Explicit(selected_ids.clone())
+            };
             let admission = admit_batch_launch(BatchLaunchRequest {
                 store: &store,
                 requested_project_id: Some(&project.id),
                 source_jobs: &jobs,
                 queue_job_ids: &queue_job_ids,
-                selected_ids: &selected_ids,
+                selection_scope: &selection_scope,
                 retry_scope: super::BulkRetryScope::All,
                 mode: BatchExecutionMode::Preflight,
                 fallback_profile: &jobs[0].form.profile,
@@ -930,7 +931,7 @@ mod tests {
             requested_project_id: None,
             source_jobs: &jobs,
             queue_job_ids: &[],
-            selected_ids: &HashSet::new(),
+            selection_scope: &SelectionScope::all_matching(),
             retry_scope: super::BulkRetryScope::All,
             mode: BatchExecutionMode::Preflight,
             fallback_profile: &jobs[0].form.profile,
