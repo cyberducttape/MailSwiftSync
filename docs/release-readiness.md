@@ -269,6 +269,14 @@ and require the corresponding integration run.
   the cases run in one process; it is evidence for a baseline, not a portable
   memory budget. Re-run the script on each supported release host and retain
   the raw output with the release evidence.
+
+  The pure cached-filter/selection path has a companion command,
+  `scripts/benchmark-ui-scale.sh`. It measures 100k-row filter keystroke,
+  explicit selection-all, and a 1,000-row state-update refresh. It does not
+  yet measure egui first-frame rendering or application reload time. The same
+  local release baseline measured 4 ms for filtering, 11 ms for selecting all
+  100,000 IDs, and 3 ms for refreshing a 1,000-row state update. These are
+  pure read-model timings, not end-to-end GUI budgets.
 - Provider consent flows and equivalent unattended secret-broker delivery
   remain outstanding: MailSwiftSync still does not implement an OAuth
   authorization flow, so an operator must register their own application and
