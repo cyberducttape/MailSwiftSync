@@ -17,7 +17,7 @@ impl UiLanguage {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::English => "English",
-            Self::German => "Deutsch",
+            Self::German => "Deutsch (teilweise)",
         }
     }
 
@@ -421,7 +421,7 @@ mod tests {
     fn language_catalog_keeps_english_default_and_german_shell_labels() {
         assert_eq!(UiLanguage::English.text("Overview"), "Overview");
         assert_eq!(UiLanguage::German.text("Overview"), "Übersicht");
-        assert_eq!(UiLanguage::German.label(), "Deutsch");
+        assert_eq!(UiLanguage::German.label(), "Deutsch (teilweise)");
         assert_eq!(
             UiLanguage::German.text("untranslated technical detail"),
             "untranslated technical detail"
