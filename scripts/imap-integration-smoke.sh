@@ -515,8 +515,13 @@ run_product() {
     wait "$sleep_pid" || exit 0
     if kill -0 "$pipeline_pid" 2>/dev/null; then
       {
-        printf '\n--- live thread state after 60 seconds (PID TID PPID state wait-channel command) ---\n'
-        ps -eLo pid,tid,ppid,stat,wchan:32,comm | head -160 || true
+        printf '\n--- live thread state after 60 seconds (PID TID PPID PGID SID state wait-channel command) ---\n'
+        ps -eLo pid,tid,ppid,pgid,sess,stat,wchan:32,comm | head -160 || true
+        while read -r app_pid; do
+          [[ -n "$app_pid" ]] || continue
+          printf 'MailSwiftSync PID %s child PIDs: ' "$app_pid"
+          cat "/proc/$app_pid/task/$app_pid/children" 2>/dev/null || true
+        done < <(ps -eo pid,comm | awk '$2 == "mailswiftsync" { print $1 }')
       } >> "$product_log"
     fi
   ) &
