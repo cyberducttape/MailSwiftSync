@@ -493,7 +493,7 @@ chmod 0600 "$source_secret" "$destination_secret"
 run_product() {
   # A broken engine, fixture, or controller must produce a bounded release
   # failure rather than consuming an unattended CI runner indefinitely.
-  timeout --foreground 180 "$binary" "$@" 2>&1 | LC_ALL=C awk -v path="$product_log" '
+  MAILSWIFTSYNC_DEBUG_PROCESS_WAIT=1 timeout --foreground 180 "$binary" "$@" 2>&1 | LC_ALL=C awk -v path="$product_log" '
     {
       print
       fflush()

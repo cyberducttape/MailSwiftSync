@@ -574,6 +574,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
             Err(format!("engine release failed; child cancelled: {error}"))
         } else {
+            let debug_supervision = process_supervision_debug_enabled();
+            if debug_supervision {
+                eprintln!("[process-debug] streaming wait for child {}", child.id());
+            }
             match wait_with_timeout(&mut child, timeout, cancel) {
                 Err(error) => Err(error.to_string()),
                 Ok(ProcessOutcome {
@@ -601,12 +605,21 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
         Err("process-start event channel disconnected; child cancelled before supervision".into())
     };
+    if process_supervision_debug_enabled() {
+        eprintln!("[process-debug] streaming wait returned; joining stdout reader");
+    }
     let stdout_reader = out_thread
         .join()
         .map_err(|_| "stdout reader thread panicked".to_owned());
+    if process_supervision_debug_enabled() {
+        eprintln!("[process-debug] stdout reader joined; joining stderr reader");
+    }
     let stderr_reader = err_thread
         .join()
         .map_err(|_| "stderr reader thread panicked".to_owned());
+    if process_supervision_debug_enabled() {
+        eprintln!("[process-debug] stderr reader joined");
+    }
     let reader_error = stdout_reader
         .as_ref()
         .err()
@@ -990,15 +1003,28 @@ pub(crate) fn run_capture_lines(
         }),
         _ => None,
     };
+    let debug_supervision = process_supervision_debug_enabled();
+    if debug_supervision {
+        eprintln!("[process-debug] capture waiting for child {}", child.id());
+    }
     let status = wait_with_timeout(&mut child, timeout, cancel).map_err(|error| error.to_string());
+    if debug_supervision {
+        eprintln!("[process-debug] capture wait returned; joining stdout reader");
+    }
     let stdout_lines = out_thread
         .join()
         .map_err(|_| "stdout reader thread panicked".to_owned())?
         .map_err(|error| format!("stdout reader failed: {error}"));
+    if debug_supervision {
+        eprintln!("[process-debug] stdout reader joined; joining stderr reader");
+    }
     let stderr_lines = err_thread
         .join()
         .map_err(|_| "stderr reader thread panicked".to_owned())?
         .map_err(|error| format!("stderr reader failed: {error}"));
+    if debug_supervision {
+        eprintln!("[process-debug] stderr reader joined");
+    }
     let stdout_output = stdout_lines?;
     let stderr_output = stderr_lines?;
     let capture_truncated = stdout_output.truncated || stderr_output.truncated;
@@ -1019,6 +1045,10 @@ pub(crate) fn run_capture_lines(
         );
     }
     Ok((status, lines, capture_truncated))
+}
+
+fn process_supervision_debug_enabled() -> bool {
+    std::env::var_os("MAILSWIFTSYNC_DEBUG_PROCESS_WAIT").is_some_and(|value| value == "1")
 }
 
 /// Ask an engine for its version without passing credentials or mailbox

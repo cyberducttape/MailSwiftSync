@@ -494,6 +494,9 @@ pub(crate) fn wait_with_timeout(
     #[cfg(unix)]
     let process_group = child.id();
     let started = Instant::now();
+    let mut last_debug = Instant::now();
+    let debug_supervision =
+        std::env::var_os("MAILSWIFTSYNC_DEBUG_PROCESS_WAIT").is_some_and(|value| value == "1");
     loop {
         let status = match child.try_wait() {
             Ok(status) => status,
@@ -507,6 +510,14 @@ pub(crate) fn wait_with_timeout(
             }
         };
         if let Some(status) = status {
+            if debug_supervision {
+                eprintln!(
+                    "[process-debug] child {} exited after {:.1}s with {:?}",
+                    child.id(),
+                    started.elapsed().as_secs_f64(),
+                    status.code()
+                );
+            }
             #[cfg(unix)]
             if process_group_exists(process_group) {
                 terminate_process_group_id(process_group);
@@ -542,6 +553,13 @@ pub(crate) fn wait_with_timeout(
             });
         }
         if started.elapsed() >= timeout {
+            if debug_supervision {
+                eprintln!(
+                    "[process-debug] child {} exceeded timeout after {:.1}s",
+                    child.id(),
+                    started.elapsed().as_secs_f64()
+                );
+            }
             terminate_process_group(child);
             wait_for_graceful_exit(child, Duration::from_secs(5));
             return Ok(ProcessOutcome {
@@ -549,6 +567,14 @@ pub(crate) fn wait_with_timeout(
                 cancelled: false,
                 timed_out: true,
             });
+        }
+        if debug_supervision && last_debug.elapsed() >= Duration::from_secs(15) {
+            eprintln!(
+                "[process-debug] child {} still running after {:.1}s",
+                child.id(),
+                started.elapsed().as_secs_f64()
+            );
+            last_debug = Instant::now();
         }
         thread::sleep(Duration::from_millis(100));
     }
