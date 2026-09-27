@@ -353,7 +353,7 @@ fi
 echo "PASS: the message that stayed under the destination limit transferred correctly"
 
 destination_large="$(find "$workspace/destination/mail/$user/Maildir" -type f \( -path '*/cur/*' -o -path '*/new/*' \) \
-  -exec grep -F -l -- "Message-ID: <mailswiftsync-storage-fault-large@example.test>" {} + 2>/dev/null | head -1)"
+  -exec grep -F -l -- "Message-ID: <mailswiftsync-storage-fault-large@example.test>" {} + 2>/dev/null | head -1 || true)"
 if [[ -n "$destination_large" ]]; then
   echo "FAIL: the oversized message that should have exceeded the destination write limit was found on the destination intact" >&2
   exit 1
