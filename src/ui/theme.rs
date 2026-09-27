@@ -74,7 +74,11 @@ impl ThemeColors {
     /// widgets all consume this shared `Visuals` object rather than inheriting
     /// a root `Ui`'s local overrides.
     pub(crate) fn visuals(self, dark_mode: bool) -> egui::Visuals {
-        let mut visuals = if dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
+        let mut visuals = if dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
         let stroke = |color| Stroke::new(1.0, color);
         let widget = |bg_fill, weak_bg_fill, fg| egui::style::WidgetVisuals {
             bg_fill,
@@ -451,9 +455,20 @@ mod tests {
         for theme in ThemeKind::all() {
             let colors = ThemeColors::for_theme(*theme, true);
             let theme_name = theme.label();
-            for (label, foreground) in [("info", colors.info), ("success", colors.success), ("warning", colors.warning), ("danger", colors.danger), ("link", colors.link)] {
-                for (surface_name, surface) in [("panel", colors.panel), ("window", colors.window)] {
-                    assert!(contrast_ratio(foreground, surface) >= 4.5, "{theme_name}: {label} on {surface_name} is {:.2}:1", contrast_ratio(foreground, surface));
+            for (label, foreground) in [
+                ("info", colors.info),
+                ("success", colors.success),
+                ("warning", colors.warning),
+                ("danger", colors.danger),
+                ("link", colors.link),
+            ] {
+                for (surface_name, surface) in [("panel", colors.panel), ("window", colors.window)]
+                {
+                    assert!(
+                        contrast_ratio(foreground, surface) >= 4.5,
+                        "{theme_name}: {label} on {surface_name} is {:.2}:1",
+                        contrast_ratio(foreground, surface)
+                    );
                 }
             }
         }

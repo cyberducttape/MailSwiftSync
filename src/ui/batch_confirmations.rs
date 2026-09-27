@@ -140,11 +140,21 @@ impl App {
             .cloned()
             .expect("confirmation summary is initialized above");
         let selected_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
-        let visible_selected = self.bulk_jobs.iter().enumerate().filter(|(index, _)| {
-            self.bulk_job_ids.get(*index).is_some_and(|id| self.bulk_selected_ids.contains(id))
-                && self.mailbox_matches_filter(&self.bulk_jobs[*index])
-        }).count();
-        let hidden_selected = self.bulk_selected_ids.len().saturating_sub(visible_selected);
+        let visible_selected = self
+            .bulk_jobs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                self.bulk_job_ids
+                    .get(*index)
+                    .is_some_and(|id| self.bulk_selected_ids.contains(id))
+                    && self.mailbox_matches_filter(&self.bulk_jobs[*index])
+            })
+            .count();
+        let hidden_selected = self
+            .bulk_selected_ids
+            .len()
+            .saturating_sub(visible_selected);
 
         let stored_identity = self.bulk_confirmation_identity.clone();
         let mut open = self.bulk_live_confirm_open;

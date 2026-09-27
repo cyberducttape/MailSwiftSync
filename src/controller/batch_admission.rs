@@ -241,6 +241,7 @@ pub(crate) fn durable_batch_profile_config(profile: &Profile) -> Result<String, 
         .map_err(|error| format!("Could not serialize batch plan: {error}"))
 }
 
+#[cfg(test)]
 pub(crate) fn selection_value(
     jobs: &[BulkJob],
     selected_ids: &HashSet<String>,
@@ -653,6 +654,7 @@ pub(crate) fn prepare_batch_run(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {
     let mut applied = 0;
     for job in jobs {

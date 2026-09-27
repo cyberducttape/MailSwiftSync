@@ -23,8 +23,11 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(
-                    RichText::new(self.language.text("Destination changes require confirmation"))
-                        .color(self.theme_colors().danger),
+                    RichText::new(
+                        self.language
+                            .text("Destination changes require confirmation"),
+                    )
+                    .color(self.theme_colors().danger),
                 );
                 ui.label(format!(
                     "This will invoke {} with the current credentials and rules.",
@@ -50,8 +53,12 @@ impl App {
                     let deletion_enabled = self.form.profile.delete2;
                     ui.label(
                         RichText::new(format!(
-                                "{}",
-                                self.language.text(if deletion_enabled { "Destination deletion: ENABLED ⚠" } else { "Destination deletion: disabled" })
+                            "{}",
+                            self.language.text(if deletion_enabled {
+                                "Destination deletion: ENABLED ⚠"
+                            } else {
+                                "Destination deletion: disabled"
+                            })
                         ))
                         .color(if deletion_enabled {
                             self.theme_colors().danger

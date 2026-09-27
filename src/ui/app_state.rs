@@ -1,7 +1,7 @@
 //! Application-state helpers used by the workspace UI.
 
-use crate::*;
 use crate::controller::BatchConfirmationIdentity;
+use crate::*;
 
 /// The application's full in-memory state. This struct lives in `ui` (rather
 /// than the crate root) because it is fundamentally UI/controller shared
@@ -17,7 +17,6 @@ pub(crate) struct App {
     pub(crate) status: StatusMessage,
     pub(crate) preview: bool,
     pub(crate) bulk_jobs: Vec<BulkJob>,
-    pub(crate) bulk_open: bool,
     pub(crate) settings_open: bool,
     pub(crate) bulk_search: String,
     pub(crate) bulk_state_filter: String,
@@ -160,8 +159,6 @@ pub(crate) struct App {
     /// Live retry scope defaults to unresolved rows and is process-local UI
     /// state; durable child/run IDs remain the execution identity.
     pub(crate) bulk_retry_scope: BulkRetryScope,
-    pub(crate) bulk_source_keyring_apply: String,
-    pub(crate) bulk_destination_keyring_apply: String,
     pub(crate) verification_exception_operator: String,
     pub(crate) verification_exception_reason: String,
     pub(crate) verification_search: String,

@@ -55,8 +55,12 @@ impl UiLanguage {
             "Advanced" => "Erweitert",
             "Start live migration" => "Live-Migration starten",
             "Confirm live migration" => "Live-Migration bestätigen",
-            "Destination changes require confirmation" => "Änderungen am Ziel erfordern eine Bestätigung",
-            "Source mail: not deleted by default" => "Quellnachrichten werden standardmäßig nicht gelöscht",
+            "Destination changes require confirmation" => {
+                "Änderungen am Ziel erfordern eine Bestätigung"
+            }
+            "Source mail: not deleted by default" => {
+                "Quellnachrichten werden standardmäßig nicht gelöscht"
+            }
             "Destination deletion: ENABLED ⚠" => "Löschen am Ziel: AKTIVIERT ⚠",
             "Destination deletion: disabled" => "Löschen am Ziel: deaktiviert",
             "Cancel" => "Abbrechen",
@@ -182,7 +186,9 @@ impl UiLanguage {
                 "Ein einzelnes Postfach können Sie im Migrationsplan konfigurieren."
             }
             "Import CSV / XLSX…" => "CSV / XLSX importieren…",
-            "CSV or XLSX only; legacy .xls files must be converted first." => "Nur CSV oder XLSX; alte .xls-Dateien müssen zuerst konvertiert werden.",
+            "CSV or XLSX only; legacy .xls files must be converted first." => {
+                "Nur CSV oder XLSX; alte .xls-Dateien müssen zuerst konvertiert werden."
+            }
             "Import / edit queue" => "Warteschlange importieren / bearbeiten",
             "QUEUE HEALTH" => "WARTESCHLANGENSTATUS",
             "Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight." => {
@@ -407,7 +413,11 @@ mod tests {
             "Advanced migration options",
             "Review verification",
         ] {
-            assert_ne!(UiLanguage::German.text(key), key, "missing German translation: {key}");
+            assert_ne!(
+                UiLanguage::German.text(key),
+                key,
+                "missing German translation: {key}"
+            );
         }
     }
 }

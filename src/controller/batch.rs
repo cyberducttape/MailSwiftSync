@@ -55,16 +55,6 @@ pub(crate) enum BatchExecutionMode {
     Live,
 }
 
-/// Explicit representation of batch selection scope. An empty explicit set is
-/// unambiguously empty; selecting every matching row is a separate intent.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SelectionScope {
-    /// Explicitly select all rows matching current filter state
-    AllMatching,
-    /// Explicitly select only these specific job IDs
-    Explicit(std::collections::HashSet<String>),
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BatchStartBlock {
     StaleDurableView,
@@ -516,7 +506,6 @@ mod tests {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BulkStateSet {
-    Failed,
     Attention,
     Unresolved,
 }
@@ -524,7 +513,6 @@ pub(crate) enum BulkStateSet {
 impl BulkStateSet {
     pub(crate) fn matches(self, state: &str) -> bool {
         match self {
-            Self::Failed => state == "failed",
             Self::Attention => state == "attention",
             Self::Unresolved => matches!(
                 state,
@@ -534,6 +522,10 @@ impl BulkStateSet {
     }
 }
 
+// Some narrowly targeted scopes remain available to headless policy/tests even
+// though the single Mailboxes cockpit currently exposes only the safe default,
+// delta, automation, and explicit-all paths.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum BulkRetryScope {
     #[default]

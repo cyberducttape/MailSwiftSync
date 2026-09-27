@@ -1,9 +1,7 @@
 //! Batch queue lifecycle, selection, import, and summary state.
 
 use crate::App;
-use crate::atomic_artifact::write_private_atomic;
 use crate::bulk_import::{BulkImportResult, PendingSheetImport};
-use crate::controller::batch_admission::{apply_keyring_id, selection_value};
 use crate::controller::{BulkRetryScope, BulkStateSet};
 use crate::ui::display_state_key;
 
@@ -36,19 +34,6 @@ impl App {
             "Selected {} mailbox row(s) for focused review.",
             self.bulk_selected_ids.len()
         );
-    }
-
-    pub(crate) fn export_bulk_selection(&self) -> Result<(), String> {
-        if self.bulk_jobs.is_empty() {
-            return Err("The batch queue has no mailbox rows to export.".into());
-        }
-        let value = selection_value(&self.bulk_jobs, &self.bulk_selected_ids, &self.bulk_job_ids);
-        let path = rfd::FileDialog::new()
-            .set_file_name("mailswiftsync-batch-selection.json")
-            .save_file()
-            .ok_or("Batch selection export cancelled.")?;
-        let report = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
-        write_private_atomic(&path, &report).map_err(|error| error.to_string())
     }
 
     pub(crate) fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {
@@ -168,25 +153,5 @@ impl App {
         let summary = crate::controller::BulkQueueSummary::from_jobs(&self.bulk_jobs);
         self.bulk_summary = Some((self.bulk_jobs_generation, summary));
         summary
-    }
-
-    pub(crate) fn apply_bulk_keyring_id(&mut self, source: bool) {
-        let value = if source {
-            self.bulk_source_keyring_apply.trim().to_owned()
-        } else {
-            self.bulk_destination_keyring_apply.trim().to_owned()
-        };
-        if value.is_empty() {
-            self.bulk_message = format!(
-                "Enter a {} keyring ID before applying it.",
-                if source { "source" } else { "destination" }
-            );
-            return;
-        }
-        let applied = apply_keyring_id(&mut self.bulk_jobs, &value, source);
-        self.bulk_message = format!(
-            "Applied the {} keyring ID to {applied} row(s) without a credential reference.",
-            if source { "source" } else { "destination" }
-        );
     }
 }

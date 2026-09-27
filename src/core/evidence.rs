@@ -168,7 +168,11 @@ impl ReportMailboxSnapshot {
     pub fn assurance(&self) -> MailboxAssurance {
         let transfer_completed = matches!(
             self.job.state.as_str(),
-            "completed" | "verified" | "verified_with_exceptions" | "delta_required" | "verification_difference"
+            "completed"
+                | "verified"
+                | "verified_with_exceptions"
+                | "delta_required"
+                | "verification_difference"
         );
         let (evidence_run_id, evidence, plan_snapshot) = self
             .evidence
@@ -181,16 +185,21 @@ impl ReportMailboxSnapshot {
         MailboxAssurance {
             transfer_completed,
             destination_reachable: evidence.map(|_| true),
-            inventory_reconciled: evidence.is_some_and(|value| value.source_folders == value.destination_folders),
+            inventory_reconciled: evidence
+                .is_some_and(|value| value.source_folders == value.destination_folders),
             message_level_evidence: evidence.is_some_and(|value| {
-                matches!(value.verification_method(), VerificationMethod::BodyHash | VerificationMethod::MetadataReconciliation)
+                matches!(
+                    value.verification_method(),
+                    VerificationMethod::BodyHash | VerificationMethod::MetadataReconciliation
+                )
             }),
             differences_found,
             differences_accepted: self.acceptance.is_some(),
             unresolved: self.job.state == "attention"
                 || self.job.state == "verification_difference"
                 || self.job.state == "failed",
-            verification_authority: evidence.map(|value| value.verification_method().as_str().to_owned()),
+            verification_authority: evidence
+                .map(|value| value.verification_method().as_str().to_owned()),
             evidence_run_id,
             plan_snapshot,
         }
