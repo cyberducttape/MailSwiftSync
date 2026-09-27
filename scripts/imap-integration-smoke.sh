@@ -515,8 +515,8 @@ run_product() {
     wait "$sleep_pid" || exit 0
     if kill -0 "$pipeline_pid" 2>/dev/null; then
       {
-        printf '\n--- live process state after 60 seconds (PID PPID state wait-channel command) ---\n'
-        ps -eo pid,ppid,stat,wchan:32,comm | head -80 || true
+        printf '\n--- live thread state after 60 seconds (PID TID PPID state wait-channel command) ---\n'
+        ps -eLo pid,tid,ppid,stat,wchan:32,comm | head -160 || true
       } >> "$product_log"
     fi
   ) &
