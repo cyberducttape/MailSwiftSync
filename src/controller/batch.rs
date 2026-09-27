@@ -544,6 +544,23 @@ pub(crate) struct BulkConfirmationSummary {
     pub(crate) scope: BulkRetryScope,
 }
 
+/// Immutable proof of what the operator was shown when they approved a batch.
+/// Captures exact job IDs, plan fingerprints, execution mode, and settings.
+/// Must match exactly when "Confirm" is clicked; any mutation invalidates it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchConfirmationIdentity {
+    /// Sorted list of selected job IDs (source of truth)
+    pub(crate) selected_job_ids: Vec<String>,
+    /// Retention/retry scope as displayed
+    pub(crate) retry_scope: BulkRetryScope,
+    /// Batch execution mode (live, preflight, etc)
+    pub(crate) execution_mode: BatchExecutionMode,
+    /// Worker concurrency
+    pub(crate) concurrency: usize,
+    /// Whether deletion is enabled on any selected job
+    pub(crate) deletion_enabled: bool,
+}
+
 impl BulkRetryScope {
     pub(crate) fn includes(self, state: &str) -> bool {
         let Some(state) = core::MailboxState::parse(state) else {

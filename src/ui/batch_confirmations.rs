@@ -111,12 +111,27 @@ impl App {
             let deletion_enabled = eligible_indices
                 .iter()
                 .any(|index| self.bulk_jobs[*index].form.profile.delete2);
+
+            let selected_job_ids = eligible_indices
+                .iter()
+                .filter_map(|idx| self.bulk_job_ids.get(*idx).cloned())
+                .collect::<Vec<_>>();
+            let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
+
             self.bulk_confirmation_summary = Some(crate::controller::BulkConfirmationSummary {
                 eligible_count: eligible_indices.len(),
                 deletion_enabled,
                 durable_state_error,
-                concurrency: self.form.profile.batch_concurrency.clamp(1, 16),
+                concurrency,
                 scope: self.bulk_retry_scope,
+            });
+
+            self.bulk_confirmation_identity = Some(crate::controller::BatchConfirmationIdentity {
+                selected_job_ids,
+                retry_scope: self.bulk_retry_scope,
+                execution_mode: self.bulk_mode,
+                concurrency,
+                deletion_enabled,
             });
         }
         let summary = self
@@ -124,8 +139,11 @@ impl App {
             .as_ref()
             .cloned()
             .expect("confirmation summary is initialized above");
+
+        let stored_identity = self.bulk_confirmation_identity.clone();
         let mut open = self.bulk_live_confirm_open;
         let mut close = false;
+
         egui::Window::new("Confirm live batch migration")
             .open(&mut open)
             .collapsible(false)
@@ -177,15 +195,30 @@ impl App {
                         )
                         .clicked()
                     {
-                        close = true;
-                        self.bulk_live_confirmed = true;
-                        self.start_bulk();
+                        let current_concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
+                        let identity_matches = stored_identity.as_ref().map_or(false, |stored| {
+                            stored.concurrency == current_concurrency
+                                && stored.retry_scope == self.bulk_retry_scope
+                                && stored.execution_mode == self.bulk_mode
+                                && stored.deletion_enabled == summary.deletion_enabled
+                        });
+
+                        if identity_matches {
+                            close = true;
+                            self.bulk_live_confirmed = true;
+                            self.start_bulk();
+                        } else {
+                            close = true;
+                            self.bulk_message = "Confirmation stale: concurrency, scope, or settings changed while dialog was open. Review the queue and try again.".into();
+                            self.bulk_confirmation_identity = None;
+                        }
                     }
                 });
             });
         self.bulk_live_confirm_open = open && !close;
         if !self.bulk_live_confirm_open {
             self.bulk_confirmation_summary = None;
+            self.bulk_confirmation_identity = None;
         }
     }
 }

@@ -1,6 +1,7 @@
 //! Application-state helpers used by the workspace UI.
 
 use crate::*;
+use crate::controller::BatchConfirmationIdentity;
 
 /// The application's full in-memory state. This struct lives in `ui` (rather
 /// than the crate root) because it is fundamentally UI/controller shared
@@ -145,6 +146,9 @@ pub(crate) struct App {
     pub(crate) bulk_live_confirm_open: bool,
     pub(crate) bulk_live_confirmed: bool,
     pub(crate) bulk_confirmation_summary: Option<BulkConfirmationSummary>,
+    /// Proof of what the operator saw when they opened the confirmation dialog.
+    /// Must match exactly when they click "Confirm" or the dialog re-opens.
+    pub(crate) bulk_confirmation_identity: Option<BatchConfirmationIdentity>,
     pub(crate) bulk_summary: Option<(u64, BulkQueueSummary)>,
     pub(crate) bulk_mode: BatchExecutionMode,
     pub(crate) bulk_clear_confirm_open: bool,

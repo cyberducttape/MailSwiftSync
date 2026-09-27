@@ -117,6 +117,7 @@ impl App {
                         }
                     });
                 if ui.button(self.language.text("Select visible")).clicked() {
+                    self.bulk_selected_ids.clear();
                     for (index, job) in self.bulk_jobs.iter().enumerate() {
                         if self.mailbox_matches_filter(job)
                             && let Some(id) = self.bulk_job_ids.get(index)
@@ -141,14 +142,44 @@ impl App {
             // every repaint.
             self.refresh_bulk_filter_cache();
             let visible_indices = std::mem::take(&mut self.bulk_visible_indices);
-            ui.label(
-                RichText::new(format!(
+
+            let visible_and_selected = visible_indices
+                .iter()
+                .filter(|idx| {
+                    self.bulk_job_ids.get(**idx)
+                        .map_or(false, |id| self.bulk_selected_ids.contains(id))
+                })
+                .count();
+            let hidden_selected = self.bulk_selected_ids.len().saturating_sub(visible_and_selected);
+
+            let status_text = if hidden_selected > 0 {
+                format!(
+                    "{} visible · {} selected · {} hidden by filter",
+                    visible_indices.len(),
+                    self.bulk_selected_ids.len(),
+                    hidden_selected
+                )
+            } else {
+                format!(
                     "{} visible · {} selected",
                     visible_indices.len(),
                     self.bulk_selected_ids.len()
-                ))
-                .color(self.theme_colors().text_secondary),
+                )
+            };
+
+            ui.label(
+                RichText::new(status_text)
+                    .color(self.theme_colors().text_secondary),
             );
+            if hidden_selected > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "⚠ {} mailbox(es) are selected but hidden by the current filter. They will still be included in batch operations.",
+                        hidden_selected
+                    ))
+                    .color(self.theme_colors().warning),
+                );
+            }
             let has_selection = !self.bulk_selected_ids.is_empty();
             let mut run_preflight = false;
             let mut run_live = false;

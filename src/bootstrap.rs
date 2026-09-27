@@ -436,6 +436,7 @@ impl App {
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
+            bulk_confirmation_identity: None,
             bulk_summary: None,
             bulk_mode: BatchExecutionMode::Preflight,
             bulk_clear_confirm_open: false,
