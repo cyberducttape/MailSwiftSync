@@ -38,8 +38,11 @@ unavailable. It drives the packaged MailSwiftSync binary through its profile,
 secret-file, preflight, live, incremental, durable-evidence, customer-proof,
 and verification paths. A separate recovery fixture covers controller crash,
 engine interruption, and restart ownership. This remains evidence for a
-reproducible generic-IMAP lab, not a hosted-provider support claim, and
-storage-fault and provider-specific tests remain separate gates.
+native Dovecot path that uses mdbox for the target, including both the initial
+`backup` and a `sync -1` preservation pass against the populated destination;
+it is not Maildir destination qualification. The imapsync fixture remains
+evidence for the generic IMAP path, not a hosted-provider compatibility claim.
+Storage-fault and provider-specific tests remain separate gates.
 
 Minimum test cases for every row:
 

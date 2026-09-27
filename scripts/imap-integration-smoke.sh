@@ -561,6 +561,38 @@ if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions
 fi
 echo "PASS: durable ledger records a verified terminal state"
 
+if [[ "$test_engine" == Dovecot ]]; then
+  # Exercise the exact preservation command path (`doveadm sync -1`) against
+  # an already-populated destination. Keep its plan/ledger separate from the
+  # initial-mirror proof so the immutable plan snapshot remains meaningful.
+  preservation_config="$app_runtime/preservation-config"
+  preservation_profile_dir="$preservation_config/mailswiftsync"
+  preservation_state="$app_runtime/preservation-state.db"
+  mkdir -m 0700 -p "$preservation_profile_dir"
+  sed 's/^dovecot_strategy = "initial_mirror"$/dovecot_strategy = "destination_already_active"/' \
+    "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" \
+    > "$preservation_profile_dir/profile.toml"
+  chmod 0600 "$preservation_profile_dir/profile.toml"
+  if ! grep -q '^dovecot_strategy = "destination_already_active"$' \
+      "$preservation_profile_dir/profile.toml"; then
+    echo "FAIL: preservation fixture did not select destination_already_active" >&2
+    exit 1
+  fi
+  XDG_CONFIG_HOME="$preservation_config" run_product headless "$preservation_state" preflight \
+    --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+    --diagnostic-log "$diagnostic_dir"
+  XDG_CONFIG_HOME="$preservation_config" run_product headless "$preservation_state" live \
+    --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
+    --diagnostic-log "$diagnostic_dir"
+  preservation_status="$(XDG_CONFIG_HOME="$preservation_config" run_product status "$preservation_state")"
+  if ! grep -Eq '"state": "verified(_with_exceptions)?"' <<<"$preservation_status"; then
+    echo "FAIL: Dovecot sync -1 preservation pass did not reach a verified terminal state" >&2
+    printf '%s\n' "$preservation_status" >&2
+    exit 1
+  fi
+  echo "PASS: Dovecot sync -1 preservation pass completed against the populated destination"
+fi
+
 proof="$app_runtime/customer-proof.json"
 run_product customer-proof "$state" "$proof" \
   --source-provider generic_imap --destination-provider generic_imap \

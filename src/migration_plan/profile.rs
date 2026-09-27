@@ -96,10 +96,10 @@ impl DovecotMigrationStrategy {
     pub(crate) fn description(self) -> &'static str {
         match self {
             Self::InitialMirror => {
-                "doveadm backup: mirror source mail to the destination; destination-only changes may be replaced."
+                "doveadm backup: mirror source mail to the destination; destination-only changes may be replaced. Dovecot may need to replace INBOX, which some Maildir targets refuse; test the exact target storage before migration."
             }
             Self::IncrementalMirror => {
-                "doveadm backup with the durable checkpoint: repeat an initial mirror before cutover."
+                "doveadm backup with the durable checkpoint: repeat an initial mirror before cutover. Maildir targets may refuse INBOX replacement; test the exact storage format."
             }
             Self::FinalPreservationPass => {
                 "doveadm sync -1: preserve destination-side changes for the final cutover pass."

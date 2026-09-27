@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Documented the native Dovecot initial-backup limitation observed with
+  Maildir targets that refuse INBOX replacement; the automated native-engine
+  fixture covers mdbox, not Maildir. The native integration lab now also runs
+  `sync -1` against an already-populated destination, covering the preservation
+  command path that previously lacked product-level regression coverage.
 - The native Dovecot integration lab now uses mdbox for its destination
   mailbox store because initial `doveadm backup` may need to replace INBOX,
   which Maildir cannot delete and recreate. Both fixture servers explicitly

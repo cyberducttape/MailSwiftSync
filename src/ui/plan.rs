@@ -423,7 +423,7 @@ impl App {
                                     .color(self.theme_colors().text_secondary),
                             );
                             ui.label(
-                                RichText::new("Dovecot native sync has no MailSwiftSync throttle; expect higher source load and repeat final passes after exit code 2.")
+                                RichText::new("Dovecot has no MailSwiftSync throttle; source load may be high. Initial backup may fail if the target Maildir refuses INBOX replacement. Test the exact destination storage before cutover; repeat final passes after exit code 2.")
                                     .size(11.0)
                                     .color(self.theme_colors().warning),
                             );

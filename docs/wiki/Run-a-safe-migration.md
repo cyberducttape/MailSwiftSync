@@ -72,7 +72,11 @@ Native Dovecot mode exposes four migration strategies: **Initial mirror** uses
 checkpoint; **Final preservation pass** uses `doveadm sync -1` for the cutover;
 and **Destination already active** is an advanced preservation mode using
 `sync -1`. These are migration strategies, not a simple delete-extras switch:
-review how each treats destination-side changes. Native Dovecot has no
+review how each treats destination-side changes. Initial `backup` can require
+replacing destination `INBOX`; a Maildir target may refuse that operation
+(`INBOX can't be deleted`). The native Dovecot integration fixture currently
+covers mdbox, not Maildir, so test the exact target storage format and
+existing mailbox state before using mirror mode. Native Dovecot has no
 MailSwiftSync throttle and may place high load on the source. Dovecot exit code
 2 means synchronization completed but was not perfect; MailSwiftSync marks the
 run as delta-required and the final pass should be repeated until exit code 0.
