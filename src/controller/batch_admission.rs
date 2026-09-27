@@ -1,7 +1,7 @@
 //! Batch admission and queue policy shared by GUI and headless callers.
 
 use super::batch::BatchExecutionMode;
-use super::batch::BulkRetryScope;
+use super::batch::{BatchActionRow, BulkRetryScope, build_batch_action_plan};
 use super::run::{ActiveRunContext, RunKind};
 use crate::core::{MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES};
 use crate::{Profile, bulk_import::BulkJob, core, effective_destination_tls, endpoint};
@@ -43,6 +43,9 @@ pub(crate) struct BatchLaunchRequest<'a> {
     pub(crate) mode: BatchExecutionMode,
     pub(crate) fallback_profile: &'a Profile,
     pub(crate) expected_credential_fingerprints: &'a [Option<String>],
+    /// Hash of the live confirmation plan, when confirmation was required.
+    /// Admission recomputes it from the same durable rows before execution.
+    pub(crate) expected_action_plan_hash: Option<&'a str>,
     pub(crate) run_id: &'a str,
 }
 
@@ -80,6 +83,7 @@ pub(crate) fn admit_batch_launch(
         mode,
         fallback_profile,
         expected_credential_fingerprints,
+        expected_action_plan_hash,
         run_id,
     } = request;
     let durable_admissions = if let Some(project_id) =
@@ -102,6 +106,31 @@ pub(crate) fn admit_batch_launch(
         .iter()
         .map(|admission| admission.as_ref().map(|value| value.state.clone()))
         .collect::<Vec<_>>();
+    if let Some(expected_hash) = expected_action_plan_hash {
+        let rows = source_jobs
+            .iter()
+            .enumerate()
+            .map(|(index, job)| BatchActionRow {
+                id: queue_job_ids
+                    .get(index)
+                    .map(String::as_str)
+                    .unwrap_or("<missing>"),
+                selected: queue_job_ids
+                    .get(index)
+                    .is_some_and(|id| selected_ids.contains(id)),
+                visible: true,
+                durable_state: durable_states[index].as_deref(),
+                destructive: job.form.profile.delete2,
+            })
+            .collect::<Vec<_>>();
+        let plan =
+            build_batch_action_plan(&rows, retry_scope, fallback_profile.batch_concurrency, mode);
+        if plan.identity_hash != expected_hash {
+            return Err(
+                "The confirmed batch action plan is stale; durable mailbox state or destructive settings changed. Review the selection and confirm again.".into(),
+            );
+        }
+    }
     let selected_indices = super::batch::selected_batch_indices(
         source_jobs.len(),
         queue_job_ids,
@@ -769,6 +798,7 @@ mod tests {
             mode: BatchExecutionMode::Preflight,
             fallback_profile: &profile,
             expected_credential_fingerprints: &[],
+            expected_action_plan_hash: None,
             run_id: "run-empty",
         })
         .err()
@@ -839,6 +869,7 @@ mod tests {
                 mode: BatchExecutionMode::Preflight,
                 fallback_profile: &jobs[0].form.profile,
                 expected_credential_fingerprints: &[None, None, None, None],
+                expected_action_plan_hash: None,
                 run_id: "targeted-selection-test",
             })
             .unwrap();
@@ -904,6 +935,7 @@ mod tests {
             mode: BatchExecutionMode::Preflight,
             fallback_profile: &jobs[0].form.profile,
             expected_credential_fingerprints: &[],
+            expected_action_plan_hash: None,
             run_id: "first-batch-admission-test",
         })
         .unwrap();

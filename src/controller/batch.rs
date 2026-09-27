@@ -1,6 +1,7 @@
 use crate::Profile;
 use crate::bulk_import::BulkJob;
 use crate::core;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 /// Durable outcomes produced when a batch child finishes. Keeping this policy
@@ -250,9 +251,10 @@ pub(crate) fn selected_batch_indices(
 #[cfg(test)]
 mod tests {
     use super::{
-        BatchExecutionMode, BatchStartBlock, BatchStartContext, BatchStartDecision, BulkJob,
-        BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
-        batch_start_decision, selected_batch_indices, suggested_batch_project_name,
+        BatchActionRow, BatchExecutionMode, BatchStartBlock, BatchStartContext, BatchStartDecision,
+        BulkJob, BulkQueueSummary, BulkRetryScope, batch_mailbox_state, batch_run_status,
+        batch_start_decision, build_batch_action_plan, selected_batch_indices,
+        suggested_batch_project_name,
     };
     use crate::core::{MailboxEvidence, VerificationMethod};
     use crate::migration_plan::Form;
@@ -431,6 +433,88 @@ mod tests {
     }
 
     #[test]
+    fn action_plan_counts_only_explicit_rows_and_names_blocks() {
+        let rows = vec![
+            BatchActionRow {
+                id: "eligible",
+                selected: true,
+                visible: true,
+                durable_state: Some("failed"),
+                destructive: true,
+            },
+            BatchActionRow {
+                id: "verified",
+                selected: true,
+                visible: false,
+                durable_state: Some("verified"),
+                destructive: false,
+            },
+            BatchActionRow {
+                id: "unknown",
+                selected: true,
+                visible: true,
+                durable_state: None,
+                destructive: true,
+            },
+            BatchActionRow {
+                id: "unselected",
+                selected: false,
+                visible: true,
+                durable_state: None,
+                destructive: true,
+            },
+        ];
+        let plan = build_batch_action_plan(
+            &rows,
+            BulkRetryScope::Unresolved,
+            99,
+            BatchExecutionMode::Live,
+        );
+        assert_eq!(plan.explicit_selection_count, 3);
+        assert_eq!(plan.hidden_selection_count, 1);
+        assert_eq!(plan.eligible_count, 1);
+        assert_eq!(plan.blocked_count, 2);
+        assert_eq!(plan.destructive_count, 1);
+        assert_eq!(plan.concurrency, 16);
+        assert_eq!(plan.blocked_reasons.len(), 2);
+        assert!(!plan.identity_hash.is_empty());
+    }
+
+    #[test]
+    fn action_plan_identity_is_independent_of_queue_order() {
+        let first = vec![
+            BatchActionRow {
+                id: "a",
+                selected: true,
+                visible: true,
+                durable_state: Some("failed"),
+                destructive: false,
+            },
+            BatchActionRow {
+                id: "b",
+                selected: true,
+                visible: true,
+                durable_state: Some("failed"),
+                destructive: false,
+            },
+        ];
+        let second = vec![first[1], first[0]];
+        let left = build_batch_action_plan(
+            &first,
+            BulkRetryScope::Unresolved,
+            4,
+            BatchExecutionMode::Live,
+        );
+        let right = build_batch_action_plan(
+            &second,
+            BulkRetryScope::Unresolved,
+            4,
+            BatchExecutionMode::Live,
+        );
+        assert_eq!(left.identity_hash, right.identity_hash);
+    }
+
+    #[test]
     fn batch_project_name_prefers_configured_name_and_derives_safe_fallback() {
         let mut form = Form::default();
         form.profile.source_host = "old.example".into();
@@ -537,13 +621,106 @@ pub(crate) enum BulkRetryScope {
     All,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct BulkConfirmationSummary {
+/// The single immutable scope/count model used by batch confirmation and
+/// admission-facing UI. Counts describe the explicit durable selection,
+/// never an inferred retry scope over the entire queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BatchActionPlan {
+    pub(crate) explicit_selection_count: usize,
+    pub(crate) hidden_selection_count: usize,
     pub(crate) eligible_count: usize,
-    pub(crate) deletion_enabled: bool,
-    pub(crate) durable_state_error: Option<String>,
+    pub(crate) blocked_count: usize,
+    pub(crate) blocked_reasons: Vec<String>,
+    pub(crate) destructive_count: usize,
+    pub(crate) retry_scope: BulkRetryScope,
     pub(crate) concurrency: usize,
-    pub(crate) scope: BulkRetryScope,
+    pub(crate) execution_mode: BatchExecutionMode,
+    pub(crate) identity_hash: String,
+}
+
+/// The non-secret row projection needed to build a batch action plan.
+/// Missing durable state is represented explicitly so it cannot disappear
+/// from a safety confirmation.
+#[derive(Clone, Copy)]
+pub(crate) struct BatchActionRow<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) selected: bool,
+    pub(crate) visible: bool,
+    pub(crate) durable_state: Option<&'a str>,
+    pub(crate) destructive: bool,
+}
+
+pub(crate) fn build_batch_action_plan(
+    rows: &[BatchActionRow<'_>],
+    retry_scope: BulkRetryScope,
+    concurrency: usize,
+    execution_mode: BatchExecutionMode,
+) -> BatchActionPlan {
+    let selected = rows.iter().filter(|row| row.selected).collect::<Vec<_>>();
+    let explicit_selection_count = selected.len();
+    let hidden_selection_count = selected.iter().filter(|row| !row.visible).count();
+    let eligible = selected
+        .iter()
+        .filter(|row| {
+            execution_mode == BatchExecutionMode::Preflight
+                || row
+                    .durable_state
+                    .is_some_and(|state| retry_scope.includes(state))
+        })
+        .collect::<Vec<_>>();
+    let eligible_count = eligible.len();
+    let blocked_count = explicit_selection_count.saturating_sub(eligible_count);
+    let destructive_count = eligible.iter().filter(|row| row.destructive).count();
+    let mut blocked_reasons = Vec::new();
+    if execution_mode == BatchExecutionMode::Live
+        && selected.iter().any(|row| row.durable_state.is_none())
+    {
+        blocked_reasons
+            .push("Durable mailbox state is unavailable for one or more selected rows".to_owned());
+    }
+    if execution_mode == BatchExecutionMode::Live
+        && selected.iter().any(|row| {
+            row.durable_state
+                .is_some_and(|state| !retry_scope.includes(state))
+        })
+    {
+        blocked_reasons
+            .push("One or more selected rows are outside the selected retry scope".to_owned());
+    }
+    let mut selected_rows = selected;
+    selected_rows.sort_unstable_by_key(|row| row.id);
+    let concurrency = concurrency.clamp(1, 16);
+    let mut identity_input = format!(
+        "mode={execution_mode:?}\nscope={retry_scope:?}\nconcurrency={concurrency}\ndestructive_count={destructive_count}\n"
+    );
+    for row in selected_rows {
+        identity_input.push_str(row.id);
+        identity_input.push('|');
+        identity_input.push_str(row.durable_state.unwrap_or("<missing>"));
+        identity_input.push('|');
+        identity_input.push_str(if row.destructive {
+            "destructive"
+        } else {
+            "safe"
+        });
+        identity_input.push('\n');
+    }
+    let identity_hash = Sha256::digest(identity_input.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    BatchActionPlan {
+        explicit_selection_count,
+        hidden_selection_count,
+        eligible_count,
+        blocked_count,
+        blocked_reasons,
+        destructive_count,
+        retry_scope,
+        concurrency,
+        execution_mode,
+        identity_hash,
+    }
 }
 
 /// Immutable proof of what the operator was shown when they approved a batch.
@@ -561,6 +738,8 @@ pub(crate) struct BatchConfirmationIdentity {
     pub(crate) concurrency: usize,
     /// Whether deletion is enabled on any selected job
     pub(crate) deletion_enabled: bool,
+    /// Hash of the complete action plan shown at confirmation time.
+    pub(crate) action_plan_hash: String,
 }
 
 impl BulkRetryScope {

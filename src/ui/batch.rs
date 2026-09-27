@@ -5,13 +5,59 @@
 //! the egui shell.
 
 use crate::App;
-use crate::controller::{BatchExecutionMode, BulkRetryScope, BulkStateSet};
+use crate::controller::{
+    BatchActionPlan, BatchActionRow, BatchExecutionMode, BulkRetryScope, BulkStateSet,
+    build_batch_action_plan,
+};
 use crate::ui::job_state_badge;
 use crate::ui::{WorkspaceView, display_state_key};
 use eframe::egui::{self, Color32, RichText};
 use egui_extras::{Column, TableBuilder};
 
 impl App {
+    fn current_batch_action_plan(
+        &self,
+        execution_mode: BatchExecutionMode,
+        retry_scope: BulkRetryScope,
+    ) -> BatchActionPlan {
+        let mut known_ids = std::collections::HashSet::new();
+        let mut rows = self
+            .bulk_jobs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, job)| {
+                let id = self.bulk_job_ids.get(index)?;
+                known_ids.insert(id.clone());
+                Some(BatchActionRow {
+                    id,
+                    selected: self.bulk_selected_ids.contains(id),
+                    visible: self.mailbox_matches_filter(job),
+                    durable_state: Some(job.state.as_str()),
+                    destructive: job.form.profile.delete2,
+                })
+            })
+            .collect::<Vec<_>>();
+        for id in self
+            .bulk_selected_ids
+            .iter()
+            .filter(|id| !known_ids.contains(*id))
+        {
+            rows.push(BatchActionRow {
+                id,
+                selected: true,
+                visible: false,
+                durable_state: None,
+                destructive: false,
+            });
+        }
+        build_batch_action_plan(
+            &rows,
+            retry_scope,
+            self.form.profile.batch_concurrency,
+            execution_mode,
+        )
+    }
+
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
         ui.heading(self.language.text("Mailboxes"));
@@ -224,6 +270,12 @@ impl App {
                 }
             });
             let has_selection = !self.bulk_selected_ids.is_empty();
+            let preflight_plan =
+                self.current_batch_action_plan(BatchExecutionMode::Preflight, BulkRetryScope::All);
+            let live_plan =
+                self.current_batch_action_plan(BatchExecutionMode::Live, BulkRetryScope::All);
+            let delta_plan = self
+                .current_batch_action_plan(BatchExecutionMode::Live, BulkRetryScope::DeltaRequired);
             let mut run_preflight = false;
             let mut run_live = false;
             let mut run_delta = false;
@@ -233,7 +285,10 @@ impl App {
                 if ui
                     .add_enabled(
                         has_selection && !self.running(),
-                        egui::Button::new("Run preflight"),
+                        egui::Button::new(format!(
+                            "Run preflight ({})",
+                            preflight_plan.eligible_count
+                        )),
                     )
                     .clicked()
                 {
@@ -243,7 +298,11 @@ impl App {
                     .add_enabled(
                         has_selection && !self.running(),
                         egui::Button::new(
-                            RichText::new("Run live migration").color(Color32::WHITE),
+                            RichText::new(format!(
+                                "Run live migration ({})",
+                                live_plan.eligible_count
+                            ))
+                            .color(Color32::WHITE),
                         )
                         .fill(self.theme_colors().danger),
                     )
@@ -254,7 +313,10 @@ impl App {
                 if ui
                     .add_enabled(
                         has_selection && !self.running(),
-                        egui::Button::new("Run final delta"),
+                        egui::Button::new(format!(
+                            "Run final delta ({})",
+                            delta_plan.eligible_count
+                        )),
                     )
                     .clicked()
                 {

@@ -19,9 +19,9 @@ mod single_admission;
 mod single_start;
 
 pub(crate) use batch::{
-    BatchConfirmationIdentity, BatchExecutionMode, BatchStartContext, BatchStartDecision,
-    BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, batch_mailbox_state,
-    batch_start_decision, is_verified_terminal_state,
+    BatchActionPlan, BatchActionRow, BatchConfirmationIdentity, BatchExecutionMode,
+    BatchStartContext, BatchStartDecision, BulkQueueSummary, BulkRetryScope, BulkStateSet,
+    batch_mailbox_state, batch_start_decision, build_batch_action_plan, is_verified_terminal_state,
 };
 pub(crate) use batch_admission::{
     BatchLaunchRequest, admit_batch_launch, decode_persisted_batch_profile,

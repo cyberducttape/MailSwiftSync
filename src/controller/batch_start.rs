@@ -61,6 +61,10 @@ impl App {
             mode,
             fallback_profile: &self.form.profile,
             expected_credential_fingerprints: &self.bulk_preflight_credential_fingerprints,
+            expected_action_plan_hash: self
+                .bulk_confirmation_summary
+                .as_ref()
+                .map(|plan| plan.identity_hash.as_str()),
             run_id: &run_id,
         }) {
             Ok(value) => value,

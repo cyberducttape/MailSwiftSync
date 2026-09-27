@@ -2,7 +2,6 @@
 
 use crate::App;
 use eframe::egui::{self, Color32, RichText};
-use std::collections::HashSet;
 
 impl App {
     pub(crate) fn bulk_clear_confirmation(&mut self, ctx: &egui::Context) {
@@ -87,51 +86,43 @@ impl App {
             return;
         }
         if self.bulk_confirmation_summary.is_none() {
-            let mut durable_state_error = None;
-            let eligible_indices = self
+            let rows = self
                 .bulk_jobs
                 .iter()
                 .enumerate()
-                .filter_map(|(index, _)| {
+                .filter_map(|(index, job)| {
                     let job_id = self.bulk_job_ids.get(index)?;
-                    let state = match self.cached_report_mailbox(job_id) {
-                        Some(mailbox) => mailbox.job.state.as_str(),
-                        None => {
-                            durable_state_error = Some(
-                                "Could not read durable mailbox state for confirmation; refresh the workspace and try again."
-                                    .into(),
-                            );
-                            return None;
-                        }
-                    };
-                    (self.bulk_row_is_selected(index) && self.bulk_retry_scope.includes(state))
-                        .then_some(index)
+                    Some(crate::controller::BatchActionRow {
+                        id: job_id,
+                        selected: self.bulk_row_is_selected(index),
+                        visible: self.mailbox_matches_filter(job),
+                        durable_state: Some(job.state.as_str()),
+                        destructive: job.form.profile.delete2,
+                    })
                 })
-                .collect::<HashSet<_>>();
-            let deletion_enabled = eligible_indices
-                .iter()
-                .any(|index| self.bulk_jobs[*index].form.profile.delete2);
-
-            let selected_job_ids = eligible_indices
-                .iter()
-                .filter_map(|idx| self.bulk_job_ids.get(*idx).cloned())
                 .collect::<Vec<_>>();
             let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
-
-            self.bulk_confirmation_summary = Some(crate::controller::BulkConfirmationSummary {
-                eligible_count: eligible_indices.len(),
-                deletion_enabled,
-                durable_state_error,
+            let plan = crate::controller::build_batch_action_plan(
+                &rows,
+                self.bulk_retry_scope,
                 concurrency,
-                scope: self.bulk_retry_scope,
-            });
+                self.bulk_mode,
+            );
+            let selected_job_ids = rows
+                .iter()
+                .filter(|row| row.selected)
+                .map(|row| row.id.to_owned())
+                .collect::<Vec<_>>();
+
+            self.bulk_confirmation_summary = Some(plan.clone());
 
             self.bulk_confirmation_identity = Some(crate::controller::BatchConfirmationIdentity {
                 selected_job_ids,
                 retry_scope: self.bulk_retry_scope,
                 execution_mode: self.bulk_mode,
                 concurrency,
-                deletion_enabled,
+                deletion_enabled: plan.destructive_count > 0,
+                action_plan_hash: plan.identity_hash,
             });
         }
         let summary = self
@@ -140,21 +131,6 @@ impl App {
             .cloned()
             .expect("confirmation summary is initialized above");
         let selected_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
-        let visible_selected = self
-            .bulk_jobs
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| {
-                self.bulk_job_ids
-                    .get(*index)
-                    .is_some_and(|id| self.bulk_selected_ids.contains(id))
-                    && self.mailbox_matches_filter(&self.bulk_jobs[*index])
-            })
-            .count();
-        let hidden_selected = self
-            .bulk_selected_ids
-            .len()
-            .saturating_sub(visible_selected);
 
         let stored_identity = self.bulk_confirmation_identity.clone();
         let mut open = self.bulk_live_confirm_open;
@@ -169,8 +145,20 @@ impl App {
                     RichText::new(self.language.text("This will change destination mailboxes"))
                         .color(self.theme_colors().danger),
                 );
-                ui.label(format!("{} mailboxes selected", summary.eligible_count));
-                ui.label(format!("Selected scope: {} explicit · {} visible · {} hidden by current filter", selected_ids.len(), visible_selected, hidden_selected));
+                ui.label(format!(
+                    "{} eligible of {} explicitly selected · {} blocked",
+                    summary.eligible_count,
+                    summary.explicit_selection_count,
+                    summary.blocked_count
+                ));
+                ui.label(format!(
+                    "Selected scope: {} explicit · {} visible · {} hidden by current filter",
+                    summary.explicit_selection_count,
+                    summary
+                        .explicit_selection_count
+                        .saturating_sub(summary.hidden_selection_count),
+                    summary.hidden_selection_count
+                ));
                 ui.label(RichText::new("Sample of selected mailboxes:").strong());
                 for job_id in selected_ids.iter().take(5) {
                     if let Some(index) = self.bulk_job_ids.iter().position(|id| id == job_id) {
@@ -181,31 +169,28 @@ impl App {
                 if selected_ids.len() > 5 {
                     ui.label(format!("… plus {} more selected", selected_ids.len() - 5));
                 }
-                if hidden_selected > 0 && ui.button("View all selected").clicked() {
+                if summary.hidden_selection_count > 0 && ui.button("View all selected").clicked() {
                     self.bulk_search.clear();
                     self.bulk_state_filter = "all".into();
                     close = true;
                 }
-                if let Some(error) = &summary.durable_state_error {
-                    ui.label(RichText::new(error).color(self.theme_colors().danger));
+                for reason in &summary.blocked_reasons {
+                    ui.label(RichText::new(reason).color(self.theme_colors().danger));
                 }
                 ui.label(format!("Worker concurrency: {}", summary.concurrency));
                 ui.label(
                     RichText::new(format!(
                         "Destination deletion: {}",
-                        if summary.deletion_enabled {
-                            "ENABLED ⚠"
-                        } else {
-                            "disabled"
-                        }
+                        if summary.destructive_count > 0 { "ENABLED ⚠" } else { "disabled" }
                     ))
-                    .color(if summary.deletion_enabled {
+                    .color(if summary.destructive_count > 0 {
                         self.theme_colors().danger
                     } else {
                         self.theme_colors().text_secondary
                     }),
                 );
-                ui.label(format!("Scope: {}.", summary.scope.label()));
+                ui.label(format!("Scope: {}.", summary.retry_scope.label()));
+                ui.label(format!("Plan identity: {}", summary.identity_hash));
                 ui.label("Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.");
                 ui.label(
                     RichText::new(
@@ -219,7 +204,7 @@ impl App {
                     }
                     if ui
                         .add_enabled(
-                            summary.durable_state_error.is_none() && summary.eligible_count > 0,
+                            summary.blocked_count == 0 && summary.eligible_count > 0,
                             egui::Button::new(
                                 RichText::new(self.language.text("I understand — start batch")).color(Color32::WHITE),
                             )
@@ -232,7 +217,8 @@ impl App {
                             stored.concurrency == current_concurrency
                                 && stored.retry_scope == self.bulk_retry_scope
                                 && stored.execution_mode == self.bulk_mode
-                                && stored.deletion_enabled == summary.deletion_enabled
+                                && stored.deletion_enabled == (summary.destructive_count > 0)
+                                && stored.action_plan_hash == summary.identity_hash
                         });
 
                         if identity_matches {
