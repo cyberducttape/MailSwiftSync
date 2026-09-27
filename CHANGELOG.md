@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Microsoft 365 Basic-auth admission now identifies canonical hostnames when
+  endpoints include ports or trailing dots, and no longer misclassifies hosts
+  that merely contain a Microsoft domain as a substring.
 - IMAP LIST quoted mailbox names now preserve UTF-8 bytes while unescaping
   quoted backslashes and quotes, preventing non-ASCII folder names from being
   corrupted during enumeration and verification.

@@ -195,6 +195,18 @@ pub(crate) fn default_imap_port(tls_mode: &str) -> u16 {
     }
 }
 
+fn is_microsoft_365_endpoint(configured_endpoint: &str, tls_mode: &str) -> bool {
+    let Ok((host, _)) = endpoint::parts(configured_endpoint, default_imap_port(tls_mode)) else {
+        // Endpoint syntax is validated separately and will produce its own
+        // actionable error. Do not attempt provider identification on invalid input.
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    ["outlook.office365.com", "exchange.microsoft.com"]
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+}
+
 pub(crate) fn dovecot_ssl_mode(mode: &str) -> &str {
     match mode {
         "plain" => "no",
@@ -756,24 +768,21 @@ impl Form {
                 ));
             }
         }
-        for (label, host, method) in [
+        for (label, host, tls_mode, method) in [
             (
                 "Source",
                 self.profile.source_host.as_str(),
+                self.profile.source_tls.as_str(),
                 self.profile.source_auth.as_str(),
             ),
             (
                 "Destination",
                 self.profile.destination_host.as_str(),
+                effective_destination_tls(&self.profile.destination_tls),
                 self.profile.destination_auth.as_str(),
             ),
         ] {
-            let host = host.to_ascii_lowercase();
-            if (host == "outlook.office365.com"
-                || host.ends_with(".outlook.office365.com")
-                || host.contains("exchange.microsoft.com"))
-                && method != "oauth2"
-            {
+            if is_microsoft_365_endpoint(host, tls_mode) && method != "oauth2" {
                 return Err(format!(
                     "{label} Microsoft 365 IMAP requires OAuth 2.0 / Modern Authentication; Basic Authentication and app passwords are not supported"
                 ));
@@ -1556,6 +1565,55 @@ mod tests {
         form.profile.source_auth = "password".into();
         let error = form.validate_internal(false).unwrap_err();
         assert!(error.contains("requires OAuth 2.0 / Modern Authentication"));
+    }
+
+    #[test]
+    fn microsoft_365_admission_normalizes_host_port_case_and_trailing_dot() {
+        for host in [
+            "outlook.office365.com:993",
+            "OUTLOOK.OFFICE365.COM.:993",
+            "mail.outlook.office365.com:993",
+            "exchange.microsoft.com",
+            "autodiscover.exchange.microsoft.com:993",
+        ] {
+            let mut form = Form::default();
+            form.profile.source_host = host.into();
+            form.profile.source_user = "user@example.com".into();
+            form.profile.destination_host = "imap.example.com".into();
+            form.profile.destination_user = "user@example.com".into();
+            form.profile.source_auth = "password".into();
+
+            let error = form.validate_internal(false).unwrap_err();
+            assert!(
+                error.contains("requires OAuth 2.0 / Modern Authentication"),
+                "expected Microsoft 365 policy rejection for {host:?}, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn microsoft_365_admission_does_not_match_deceptive_domain_suffixes() {
+        let mut form = Form::default();
+        form.profile.source_host = "exchange.microsoft.com.attacker.example".into();
+        form.profile.source_user = "user@example.com".into();
+        form.profile.destination_host = "imap.example.com".into();
+        form.profile.destination_user = "user@example.com".into();
+        form.profile.source_auth = "password".into();
+
+        assert!(form.validate_internal(false).is_ok());
+    }
+
+    #[test]
+    fn microsoft_365_admission_applies_to_destination_with_embedded_port() {
+        let mut form = Form::default();
+        form.profile.source_host = "imap.example.com".into();
+        form.profile.source_user = "user@example.com".into();
+        form.profile.destination_host = "outlook.office365.com:993".into();
+        form.profile.destination_user = "user@example.com".into();
+        form.profile.destination_auth = "password".into();
+
+        let error = form.validate_internal(false).unwrap_err();
+        assert!(error.contains("Destination Microsoft 365 IMAP requires OAuth"));
     }
 
     #[test]
