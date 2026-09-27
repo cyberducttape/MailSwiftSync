@@ -54,6 +54,8 @@ operator distribution archives.
   `ready`; preflight statistics cannot be mistaken for verification.
 - Maildir integration assertions now inspect only `cur/` and `new/` messages,
   excluding Dovecot index/cache files from fixture message counts.
+- Provider qualification now normalizes durable operator-facing engine labels
+  (such as `imapsync fallback`) to canonical evidence engine identifiers.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.

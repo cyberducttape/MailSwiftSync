@@ -119,6 +119,21 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
         self.assertEqual(evidence["results"]["verification_confidence"], "aggregate_only")
         self.assertEqual(evidence["proof_verification"], "canonical_digest_verified")
 
+    def test_durable_imapsync_operator_label_maps_to_qualification_identity(self):
+        value = proof(run={
+            "run_id": "run",
+            "project_id": "project",
+            "job_id": "job",
+            "status": "completed",
+            "phase_at_start": "live",
+            "engine": "imapsync fallback",
+            "engine_version": "2.314",
+            "started_at": "2026-09-20T00:00:00Z",
+            "finished_at": "2026-09-20T00:01:00Z",
+        })
+        evidence = self.generate(value)
+        self.assertEqual(evidence["engine"], "imapsync")
+
     def test_failed_or_tampered_proof_cannot_generate_pass_evidence(self):
         for value in (proof(status="attention"), proof(messages=0)):
             with self.subTest(value=value):

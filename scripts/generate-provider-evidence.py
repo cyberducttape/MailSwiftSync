@@ -20,7 +20,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SUPPORTED_ENGINE_VERSIONS = {"imapsync": {"2.314"}}
+ENGINE_IDENTITIES = {
+    "imapsync": "imapsync",
+    "imapsync fallback": "imapsync",
+    "dovecot": "dovecot",
+    "dovecot native": "dovecot",
+}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def canonical_engine_identity(value: str) -> str | None:
+    """Map durable/operator engine labels to qualification engine IDs."""
+    return ENGINE_IDENTITIES.get(value.strip().casefold())
+
 
 def canonical_proof_digest(proof: dict) -> str:
     """Reproduce reports::integrity::with_proof_digest canonicalization."""
@@ -89,10 +101,16 @@ def generate_evidence(proof_path: str, source_provider: str, destination_provide
         raise ValueError("selected evidence run is missing its recorded engine")
     if not isinstance(recorded_engine_version, str) or not recorded_engine_version:
         raise ValueError("selected evidence run is missing its recorded engine version")
-    if engine != recorded_engine:
+    recorded_engine_identity = canonical_engine_identity(recorded_engine)
+    requested_engine_identity = canonical_engine_identity(engine)
+    if (
+        requested_engine_identity is None
+        or recorded_engine_identity != requested_engine_identity
+    ):
         raise ValueError(
             f"engine claim {engine!r} does not match selected run engine {recorded_engine!r}"
         )
+    engine = requested_engine_identity
     if engine_version != recorded_engine_version:
         raise ValueError(
             "engine version claim "
