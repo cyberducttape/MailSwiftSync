@@ -5,15 +5,38 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll();
         let ctx = ui.ctx().clone();
+        ctx.set_zoom_factor(self.ui_scale);
         let colors = self.theme_colors();
+
+        let mut visuals = if self.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+
+        let hover_fill = colors.info.linear_multiply(0.2);
+        let active_fill = colors.info.linear_multiply(0.4);
+
+        visuals.override_text_color = Some(colors.text_primary);
+        visuals.widgets.noninteractive.bg_fill = colors.panel;
+        visuals.widgets.noninteractive.fg_stroke.color = colors.text_secondary;
+        visuals.widgets.inactive.bg_fill = colors.panel;
+        visuals.widgets.inactive.fg_stroke.color = colors.text_secondary;
+        visuals.widgets.hovered.bg_fill = hover_fill;
+        visuals.widgets.hovered.fg_stroke.color = colors.text_primary;
+        visuals.widgets.active.bg_fill = active_fill;
+        visuals.widgets.active.fg_stroke.color = colors.text_primary;
+        visuals.window_fill = colors.window;
+        visuals.panel_fill = colors.panel;
+        visuals.hyperlink_color = colors.link;
+        visuals.selection.bg_fill = colors.selection;
+        visuals.selection.stroke.color = colors.text_primary;
+        visuals.popup_shadow.color = egui::Color32::from_black_alpha(50);
+
+        ctx.set_visuals(visuals);
+
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, colors.background);
-        ui.visuals_mut().override_text_color = Some(colors.text_primary);
-        ui.visuals_mut().widgets.noninteractive.bg_fill = colors.panel;
-        ui.visuals_mut().window_fill = colors.window;
-        ui.visuals_mut().hyperlink_color = colors.link;
-        ui.visuals_mut().selection.bg_fill = colors.selection;
-        ui.visuals_mut().widgets.noninteractive.fg_stroke.color = colors.border;
 
         ui.vertical(|ui| {
             ui.horizontal_wrapped(|ui| {

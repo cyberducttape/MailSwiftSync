@@ -334,6 +334,20 @@ impl App {
                     )
                     .color(colors.text_secondary),
                 );
+
+                let validation_result = crate::engine::canonical_extra_options(&self.form.profile.extra_options);
+                if let Err(validation_error) = &validation_result {
+                    ui.label(
+                        RichText::new(format!("⚠ Execution plan validation failed: {}", validation_error))
+                            .color(colors.danger),
+                    );
+                    ui.label(
+                        RichText::new("Fix the advanced options above before this plan can run.")
+                            .color(colors.text_secondary),
+                    );
+                    return;
+                }
+
                 let (exe, args) = self.form.command(true);
                 ui.label(RichText::new(format!("Executable: {exe}")).monospace());
                 egui::ScrollArea::vertical()
