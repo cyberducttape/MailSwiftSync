@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Updated the capability manifest to reflect that SQLite-backed streaming
+  reconciliation is wired into live verification; large-account qualification
+  and durable per-message checkpoint/restart semantics remain outstanding.
 - Microsoft 365 Basic-auth admission now identifies canonical hostnames when
   endpoints include ports or trailing dots, and no longer misclassifies hosts
   that merely contain a Microsoft domain as a substring.

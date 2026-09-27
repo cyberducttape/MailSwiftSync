@@ -1,7 +1,7 @@
 # MailSwiftSync Capability Manifest
 
 **Status source:** [`capabilities.toml`](capabilities.toml)
-**Last verified:** 2026-09-25
+**Last verified:** 2026-09-27
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
 The `[documentation]` policy in `capabilities.toml` also marks terms that must
@@ -160,8 +160,8 @@ particular target.
    - Wired after successful TLS imapsync transfers for the full selectable-folder inventory
    - Uses Message-ID, INTERNALDATE, and RFC822.SIZE; it does not hash message bodies
    - Bounded fetch pages, account/message limits, and any unstable folder fail closed; partial account evidence is not emitted
-   - The one-million-record and estimated 256 MiB limits are admission guards, not peak-memory guarantees; SQLite-backed streaming reconciliation is a production blocker for very large MSP migrations
-   - Mismatch rows are durably committed with terminal evidence and rendered in the operator verification report; per-message checkpoint persistence remains future work
+   - Live verification stages fetched metadata in SQLite and reconciles it in bounded batches; the estimated 256 MiB fetched-state budget is an admission guard, not a whole-process peak-memory guarantee
+   - Large-account qualification and load testing remain outstanding; mismatch details are still accumulated for evidence persistence, and durable per-message checkpoint/restart semantics remain future work
 
 2. **Provider throttling is not enforced**
    - Configurations defined for Gmail, O365, Fastmail
@@ -191,8 +191,8 @@ particular target.
 
 **Not yet ready for:**
 - Unattended migrations (no adaptive throttling or recovery approval)
-- Large-scale deployments without a qualified provider pilot (message metadata verification is bounded, materializes multiple in-memory indexes, and requires live-provider validation)
-- Very large MSP migrations before SQLite-backed streaming reconciliation is implemented
+- Large-scale deployments without a qualified provider pilot or large-account load qualification
+- Unattended very-large migrations requiring durable per-message checkpoint/restart semantics
 - Critical customer mailboxes (lacking live provider validation)
 - Automated migrations (recovery guidance not surfaced)
 
@@ -218,7 +218,9 @@ To reach GA 1.0, the following work is required:
 - [ ] Provider-specific error classification in retry logic
 
 **Medium-term (v1.0 GA):**
-- [ ] Implement SQLite-backed streaming reconciliation; this is a production blocker for very large MSP migrations
+- [x] Implement SQLite-backed streaming reconciliation in the live metadata-verification path
+- [ ] Qualify large-account performance and memory behavior with 100k+ message load tests
+- [ ] Implement durable per-message checkpoints and restart semantics
 - [ ] Performance benchmarks with 100k+ message mailboxes
 - [ ] Provider edge case testing
 - [ ] Production support runbooks
