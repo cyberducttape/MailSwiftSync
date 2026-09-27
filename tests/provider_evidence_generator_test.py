@@ -107,7 +107,7 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
                 qualification_bundle_id=arguments.pop("qualification_bundle_id"), **arguments
             )
 
-    def test_actual_customer_proof_schema_generates_strict_evidence(self):
+    def test_qualified_customer_proof_generates_strict_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "proof.json"
             path.write_text(json.dumps(proof()), encoding="utf-8")
@@ -118,6 +118,14 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
         self.assertNotIn("messages_verified", evidence["results"])
         self.assertEqual(evidence["results"]["verification_confidence"], "aggregate_only")
         self.assertEqual(evidence["proof_verification"], "canonical_digest_verified")
+
+    def test_customer_proof_without_structured_qualification_observations_is_rejected(self):
+        value = proof()
+        value["project"].pop("dataset_digest")
+        value["project"].pop("scenario_observations")
+        value["proof_digest"] = MODULE.canonical_proof_digest(value)
+        with self.assertRaisesRegex(ValueError, "real project.dataset_digest"):
+            self.generate(value)
 
     def test_durable_imapsync_operator_label_maps_to_qualification_identity(self):
         value = proof(run={

@@ -42,38 +42,13 @@ jobs:
             sudo chown -R "$(id -u):$(id -g)" provider-evidence
             chmod -R u+rwX,go-rwx provider-evidence
           fi
-      - name: Generate generic IMAP qualification evidence
-        if: success()
-        run: |
-          run_id=$(python3 - provider-evidence/customer-proof.json <<'PY'
-          import json, sys
-          proof = json.load(open(sys.argv[1], encoding="utf-8"))
-          runs = [run for run in proof["runs"] if run.get("status") == "completed"]
-          print(max(runs, key=lambda run: (run["started_at"], run["run_id"]))["run_id"])
-          PY
-          )
-          mailswiftsync_version=$(docker run --rm mailswiftsync:integration --version | sed -n 's/^MailSwiftSync \([^ ]*\).*/\1/p')
-          mailswiftsync_commit=$(docker run --rm mailswiftsync:integration --version | sed -n 's/.*(git \([^)]*\)).*/\1/p')
-          mailswiftsync_sha=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'sha256sum /usr/local/bin/mailswiftsync' | awk '{print $1}')
-          imapsync_version=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'imapsync --version 2>&1' | sed -n -e 's/.*imapsync[[:space:]]\+\([0-9][0-9.]*\).*/\1/p' -e 's/^[[:space:]]*v\?\([0-9][0-9.]*\)[[:space:]]*$/\1/p' | head -1)
-          imapsync_sha=$(docker run --rm --entrypoint /bin/bash mailswiftsync:integration -c 'sha256sum "$(command -v imapsync)"' | awk '{print $1}')
-          qualification_bundle_id="generic-imap-$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA}"
-          python3 scripts/generate-provider-evidence.py \
-            provider-evidence/customer-proof.json generic_imap generic_imap live_pilot \
-            --run-id "$run_id" --engine-version "$imapsync_version" \
-            --mailswiftsync-version "$mailswiftsync_version" \
-            --mailswiftsync-commit "$mailswiftsync_commit" \
-            --mailswiftsync-binary-sha256 "$mailswiftsync_sha" \
-            --imapsync-binary-sha256 "$imapsync_sha" \
-            --qualification-bundle-id "$qualification_bundle_id" \
-            --output provider-evidence/generic_imap-to-generic_imap-live_pilot.json
       - name: Run controller crash and recovery lab
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-recovery-smoke.sh
       - name: Run controller storage-fault and corruption lab
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/controller-chaos-smoke.sh
       - name: Run engine-side destination storage-fault lab
         run: docker run --rm --entrypoint /bin/bash mailswiftsync:integration /usr/local/lib/mailswiftsync/engine-storage-fault-smoke.sh
-      - name: Upload generated customer-proof and provider evidence
+      - name: Upload integration customer-proof and diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

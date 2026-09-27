@@ -56,6 +56,8 @@ operator distribution archives.
   excluding Dovecot index/cache files from fixture message counts.
 - Provider qualification now normalizes durable operator-facing engine labels
   (such as `imapsync fallback`) to canonical evidence engine identifiers.
+- The small generic IMAP integration lab now uploads its verified product
+  proof without mislabeling it as provider-qualification evidence.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
