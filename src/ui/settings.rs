@@ -66,23 +66,32 @@ pub(crate) fn show(
                             }
                         });
                 });
-                ui.horizontal(|ui| {
-                    ui.label(language.text("Theme"));
-                    let label = language.text(if *dark_mode { "Dark" } else { "Light" });
-                    if ui.button(label).clicked() {
-                        *dark_mode = !*dark_mode;
-                        if let Err(value) = (crate::ui::AppearancePreferences {
-                            theme: *theme,
-                            language: *language,
-                            dark_mode: *dark_mode,
-                            ui_scale: *ui_scale,
-                        })
-                        .save()
-                        {
-                            error = Some(format!("{}: {value}", language.text("Could not save appearance preference")));
+                let theme_is_variable = matches!(theme, crate::ui::ThemeKind::Default);
+                if theme_is_variable {
+                    ui.horizontal(|ui| {
+                        ui.label(language.text("Theme"));
+                        let label = language.text(if *dark_mode { "Dark" } else { "Light" });
+                        if ui.button(label).clicked() {
+                            *dark_mode = !*dark_mode;
+                            if let Err(value) = (crate::ui::AppearancePreferences {
+                                theme: *theme,
+                                language: *language,
+                                dark_mode: *dark_mode,
+                                ui_scale: *ui_scale,
+                            })
+                            .save()
+                            {
+                                error = Some(format!("{}: {value}", language.text("Could not save appearance preference")));
+                            }
                         }
-                    }
-                });
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(language.text("Theme"));
+                        ui.label(RichText::new(theme.label()).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                        ui.label(RichText::new("(fixed palette)").size(10.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.label(format!("{}: {:.0}%", language.text("Interface size"), *ui_scale * 100.0));
                     if ui.button(language.text("Decrease")).clicked() {
