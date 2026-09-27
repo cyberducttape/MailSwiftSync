@@ -152,20 +152,12 @@ impl App {
                 .count();
             let hidden_selected = self.bulk_selected_ids.len().saturating_sub(visible_and_selected);
 
-            let status_text = if hidden_selected > 0 {
-                format!(
-                    "{} visible · {} selected · {} hidden by filter",
-                    visible_indices.len(),
-                    self.bulk_selected_ids.len(),
-                    hidden_selected
-                )
-            } else {
-                format!(
-                    "{} visible · {} selected",
-                    visible_indices.len(),
-                    self.bulk_selected_ids.len()
-                )
-            };
+            let status_text = format!(
+                "{} selected · {} visible · {} hidden by current filter",
+                self.bulk_selected_ids.len(),
+                visible_indices.len(),
+                hidden_selected
+            );
 
             ui.label(
                 RichText::new(status_text)
