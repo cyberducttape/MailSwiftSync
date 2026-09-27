@@ -1004,8 +1004,20 @@ pub(crate) fn headless_supervise(
 
 pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
+    let mut last_debug = std::time::Instant::now();
     while app.running() || app.capability_receiver.is_some() || app.live_auth_receiver.is_some() {
         app.poll();
+        if crate::runner::process_supervision_debug_enabled()
+            && last_debug.elapsed() >= Duration::from_secs(15)
+        {
+            eprintln!(
+                "[process-debug] headless poll still waiting (running={}, output_lines={}, status={})",
+                app.running(),
+                app.output.len(),
+                app.status.text
+            );
+            last_debug = std::time::Instant::now();
+        }
         if std::time::Instant::now() >= deadline {
             if let Some(cancel) = &app.cancel_requested {
                 cancel.store(true, Ordering::Relaxed);

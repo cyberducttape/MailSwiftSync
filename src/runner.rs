@@ -1047,7 +1047,7 @@ pub(crate) fn run_capture_lines(
     Ok((status, lines, capture_truncated))
 }
 
-fn process_supervision_debug_enabled() -> bool {
+pub(crate) fn process_supervision_debug_enabled() -> bool {
     std::env::var_os("MAILSWIFTSYNC_DEBUG_PROCESS_WAIT").is_some_and(|value| value == "1")
 }
 

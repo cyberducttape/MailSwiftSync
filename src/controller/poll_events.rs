@@ -458,7 +458,12 @@ impl App {
                             ));
                         }
                     }
-                    Event::Finished(r) => done = Some(r),
+                    Event::Finished(r) => {
+                        if crate::runner::process_supervision_debug_enabled() {
+                            eprintln!("[process-debug] controller poll consumed terminal event");
+                        }
+                        done = Some(r);
+                    }
                 }
             }
         }

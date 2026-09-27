@@ -208,12 +208,23 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             {
                 result = Err(format!("terminal evidence delivery failed: {error}"));
             }
-            if let Err(error) =
-                send_reliable_event(&tx, Event::Finished(result.map(|stream| stream.outcome)))
-            {
+            if crate::runner::process_supervision_debug_enabled() {
+                eprintln!(
+                    "[process-debug] single worker reached terminal handoff (result_ok={})",
+                    result.is_ok()
+                );
+            }
+            let terminal_send =
+                send_reliable_event(&tx, Event::Finished(result.map(|stream| stream.outcome)));
+            if let Err(error) = terminal_send {
                 eprintln!("reliable terminal event delivery failed: {error}");
+            } else if crate::runner::process_supervision_debug_enabled() {
+                eprintln!("[process-debug] single worker queued terminal event");
             }
         }));
+        if crate::runner::process_supervision_debug_enabled() {
+            eprintln!("[process-debug] single worker closure returned");
+        }
         if worker_result.is_err()
             && let Err(error) = send_reliable_event(
                 &tx,
