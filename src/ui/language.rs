@@ -54,6 +54,27 @@ impl UiLanguage {
             "Preview command" => "Befehl anzeigen",
             "Advanced" => "Erweitert",
             "Start live migration" => "Live-Migration starten",
+            "Confirm live migration" => "Live-Migration bestätigen",
+            "Destination changes require confirmation" => "Änderungen am Ziel erfordern eine Bestätigung",
+            "Source mail: not deleted by default" => "Quellnachrichten werden standardmäßig nicht gelöscht",
+            "Destination deletion: ENABLED ⚠" => "Löschen am Ziel: AKTIVIERT ⚠",
+            "Destination deletion: disabled" => "Löschen am Ziel: deaktiviert",
+            "Cancel" => "Abbrechen",
+            "I understand — start migration" => "Verstanden — Migration starten",
+            "Execution plan" => "Ausführungsplan",
+            "Advanced migration options" => "Erweiterte Migrationsoptionen",
+            "Review verification" => "Verifizierung prüfen",
+            "Confirm live batch migration" => "Live-Stapel-Migration bestätigen",
+            "This will change destination mailboxes" => "Dies ändert Zielpostfächer",
+            "I understand — start batch" => "Verstanden — Stapel starten",
+            "Clear mailbox queue?" => "Postfachwarteschlange leeren?",
+            "Discard the current queue?" => "Aktuelle Warteschlange verwerfen?",
+            "Keep queue" => "Warteschlange behalten",
+            "Clear queue" => "Warteschlange leeren",
+            "Replace mailbox queue?" => "Postfachwarteschlange ersetzen?",
+            "Replace the current queue?" => "Aktuelle Warteschlange ersetzen?",
+            "Keep current queue" => "Aktuelle Warteschlange behalten",
+            "Replace queue" => "Warteschlange ersetzen",
             "Source preset" => "Quellvorgabe",
             "Destination preset" => "Zielvorgabe",
             "Generic IMAP preset" => "Allgemeine IMAP-Vorgabe",
@@ -372,5 +393,20 @@ mod tests {
             UiLanguage::German.text("untranslated technical detail"),
             "untranslated technical detail"
         );
+    }
+
+    #[test]
+    fn destructive_and_safety_paths_are_translated() {
+        for key in [
+            "Confirm live migration",
+            "I understand — start migration",
+            "Confirm live batch migration",
+            "I understand — start batch",
+            "Clear mailbox queue?",
+            "Advanced migration options",
+            "Review verification",
+        ] {
+            assert_ne!(UiLanguage::German.text(key), key, "missing German translation: {key}");
+        }
     }
 }

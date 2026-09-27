@@ -1,4 +1,4 @@
-use eframe::egui::Color32;
+use eframe::egui::{self, Color32, Stroke};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
@@ -70,6 +70,47 @@ pub(crate) struct ThemeColors {
 }
 
 impl ThemeColors {
+    /// Install a complete context-level palette. Windows, menus, popups, and
+    /// widgets all consume this shared `Visuals` object rather than inheriting
+    /// a root `Ui`'s local overrides.
+    pub(crate) fn visuals(self, dark_mode: bool) -> egui::Visuals {
+        let mut visuals = if dark_mode { egui::Visuals::dark() } else { egui::Visuals::light() };
+        let stroke = |color| Stroke::new(1.0, color);
+        let widget = |bg_fill, weak_bg_fill, fg| egui::style::WidgetVisuals {
+            bg_fill,
+            weak_bg_fill,
+            bg_stroke: stroke(self.border),
+            corner_radius: egui::CornerRadius::same(3),
+            fg_stroke: stroke(fg),
+            expansion: 0.0,
+        };
+        visuals.dark_mode = dark_mode;
+        visuals.override_text_color = Some(self.text_primary);
+        visuals.weak_text_color = Some(self.text_secondary);
+        visuals.widgets.noninteractive = widget(self.panel, self.panel, self.text_primary);
+        visuals.widgets.inactive = widget(self.panel, self.panel, self.text_primary);
+        visuals.widgets.hovered = widget(self.selection, self.selection, self.text_primary);
+        visuals.widgets.active = widget(self.info, self.info, Color32::WHITE);
+        visuals.widgets.open = widget(self.selection, self.selection, self.text_primary);
+        visuals.window_fill = self.window;
+        visuals.window_stroke = stroke(self.border);
+        visuals.panel_fill = self.panel;
+        visuals.faint_bg_color = self.selection;
+        visuals.extreme_bg_color = self.background;
+        visuals.text_edit_bg_color = Some(self.background);
+        visuals.code_bg_color = self.background;
+        visuals.warn_fg_color = self.warning;
+        visuals.error_fg_color = self.danger;
+        visuals.hyperlink_color = self.link;
+        visuals.selection.bg_fill = self.selection;
+        visuals.selection.stroke = stroke(self.text_primary);
+        visuals.popup_shadow.color = Color32::from_black_alpha(if dark_mode { 160 } else { 70 });
+        visuals.button_frame = true;
+        visuals.collapsing_header_frame = true;
+        visuals.striped = true;
+        visuals
+    }
+
     pub(crate) fn for_theme(theme: ThemeKind, dark_mode: bool) -> Self {
         match theme {
             ThemeKind::Default => {
@@ -241,11 +282,11 @@ impl ThemeColors {
             window: Color32::from_rgb(166, 202, 240),
             text_primary: Color32::BLACK,
             text_secondary: Color32::from_rgb(35, 35, 35),
-            info: navy,
+            info: Color32::BLACK,
             success: Color32::from_rgb(0, 75, 0),
             warning: Color32::from_rgb(100, 50, 0),
             danger: Color32::from_rgb(128, 0, 0),
-            link: navy,
+            link: Color32::BLACK,
             selection: navy,
             border: Color32::WHITE,
         }
@@ -258,9 +299,9 @@ impl ThemeColors {
             window: Color32::from_rgb(212, 208, 200),
             text_primary: Color32::BLACK,
             text_secondary: Color32::BLACK,
-            info: Color32::from_rgb(0, 0, 75),
-            success: Color32::from_rgb(0, 25, 0),
-            warning: Color32::from_rgb(35, 18, 0),
+            info: Color32::from_rgb(0, 0, 45),
+            success: Color32::from_rgb(0, 15, 0),
+            warning: Color32::from_rgb(35, 12, 0),
             danger: Color32::from_rgb(50, 0, 0),
             link: Color32::from_rgb(0, 0, 80),
             selection: Color32::from_rgb(0, 0, 128),
@@ -406,35 +447,29 @@ mod tests {
     }
 
     #[test]
-    fn semantic_colors_meet_wcag_aa_contrast() {
+    fn semantic_colors_meet_wcag_aa_contrast_on_every_surface() {
         for theme in ThemeKind::all() {
             let colors = ThemeColors::for_theme(*theme, true);
             let theme_name = theme.label();
+            for (label, foreground) in [("info", colors.info), ("success", colors.success), ("warning", colors.warning), ("danger", colors.danger), ("link", colors.link)] {
+                for (surface_name, surface) in [("panel", colors.panel), ("window", colors.window)] {
+                    assert!(contrast_ratio(foreground, surface) >= 4.5, "{theme_name}: {label} on {surface_name} is {:.2}:1", contrast_ratio(foreground, surface));
+                }
+            }
+        }
+    }
 
-            assert!(
-                contrast_ratio(colors.info, colors.panel) >= 4.5,
-                "{}: info color contrast is {:.2}:1, needs 4.5:1",
-                theme_name,
-                contrast_ratio(colors.info, colors.panel)
-            );
-            assert!(
-                contrast_ratio(colors.success, colors.panel) >= 4.5,
-                "{}: success color contrast is {:.2}:1, needs 4.5:1",
-                theme_name,
-                contrast_ratio(colors.success, colors.panel)
-            );
-            assert!(
-                contrast_ratio(colors.warning, colors.panel) >= 4.5,
-                "{}: warning color contrast is {:.2}:1, needs 4.5:1",
-                theme_name,
-                contrast_ratio(colors.warning, colors.panel)
-            );
-            assert!(
-                contrast_ratio(colors.danger, colors.panel) >= 4.5,
-                "{}: danger color contrast is {:.2}:1, needs 4.5:1",
-                theme_name,
-                contrast_ratio(colors.danger, colors.panel)
-            );
+    #[test]
+    fn context_visuals_cover_interactive_and_popup_states() {
+        for theme in ThemeKind::all() {
+            let colors = ThemeColors::for_theme(*theme, false);
+            let visuals = colors.visuals(false);
+            assert_eq!(visuals.window_fill, colors.window);
+            assert_eq!(visuals.panel_fill, colors.panel);
+            assert_eq!(visuals.widgets.hovered.bg_fill, visuals.selection.bg_fill);
+            assert_eq!(visuals.widgets.active.bg_fill, colors.info);
+            assert_eq!(visuals.window_stroke.color, colors.border);
+            assert!(visuals.button_frame && visuals.collapsing_header_frame);
         }
     }
 

@@ -17,13 +17,13 @@ impl App {
         }
         let mut open = self.live_confirm_open;
         let mut close_requested = false;
-        egui::Window::new("Confirm live migration")
+        egui::Window::new(self.language.text("Confirm live migration"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(
-                    RichText::new("Destination changes require confirmation")
+                    RichText::new(self.language.text("Destination changes require confirmation"))
                         .color(self.theme_colors().danger),
                 );
                 ui.label(format!(
@@ -36,7 +36,7 @@ impl App {
                     "{}  →  {}",
                     self.form.profile.source_host, self.form.profile.destination_host
                 ));
-                ui.label("Source mail: not deleted by default");
+                ui.label(self.language.text("Source mail: not deleted by default"));
                 if self.form.engine() == crate::core::Engine::Dovecot {
                     ui.label(
                         RichText::new(format!(
@@ -50,12 +50,8 @@ impl App {
                     let deletion_enabled = self.form.profile.delete2;
                     ui.label(
                         RichText::new(format!(
-                            "Destination deletion: {}",
-                            if deletion_enabled {
-                                "ENABLED ⚠"
-                            } else {
-                                "disabled"
-                            }
+                                "{}",
+                                self.language.text(if deletion_enabled { "Destination deletion: ENABLED ⚠" } else { "Destination deletion: disabled" })
                         ))
                         .color(if deletion_enabled {
                             self.theme_colors().danger
@@ -66,13 +62,13 @@ impl App {
                 }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(self.language.text("Cancel")).clicked() {
                         close_requested = true;
                     }
                     if ui
                         .add(
                             egui::Button::new(
-                                RichText::new("I understand — start migration")
+                                RichText::new(self.language.text("I understand — start migration"))
                                     .color(Color32::WHITE),
                             )
                             .fill(self.theme_colors().danger),
@@ -324,7 +320,7 @@ impl App {
             return;
         }
         let colors = self.theme_colors();
-        egui::Window::new("Execution plan")
+        egui::Window::new(self.language.text("Execution plan"))
             .open(&mut self.preview)
             .default_width(670.0)
             .show(ctx, |ui| {
@@ -372,7 +368,7 @@ impl App {
             return;
         }
         let mut open = self.advanced_open;
-        egui::Window::new("Advanced migration options")
+        egui::Window::new(self.language.text("Advanced migration options"))
             .open(&mut open)
             .default_width(620.0)
             .show(ctx, |ui| {

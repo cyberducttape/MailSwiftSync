@@ -12,22 +12,22 @@ impl App {
         let mut open = self.bulk_clear_confirm_open;
         let mut clear = false;
         let mut close_requested = false;
-        egui::Window::new("Clear mailbox queue?")
+        egui::Window::new(self.language.text("Clear mailbox queue?"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading("Discard the current queue?");
+                ui.heading(self.language.text("Discard the current queue?"));
                 ui.label(format!(
                     "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.",
                     self.bulk_jobs.len()
                 ));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Keep queue").clicked() {
+                    if ui.button(self.language.text("Keep queue")).clicked() {
                         close_requested = true;
                     }
-                    if ui.button("Clear queue").clicked() {
+                    if ui.button(self.language.text("Clear queue")).clicked() {
                         clear = true;
                         close_requested = true;
                     }
@@ -53,22 +53,22 @@ impl App {
         let mut open = true;
         let mut close_requested = false;
         let mut replace = false;
-        egui::Window::new("Replace mailbox queue?")
+        egui::Window::new(self.language.text("Replace mailbox queue?"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading("Replace the current queue?");
+                ui.heading(self.language.text("Replace the current queue?"));
                 ui.label(format!(
                     "Importing {path_label} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.",
                     self.bulk_jobs.len()
                 ));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Keep current queue").clicked() {
+                    if ui.button(self.language.text("Keep current queue")).clicked() {
                         close_requested = true;
                     }
-                    if ui.button("Replace queue").clicked() {
+                    if ui.button(self.language.text("Replace queue")).clicked() {
                         replace = true;
                         close_requested = true;
                     }
@@ -150,13 +150,13 @@ impl App {
         let mut open = self.bulk_live_confirm_open;
         let mut close = false;
 
-        egui::Window::new("Confirm live batch migration")
+        egui::Window::new(self.language.text("Confirm live batch migration"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(
-                    RichText::new("This will change destination mailboxes")
+                    RichText::new(self.language.text("This will change destination mailboxes"))
                         .color(self.theme_colors().danger),
                 );
                 ui.label(format!("{} mailboxes selected", summary.eligible_count));
@@ -204,14 +204,14 @@ impl App {
                     .color(self.theme_colors().text_secondary),
                 );
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(self.language.text("Cancel")).clicked() {
                         close = true;
                     }
                     if ui
                         .add_enabled(
                             summary.durable_state_error.is_none() && summary.eligible_count > 0,
                             egui::Button::new(
-                                RichText::new("I understand — start batch").color(Color32::WHITE),
+                                RichText::new(self.language.text("I understand — start batch")).color(Color32::WHITE),
                             )
                             .fill(self.theme_colors().danger),
                         )
