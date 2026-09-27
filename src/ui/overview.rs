@@ -97,6 +97,8 @@ impl App {
         });
         self.project_summary(ui);
         ui.add_space(14.0);
+        self.attention_center(ui);
+        ui.add_space(14.0);
         if project.is_none() && self.bulk_jobs.is_empty() {
             ui.group(|ui| {
                 ui.heading(self.language.text("Start your first migration"));
@@ -296,6 +298,69 @@ impl App {
             response.on_hover_text(
                 "Use IMAPS or STARTTLS whenever possible. This acknowledgement is required before any authenticated operation, including dry preflight, and is included in the preflight fingerprint.",
             );
+        });
+    }
+
+    fn attention_center(&mut self, ui: &mut egui::Ui) {
+        let attention = self
+            .ui_snapshot
+            .verification_rows
+            .iter()
+            .filter(|mailbox| mailbox.attention_reason.is_some())
+            .collect::<Vec<_>>();
+        if attention.is_empty() {
+            return;
+        }
+        let colors = self.theme_colors();
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(self.language.text("ATTENTION CENTER"))
+                        .strong()
+                        .color(colors.warning),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "{} shown · {} total need review",
+                        attention.len(),
+                        self.ui_snapshot.mailbox_counts.needs_review
+                    ))
+                    .color(colors.text_secondary),
+                );
+                if ui.button(self.language.text("Open verification")).clicked() {
+                    self.active_view = WorkspaceView::Verification;
+                }
+            });
+            ui.label(
+                RichText::new(
+                    self.language.text(
+                        "Each item names the durable reason and the next safe operator action.",
+                    ),
+                )
+                .size(11.0)
+                .color(colors.text_secondary),
+            );
+            for mailbox in attention.iter().take(5) {
+                let Some(reason) = mailbox.attention_reason else {
+                    continue;
+                };
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(&mailbox.job.source_mailbox).strong());
+                    ui.label(format!(
+                        "{} → {}",
+                        mailbox.job.source_mailbox, mailbox.job.destination_mailbox
+                    ));
+                    ui.label(RichText::new(reason.as_str()).color(colors.warning));
+                });
+                ui.label(RichText::new(reason.recommended_action()).color(colors.text_secondary));
+            }
+            if attention.len() > 5 {
+                ui.label(
+                    RichText::new(format!("… plus {} more on this page", attention.len() - 5))
+                        .color(colors.text_secondary),
+                );
+            }
         });
     }
 
