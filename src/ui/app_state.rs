@@ -137,6 +137,7 @@ pub(crate) struct App {
     pub(crate) dark_mode: bool,
     pub(crate) theme: ThemeKind,
     pub(crate) ui_scale: f32,
+    pub(crate) language: UiLanguage,
     /// Operator/agency name and contact line applied to customer-proof
     /// exports. Independent of the migration plan/profile; see
     /// `branding::OperatorBranding`.

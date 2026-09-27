@@ -16,20 +16,29 @@ use egui_extras::{Column, TableBuilder};
 impl App {
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
-        ui.heading("Mailboxes");
-        ui.label(RichText::new("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.").color(self.theme_colors().text_secondary));
+        ui.heading(self.language.text("Mailboxes"));
+        ui.label(RichText::new(self.language.text("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.")).color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         if self.historical_mailbox_view(ui) {
             return;
         }
         if self.bulk_jobs.is_empty() {
             ui.group(|ui| {
-                ui.heading("No bulk mailbox list loaded");
-                ui.label("A single mailbox can be configured from the migration plan.");
-                if ui.button("Open migration plan").clicked() {
+                ui.heading(self.language.text("No bulk mailbox list loaded"));
+                ui.label(
+                    self.language
+                        .text("A single mailbox can be configured from the migration plan."),
+                );
+                if ui
+                    .button(self.language.text("Open migration plan"))
+                    .clicked()
+                {
                     self.active_view = WorkspaceView::Plan;
                 }
-                if ui.button("Import CSV / Excel…").clicked() {
+                if ui
+                    .button(self.language.text("Import CSV / Excel…"))
+                    .clicked()
+                {
                     self.bulk_open = true;
                 }
             });
@@ -39,13 +48,16 @@ impl App {
                     RichText::new(format!("{} mailbox jobs in scope", self.bulk_jobs.len()))
                         .strong(),
                 );
-                if ui.button("Import / edit queue").clicked() {
+                if ui
+                    .button(self.language.text("Import / edit queue"))
+                    .clicked()
+                {
                     self.bulk_open = true;
                 }
             });
             let summary = self.bulk_queue_summary();
             ui.group(|ui| {
-                ui.label(RichText::new("QUEUE HEALTH").strong().size(11.0));
+                ui.label(RichText::new(self.language.text("QUEUE HEALTH")).strong().size(11.0));
                 ui.horizontal_wrapped(|ui| {
                     ui.label(format!("{} imported", summary.imported));
                     ui.label(format!("{} queued", summary.queued));
@@ -67,17 +79,17 @@ impl App {
                         if unresolved == 0 { colors.success } else { colors.danger },
                     ));
                 });
-                ui.label(RichText::new("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.").size(11.0).color(colors.text_secondary));
+                ui.label(RichText::new(self.language.text("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.")).size(11.0).color(colors.text_secondary));
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label("Search");
+                ui.label(self.language.text("Search"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.bulk_search)
-                        .hint_text("mailbox, host, or user")
+                        .hint_text(self.language.text("mailbox, host, or user"))
                         .desired_width(220.0),
                 );
                 egui::ComboBox::from_id_salt("mailbox_state_filter")
-                    .selected_text(match self.bulk_state_filter.as_str() {
+                    .selected_text(self.language.text(match self.bulk_state_filter.as_str() {
                         "imported" => "Imported",
                         "attention" => "Attention",
                         "failed" => "Failed",
@@ -85,7 +97,7 @@ impl App {
                         "verified" | "verified_with_exceptions" => "Verified",
                         "ready" => "Ready",
                         _ => "All states",
-                    })
+                    }))
                     .show_ui(ui, |ui| {
                         for (value, label) in [
                             ("all", "All states"),
@@ -97,10 +109,14 @@ impl App {
                             ("verified", "Verified"),
                             ("verified_with_exceptions", "Verified with exceptions"),
                         ] {
-                            ui.selectable_value(&mut self.bulk_state_filter, value.into(), label);
+                            ui.selectable_value(
+                                &mut self.bulk_state_filter,
+                                value.into(),
+                                self.language.text(label),
+                            );
                         }
                     });
-                if ui.button("Select visible").clicked() {
+                if ui.button(self.language.text("Select visible")).clicked() {
                     for (index, job) in self.bulk_jobs.iter().enumerate() {
                         if self.mailbox_matches_filter(job)
                             && let Some(id) = self.bulk_job_ids.get(index)
@@ -109,13 +125,13 @@ impl App {
                         }
                     }
                 }
-                if ui.button("Select unresolved").clicked() {
+                if ui.button(self.language.text("Select unresolved")).clicked() {
                     self.select_bulk_state_set(BulkStateSet::Unresolved);
                 }
-                if ui.button("Select attention").clicked() {
+                if ui.button(self.language.text("Select attention")).clicked() {
                     self.select_bulk_state_set(BulkStateSet::Attention);
                 }
-                if ui.button("Clear selection").clicked() {
+                if ui.button(self.language.text("Clear selection")).clicked() {
                     self.bulk_selected_ids.clear();
                 }
             });
@@ -139,7 +155,7 @@ impl App {
             let mut run_delta = false;
             let mut review_selected = false;
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Selected mailbox actions").strong());
+                ui.label(RichText::new(self.language.text("Selected mailbox actions")).strong());
                 if ui
                     .add_enabled(
                         has_selection && !self.running(),

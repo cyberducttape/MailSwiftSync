@@ -292,6 +292,8 @@ use std::path::PathBuf;
 pub(crate) struct AppearancePreferences {
     #[serde(default)]
     pub(crate) theme: ThemeKind,
+    #[serde(default)]
+    pub(crate) language: super::UiLanguage,
     pub(crate) dark_mode: bool,
     pub(crate) ui_scale: f32,
 }
@@ -300,6 +302,7 @@ impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
             theme: ThemeKind::Default,
+            language: super::UiLanguage::English,
             dark_mode: true,
             ui_scale: crate::DEFAULT_UI_SCALE,
         }
@@ -337,6 +340,7 @@ impl AppearancePreferences {
         };
         Self {
             theme: preferences.theme,
+            language: preferences.language,
             dark_mode: preferences.dark_mode,
             ui_scale,
         }
@@ -399,5 +403,16 @@ mod tests {
                 theme.label()
             );
         }
+    }
+
+    #[test]
+    fn appearance_preferences_default_legacy_files_to_english_and_read_german() {
+        let legacy: AppearancePreferences =
+            toml::from_str("dark_mode = true\nui_scale = 1.0\n").unwrap();
+        assert_eq!(legacy.language, super::super::UiLanguage::English);
+
+        let german: AppearancePreferences =
+            toml::from_str("language = 'German'\ndark_mode = true\nui_scale = 1.0\n").unwrap();
+        assert_eq!(german.language, super::super::UiLanguage::German);
     }
 }

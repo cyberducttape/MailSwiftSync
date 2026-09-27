@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a persisted English/German language choice for the desktop interface,
+  with German navigation, settings, account setup, overview, activity, and
+  verification labels. CLI output and generated reports remain English.
 - Support bundles no longer include customer-controlled project names; their
   redaction metadata explicitly records that project names are excluded.
 - Added deterministic property-style parser tests for arbitrary IMAP response,

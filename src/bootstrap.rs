@@ -431,6 +431,7 @@ impl App {
             dark_mode: appearance.dark_mode,
             theme: appearance.theme,
             ui_scale: appearance.ui_scale,
+            language: appearance.language,
             branding: crate::branding::OperatorBranding::load(),
             bulk_live_confirm_open: false,
             bulk_live_confirmed: false,

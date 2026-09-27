@@ -12,10 +12,13 @@ use eframe::egui::{self, RichText};
 
 impl App {
     pub(crate) fn overview_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Migration overview");
+        ui.heading(self.language.text("Migration overview"));
         ui.label(
-            RichText::new("A calm, evidence-led workspace for moving mailboxes safely.")
-                .color(self.theme_colors().text_secondary),
+            RichText::new(
+                self.language
+                    .text("A calm, evidence-led workspace for moving mailboxes safely."),
+            )
+            .color(self.theme_colors().text_secondary),
         );
         ui.add_space(16.0);
         let project = self.ui_snapshot.project.clone();
@@ -51,7 +54,7 @@ impl App {
         ui.add_space(14.0);
         let workflow_index = workflow_step_index(phase, !self.preflight.is_empty(), has_mailboxes);
         ui.group(|ui| {
-            ui.label(RichText::new("MIGRATION WORKFLOW").strong().size(11.0));
+            ui.label(RichText::new(self.language.text("MIGRATION WORKFLOW")).strong().size(11.0));
             ui.horizontal_wrapped(|ui| {
                 for (index, (title, detail)) in [
                     ("Connect", "endpoints"),
@@ -73,12 +76,12 @@ impl App {
                     };
                     ui.group(|ui| {
                         ui.label(
-                            RichText::new(format!("{marker} {title}"))
+                            RichText::new(format!("{marker} {}", self.language.text(title)))
                                 .strong()
                                 .color(color),
                         );
                         ui.label(
-                            RichText::new(detail).color(self.theme_colors().text_secondary),
+                            RichText::new(self.language.text(detail)).color(self.theme_colors().text_secondary),
                         );
                     });
                     if index < 5 {
@@ -87,7 +90,7 @@ impl App {
                 }
             });
             ui.label(
-                RichText::new("The highlighted step is the current operator focus. A completed-looking step never bypasses the durable execution gates.")
+                RichText::new(self.language.text("The highlighted step is the current operator focus. A completed-looking step never bypasses the durable execution gates."))
                     .size(11.0)
                     .color(self.theme_colors().text_secondary),
             );
@@ -96,8 +99,8 @@ impl App {
         ui.add_space(14.0);
         if project.is_none() && self.bulk_jobs.is_empty() {
             ui.group(|ui| {
-                ui.heading("Start your first migration");
-                ui.label("MailSwiftSync guides every migration through a reviewable preflight before any destination changes are allowed.");
+                ui.heading(self.language.text("Start your first migration"));
+                ui.label(self.language.text("MailSwiftSync guides every migration through a reviewable preflight before any destination changes are allowed."));
                 ui.add_space(8.0);
                 ui.horizontal_wrapped(|ui| {
                     for (number, title, detail) in [
@@ -106,21 +109,21 @@ impl App {
                         ("3", "Prove", "Migrate, verify, and export customer evidence."),
                     ] {
                         ui.group(|ui| {
-                            ui.label(RichText::new(format!("{number}  {title}")).strong());
-                            ui.label(RichText::new(detail).color(self.theme_colors().text_secondary));
+                            ui.label(RichText::new(format!("{number}  {}", self.language.text(title))).strong());
+                            ui.label(RichText::new(self.language.text(detail)).color(self.theme_colors().text_secondary));
                         });
                     }
                 });
-                if ui.button("Configure first mailbox  →").clicked() {
+                if ui.button(self.language.text("Configure first mailbox  →")).clicked() {
                     self.active_view = WorkspaceView::Plan;
                 }
-                ui.label(RichText::new("For multiple mailboxes, use Batch after reviewing one representative pilot.").color(self.theme_colors().text_secondary));
+                ui.label(RichText::new(self.language.text("For multiple mailboxes, use Batch after reviewing one representative pilot.")).color(self.theme_colors().text_secondary));
             });
             ui.add_space(14.0);
         }
         ui.group(|ui| {
             ui.label(
-                RichText::new("CURRENT PHASE")
+                RichText::new(self.language.text("CURRENT PHASE"))
                     .size(11.0)
                     .strong()
                     .color(self.theme_colors().text_secondary),
@@ -140,34 +143,34 @@ impl App {
         ui.horizontal(|ui| {
             ui.group(|ui| {
                 ui.label(
-                    RichText::new("PROJECT STATUS")
+                    RichText::new(self.language.text("PROJECT STATUS"))
                         .size(11.0)
                         .color(self.theme_colors().text_secondary),
                 );
                 ui.heading(if project.is_some() {
-                    "Project created"
+                    self.language.text("Project created")
                 } else if has_bulk_jobs {
-                    "Batch queue loaded"
+                    self.language.text("Batch queue loaded")
                 } else {
-                    "No project yet"
+                    self.language.text("No project yet")
                 });
                 ui.label(if project.is_some() {
-                    "State is durable and ready for review."
+                    self.language.text("State is durable and ready for review.")
                 } else if has_bulk_jobs {
-                    "Review the imported rows, then run a durable preflight."
+                    self.language.text("Review the imported rows, then run a durable preflight.")
                 } else {
-                    "Start by configuring endpoints or importing a mailbox list."
+                    self.language.text("Start by configuring endpoints or importing a mailbox list.")
                 });
             });
             ui.group(|ui| {
                 ui.label(
-                    RichText::new("MAILBOXES")
+                    RichText::new(self.language.text("MAILBOXES"))
                         .size(11.0)
                         .color(self.theme_colors().text_secondary),
                 );
                 if !has_mailboxes {
-                    ui.heading("None configured");
-                    ui.label("Use Mailboxes to review scope before running anything.");
+                    ui.heading(self.language.text("None configured"));
+                    ui.label(self.language.text("Use Mailboxes to review scope before running anything."));
                 } else if !has_durable_jobs {
                     ui.heading(format!("{} queued", batch_summary.total));
                     ui.label(format!(
@@ -179,7 +182,7 @@ impl App {
                         batch_summary.attention,
                         batch_summary.unresolved(),
                     ));
-                    ui.label("Imported rows are not durable until preflight admission succeeds.");
+                    ui.label(self.language.text("Imported rows are not durable until preflight admission succeeds."));
                 } else {
                     ui.heading(format!("{} total", mailbox_counts.total));
                     ui.label(format!(
@@ -199,27 +202,27 @@ impl App {
             });
             ui.group(|ui| {
                 ui.label(
-                    RichText::new("EVIDENCE")
+                    RichText::new(self.language.text("EVIDENCE"))
                         .size(11.0)
                         .color(self.theme_colors().text_secondary),
                 );
                 ui.heading(if proof_ready {
-                    "Customer proof ready"
+                    self.language.text("Customer proof ready")
                 } else if project.is_some() {
-                    "Review required"
+                    self.language.text("Review required")
                 } else {
-                    "Not available"
+                    self.language.text("Not available")
                 });
                 ui.label(if proof_ready {
-                    "Open Verification to export the customer-safe evidence artifact."
+                    self.language.text("Open Verification to export the customer-safe evidence artifact.")
                 } else {
-                    "Open Verification to review evidence; customer proof remains gated until the durable state is complete."
+                    self.language.text("Open Verification to review evidence; customer proof remains gated until the durable state is complete.")
                 });
             });
         });
         ui.add_space(16.0);
         ui.group(|ui| {
-            ui.heading("Recommended next step");
+            ui.heading(self.language.text("Recommended next step"));
             ui.label(next_action);
             ui.add_space(8.0);
             ui.horizontal(|ui| {

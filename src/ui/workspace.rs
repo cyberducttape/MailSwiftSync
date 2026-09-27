@@ -355,7 +355,7 @@ impl App {
             return false;
         }
         if self.active_project_id().is_none() || self.ui_snapshot.project.is_none() {
-            ui.label("No historical project is selected.");
+            ui.label(self.language.text("No historical project is selected."));
             return true;
         }
         let colors = self.theme_colors();
@@ -379,9 +379,9 @@ impl App {
                     .striped(true)
                     .show(ui, |ui| {
                         if rows.start == 0 {
-                            ui.strong("Source");
-                            ui.strong("Destination");
-                            ui.strong("State");
+                            ui.strong(self.language.text("Source"));
+                            ui.strong(self.language.text("Destination"));
+                            ui.strong(self.language.text("State"));
                             ui.end_row();
                         }
                         for index in rows {
@@ -399,7 +399,7 @@ impl App {
             if ui
                 .add_enabled(
                     self.historical_mailbox_offset > 0,
-                    egui::Button::new("← Previous 200"),
+                    egui::Button::new(self.language.text("← Previous 200")),
                 )
                 .clicked()
             {
@@ -409,7 +409,7 @@ impl App {
             if ui
                 .add_enabled(
                     self.historical_mailbox_offset as usize + page_len < total_jobs,
-                    egui::Button::new("Next 200 →"),
+                    egui::Button::new(self.language.text("Next 200 →")),
                 )
                 .clicked()
             {
@@ -446,29 +446,29 @@ impl App {
         let mut open = self.projects_open;
         let mut selected_project = None;
         let mut new_migration_requested = false;
-        egui::Window::new("Projects")
+        egui::Window::new(self.language.text("Projects"))
             .open(&mut open)
             .default_width(760.0)
             .default_height(520.0)
             .collapsible(false)
             .show(ctx, |ui| {
-                ui.heading("Migration projects");
-                ui.label(RichText::new("Select a durable project to make it the workspace for reports, mailboxes, activity, and verification.").color(self.theme_colors().text_secondary));
+                ui.heading(self.language.text("Migration projects"));
+                ui.label(RichText::new(self.language.text("Select a durable project to make it the workspace for reports, mailboxes, activity, and verification.")).color(self.theme_colors().text_secondary));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label("Search");
+                    ui.label(self.language.text("Search"));
                     ui.add(egui::TextEdit::singleline(&mut self.project_search)
-                        .hint_text("project name, source, or destination")
+                        .hint_text(self.language.text("project name, source, or destination"))
                         .desired_width(320.0));
                 });
                 ui.add_space(8.0);
                 ui.label(RichText::new(format!("{} project(s)", self.project_visible_indices.len())).color(self.theme_colors().text_secondary));
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     egui::Grid::new("project_browser").striped(true).show(ui, |ui| {
-                        ui.strong("Project");
-                        ui.strong("Phase");
-                        ui.strong("Source");
-                        ui.strong("Destination");
+                        ui.strong(self.language.text("Project"));
+                        ui.strong(self.language.text("Phase"));
+                        ui.strong(self.language.text("Source"));
+                        ui.strong(self.language.text("Destination"));
                         ui.end_row();
                         for &index in &self.project_visible_indices {
                             let project = &self.ui_snapshot.projects[index];
@@ -484,7 +484,7 @@ impl App {
                     });
                 });
                 ui.add_space(8.0);
-                if ui.button("New migration plan").clicked() {
+                if ui.button(self.language.text("New migration plan")).clicked() {
                     new_migration_requested = true;
                 }
             });

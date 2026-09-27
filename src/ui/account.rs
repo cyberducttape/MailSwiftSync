@@ -16,6 +16,7 @@ pub(crate) fn password_visibility_id(title: &str) -> egui::Id {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_account(
     ui: &mut egui::Ui,
+    language: crate::ui::UiLanguage,
     title: &str,
     host: &mut String,
     user: &mut String,
@@ -50,9 +51,9 @@ pub(crate) fn render_account(
         ui.heading(RichText::new(title).color(color));
         ui.label(
             RichText::new(if title.contains("DOVECOT") {
-                "Local Dovecot account"
+                language.text("Local Dovecot account")
             } else {
-                "IMAP connection"
+                language.text("IMAP connection")
             })
             .size(11.0)
             .color(if ui.visuals().dark_mode {
@@ -62,32 +63,32 @@ pub(crate) fn render_account(
             }),
         );
         ui.horizontal(|ui| {
-            ui.label("Server");
+            ui.label(language.text("Server"));
             ui.add_enabled(editable, egui::TextEdit::singleline(host));
         });
         inline_error(ui, "Server", host, true);
         ui.horizontal(|ui| {
-            ui.label("User");
+            ui.label(language.text("User"));
             ui.add_enabled(editable, egui::TextEdit::singleline(user));
         });
         inline_error(ui, "User", user, true);
         ui.horizontal(|ui| {
-            ui.label("Authentication");
+            ui.label(language.text("Authentication"));
             egui::ComboBox::from_id_salt(("auth_method", title))
                 .selected_text(if auth_method_is_oauth(auth_method) {
                     "OAuth 2.0 / XOAUTH2"
                 } else {
-                    "Password"
+                    language.text("Password")
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(auth_method, "password".into(), "Password");
+                    ui.selectable_value(auth_method, "password".into(), language.text("Password"));
                     ui.selectable_value(auth_method, "oauth2".into(), "OAuth 2.0 / XOAUTH2");
                 });
         });
         if auth_method_is_oauth(auth_method) {
             ui.label(
                 RichText::new(
-                    "Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. MailSwiftSync does not request provider consent, but can refresh an expired token automatically if you configure a refresh token in the OS keyring dialog's Automatic OAuth refresh section.",
+                    language.text("Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. MailSwiftSync does not request provider consent, but can refresh an expired token automatically if you configure a refresh token in the OS keyring dialog's Automatic OAuth refresh section."),
                 )
                 .size(11.0)
                 .color(if ui.visuals().dark_mode {
@@ -99,9 +100,9 @@ pub(crate) fn render_account(
         }
         ui.horizontal(|ui| {
             ui.label(if auth_method_is_oauth(auth_method) {
-                "Access token"
+                language.text("Access token")
             } else {
-                "Password"
+                language.text("Password")
             });
             let visibility_id = password_visibility_id(title);
             let visible = ui.ctx().data_mut(|data| {
@@ -118,7 +119,7 @@ pub(crate) fn render_account(
             if ui
                 .add_enabled(
                     editable,
-                    egui::Button::new(if visible { "Hide" } else { "Show" }),
+                    egui::Button::new(language.text(if visible { "Hide" } else { "Show" })),
                 )
                 .clicked()
             {
@@ -161,13 +162,13 @@ impl App {
             return;
         }
         let mut open = self.keyring_open;
-        egui::Window::new("OS keyring credentials")
+        egui::Window::new(self.language.text("OS keyring credentials"))
             .open(&mut open)
             .default_width(620.0)
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new(
-                        "Keyring IDs are non-secret references saved in the profile. Passwords and OAuth access tokens stay in the operating system credential store and are loaded only into the active session.",
+                    self.language.text("Keyring IDs are non-secret references saved in the profile. Passwords and OAuth access tokens stay in the operating system credential store and are loaded only into the active session."),
                     )
                     .color(self.theme_colors().text_secondary),
                 );
@@ -175,19 +176,19 @@ impl App {
                 let editable = !self.running();
                 ui.add_enabled_ui(editable, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Source ID");
+                        ui.label(self.language.text("Source ID"));
                         ui.text_edit_singleline(&mut self.form.profile.source_credential_id);
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Destination ID");
+                        ui.label(self.language.text("Destination ID"));
                         ui.text_edit_singleline(&mut self.form.profile.destination_credential_id);
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         let source_label = if auth_method_is_oauth(&self.form.profile.source_auth) {
-                            "Store source token"
+                            self.language.text("Store source token")
                         } else {
-                            "Store source password"
+                            self.language.text("Store source password")
                         };
                         if ui.button(source_label).clicked() {
                             match self.form.store_keyring_password(true) {
@@ -195,13 +196,13 @@ impl App {
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
-                        if ui.button("Load source").clicked() {
+                        if ui.button(self.language.text("Load source")).clicked() {
                             match self.form.load_keyring_password(true) {
                                 Ok(()) => self.set_status("Source credential loaded", StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
-                        if ui.button("Delete source").clicked() {
+                        if ui.button(self.language.text("Delete source")).clicked() {
                             match self.form.delete_keyring_password(true) {
                                 Ok(()) => self.set_status("Source credential deleted from OS keyring", StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
@@ -210,9 +211,9 @@ impl App {
                     });
                     ui.horizontal(|ui| {
                         let destination_label = if auth_method_is_oauth(&self.form.profile.destination_auth) {
-                            "Store destination token"
+                            self.language.text("Store destination token")
                         } else {
-                            "Store destination password"
+                            self.language.text("Store destination password")
                         };
                         if ui.button(destination_label).clicked() {
                             match self.form.store_keyring_password(false) {
@@ -220,13 +221,13 @@ impl App {
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
-                        if ui.button("Load destination").clicked() {
+                        if ui.button(self.language.text("Load destination")).clicked() {
                             match self.form.load_keyring_password(false) {
                                 Ok(()) => self.set_status("Destination credential loaded", StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
-                        if ui.button("Delete destination").clicked() {
+                        if ui.button(self.language.text("Delete destination")).clicked() {
                             match self.form.delete_keyring_password(false) {
                                 Ok(()) => self.set_status("Destination credential deleted from OS keyring", StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
@@ -235,7 +236,7 @@ impl App {
                     });
                 });
                 if !editable {
-                    ui.label(RichText::new("Credential settings are locked while a migration is running.").color(self.theme_colors().text_secondary));
+                    ui.label(RichText::new(self.language.text("Credential settings are locked while a migration is running.")).color(self.theme_colors().text_secondary));
                 }
                 ui.add_space(6.0);
                 ui.label(
@@ -257,36 +258,36 @@ impl App {
     /// exchanges it for a fresh access token before each live launch instead
     /// of requiring a freshly copied token every time.
     fn oauth_refresh_section(&mut self, ui: &mut egui::Ui, editable: bool) {
-        ui.label(RichText::new("Automatic OAuth refresh (optional)").strong());
+        ui.label(RichText::new(self.language.text("Automatic OAuth refresh (optional)")).strong());
         ui.label(
             RichText::new(
-                "Requires an OAuth application you have already registered with the provider and a refresh token obtained through its consent flow. MailSwiftSync does not perform consent; it only exchanges an existing refresh token for a fresh access token before each live launch.",
+                self.language.text("Requires an OAuth application you have already registered with the provider and a refresh token obtained through its consent flow. MailSwiftSync does not perform consent; it only exchanges an existing refresh token for a fresh access token before each live launch."),
             )
             .size(11.0)
             .color(self.theme_colors().text_secondary),
         );
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Source refresh ID");
+                ui.label(self.language.text("Source refresh ID"));
                 ui.text_edit_singleline(&mut self.form.profile.source_oauth_refresh_credential_id);
             });
             ui.horizontal(|ui| {
-                ui.label("Destination refresh ID");
+                ui.label(self.language.text("Destination refresh ID"));
                 ui.text_edit_singleline(
                     &mut self.form.profile.destination_oauth_refresh_credential_id,
                 );
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Token endpoint");
+                ui.label(self.language.text("Token endpoint"));
                 ui.text_edit_singleline(&mut self.oauth_refresh_editor_endpoint);
             });
             ui.horizontal(|ui| {
-                ui.label("Client ID");
+                ui.label(self.language.text("Client ID"));
                 ui.text_edit_singleline(&mut self.oauth_refresh_editor_client_id);
             });
             ui.horizontal(|ui| {
-                ui.label("Client secret (if required)");
+                ui.label(self.language.text("Client secret (if required)"));
                 ui.add(
                     egui::TextEdit::singleline(
                         self.oauth_refresh_editor_client_secret.as_mut_string(),
@@ -295,7 +296,7 @@ impl App {
                 );
             });
             ui.horizontal(|ui| {
-                ui.label("Refresh token");
+                ui.label(self.language.text("Refresh token"));
                 ui.add(
                     egui::TextEdit::singleline(
                         self.oauth_refresh_editor_refresh_token.as_mut_string(),
@@ -305,29 +306,29 @@ impl App {
             });
             ui.label(
                 RichText::new(
-                    "The fields above are entered once per store; they are cleared from memory immediately afterward and are never written to the profile or durable ledger.",
+                    self.language.text("The fields above are entered once per store; they are cleared from memory immediately afterward and are never written to the profile or durable ledger."),
                 )
                 .size(11.0)
                 .color(self.theme_colors().text_secondary),
             );
             ui.horizontal(|ui| {
-                if ui.button("Store for source").clicked() {
+                if ui.button(self.language.text("Store for source")).clicked() {
                     self.store_oauth_refresh_editor(true);
                 }
-                if ui.button("Store for destination").clicked() {
+                if ui.button(self.language.text("Store for destination")).clicked() {
                     self.store_oauth_refresh_editor(false);
                 }
             });
             ui.horizontal(|ui| {
-                if ui.button("Refresh source now").clicked() {
+                if ui.button(self.language.text("Refresh source now")).clicked() {
                     self.run_manual_oauth_refresh(true);
                 }
-                if ui.button("Refresh destination now").clicked() {
+                if ui.button(self.language.text("Refresh destination now")).clicked() {
                     self.run_manual_oauth_refresh(false);
                 }
             });
             ui.horizontal(|ui| {
-                if ui.button("Delete source refresh config").clicked() {
+                if ui.button(self.language.text("Delete source refresh config")).clicked() {
                     match self.form.delete_oauth_refresh_config(true) {
                         Ok(()) => self.set_status(
                             "Source OAuth refresh configuration deleted",
@@ -336,7 +337,7 @@ impl App {
                         Err(error) => self.set_status(error, StatusSeverity::Error),
                     }
                 }
-                if ui.button("Delete destination refresh config").clicked() {
+                if ui.button(self.language.text("Delete destination refresh config")).clicked() {
                     match self.form.delete_oauth_refresh_config(false) {
                         Ok(()) => self.set_status(
                             "Destination OAuth refresh configuration deleted",

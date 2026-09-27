@@ -7,12 +7,12 @@ use eframe::egui::{self, RichText};
 impl App {
     pub(crate) fn verification_view(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
-        ui.heading("Verification");
-        ui.label(RichText::new("Do not trust a completed process until the destination reconciles with the source.").color(self.theme_colors().text_secondary));
+        ui.heading(self.language.text("Verification"));
+        ui.label(RichText::new(self.language.text("Do not trust a completed process until the destination reconciles with the source.")).color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         ui.group(|ui| {
-            ui.heading("Verification and audit report");
-            ui.label(RichText::new("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.").color(self.theme_colors().text_secondary));
+            ui.heading(self.language.text("Verification and audit report"));
+            ui.label(RichText::new(self.language.text("The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention.")).color(self.theme_colors().text_secondary));
             if self.active_project_id().is_some() {
                 let proof_ready = self.ui_snapshot.project.as_ref().is_some_and(|project| {
                     customer_proof_ready(
@@ -21,21 +21,21 @@ impl App {
                         self.ui_snapshot.is_stale(),
                     )
                 });
-                if ui.button("Export project report…").clicked() { self.report_export_result("Project report", self.export_project_report()); }
+                if ui.button(self.language.text("Export project report…")).clicked() { self.report_export_result("Project report", self.export_project_report()); }
                 if ui.button("Export project JSON…").clicked() { self.report_export_result("Project JSON", self.export_project_json()); }
                 if ui
                     .add_enabled(
                         proof_ready,
-                        egui::Button::new("Export customer proof JSON…"),
+                        egui::Button::new(self.language.text("Export customer proof JSON…")),
                     )
                     .on_disabled_hover_text(
-                        "Customer proof becomes available after the durable project is Complete, every mailbox is verified, and the state view is current.",
+                        self.language.text("Customer proof becomes available after the durable project is Complete, every mailbox is verified, and the state view is current."),
                     )
                     .clicked()
                 {
                     self.report_export_result("Customer proof", self.export_customer_proof());
                 }
-                if ui.button("Export support bundle…").clicked() { self.report_export_result("Support bundle", self.export_support_bundle_dialog()); }
+                if ui.button(self.language.text("Export support bundle…")).clicked() { self.report_export_result("Support bundle", self.export_support_bundle_dialog()); }
                 if ui.button("Export project health…").clicked() { self.report_export_result("Project health export", self.export_project_health()); }
                 if let Some(project) = self.ui_snapshot.project.as_ref() {
                     if customer_proof_ready(
@@ -65,16 +65,16 @@ impl App {
                 if self.ui_snapshot.verification_loaded {
                     let mailbox_counts = self.ui_snapshot.mailbox_counts;
                     ui.separator();
-                    ui.heading("Mailbox evidence");
+                    ui.heading(self.language.text("Mailbox evidence"));
                     ui.label(format!("{verified} of {} verified · {review} require review", mailbox_counts.total, verified = mailbox_counts.verified, review = mailbox_counts.needs_review));
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Search");
-                        ui.add(egui::TextEdit::singleline(&mut self.verification_search).hint_text("mailbox or destination").desired_width(220.0));
+                        ui.label(self.language.text("Search"));
+                        ui.add(egui::TextEdit::singleline(&mut self.verification_search).hint_text(self.language.text("mailbox or destination")).desired_width(220.0));
                         egui::ComboBox::from_id_salt("verification_result_filter")
-                            .selected_text(match self.verification_filter.as_str() { "review" => "Needs review", "verified" => "Verified", "difference" => "Differences", _ => "All results" })
+                            .selected_text(self.language.text(match self.verification_filter.as_str() { "review" => "Needs review", "verified" => "Verified", "difference" => "Differences", _ => "All results" }))
                             .show_ui(ui, |ui| {
                                 for (value, label) in [("all", "All results"), ("review", "Needs review"), ("verified", "Verified"), ("difference", "Differences")] {
-                                    ui.selectable_value(&mut self.verification_filter, value.into(), label);
+                                    ui.selectable_value(&mut self.verification_filter, value.into(), self.language.text(label));
                                 }
                             });
                     });

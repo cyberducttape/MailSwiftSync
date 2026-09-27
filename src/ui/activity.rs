@@ -15,19 +15,19 @@ impl App {
         }
         let mut open = self.stop_confirm_open;
         let mut close_requested = false;
-        egui::Window::new("Stop migration?")
+        egui::Window::new(self.language.text("Stop migration?"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading(RichText::new("The migration will stop where it is").color(self.theme_colors().danger));
-                ui.label("The destination may be partially migrated. A later preflight, delta, or verification pass may be required before continuing.");
+                ui.heading(RichText::new(self.language.text("The migration will stop where it is")).color(self.theme_colors().danger));
+                ui.label(self.language.text("The destination may be partially migrated. A later preflight, delta, or verification pass may be required before continuing."));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Keep running").clicked() {
+                    if ui.button(self.language.text("Keep running")).clicked() {
                         close_requested = true;
                     }
-                    if ui.add(egui::Button::new(RichText::new("Stop migration").color(Color32::WHITE)).fill(self.theme_colors().danger)).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(self.language.text("Stop migration")).color(Color32::WHITE)).fill(self.theme_colors().danger)).clicked() {
                         if let Some(cancel) = &self.cancel_requested {
                             cancel.store(true, Ordering::Relaxed);
                         }
@@ -40,8 +40,8 @@ impl App {
     }
 
     pub(crate) fn activity_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Activity");
-        ui.label(RichText::new("Live output is retained here for operator review. Durable run history remains available after restart.").color(self.theme_colors().text_secondary));
+        ui.heading(self.language.text("Activity"));
+        ui.label(RichText::new(self.language.text("Live output is retained here for operator review. Durable run history remains available after restart.")).color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
         if !self.workspace_read_only
             && let Some(job) = self.job_id.as_deref()
@@ -54,12 +54,15 @@ impl App {
                 .map(|mailbox| mailbox.job.state.clone());
             match state.as_deref() {
                 Some(state) if needs_operator_review(state) => {
-                    if ui.button("Prepare safe retry  →").clicked() {
+                    if ui
+                        .button(self.language.text("Prepare safe retry  →"))
+                        .clicked()
+                    {
                         self.form.dry_run = true;
                         self.live_confirmed = false;
                         self.active_view = WorkspaceView::Plan;
                         self.set_status(
-                            "Retry prepared as a dry preflight. Review the exact plan before any live run.",
+                    self.language.text("Retry prepared as a dry preflight. Review the exact plan before any live run."),
                             StatusSeverity::Info,
                         );
                     }
@@ -71,9 +74,9 @@ impl App {
             ui.horizontal(|ui| {
                 let running = self.running();
                 ui.heading(if running {
-                    "Run in progress"
+                    self.language.text("Run in progress")
                 } else {
-                    "No active run"
+                    self.language.text("No active run")
                 });
                 if let Some(started_at) = self.run_started_at {
                     ui.label(format!(
@@ -85,21 +88,27 @@ impl App {
                     RichText::new(&self.status.text)
                         .color(status_color(self.status.severity, self.theme_colors())),
                 );
-                if ui.button("Copy support summary").clicked() {
+                if ui
+                    .button(self.language.text("Copy support summary"))
+                    .clicked()
+                {
                     ui.ctx().copy_text(self.support_summary());
                 }
-                ui.menu_button("Raw output…", |ui| {
+                ui.menu_button(self.language.text("Raw output…"), |ui| {
                     ui.label(
-                        RichText::new("May contain mailbox metadata")
+                        RichText::new(self.language.text("May contain mailbox metadata"))
                             .color(self.theme_colors().warning),
                     );
-                    if ui.button("Copy redacted engine output").clicked() {
+                    if ui
+                        .button(self.language.text("Copy redacted engine output"))
+                        .clicked()
+                    {
                         ui.ctx()
                             .copy_text(self.output.iter().cloned().collect::<Vec<_>>().join("\n"));
                         ui.close();
                     }
                 });
-                if running && ui.button("Stop migration").clicked() {
+                if running && ui.button(self.language.text("Stop migration")).clicked() {
                     self.stop_confirm_open = true;
                 }
             });
@@ -120,11 +129,11 @@ impl App {
         });
         ui.add_space(14.0);
         ui.horizontal(|ui| {
-            ui.heading("Durable run history");
+            ui.heading(self.language.text("Durable run history"));
             let history_label = if self.activity_show_all {
-                "Show recent 20"
+                self.language.text("Show recent 20")
             } else {
-                "Show up to 250 runs"
+                self.language.text("Show up to 250 runs")
             };
             if ui.button(history_label).clicked() {
                 self.activity_show_all = !self.activity_show_all;
@@ -143,10 +152,13 @@ impl App {
             20
         };
         ui.horizontal_wrapped(|ui| {
-            ui.label("Filter history");
+            ui.label(self.language.text("Filter history"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.activity_search)
-                    .hint_text("mailbox, phase, engine, run ID, or detail")
+                    .hint_text(
+                        self.language
+                            .text("mailbox, phase, engine, run ID, or detail"),
+                    )
                     .desired_width(280.0),
             );
             egui::ComboBox::from_id_salt("activity_status_filter")
