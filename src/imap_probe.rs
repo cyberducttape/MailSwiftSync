@@ -828,8 +828,8 @@ fn parse_list_delimiter(line: &str) -> Option<String> {
 }
 
 /// Tokenize the bounded, non-literal portion of an IMAP LIST response.
-/// Quoted strings may contain whitespace and an escaped quote; deciding that
-/// a quote terminates the token based only on `ends_with('"')` is incorrect.
+/// Quoted strings may contain UTF-8, whitespace, and escaped quote/backslash
+/// bytes; decode the complete token only after processing quoted pairs.
 fn parse_list_tokens(line: &str) -> Option<Vec<String>> {
     let bytes = line.as_bytes();
     let mut tokens = Vec::new();
@@ -843,13 +843,13 @@ fn parse_list_tokens(line: &str) -> Option<Vec<String>> {
         }
         if bytes[offset] == b'"' {
             offset += 1;
-            let mut value = String::new();
+            let mut value = Vec::new();
             let mut closed = false;
             while offset < bytes.len() {
                 match bytes[offset] {
                     b'\\' => {
                         offset += 1;
-                        value.push(char::from(*bytes.get(offset)?));
+                        value.push(*bytes.get(offset)?);
                         offset += 1;
                     }
                     b'"' => {
@@ -858,7 +858,7 @@ fn parse_list_tokens(line: &str) -> Option<Vec<String>> {
                         break;
                     }
                     byte => {
-                        value.push(char::from(byte));
+                        value.push(byte);
                         offset += 1;
                     }
                 }
@@ -866,7 +866,7 @@ fn parse_list_tokens(line: &str) -> Option<Vec<String>> {
             if !closed {
                 return None;
             }
-            tokens.push(value);
+            tokens.push(String::from_utf8(value).ok()?);
         } else {
             let start = offset;
             while bytes
@@ -2668,6 +2668,22 @@ mod tests {
         assert_eq!(
             parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "a\"b folder""#),
             Some("a\"b folder".into())
+        );
+    }
+
+    #[test]
+    fn list_mailbox_parser_preserves_utf8_and_quoted_escapes() {
+        assert_eq!(
+            parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "Café""#),
+            Some("Café".into())
+        );
+        assert_eq!(
+            parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "郵件 📬""#),
+            Some("郵件 📬".into())
+        );
+        assert_eq!(
+            parse_list_mailbox_name(r#"* LIST (\HasNoChildren) "/" "Café 郵件 📬 a\\b\"c""#),
+            Some("Café 郵件 📬 a\\b\"c".into())
         );
     }
 

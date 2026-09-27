@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- IMAP LIST quoted mailbox names now preserve UTF-8 bytes while unescaping
+  quoted backslashes and quotes, preventing non-ASCII folder names from being
+  corrupted during enumeration and verification.
 - Documented the native Dovecot initial-backup limitation observed with
   Maildir targets that refuse INBOX replacement; the automated native-engine
   fixture covers mdbox, not Maildir. The native integration lab now also runs
