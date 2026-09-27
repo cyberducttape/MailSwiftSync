@@ -109,6 +109,26 @@ impl App {
             }
             let selected_mailbox = self.job_id.as_deref().and_then(|job_id| self.cached_report_mailbox(job_id)).cloned();
             if let Some(mailbox) = selected_mailbox {
+                let assurance = mailbox.assurance();
+                ui.separator();
+                ui.heading("Assurance");
+                ui.label(if assurance.unresolved {
+                    "Attention required: this mailbox is not currently safe to close."
+                } else if assurance.transfer_completed && assurance.inventory_reconciled {
+                    "Transfer and inventory evidence support this mailbox's current state."
+                } else {
+                    "Assurance is incomplete; review the missing facts before proceeding."
+                });
+                for (label, value) in [
+                    ("Transfer", if assurance.transfer_completed { "completed" } else { "not complete" }),
+                    ("Destination reachable", match assurance.destination_reachable { Some(true) => "confirmed", Some(false) => "failed", None => "unknown" }),
+                    ("Inventory reconciled", if assurance.inventory_reconciled { "confirmed" } else { "not confirmed" }),
+                    ("Message-level evidence", if assurance.message_level_evidence { "collected" } else { "not collected" }),
+                    ("Differences", if assurance.differences_found == 0 { "none recorded" } else { "found" }),
+                    ("Verification authority", assurance.verification_authority.as_deref().unwrap_or("unknown")),
+                ] {
+                    ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); });
+                }
                 match mailbox.evidence.as_ref() {
                     Some((_, evidence, _)) => {
                         ui.label("Durable mailbox reconciliation");

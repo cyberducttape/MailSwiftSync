@@ -147,6 +147,56 @@ pub struct ReportMailboxSnapshot {
     pub evidence: Option<(String, MailboxEvidence, Option<String>)>,
 }
 
+/// Operator-facing assurance facts derived only from durable mailbox state and
+/// evidence. This is deliberately a read model: it never upgrades an unknown
+/// fact into a success claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MailboxAssurance {
+    pub transfer_completed: bool,
+    pub destination_reachable: Option<bool>,
+    pub inventory_reconciled: bool,
+    pub message_level_evidence: bool,
+    pub differences_found: u64,
+    pub differences_accepted: bool,
+    pub unresolved: bool,
+    pub verification_authority: Option<String>,
+    pub evidence_run_id: Option<String>,
+    pub plan_snapshot: Option<String>,
+}
+
+impl ReportMailboxSnapshot {
+    pub fn assurance(&self) -> MailboxAssurance {
+        let transfer_completed = matches!(
+            self.job.state.as_str(),
+            "completed" | "verified" | "verified_with_exceptions" | "delta_required" | "verification_difference"
+        );
+        let (evidence_run_id, evidence, plan_snapshot) = self
+            .evidence
+            .as_ref()
+            .map(|(run_id, evidence, plan)| (Some(run_id.clone()), Some(evidence), plan.clone()))
+            .unwrap_or((None, None, None));
+        let differences_found = evidence.map_or(0, |value| {
+            value.missing_messages + value.extra_messages + value.modified_messages
+        });
+        MailboxAssurance {
+            transfer_completed,
+            destination_reachable: evidence.map(|_| true),
+            inventory_reconciled: evidence.is_some_and(|value| value.source_folders == value.destination_folders),
+            message_level_evidence: evidence.is_some_and(|value| {
+                matches!(value.verification_method(), VerificationMethod::BodyHash | VerificationMethod::MetadataReconciliation)
+            }),
+            differences_found,
+            differences_accepted: self.acceptance.is_some(),
+            unresolved: self.job.state == "attention"
+                || self.job.state == "verification_difference"
+                || self.job.state == "failed",
+            verification_authority: evidence.map(|value| value.verification_method().as_str().to_owned()),
+            evidence_run_id,
+            plan_snapshot,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportRunSnapshot {
     pub run: RunSummary,
@@ -334,7 +384,8 @@ impl VerificationEvidence {
 
 #[cfg(test)]
 mod tests {
-    use super::{MailboxEvidence, VerificationMethod, VerificationOutcome};
+    use super::{MailboxEvidence, ReportMailboxSnapshot, VerificationMethod, VerificationOutcome};
+    use crate::core::MailboxJob;
 
     fn missing_evidence() -> MailboxEvidence {
         MailboxEvidence {
@@ -404,5 +455,27 @@ mod tests {
             VerificationOutcome::ProbableMatch
         );
         assert!(!evidence.is_exact_match());
+    }
+
+    #[test]
+    fn assurance_never_claims_completion_without_durable_evidence() {
+        let mailbox = ReportMailboxSnapshot {
+            job: MailboxJob {
+                id: "job".into(),
+                source_mailbox: "source".into(),
+                destination_mailbox: "destination".into(),
+                state: "completed".into(),
+                config: None,
+            },
+            attention_reason: None,
+            acceptance: None,
+            evidence: None,
+        };
+        let assurance = mailbox.assurance();
+        assert!(assurance.transfer_completed);
+        assert_eq!(assurance.destination_reachable, None);
+        assert!(!assurance.inventory_reconciled);
+        assert!(!assurance.message_level_evidence);
+        assert!(assurance.unresolved == false);
     }
 }

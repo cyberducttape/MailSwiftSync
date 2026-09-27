@@ -47,7 +47,7 @@ pub use capabilities::ServerCapabilities;
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{
-    EvidenceScope, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
+    EvidenceScope, MailboxAssurance, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
     ReportRunSnapshot, VerificationAcceptance, VerificationEvidence, VerificationMethod,
     VerificationOutcome,
 };
