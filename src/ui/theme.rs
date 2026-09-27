@@ -206,7 +206,7 @@ impl ThemeColors {
             window: Color32::from_rgb(0, 40, 80),
             text_primary: Color32::WHITE,
             text_secondary: Color32::from_rgb(220, 235, 255),
-            info: Color32::from_rgb(65, 105, 225),
+            info: Color32::from_rgb(100, 180, 255),
             success: Color32::from_rgb(0, 255, 255),
             warning: Color32::from_rgb(255, 255, 0),
             danger: Color32::from_rgb(255, 100, 100),
@@ -242,8 +242,8 @@ impl ThemeColors {
             text_primary: Color32::BLACK,
             text_secondary: Color32::from_rgb(35, 35, 35),
             info: navy,
-            success: Color32::from_rgb(0, 100, 0),
-            warning: Color32::from_rgb(128, 70, 0),
+            success: Color32::from_rgb(0, 75, 0),
+            warning: Color32::from_rgb(100, 50, 0),
             danger: Color32::from_rgb(128, 0, 0),
             link: navy,
             selection: navy,
@@ -258,11 +258,11 @@ impl ThemeColors {
             window: Color32::from_rgb(212, 208, 200),
             text_primary: Color32::BLACK,
             text_secondary: Color32::BLACK,
-            info: Color32::from_rgb(0, 0, 128),
-            success: Color32::from_rgb(0, 90, 0),
-            warning: Color32::from_rgb(120, 65, 0),
-            danger: Color32::from_rgb(128, 0, 0),
-            link: Color32::from_rgb(0, 0, 128),
+            info: Color32::from_rgb(0, 0, 75),
+            success: Color32::from_rgb(0, 25, 0),
+            warning: Color32::from_rgb(35, 18, 0),
+            danger: Color32::from_rgb(50, 0, 0),
+            link: Color32::from_rgb(0, 0, 80),
             selection: Color32::from_rgb(0, 0, 128),
             border: Color32::WHITE,
         }
@@ -401,6 +401,39 @@ mod tests {
                 contrast_ratio(colors.text_secondary, colors.panel) >= 4.5,
                 "{} secondary text is too low contrast",
                 theme.label()
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_colors_meet_wcag_aa_contrast() {
+        for theme in ThemeKind::all() {
+            let colors = ThemeColors::for_theme(*theme, true);
+            let theme_name = theme.label();
+
+            assert!(
+                contrast_ratio(colors.info, colors.panel) >= 4.5,
+                "{}: info color contrast is {:.2}:1, needs 4.5:1",
+                theme_name,
+                contrast_ratio(colors.info, colors.panel)
+            );
+            assert!(
+                contrast_ratio(colors.success, colors.panel) >= 4.5,
+                "{}: success color contrast is {:.2}:1, needs 4.5:1",
+                theme_name,
+                contrast_ratio(colors.success, colors.panel)
+            );
+            assert!(
+                contrast_ratio(colors.warning, colors.panel) >= 4.5,
+                "{}: warning color contrast is {:.2}:1, needs 4.5:1",
+                theme_name,
+                contrast_ratio(colors.warning, colors.panel)
+            );
+            assert!(
+                contrast_ratio(colors.danger, colors.panel) >= 4.5,
+                "{}: danger color contrast is {:.2}:1, needs 4.5:1",
+                theme_name,
+                contrast_ratio(colors.danger, colors.panel)
             );
         }
     }
