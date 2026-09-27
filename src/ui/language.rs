@@ -160,7 +160,7 @@ impl UiLanguage {
             "A single mailbox can be configured from the migration plan." => {
                 "Ein einzelnes Postfach können Sie im Migrationsplan konfigurieren."
             }
-            "Import CSV / Excel…" => "CSV / Excel importieren …",
+            "Import CSV / XLSX…" => "CSV / XLSX importieren…",
             "Import / edit queue" => "Warteschlange importieren / bearbeiten",
             "QUEUE HEALTH" => "WARTESCHLANGENSTATUS",
             "Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight." => {

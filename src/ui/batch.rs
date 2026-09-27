@@ -36,7 +36,7 @@ impl App {
                     self.active_view = WorkspaceView::Plan;
                 }
                 if ui
-                    .button(self.language.text("Import CSV / Excel…"))
+                    .button(self.language.text("Import CSV / XLSX…"))
                     .clicked()
                 {
                     self.bulk_open = true;
@@ -406,7 +406,7 @@ impl App {
                 }
                 ui.label(RichText::new("Used for the durable project and customer evidence when imported rows do not provide project_name.").size(11.0).color(self.theme_colors().text_secondary));
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / Excel…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
+                    if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / XLSX…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xlsx"]).pick_file() { self.request_bulk_import(path); }
                     if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() { if self.bulk_jobs.is_empty() { self.clear_bulk_queue(); } else { self.bulk_clear_confirm_open = true; } }
                     if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new("Export selected set…")).clicked() { self.bulk_message = match self.export_bulk_selection() { Ok(()) => "Selected batch rows exported without credentials or engine options.".into(), Err(error) => error }; }
                     let selected_or_all: Vec<usize> = (0..self.bulk_jobs.len())
