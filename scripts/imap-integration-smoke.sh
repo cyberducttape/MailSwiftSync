@@ -155,12 +155,47 @@ cleanup() {
       chmod 0600 "$MAILSWIFTSYNC_EVIDENCE_OUTPUT/integration-product.log" 2>/dev/null || true
     fi
   fi
-  if [[ -n "${source_pid:-}" ]]; then kill "$source_pid" 2>/dev/null || true; fi
-  if [[ -n "${destination_pid:-}" ]]; then kill "$destination_pid" 2>/dev/null || true; fi
-  wait "${source_pid:-}" 2>/dev/null || true
-  wait "${destination_pid:-}" 2>/dev/null || true
+  stop_server() {
+    local pid="$1"
+    local config="$2"
+    [[ -n "$pid" ]] || return 0
+    # Dovecot owns child workers that may still create run-directory state
+    # after the master receives SIGTERM. Ask it to shut down cleanly, then
+    # wait for the foreground master before removing the fixture tree.
+    if [[ -f "$config" ]]; then
+      doveadm -c "$config" stop >/dev/null 2>&1 || true
+    fi
+    for _ in {1..50}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null || true
+      for _ in {1..50}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+  }
+  stop_server "${destination_pid:-}" "${workspace:-}/destination.conf"
+  stop_server "${source_pid:-}" "${workspace:-}/source.conf"
   if [[ "${MAILSWIFTSYNC_KEEP_LAB:-0}" != "1" ]]; then
-    rm -rf -- "$workspace"
+    local removed=0
+    for _ in {1..10}; do
+      if rm -rf -- "$workspace"; then
+        removed=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$removed" != 1 ]]; then
+      echo "FAIL: could not remove stopped integration workspace $workspace" >&2
+      status=1
+    fi
   else
     echo "Keeping integration lab workspace: $workspace" >&2
   fi
