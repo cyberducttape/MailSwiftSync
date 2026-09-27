@@ -136,9 +136,14 @@ impl MessageMetadataStage {
             .connection_ref()
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
+        // HashMap iteration order is randomized. Persist each fetched page in
+        // canonical key order so the staged verifier's row traversal and
+        // duplicate-Message-ID pairing are repeatable.
+        let mut ordered_messages = messages.iter().collect::<Vec<_>>();
+        ordered_messages.sort_by(|(left, _), (right, _)| left.cmp(right));
         {
             let mut insert = tx.prepare_cached("INSERT INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8)").map_err(|e| e.to_string())?;
-            for (key, message) in messages {
+            for (key, message) in ordered_messages {
                 let uidvalidity = key
                     .uidvalidity
                     .map(sqlite_i64)

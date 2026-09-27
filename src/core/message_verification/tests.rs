@@ -1161,3 +1161,139 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
         }
     }
 }
+
+#[test]
+fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
+    fn next(state: &mut u64) -> u64 {
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        *state
+    }
+
+    fn signatures(mismatches: &[MessageMismatch]) -> Vec<String> {
+        let mut result = mismatches
+            .iter()
+            .map(|mismatch| {
+                format!(
+                    "{:?}|{:?}|{:?}",
+                    &mismatch.mismatch_type,
+                    (
+                        &mismatch.source_folder,
+                        mismatch.source_uidvalidity,
+                        &mismatch.source_uid,
+                        &mismatch.source_message_id,
+                        mismatch.source_size_bytes,
+                        &mismatch.source_date,
+                        &mismatch.source_fingerprint,
+                    ),
+                    (
+                        &mismatch.destination_folder,
+                        mismatch.destination_uidvalidity,
+                        &mismatch.dest_uid,
+                        &mismatch.dest_message_id,
+                        mismatch.dest_size_bytes,
+                        &mismatch.dest_date,
+                        &mismatch.destination_fingerprint,
+                    )
+                )
+            })
+            .collect::<Vec<_>>();
+        result.sort();
+        result
+    }
+
+    let folders = ["INBOX", "Sent", "Archive", "A", "B", "M", "Z"];
+    let dates = [
+        "01-Jan-2024 00:00:00 +0000",
+        "02-Jan-2024 00:00:00 +0000",
+        "03-Jan-2024 00:00:00 +0000",
+    ];
+    let folder_mapping = HashMap::from([(String::from("INBOX"), String::from("Archive"))]);
+    let mut state = 0x5354_4147_4544_u64;
+
+    for case in 0..48 {
+        let mut source = ExtractedMessages::new();
+        let mut destination = ExtractedMessages::new();
+        for index in 0..10 {
+            let seed = next(&mut state);
+            let source_folder = folders[(seed as usize) % folders.len()];
+            let source_uid = format!("s-{case}-{index}");
+            let message_id = (!seed.is_multiple_of(5)).then(|| format!("<id-{}>", (seed >> 8) % 5));
+            let size = Some(100 + ((seed >> 16) % 4));
+            let date = Some(dates[((seed >> 24) as usize) % dates.len()].to_owned());
+            source.insert(
+                MailboxMessageKey::new(source_folder, &source_uid),
+                ExtractedMessage {
+                    message_id: message_id.clone(),
+                    uid: Some(source_uid),
+                    size_bytes: size,
+                    internal_date: date.clone(),
+                },
+            );
+
+            if seed.is_multiple_of(7) {
+                continue;
+            }
+            let destination_seed = next(&mut state);
+            let expected_folder = if source_folder == "INBOX" {
+                "Archive"
+            } else {
+                source_folder
+            };
+            let destination_folder = if destination_seed.is_multiple_of(3) {
+                expected_folder
+            } else {
+                folders[((destination_seed >> 8) as usize) % folders.len()]
+            };
+            let destination_uid = format!("d-{case}-{index}");
+            destination.insert(
+                MailboxMessageKey::new(destination_folder, &destination_uid),
+                ExtractedMessage {
+                    message_id: if destination_seed.is_multiple_of(6) {
+                        Some(format!("<other-{}>", destination_seed % 4))
+                    } else {
+                        message_id
+                    },
+                    uid: Some(destination_uid),
+                    size_bytes: Some(100 + ((destination_seed >> 16) % 4)),
+                    internal_date: Some(
+                        dates[((destination_seed >> 24) as usize) % dates.len()].to_owned(),
+                    ),
+                },
+            );
+        }
+
+        let (reference_mismatches, reference_summary) =
+            MessageVerification::detect_mismatches_with_folder_mapping(
+                "generated-parity",
+                &format!("reference-{case}"),
+                &source,
+                &destination,
+                &folder_mapping,
+            )
+            .unwrap();
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        stage
+            .insert_messages(StagedMessageSide::Source, &source)
+            .unwrap();
+        stage
+            .insert_messages(StagedMessageSide::Destination, &destination)
+            .unwrap();
+        let (staged_mismatches, staged_summary) =
+            MessageVerification::detect_mismatches_from_stage(
+                "generated-parity",
+                &format!("staged-{case}"),
+                &stage,
+                &folder_mapping,
+            )
+            .unwrap();
+
+        assert_eq!(staged_summary, reference_summary, "case {case}");
+        assert_eq!(
+            signatures(&staged_mismatches),
+            signatures(&reference_mismatches),
+            "semantic mismatch records differed in generated case {case}"
+        );
+    }
+}

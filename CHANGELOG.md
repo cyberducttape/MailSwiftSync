@@ -12,6 +12,10 @@ operator distribution archives.
   endpoint, and shell-option inputs, plus UTF-8 quoted LIST-name round trips.
 - Split metadata FETCH response parsing into its own IMAP parser module without
   changing the live verifier's call surface.
+- Staged message pages are now inserted in canonical mailbox/UID order, making
+  duplicate-Message-ID reconciliation independent of randomized HashMap order.
+- Added generated differential reconciliation coverage comparing every
+  semantic source/destination mismatch field across 48 deterministic cases.
 - Aligned the in-memory reconciliation reference with SQLite's deterministic
   wrong-folder candidate selection and expanded staged parity checks to compare
   full source/destination folder and UID evidence.
