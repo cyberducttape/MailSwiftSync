@@ -1003,4 +1003,110 @@ mod tests {
         assert!(job.form.source_password.is_empty());
         assert!(job.form.destination_password.is_empty());
     }
+
+    #[test]
+    #[ignore = "opt-in release scale benchmark; run scripts/benchmark-import-scale.sh"]
+    fn scale_import_benchmark() {
+        use std::fmt::Write as _;
+        use std::time::Instant;
+
+        fn resident_set_bytes() -> Option<u64> {
+            let status = std::fs::read_to_string("/proc/self/status").ok()?;
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmRSS:"))
+                .and_then(|value| value.split_whitespace().next())
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(|kilobytes| kilobytes.saturating_mul(1024))
+        }
+
+        fn csv_fixture(rows: usize) -> String {
+            let mut csv =
+                String::from("source_host,source_user,destination_host,destination_user\n");
+            for row in 0..rows {
+                writeln!(
+                    csv,
+                    "source.example,user{row}@source.example,destination.example,user{row}@destination.example"
+                )
+                .unwrap();
+            }
+            csv
+        }
+
+        fn xlsx_fixture(rows: usize) -> String {
+            let mut worksheet = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:D{}"/><sheetData>"#,
+                rows + 1
+            );
+            for row in 1..=rows + 1 {
+                let values = if row == 1 {
+                    [
+                        "source_host".to_owned(),
+                        "source_user".to_owned(),
+                        "destination_host".to_owned(),
+                        "destination_user".to_owned(),
+                    ]
+                } else {
+                    let index = row - 2;
+                    [
+                        "source.example".to_owned(),
+                        format!("user{index}@source.example"),
+                        "destination.example".to_owned(),
+                        format!("user{index}@destination.example"),
+                    ]
+                };
+                write!(worksheet, "<row r=\"{row}\">").unwrap();
+                for (column, value) in ['A', 'B', 'C', 'D'].into_iter().zip(values) {
+                    write!(
+                        worksheet,
+                        "<c r=\"{column}{row}\" t=\"inlineStr\"><is><t>{value}</t></is></c>"
+                    )
+                    .unwrap();
+                }
+                worksheet.push_str("</row>");
+            }
+            worksheet.push_str("</sheetData></worksheet>");
+            worksheet
+        }
+
+        let base = Form::default();
+        for rows in [1_000, 10_000, 100_000] {
+            let path = std::env::temp_dir().join(format!(
+                "mailswiftsync-scale-csv-{}-{rows}.csv",
+                uuid::Uuid::new_v4()
+            ));
+            let contents = csv_fixture(rows);
+            std::fs::write(&path, &contents).unwrap();
+            let bytes = std::fs::metadata(&path).unwrap().len();
+            let before = resident_set_bytes();
+            let started = Instant::now();
+            let jobs = super::read_csv(&path, &base).unwrap();
+            let elapsed_ms = started.elapsed().as_millis();
+            let after = resident_set_bytes();
+            assert_eq!(jobs.len(), rows);
+            eprintln!(
+                "scale-import format=csv rows={rows} bytes={bytes} elapsed_ms={elapsed_ms} rss_before={before:?} rss_after={after:?}"
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+        for rows in [10_000, 100_000] {
+            let path = std::env::temp_dir().join(format!(
+                "mailswiftsync-scale-xlsx-{}-{rows}.xlsx",
+                uuid::Uuid::new_v4()
+            ));
+            let worksheet = xlsx_fixture(rows);
+            write_minimal_xlsx(&path, &worksheet);
+            let bytes = std::fs::metadata(&path).unwrap().len();
+            let before = resident_set_bytes();
+            let started = Instant::now();
+            let jobs = super::read_sheet(&path, &base, 0).unwrap();
+            let elapsed_ms = started.elapsed().as_millis();
+            let after = resident_set_bytes();
+            assert_eq!(jobs.len(), rows);
+            eprintln!(
+                "scale-import format=xlsx rows={rows} bytes={bytes} elapsed_ms={elapsed_ms} rss_before={before:?} rss_after={after:?}"
+            );
+            std::fs::remove_file(path).unwrap();
+        }
+    }
 }

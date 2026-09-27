@@ -248,7 +248,27 @@ and require the corresponding integration run.
   1.0 claim at this ceiling, publish reproducible 1k/10k/100k CSV and
   10k/100k XLSX latency, memory, first-render, keystroke-filter, selection,
   state-update, and reload measurements, then move the queue read model toward
-  indexed SQLite paging if those budgets are not met.
+  indexed SQLite paging if those budgets are not met. The import portion is
+  reproducible with `scripts/benchmark-import-scale.sh`; it is intentionally
+  opt-in because the 100k XLSX case must run on the release host class. This
+  does not yet satisfy the full desktop gate: first-render, filter, selection,
+  state-update, and reload measurements still need to be captured.
+
+  A local release-mode baseline on 2026-09-27 (Linux x86_64, 16 CPUs, the
+  cases run sequentially in one process) was:
+
+  | Import | Rows | Elapsed | RSS after case |
+  | --- | ---: | ---: | ---: |
+  | CSV | 1,000 | 2 ms | 8.0 MiB |
+  | CSV | 10,000 | 23 ms | 19.1 MiB |
+  | CSV | 100,000 | 231 ms | 130.5 MiB |
+  | XLSX | 10,000 | 49 ms | 54.7 MiB |
+  | XLSX | 100,000 | 536 ms | 177.3 MiB |
+
+  RSS is the process resident set reported by Linux and is cumulative because
+  the cases run in one process; it is evidence for a baseline, not a portable
+  memory budget. Re-run the script on each supported release host and retain
+  the raw output with the release evidence.
 - Provider consent flows and equivalent unattended secret-broker delivery
   remain outstanding: MailSwiftSync still does not implement an OAuth
   authorization flow, so an operator must register their own application and
