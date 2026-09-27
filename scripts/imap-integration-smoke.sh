@@ -101,6 +101,8 @@ cleanup() {
       {
         printf 'exit_status=%s\nengine=%s\ndovecot_version=%s\nimapsync_version=%s\n' \
           "$status" "${test_engine:-unknown}" "${dovecot_version:-unknown}" "${imapsync_version:-unknown}"
+        echo '--- bounded process state (PID PPID state wait-channel command) ---'
+        ps -eo pid,ppid,stat,wchan:32,comm | head -80 || true
         if [[ -n "${binary:-}" && -f "${state:-}" ]]; then
           echo '--- bounded durable status summary ---'
           "$binary" status "$state" --summary 2>&1 || true
