@@ -32,7 +32,14 @@ if [[ -z "$dovecot_version" ]]; then
   exit 1
 fi
 dovecot_semver="${dovecot_version%% *}"
-imap_binary="$(find /usr/lib*/dovecot /usr/libexec/dovecot -maxdepth 1 -type f -name imap 2>/dev/null | head -1)"
+imap_search_roots=()
+for path in /usr/lib*/dovecot /usr/libexec/dovecot; do
+  [[ -d "$path" ]] && imap_search_roots+=("$path")
+done
+imap_binary=""
+if ((${#imap_search_roots[@]} > 0)); then
+  imap_binary="$(find "${imap_search_roots[@]}" -maxdepth 1 -name imap -print -quit 2>/dev/null)"
+fi
 if [[ -z "$imap_binary" ]]; then
   echo "FAIL: could not locate the dovecot imap service binary to wrap" >&2
   exit 1
