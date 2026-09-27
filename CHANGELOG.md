@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Aligned the in-memory reconciliation reference with SQLite's deterministic
+  wrong-folder candidate selection and expanded staged parity checks to compare
+  full source/destination folder and UID evidence.
 - Updated the capability manifest to reflect that SQLite-backed streaming
   reconciliation is wired into live verification; large-account qualification
   and durable per-message checkpoint/restart semantics remain outstanding.

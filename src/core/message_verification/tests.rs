@@ -1056,6 +1056,47 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
             )]),
             HashMap::new(),
         ),
+        (
+            ExtractedMessages::from([(
+                MailboxMessageKey::new("M", "1"),
+                message(
+                    Some("<multiple-lower>"),
+                    "1",
+                    60,
+                    "04-Jan-2024 00:00:00 +0000",
+                ),
+            )]),
+            ExtractedMessages::from([
+                (
+                    MailboxMessageKey::new("A", "7"),
+                    message(
+                        Some("<multiple-lower>"),
+                        "7",
+                        60,
+                        "04-Jan-2024 00:00:00 +0000",
+                    ),
+                ),
+                (
+                    MailboxMessageKey::new("B", "8"),
+                    message(
+                        Some("<multiple-lower>"),
+                        "8",
+                        60,
+                        "04-Jan-2024 00:00:00 +0000",
+                    ),
+                ),
+                (
+                    MailboxMessageKey::new("Z", "9"),
+                    message(
+                        Some("<multiple-lower>"),
+                        "9",
+                        60,
+                        "04-Jan-2024 00:00:00 +0000",
+                    ),
+                ),
+            ]),
+            HashMap::new(),
+        ),
     ];
 
     for (index, (source, destination, folder_mapping)) in cases.into_iter().enumerate() {
@@ -1089,7 +1130,9 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
             .map(|mismatch| {
                 (
                     mismatch.mismatch_type.clone(),
+                    mismatch.source_folder.clone(),
                     mismatch.source_uid.clone(),
+                    mismatch.destination_folder.clone(),
                     mismatch.dest_uid.clone(),
                 )
             })
@@ -1099,7 +1142,9 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
             .map(|mismatch| {
                 (
                     mismatch.mismatch_type.clone(),
+                    mismatch.source_folder.clone(),
                     mismatch.source_uid.clone(),
+                    mismatch.destination_folder.clone(),
                     mismatch.dest_uid.clone(),
                 )
             })
@@ -1107,5 +1152,12 @@ fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
         expected.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
         staged.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
         assert_eq!(staged, expected, "case {index}");
+        if index == 3 {
+            let selected = staged_mismatches
+                .iter()
+                .find(|mismatch| mismatch.source_uid.as_deref() == Some("1"))
+                .expect("multiple-candidate case should classify its source message");
+            assert_eq!(selected.destination_folder.as_deref(), Some("B"));
+        }
     }
 }

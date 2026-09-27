@@ -646,17 +646,15 @@ impl MessageVerification {
                 let Some(folder_candidates) = dest_by_metadata.get_mut(&source_metadata) else {
                     continue;
                 };
-                let lower = folder_candidates.range(..expected_folder).next();
+                let lower = folder_candidates.range(..expected_folder).next_back();
                 let upper = folder_candidates
                     .range::<&str, _>((Excluded(expected_folder), Unbounded))
                     .next();
-                let candidate_folder = match (lower, upper) {
-                    (Some((lower, _)), Some((upper, _))) => {
-                        Some(if lower <= upper { *lower } else { *upper })
-                    }
-                    (Some((folder, _)), None) | (None, Some((folder, _))) => Some(*folder),
-                    (None, None) => None,
-                };
+                // Match the staged SQL rule: choose the greatest folder below
+                // the expected folder, falling back to the smallest above it.
+                let candidate_folder = lower
+                    .map(|(folder, _)| *folder)
+                    .or_else(|| upper.map(|(folder, _)| *folder));
                 let Some(candidate_folder) = candidate_folder else {
                     continue;
                 };
