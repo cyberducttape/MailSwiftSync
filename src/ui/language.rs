@@ -226,6 +226,23 @@ impl UiLanguage {
             "Run live migration ({})" => "Live-Migration ausführen ({})",
             "Run final delta ({})" => "Finales Delta ausführen ({})",
             "Selected mailbox actions" => "Aktionen für ausgewählte Postfächer",
+            "⚠ {} mailbox(es) are selected but hidden by the current filter. They will still be included in batch operations." => {
+                "⚠ {} Postfach/er sind ausgewählt, aber durch den aktuellen Filter verborgen. Sie bleiben in Stapelvorgängen enthalten."
+            }
+            "Review selected ({})" => "Auswahl prüfen ({})",
+            "No mailboxes selected." => "Keine Postfächer ausgewählt.",
+            "DESTRUCTIVE: destination deletion enabled" => "DESTRUKTIV: Löschen am Ziel aktiviert",
+            "destination deletion disabled" => "Löschen am Ziel deaktiviert",
+            "State: {} · {}" => "Status: {} · {}",
+            "Select one or more rows to enable actions." => {
+                "Wählen Sie mindestens eine Zeile aus, um Aktionen zu aktivieren."
+            }
+            "Operator action" => "Betreiberaktion",
+            "Select {} → {}" => "{} → {} auswählen",
+            "Inspect durable run detail" => "Dauerhafte Ausführungsdetails prüfen",
+            "Batch actions apply only to explicitly selected rows. Use Select unresolved or Select visible to create a selection." => {
+                "Stapelaktionen gelten nur für ausdrücklich ausgewählte Zeilen. Nutzen Sie „Offene auswählen“ oder „Sichtbare auswählen“, um eine Auswahl zu erstellen."
+            }
             "Batch migration queue" => "Stapel-Migrationswarteschlange",
             "Import → review → validate" => "Importieren → prüfen → validieren",
             "Batch mode" => "Stapelmodus",
@@ -243,6 +260,7 @@ impl UiLanguage {
             "Ready" => "Bereit",
             "All states" => "Alle Status",
             "Verified with exceptions" => "Mit Ausnahmen verifiziert",
+            "… plus {} more selected" => "… plus {} weitere ausgewählt",
             "OS keyring credentials" => "Zugangsdaten im Betriebssystem-Schlüsselbund",
             "Source ID" => "Quell-ID",
             "Destination ID" => "Ziel-ID",
@@ -439,6 +457,12 @@ mod tests {
             "View all selected",
             "Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.",
             "Confirmation stale: concurrency, scope, or settings changed while dialog was open. Review the queue and try again.",
+            "Review selected ({})",
+            "No mailboxes selected.",
+            "DESTRUCTIVE: destination deletion enabled",
+            "Select one or more rows to enable actions.",
+            "Operator action",
+            "Inspect durable run detail",
             "Clear mailbox queue?",
             "Advanced migration options",
             "Review verification",

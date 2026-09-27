@@ -218,22 +218,24 @@ impl App {
             ui.label(RichText::new(status_text).color(self.theme_colors().text_secondary));
             if hidden_selected > 0 {
                 ui.label(
-                    RichText::new(format!(
-                        "⚠ {} mailbox(es) are selected but hidden by the current filter. They will still be included in batch operations.",
-                        hidden_selected
-                    ))
+                    RichText::new(
+                        self.language
+                            .text("⚠ {} mailbox(es) are selected but hidden by the current filter. They will still be included in batch operations.")
+                            .replace("{}", &hidden_selected.to_string()),
+                    )
                     .color(self.theme_colors().warning),
                 );
             }
-            egui::CollapsingHeader::new(format!(
-                "Review selected ({})",
-                self.bulk_selected_ids.len()
-            ))
+            egui::CollapsingHeader::new(
+                self.language
+                    .text("Review selected ({})")
+                    .replace("{}", &self.bulk_selected_ids.len().to_string()),
+            )
             .default_open(true)
             .show(ui, |ui| {
                 if self.bulk_selected_ids.is_empty() {
                     ui.label(
-                        RichText::new("No mailboxes selected.")
+                        RichText::new(self.language.text("No mailboxes selected."))
                             .color(self.theme_colors().text_secondary),
                     );
                 } else {
@@ -246,9 +248,10 @@ impl App {
                         }
                         let profile = &job.form.profile;
                         let destructive = if profile.delete2 {
-                            "DESTRUCTIVE: destination deletion enabled"
+                            self.language
+                                .text("DESTRUCTIVE: destination deletion enabled")
                         } else {
-                            "destination deletion disabled"
+                            self.language.text("destination deletion disabled")
                         };
                         ui.group(|ui| {
                             ui.label(RichText::new(&job.label).strong());
@@ -260,11 +263,12 @@ impl App {
                                 "{} → {}",
                                 profile.source_host, profile.destination_host
                             ));
-                            ui.label(format!(
-                                "State: {} · {}",
-                                display_state_key(&job.state),
-                                destructive
-                            ));
+                            ui.label(
+                                self.language
+                                    .text("State: {} · {}")
+                                    .replace("{}", &display_state_key(&job.state))
+                                    .replacen("{}", destructive, 1),
+                            );
                         });
                     }
                 }
@@ -336,8 +340,11 @@ impl App {
                 }
                 if !has_selection {
                     ui.label(
-                        RichText::new("Select one or more rows to enable actions.")
-                            .color(self.theme_colors().text_secondary),
+                        RichText::new(
+                            self.language
+                                .text("Select one or more rows to enable actions."),
+                        )
+                        .color(self.theme_colors().text_secondary),
                     );
                 }
             });
@@ -383,7 +390,7 @@ impl App {
                         "Operator action",
                     ] {
                         header.col(|ui| {
-                            ui.strong(label);
+                            ui.strong(self.language.text(label));
                         });
                     }
                 })
@@ -396,10 +403,11 @@ impl App {
                         };
                         row.col(|ui| {
                             let mut selected = self.bulk_selected_ids.contains(job_id);
-                            let accessible_name = format!(
-                                "Select {} → {}",
-                                job.form.profile.source_user, job.form.profile.destination_user
-                            );
+                            let accessible_name = self
+                                .language
+                                .text("Select {} → {}")
+                                .replace("{}", &job.form.profile.source_user)
+                                .replacen("{}", &job.form.profile.destination_user, 1);
                             let response = ui.checkbox(&mut selected, "");
                             response.widget_info(|| {
                                 egui::WidgetInfo::selected(
@@ -449,8 +457,10 @@ impl App {
                                     );
                                 } else {
                                     ui.label(
-                                        RichText::new("Inspect durable run detail")
-                                            .color(self.theme_colors().text_secondary),
+                                        RichText::new(
+                                            self.language.text("Inspect durable run detail"),
+                                        )
+                                        .color(self.theme_colors().text_secondary),
                                     );
                                 }
                             }
@@ -458,7 +468,10 @@ impl App {
                     });
                 });
             self.bulk_visible_indices = visible_indices;
-            ui.label(RichText::new("Batch actions apply only to explicitly selected rows. Use Select unresolved or Select visible to create a selection.").color(self.theme_colors().text_secondary));
+            ui.label(
+                RichText::new(self.language.text("Batch actions apply only to explicitly selected rows. Use Select unresolved or Select visible to create a selection."))
+                    .color(self.theme_colors().text_secondary),
+            );
         }
     }
 }
