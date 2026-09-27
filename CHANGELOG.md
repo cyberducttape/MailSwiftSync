@@ -58,6 +58,8 @@ operator distribution archives.
   (such as `imapsync fallback`) to canonical evidence engine identifiers.
 - The small generic IMAP integration lab now uploads its verified product
   proof without mislabeling it as provider-qualification evidence.
+- The disposable destination storage-fault fixture now runs with the
+  privileges required to prepare Dovecot-owned test mail storage.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
