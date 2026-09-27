@@ -8,6 +8,15 @@ use crate::controller::{BulkRetryScope, BulkStateSet};
 use crate::ui::display_state_key;
 
 impl App {
+    pub(crate) fn choose_bulk_import(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("CSV or XLSX", &["csv", "xlsx"])
+            .pick_file()
+        {
+            self.request_bulk_import(path);
+        }
+    }
+
     pub(crate) fn bulk_row_is_selected(&self, index: usize) -> bool {
         self.bulk_job_ids
             .get(index)

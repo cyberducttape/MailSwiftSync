@@ -78,7 +78,6 @@ impl eframe::App for App {
         self.advanced_dialog(&ctx);
         self.live_confirmation(&ctx);
         self.stop_confirmation(&ctx);
-        self.bulk_dialog(&ctx);
         self.bulk_sheet_selection(&ctx);
         self.bulk_clear_confirmation(&ctx);
         self.bulk_import_confirmation(&ctx);

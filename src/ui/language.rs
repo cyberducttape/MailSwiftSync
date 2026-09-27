@@ -182,6 +182,7 @@ impl UiLanguage {
                 "Ein einzelnes Postfach können Sie im Migrationsplan konfigurieren."
             }
             "Import CSV / XLSX…" => "CSV / XLSX importieren…",
+            "CSV or XLSX only; legacy .xls files must be converted first." => "Nur CSV oder XLSX; alte .xls-Dateien müssen zuerst konvertiert werden.",
             "Import / edit queue" => "Warteschlange importieren / bearbeiten",
             "QUEUE HEALTH" => "WARTESCHLANGENSTATUS",
             "Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight." => {

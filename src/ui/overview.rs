@@ -251,7 +251,7 @@ impl App {
                     )
                     .clicked()
                 {
-                    self.bulk_open = true;
+                    self.active_view = WorkspaceView::Mailboxes;
                 }
             });
         });
@@ -324,7 +324,7 @@ impl App {
                 });
                 ui.horizontal(|ui| {
                     if ui.button("Import mailbox list").clicked() {
-                        self.bulk_open = true;
+                        self.active_view = WorkspaceView::Mailboxes;
                     }
                     ui.label(RichText::new("For one mailbox, continue with the migration plan below.").size(11.0).color(colors.text_secondary));
                 });

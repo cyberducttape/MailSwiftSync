@@ -39,8 +39,9 @@ impl App {
                     .button(self.language.text("Import CSV / XLSX…"))
                     .clicked()
                 {
-                    self.bulk_open = true;
+                    self.choose_bulk_import();
                 }
+                ui.label(RichText::new(self.language.text("CSV or XLSX only; legacy .xls files must be converted first.")).size(11.0).color(colors.text_secondary));
             });
         } else {
             ui.horizontal(|ui| {
@@ -49,10 +50,10 @@ impl App {
                         .strong(),
                 );
                 if ui
-                    .button(self.language.text("Import / edit queue"))
+                    .button(self.language.text("Import CSV / XLSX…"))
                     .clicked()
                 {
-                    self.bulk_open = true;
+                    self.choose_bulk_import();
                 }
             });
             let summary = self.bulk_queue_summary();
@@ -300,7 +301,19 @@ impl App {
                         };
                         row.col(|ui| {
                             let mut selected = self.bulk_selected_ids.contains(job_id);
-                            if ui.checkbox(&mut selected, "").changed() {
+                            let accessible_name = format!(
+                                "Select {} → {}",
+                                job.form.profile.source_user,
+                                job.form.profile.destination_user
+                            );
+                            let response = ui.checkbox(&mut selected, "");
+                            response.widget_info(|| egui::WidgetInfo::selected(
+                                egui::WidgetType::Checkbox,
+                                ui.is_enabled(),
+                                selected,
+                                accessible_name.clone(),
+                            ));
+                            if response.changed() {
                                 if selected {
                                     self.bulk_selected_ids.insert(job_id.clone());
                                 } else {
