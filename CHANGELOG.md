@@ -52,6 +52,8 @@ operator distribution archives.
 - Successful single and batch preflights now atomically persist engine
   observations with their immutable plan digest while keeping the mailbox
   `ready`; preflight statistics cannot be mistaken for verification.
+- Maildir integration assertions now inspect only `cur/` and `new/` messages,
+  excluding Dovecot index/cache files from fixture message counts.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.

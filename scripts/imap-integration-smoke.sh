@@ -598,6 +598,18 @@ echo "PASS: incremental orchestration preserved verified terminal state"
 
 destination_maildir="$workspace/destination/mail/$user/Maildir"
 destination_message_ids=""
+maildir_count_matching() {
+  local pattern="$1"
+  local matches
+  matches="$(find "$destination_maildir" -type f \
+    \( -path '*/cur/*' -o -path '*/new/*' \) -print0 |
+    xargs -0 -r grep -F -l -- "$pattern" || true)"
+  if [[ -z "$matches" ]]; then
+    printf '0'
+  else
+    printf '%s\n' "$matches" | wc -l | tr -d '[:space:]'
+  fi
+}
 if [[ "$test_engine" == Dovecot ]]; then
   # The native-engine fixture uses mdbox to support exact backup semantics;
   # inspect stored messages through Dovecot rather than assuming Maildir files.
@@ -615,7 +627,7 @@ destination_has_message_id() {
   if [[ "$test_engine" == Dovecot ]]; then
     grep -F -q -- "$message_id" <<<"$destination_message_ids"
   else
-    grep -R -F -q -- "Message-ID: <$message_id>" "$destination_maildir"
+    [[ "$(maildir_count_matching "Message-ID: <$message_id>")" -gt 0 ]]
   fi
 }
 if [[ "$destination_messages" -lt 1 ]]; then
@@ -650,7 +662,7 @@ done
 if [[ "$test_engine" == Dovecot ]]; then
   sparse_count="$(grep -c '^hdr.message-id: <mailswiftsync-sparse-' <<<"$destination_message_ids" || true)"
 else
-  sparse_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-sparse-" "$destination_maildir" | wc -l)"
+  sparse_count="$(maildir_count_matching "Message-ID: <mailswiftsync-sparse-")"
 fi
 printf 'Integration assertion: sparse UID message count=%s\n' "$sparse_count" >> "$product_log"
 if [[ "$sparse_count" -ne 10 ]]; then
@@ -661,7 +673,7 @@ echo "PASS: destination retained sparse-UID fixture endpoints"
 if [[ "$test_engine" == Dovecot ]]; then
   duplicate_count="$(grep -c '^hdr.message-id: <mailswiftsync-duplicate@example.test>' <<<"$destination_message_ids" || true)"
 else
-  duplicate_count="$(grep -R -F -l -- "Message-ID: <mailswiftsync-duplicate@example.test>" "$destination_maildir" | wc -l)"
+  duplicate_count="$(maildir_count_matching "Message-ID: <mailswiftsync-duplicate@example.test>")"
 fi
 printf 'Integration assertion: duplicate Message-ID count=%s\n' "$duplicate_count" >> "$product_log"
 if [[ "$duplicate_count" -ne 2 ]]; then
