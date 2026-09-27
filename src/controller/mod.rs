@@ -20,8 +20,9 @@ mod single_start;
 
 pub(crate) use batch::{
     BatchConfirmationIdentity, BatchExecutionMode, BatchStartContext, BatchStartDecision,
-    BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet, batch_mailbox_state,
-    batch_start_decision, is_verified_terminal_state, suggested_batch_project_name,
+    BulkConfirmationSummary, BulkQueueSummary, BulkRetryScope, BulkStateSet,
+    batch_mailbox_state, batch_start_decision, is_verified_terminal_state,
+    suggested_batch_project_name,
 };
 pub(crate) use batch_admission::{
     BatchLaunchRequest, admit_batch_launch, decode_persisted_batch_profile,

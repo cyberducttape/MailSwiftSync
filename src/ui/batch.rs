@@ -218,7 +218,10 @@ impl App {
                     run_delta = true;
                 }
                 if ui
-                    .add_enabled(has_selection, egui::Button::new("Review verification"))
+                    .add_enabled(
+                        self.bulk_selected_ids.len() == 1,
+                        egui::Button::new("Review verification"),
+                    )
                     .clicked()
                 {
                     review_selected = true;
@@ -406,9 +409,32 @@ impl App {
                     if ui.add_enabled(!self.running() && self.bulk_import_receiver.is_none(), egui::Button::new("Import CSV / Excel…")).clicked() && let Some(path) = rfd::FileDialog::new().add_filter("Migration lists", &["csv", "xls", "xlsx"]).pick_file() { self.request_bulk_import(path); }
                     if ui.add_enabled(!self.running(), egui::Button::new("Clear queue")).clicked() { if self.bulk_jobs.is_empty() { self.clear_bulk_queue(); } else { self.bulk_clear_confirm_open = true; } }
                     if ui.add_enabled(!self.running() && !self.bulk_jobs.is_empty(), egui::Button::new("Export selected set…")).clicked() { self.bulk_message = match self.export_bulk_selection() { Ok(()) => "Selected batch rows exported without credentials or engine options.".into(), Err(error) => error }; }
-                    let live_count = self.bulk_jobs.iter().filter(|job| self.bulk_retry_scope.includes(&display_state_key(&job.state))).count();
-                    let label = if self.bulk_mode.is_preflight() { format!("Run {} preflight checks", self.bulk_jobs.len()) } else { format!("Start {live_count} live migrations") };
-                    let can_start = !self.running() && !self.bulk_jobs.is_empty() && (self.bulk_mode.is_preflight() || live_count > 0);
+                    let selected_or_all: Vec<usize> = (0..self.bulk_jobs.len())
+                        .filter(|index| {
+                            self.bulk_selected_ids.is_empty()
+                                || self.bulk_job_ids
+                                    .get(*index)
+                                    .is_some_and(|id| self.bulk_selected_ids.contains(id))
+                        })
+                        .collect();
+                    let preflight_count = selected_or_all.len();
+                    let live_count = selected_or_all
+                        .iter()
+                        .filter(|index| {
+                            if let Some(job) = self.bulk_jobs.get(**index) {
+                                self.bulk_retry_scope.includes(&display_state_key(&job.state))
+                            } else {
+                                false
+                            }
+                        })
+                        .count();
+                    let label = if self.bulk_mode.is_preflight() {
+                        format!("Run {} preflight checks", preflight_count)
+                    } else {
+                        format!("Start {live_count} live migrations")
+                    };
+                    let can_start = !self.running() && !self.bulk_jobs.is_empty()
+                        && (self.bulk_mode.is_preflight() && preflight_count > 0 || self.bulk_mode.is_live() && live_count > 0);
                     if ui.add_enabled(can_start, egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(if self.bulk_mode.is_preflight() { self.theme_colors().info } else { self.theme_colors().danger })).clicked() { self.start_bulk(); }
                 });
                 ui.add_space(10.0);

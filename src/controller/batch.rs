@@ -55,6 +55,19 @@ pub(crate) enum BatchExecutionMode {
     Live,
 }
 
+/// Explicit representation of batch selection scope.
+/// Replaces the implicit "empty set = all rows" sentinel to eliminate ambiguity
+/// between "nothing selected" (no operations allowed) and "all rows selected".
+/// This type documents the intended future migration pattern; current code still
+/// uses HashSet<String> with implicit all-rows semantics via selection_value().
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionScope {
+    /// Explicitly select all rows matching current filter state
+    AllMatching,
+    /// Explicitly select only these specific job IDs
+    Explicit(std::collections::HashSet<String>),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BatchStartBlock {
     StaleDurableView,
