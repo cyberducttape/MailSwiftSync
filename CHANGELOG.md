@@ -61,7 +61,9 @@ operator distribution archives.
 - The disposable destination storage-fault fixture now runs with the
   privileges required to prepare Dovecot-owned test mail storage and locates
   the Dovecot worker without aborting on absent library directories. Controller
-  state and runtime files now live in an owner-matched private subdirectory.
+  state and runtime files now live in an owner-matched private subdirectory;
+  the file-size limit allows server metadata writes while rejecting the target
+  oversized-message fixture.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.

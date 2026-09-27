@@ -211,11 +211,10 @@ EOF
 source_port="${MAILSWIFTSYNC_SOURCE_PORT:-19153}"
 destination_port="${MAILSWIFTSYNC_DESTINATION_PORT:-19154}"
 source_pid="$(start_server source "$source_port")"
-# 4 blocks is comfortably under any real message here (the small fixture is
-# under 200 bytes; the oversized fixture is 64 KiB) and comfortably above
-# what Dovecot itself needs to write to start the per-connection worker, so
-# only the oversized message's write trips it.
-destination_pid="$(start_server destination "$destination_port" 4)"
+# RLIMIT_FSIZE is measured in 512-byte blocks. A 64 KiB limit leaves room for
+# Dovecot's mailbox/index writes and the small control message, while the
+# oversized 256 KiB message still exceeds it decisively.
+destination_pid="$(start_server destination "$destination_port" 128)"
 
 for port in "$source_port" "$destination_port"; do
   ready=0
@@ -248,7 +247,7 @@ EOF
 large_message="$workspace/source/mail/$user/Maildir/new/large-fixture.eml"
 {
   printf 'From: migration-lab@example.test\r\nTo: lab@example.test\r\nSubject: MailSwiftSync storage-fault lab: oversized fixture\r\nMessage-ID: <mailswiftsync-storage-fault-large@example.test>\r\nDate: Tue, 01 Jan 2030 00:01:00 +0000\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n'
-  head -c 65536 /dev/zero | tr '\0' 'Z'
+  head -c 262144 /dev/zero | tr '\0' 'Z'
   printf '\r\n'
 } > "$large_message"
 
