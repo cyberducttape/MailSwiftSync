@@ -274,8 +274,6 @@ impl App {
                 }
             });
             let has_selection = !self.bulk_selected_ids.is_empty();
-            let preflight_plan =
-                self.current_batch_action_plan(BatchExecutionMode::Preflight, BulkRetryScope::All);
             let live_plan =
                 self.current_batch_action_plan(BatchExecutionMode::Live, BulkRetryScope::All);
             let delta_plan = self
@@ -292,7 +290,7 @@ impl App {
                         egui::Button::new(
                             self.language
                                 .text("Run preflight ({})")
-                                .replace("{}", &preflight_plan.eligible_count.to_string()),
+                                .replace("{}", &live_plan.explicit_selection_count.to_string()),
                         ),
                     )
                     .clicked()
