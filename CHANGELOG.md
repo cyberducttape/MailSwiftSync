@@ -43,9 +43,8 @@ operator distribution archives.
   early if `ps` is missing.
 - The packaged-imapsync integration fixture now enables bounded diagnostic
   output and a 30-second engine protocol timeout to locate the dry-run shutdown
-  stall before the outer lab watchdog expires; failure artifacts include a
-  bounded process-state snapshot to distinguish a live child from app-side
-  waiting.
+  stall before the outer lab watchdog expires; a live process-state snapshot
+  is captured after 60 seconds if a product command is still running.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
