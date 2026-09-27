@@ -506,7 +506,26 @@ run_product() {
       }
     }
     END { close(path) }
-  '
+  ' &
+  local pipeline_pid=$!
+  (
+    sleep 60 &
+    local sleep_pid=$!
+    trap 'kill "$sleep_pid" 2>/dev/null || true; wait "$sleep_pid" 2>/dev/null || true; exit 0' TERM
+    wait "$sleep_pid" || exit 0
+    if kill -0 "$pipeline_pid" 2>/dev/null; then
+      {
+        printf '\n--- live process state after 60 seconds (PID PPID state wait-channel command) ---\n'
+        ps -eo pid,ppid,stat,wchan:32,comm | head -80 || true
+      } >> "$product_log"
+    fi
+  ) &
+  local monitor_pid=$!
+  local pipeline_status=0
+  wait "$pipeline_pid" || pipeline_status=$?
+  kill "$monitor_pid" 2>/dev/null || true
+  wait "$monitor_pid" 2>/dev/null || true
+  return "$pipeline_status"
 }
 
 assert_mailbox_state() {
