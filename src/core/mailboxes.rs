@@ -232,6 +232,7 @@ impl StateStore {
     /// Persist the opaque digest of a preflighted plan. Callers should pass a
     /// canonical plan hash rather than generated command arguments; the
     /// stored value is used only for exact equality during live admission.
+    #[cfg(test)]
     pub fn set_preflight_plan(&self, job_id: &str, plan: &str) -> rusqlite::Result<()> {
         if plan.len() != 64 || !plan.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(rusqlite::Error::InvalidQuery);

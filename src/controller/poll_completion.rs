@@ -40,13 +40,7 @@ impl App {
                 );
                 self.report_store_error("record incomplete verification", result);
             }
-            if !was_bulk_run && let Some(job) = &run_context.job_id {
-                if succeeded && run_context.dry_run {
-                    let result = self
-                        .store
-                        .set_preflight_plan(job, &run_context.plan_fingerprint);
-                    self.report_store_error("record preflight plan", result);
-                }
+            if !was_bulk_run && run_context.job_id.is_some() {
                 let final_state =
                     if succeeded && run_context.dry_run {
                         "ready"
@@ -106,30 +100,34 @@ impl App {
                 let terminal_write = if !was_bulk_run
                     && let (Some(job), Some(state)) = (&run_context.job_id, direct_final_state)
                 {
+                    let preflight_plan = (succeeded && run_context.dry_run)
+                        .then_some(run_context.plan_fingerprint.as_str());
                     if run_status == "completed" {
                         if let Some(evidence) = terminal_evidence.as_ref() {
-                            self.store
-                                .finish_run_for_mailbox_with_evidence_and_mismatches_and_checkpoint(
-                                    project,
-                                    job,
-                                    run_id,
-                                    run_status,
-                                    state,
-                                    &detail,
-                                    evidence,
-                                    &self.pending_mismatches,
-                                    terminal_checkpoint.as_deref(),
-                                )
-                        } else {
-                            self.store.finish_run_for_mailbox_with_checkpoint(
+                            self.store.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
                                 project,
                                 job,
                                 run_id,
                                 run_status,
                                 state,
                                 &detail,
+                                evidence,
+                                &self.pending_mismatches,
+                                preflight_plan,
                                 terminal_checkpoint.as_deref(),
                             )
+                        } else {
+                            self.store
+                                .finish_run_for_mailbox_with_preflight_plan_and_checkpoint(
+                                    project,
+                                    job,
+                                    run_id,
+                                    run_status,
+                                    state,
+                                    &detail,
+                                    preflight_plan,
+                                    terminal_checkpoint.as_deref(),
+                                )
                         }
                     } else {
                         self.store.finish_run_for_mailbox_with_checkpoint(
@@ -148,6 +146,13 @@ impl App {
                 let terminal_write_ok = match terminal_write {
                     Ok(()) => true,
                     Err(error) => {
+                        if crate::runner::process_supervision_debug_enabled()
+                            && !self.durability_recovery_pending
+                        {
+                            eprintln!(
+                                "[process-debug] first terminal persistence failure for run {run_id}: {error}"
+                            );
+                        }
                         self.durability_error = true;
                         self.durability_recovery_pending = true;
                         push_visible_output(

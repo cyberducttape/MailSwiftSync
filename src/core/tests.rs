@@ -1402,6 +1402,80 @@ fn evidence_terminal_completion_allows_running_to_verified_atomically() {
 }
 
 #[test]
+fn preflight_evidence_and_plan_commit_atomically_without_certifying_mailbox() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("preflight-evidence", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    let run_id = "run-preflight-evidence";
+    let digest = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::AggregateEngine,
+        verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+        source_messages: 16,
+        destination_messages: 16,
+        source_bytes: 4153,
+        destination_bytes: 4153,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 3,
+        destination_folders: 3,
+        authoritative: true,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+    };
+    db.begin_run(&project.id, &job, run_id, "imapsync").unwrap();
+
+    assert!(
+        db.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
+            &project.id,
+            &job,
+            run_id,
+            "completed",
+            "ready",
+            "",
+            &evidence,
+            &[],
+            None,
+            None,
+        )
+        .is_err()
+    );
+    assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("running"));
+
+    db.finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
+        &project.id,
+        &job,
+        run_id,
+        "completed",
+        "ready",
+        "",
+        &evidence,
+        &[],
+        Some(digest),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(db.mailbox_state(&job).unwrap().as_deref(), Some("ready"));
+    assert_eq!(db.run_status(run_id).unwrap().as_deref(), Some("completed"));
+    assert_eq!(db.preflight_plan(&job).unwrap().as_deref(), Some(digest));
+    let stored_evidence = db.evidence(&job).unwrap().unwrap();
+    assert_eq!(
+        stored_evidence.verification_outcome,
+        Some(VerificationOutcome::Incomplete)
+    );
+    assert!(!stored_evidence.authoritative);
+    assert_eq!(stored_evidence.source_messages, evidence.source_messages);
+    assert!(!db.all_mailboxes_verified(&project.id).unwrap());
+}
+
+#[test]
 fn evidence_difference_is_not_promoted_to_verified_or_complete() {
     let db = StateStore::in_memory().unwrap();
     let project = db

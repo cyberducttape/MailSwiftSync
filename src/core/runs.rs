@@ -709,11 +709,12 @@ impl StateStore {
         )
     }
 
-    /// Atomically records evidence, durable per-message mismatch records,
-    /// completes a mailbox run, and optionally persists the preflight digest
-    /// and Dovecot checkpoint. Mismatch rows are committed in the same
-    /// transaction as the evidence so an accepted terminal run can never
-    /// outlive the detailed records that explain its counters.
+    /// Atomically records terminal verification evidence or successful
+    /// preflight observations, completes the mailbox run, and optionally
+    /// persists the preflight digest and Dovecot checkpoint. A ready mailbox
+    /// may carry evidence only when its immutable preflight digest is supplied;
+    /// preflight evidence is telemetry, not a verification claim. Mismatch
+    /// rows are committed in the same transaction as terminal evidence.
     #[allow(clippy::too_many_arguments)]
     pub fn finish_run_for_mailbox_with_evidence_and_mismatches_and_preflight_plan_and_checkpoint(
         &self,
@@ -736,11 +737,13 @@ impl StateStore {
         if checkpoint.is_some_and(|value| !valid_dovecot_checkpoint(value)) {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        let successful_preflight = mailbox_state == "ready" && preflight_plan.is_some();
         if run_status != "completed"
-            || !matches!(
-                mailbox_state,
-                "verified" | "delta_required" | "verification_difference"
-            )
+            || (!successful_preflight
+                && !matches!(
+                    mailbox_state,
+                    "verified" | "delta_required" | "verification_difference"
+                ))
         {
             return Err(rusqlite::Error::InvalidQuery);
         }
@@ -760,6 +763,9 @@ impl StateStore {
                 || (value.verification_method == VerificationMethod::AggregateEngine
                     && !value.authoritative))
         {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        if successful_preflight && !mismatches.is_empty() {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let attention_reason =
@@ -801,8 +807,14 @@ impl StateStore {
         let extra_messages = sqlite_i64(value.extra_messages)?;
         let modified_messages = sqlite_i64(value.modified_messages)?;
         let probable_messages = sqlite_i64(value.probable_messages)?;
-        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![job_id, run_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
-        tx.execute("INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(job_id) DO UPDATE SET verification_method=excluded.verification_method,verification_outcome=excluded.verification_outcome,source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,probable_messages=excluded.probable_messages,captured_at=CURRENT_TIMESTAMP", params![job_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
+        let verification_outcome = if successful_preflight {
+            VerificationOutcome::Incomplete
+        } else {
+            value.verification_outcome()
+        };
+        let authoritative = value.authoritative && !successful_preflight;
+        tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![job_id, run_id, value.verification_method().as_str(), verification_outcome.as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
+        tx.execute("INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(job_id) DO UPDATE SET verification_method=excluded.verification_method,verification_outcome=excluded.verification_outcome,source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,probable_messages=excluded.probable_messages,captured_at=CURRENT_TIMESTAMP", params![job_id, value.verification_method().as_str(), verification_outcome.as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
         if mismatches.len() > 1_000_000
             || mismatches.iter().any(|mismatch| {
                 mismatch.job_id.as_ref() != job_id
@@ -927,7 +939,15 @@ impl StateStore {
         tx.execute("DELETE FROM active_processes WHERE run_id=?1", [run_id])?;
         tx.execute(
             "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,'run_finished',?3)",
-            params![project_id, run_id, "success with verification evidence"],
+            params![
+                project_id,
+                run_id,
+                if successful_preflight {
+                    "successful preflight with engine observations"
+                } else {
+                    "success with verification evidence"
+                }
+            ],
         )?;
         tx.commit()
     }

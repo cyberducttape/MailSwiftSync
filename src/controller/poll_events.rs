@@ -459,7 +459,12 @@ impl App {
                         }
                     }
                     Event::Finished(r) => {
-                        if crate::runner::process_supervision_debug_enabled() {
+                        static REPORTED_FINISHED_EVENT: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if crate::runner::process_supervision_debug_enabled()
+                            && !REPORTED_FINISHED_EVENT
+                                .swap(true, std::sync::atomic::Ordering::Relaxed)
+                        {
                             eprintln!("[process-debug] controller poll consumed terminal event");
                         }
                         done = Some(r);

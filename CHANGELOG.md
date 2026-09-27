@@ -46,9 +46,12 @@ operator distribution archives.
   stall before the outer lab watchdog expires; a bounded live thread/process-
   group snapshot is captured after 60 seconds if a product command is still running.
 - Integration-only process supervision diagnostics now distinguish a child
-  wait stall, blocked stdout/stderr drain, and terminal-event delivery stall
-  without adding routine product output when the opt-in environment switch is
-  unset.
+  wait stall, blocked stdout/stderr drain, terminal-event delivery, and
+  repeated terminal persistence failure without routine product output when
+  the opt-in environment switch is unset.
+- Successful single and batch preflights now atomically persist engine
+  observations with their immutable plan digest while keeping the mailbox
+  `ready`; preflight statistics cannot be mistaken for verification.
 - Dovecot native transfers now use a private runtime config that includes the
   destination config and reads the source credential from an owner-only file;
   the password stays out of process arguments and the profile.
