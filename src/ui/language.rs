@@ -318,6 +318,21 @@ impl UiLanguage {
             }
             "{} shown · {} total need review" => "{} angezeigt · insgesamt {} erfordern Prüfung",
             "{}/{} configuration items complete" => "{}/{} Konfigurationselemente abgeschlossen",
+            "Process review acknowledged; execution gates are available again." => {
+                "Prozessprüfung bestätigt; Ausführungsfreigaben sind wieder verfügbar."
+            }
+            "Could not clear reviewed process identities: {error}" => {
+                "Geprüfte Prozesskennungen konnten nicht gelöscht werden: {error}"
+            }
+            "Readiness observations expired because the migration plan changed; run discovery again." => {
+                "Die Bereitschaftsbeobachtungen sind abgelaufen, weil sich der Migrationsplan geändert hat. Führen Sie die Erkennung erneut aus."
+            }
+            "Project reopened for documented review" => {
+                "Projekt für dokumentierte Prüfung erneut geöffnet"
+            }
+            "Could not reopen project: {error}" => {
+                "Projekt konnte nicht erneut geöffnet werden: {error}"
+            }
             "None configured" => "Noch nicht eingerichtet",
             "Use Mailboxes to review scope before running anything." => {
                 "Prüfen Sie den Umfang unter „Postfächer“, bevor Sie einen Vorgang starten."
@@ -816,6 +831,11 @@ mod tests {
             "Source mail is read-only by default",
             "{} shown · {} total need review",
             "{}/{} configuration items complete",
+            "Process review acknowledged; execution gates are available again.",
+            "Could not clear reviewed process identities: {error}",
+            "Readiness observations expired because the migration plan changed; run discovery again.",
+            "Project reopened for documented review",
+            "Could not reopen project: {error}",
             "{} visible on page · showing {}–{} of {}",
             "MIGRATION LIFECYCLE",
             "ATTENTION REQUIRED",

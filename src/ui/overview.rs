@@ -418,9 +418,9 @@ impl App {
                     match self.store.clear_active_processes_after_review() {
                         Ok(()) => {
                             self.process_review_required = false;
-                            self.set_status("Process review acknowledged; execution gates are available again.", StatusSeverity::Success);
+                            self.set_status(self.language.text("Process review acknowledged; execution gates are available again."), StatusSeverity::Success);
                         }
-                        Err(error) => self.set_status(format!("Could not clear reviewed process identities: {error}"), StatusSeverity::Error),
+                        Err(error) => self.set_status(self.language.text("Could not clear reviewed process identities: {error}").replace("{error}", &error.to_string()), StatusSeverity::Error),
                     }
                 }
             });
@@ -465,7 +465,7 @@ impl App {
     pub(crate) fn overview_readiness_controls(&mut self, ui: &mut egui::Ui) {
         if self.invalidate_stale_capability_observation() {
             self.set_status(
-                "Readiness observations expired because the migration plan changed; run discovery again.",
+                self.language.text("Readiness observations expired because the migration plan changed; run discovery again."),
                 StatusSeverity::Warning,
             );
         }
@@ -526,9 +526,9 @@ impl App {
                         match self.store.reopen_project(&project_id, &self.reopen_reason) {
                             Ok(()) => {
                                 self.reopen_reason.clear();
-                                self.set_status("Project reopened for documented review", StatusSeverity::Warning);
+                                self.set_status(self.language.text("Project reopened for documented review"), StatusSeverity::Warning);
                             }
-                            Err(error) => self.set_status(format!("Could not reopen project: {error}"), StatusSeverity::Error),
+                            Err(error) => self.set_status(self.language.text("Could not reopen project: {error}").replace("{error}", &error.to_string()), StatusSeverity::Error),
                         }
                     }
                 });
