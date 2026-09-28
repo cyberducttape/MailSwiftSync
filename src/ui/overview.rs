@@ -460,16 +460,6 @@ impl App {
             });
             ui.add_space(8.0);
         }
-        if self.active_view != WorkspaceView::Plan {
-            match self.active_view {
-                WorkspaceView::Overview => self.overview_view(ui),
-                WorkspaceView::Mailboxes => self.mailbox_view(ui),
-                WorkspaceView::Activity => self.activity_view(ui),
-                WorkspaceView::Verification => self.verification_view(ui),
-                WorkspaceView::Plan => {}
-            }
-            return;
-        }
         let (passed, total) = plan_completeness(&self.form.profile);
         ui.group(|ui| {
             ui.horizontal(|ui| {

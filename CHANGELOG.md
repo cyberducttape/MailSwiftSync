@@ -6,6 +6,9 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Fixed a startup stack overflow caused by the overview summary redispatching
+  the Overview page recursively; the application shell now remains the sole
+  owner of workspace-page dispatch.
 - Encrypted imapsync verification now persists fetched-page cursors and opt-in
   body fingerprints in a private SQLite stage, resumes staged pages after a
   controller restart, and binds retained data to a SHA-256 plan identity.
