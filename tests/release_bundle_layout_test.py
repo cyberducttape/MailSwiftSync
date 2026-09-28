@@ -40,6 +40,16 @@ def verify_workflow_packaging_commands() -> None:
         raise AssertionError("macOS ditto --keepParent would nest the release bundle")
 
 
+def verify_portable_packaging_script() -> None:
+    script = Path("scripts/package.sh").read_text(encoding="utf-8")
+    if 'mkdir -p dist' not in script:
+        raise AssertionError("portable packaging must create its output directory")
+    if '"$package_dir/$target_name"' not in script:
+        raise AssertionError(
+            "portable packaging must use the target-named binary expected by the bundle verifier"
+        )
+
+
 def make_bundle(root: Path) -> None:
     for document in DOCUMENTS:
         path = root / document
@@ -84,6 +94,7 @@ def run_link_checker(root: Path, expected: bool) -> None:
 with tempfile.TemporaryDirectory(prefix="mailswiftsync-release-layout-") as temporary:
     workspace = Path(temporary)
     verify_workflow_packaging_commands()
+    verify_portable_packaging_script()
 
     links = workspace / "links"
     (links / "docs").mkdir(parents=True)

@@ -15,9 +15,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cp target/release/mailswiftsync "$package_dir/mailswiftsync"
+mkdir -p dist
+cp target/release/mailswiftsync "$package_dir/$target_name"
 scripts/stage-release-docs.sh "$package_dir"
-chmod 0755 "$package_dir/mailswiftsync"
+chmod 0755 "$package_dir/$target_name"
 archive="dist/${target_name}.tar.gz"
 if [[ -z "${SOURCE_DATE_EPOCH:-}" ]]; then
   SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
