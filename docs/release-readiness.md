@@ -259,16 +259,20 @@ and require the corresponding integration run.
 
   | Import | Rows | Elapsed | RSS after case |
   | --- | ---: | ---: | ---: |
-  | CSV | 1,000 | 2 ms | 8.0 MiB |
-  | CSV | 10,000 | 23 ms | 19.1 MiB |
-  | CSV | 100,000 | 231 ms | 130.5 MiB |
-  | XLSX | 10,000 | 49 ms | 54.7 MiB |
-  | XLSX | 100,000 | 536 ms | 177.3 MiB |
+  | CSV | 1,000 | 2 ms | 8.5 MiB |
+  | CSV | 10,000 | 22 ms | 19.7 MiB |
+  | CSV | 100,000 | 226 ms | 131.1 MiB |
+  | XLSX | 10,000 | 54 ms | 31.6 MiB |
+  | XLSX | 100,000 | 565 ms | 177.7 MiB |
 
   RSS is the process resident set reported by Linux and is cumulative because
   the cases run in one process; it is evidence for a baseline, not a portable
   memory budget. Re-run the script on each supported release host and retain
-  the raw output with the release evidence.
+  the raw output with the release evidence. The import benchmark enforces
+  default elapsed-time budgets of 100/500/2,000 ms for 1k/10k/100k CSV and
+  1,000/5,000 ms for 10k/100k XLSX. Qualified host classes may override these
+  with the documented `MAILSWIFTSYNC_IMPORT_*_BUDGET_MS` variables; an absent
+  or malformed result fails the script.
 
   The pure cached-filter/selection path has a companion command,
   `scripts/benchmark-ui-scale.sh`. It measures 100k-row filter keystroke,
@@ -286,9 +290,13 @@ and require the corresponding integration run.
   `scripts/benchmark-reload-scale.sh`. It seeds and closes a file-backed
   100,000-row project, reopens it, then reads bounded mailbox, status, and
   verification pages plus aggregate counts. The local release baseline was
-  509 ms to seed, 771 ms to reopen, and 125 ms for those bounded reads. This
+  495 ms to seed, 759 ms to reopen, and 118 ms for those bounded reads. This
   is evidence for the SQLite read path, not an egui first-frame measurement or
-  a release budget; capture both on each supported release host.
+  a release budget; capture both on each supported release host. The script
+  enforces default budgets of 5,000 ms for seeding, 2,000 ms for reopen, and
+  1,000 ms for bounded reads. Qualified hosts may override these with
+  `MAILSWIFTSYNC_RELOAD_*_BUDGET_MS`; missing or malformed metrics fail the
+  script.
 - Provider consent flows and equivalent unattended secret-broker delivery
   remain outstanding: MailSwiftSync still does not implement an OAuth
   authorization flow, so an operator must register their own application and
