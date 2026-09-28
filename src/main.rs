@@ -1121,14 +1121,14 @@ mod tests {
         .expect("the checked-in bulk template must be importable by default");
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].label, "Example mailbox");
-        assert!(jobs[0].form.source_password.is_empty());
-        assert!(jobs[0].form.destination_password.is_empty());
+        assert!(jobs[0].form().source_password.is_empty());
+        assert!(jobs[0].form().destination_password.is_empty());
         assert_eq!(
-            jobs[0].form.profile.source_credential_id,
+            jobs[0].form().profile.source_credential_id,
             "source-keyring-id"
         );
         assert_eq!(
-            jobs[0].form.profile.destination_credential_id,
+            jobs[0].form().profile.destination_credential_id,
             "destination-keyring-id"
         );
     }
@@ -1162,8 +1162,8 @@ mod tests {
             job_state_badge(&job.state, ThemeColors::dark()).0,
             "○ Imported"
         );
-        assert!(job.form.source_password.is_empty());
-        assert!(job.form.validate().is_err());
+        assert!(job.form().source_password.is_empty());
+        assert!(job.form().validate().is_err());
     }
 
     #[test]
@@ -1176,8 +1176,8 @@ mod tests {
         values.insert("destination_user".into(), "new@example".into());
         values.insert("destination_password".into(), " Destination! ".into());
         let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, true).unwrap();
-        assert_eq!(job.form.source_password.as_str(), " Secret123 ");
-        assert_eq!(job.form.destination_password.as_str(), " Destination! ");
+        assert_eq!(job.form().source_password.as_str(), " Secret123 ");
+        assert_eq!(job.form().destination_password.as_str(), " Destination! ");
     }
 
     #[test]
@@ -1227,11 +1227,7 @@ mod tests {
         form.source_password = "source-secret".to_owned().into();
         form.destination_password = "destination-secret".to_owned().into();
         form.profile.source_credential_id = "source-key".into();
-        let jobs = vec![BulkJob {
-            label: "mailbox".into(),
-            form,
-            state: "failed".into(),
-        }];
+        let jobs = vec![BulkJob::from_form("mailbox".into(), form, "failed".into())];
         let value = selection_value(&jobs, &SelectionScope::all_matching(), &[]);
         let text = serde_json::to_string(&value).unwrap();
         assert!(text.contains("source@example"));
@@ -1272,13 +1268,13 @@ mod tests {
             "destination-alice".into(),
         );
         let job = bulk_import::job_from_values(values.clone(), &Form::default(), 2, false).unwrap();
-        assert_eq!(job.form.profile.source_credential_id, "source-alice");
+        assert_eq!(job.form().profile.source_credential_id, "source-alice");
         assert_eq!(
-            job.form.profile.destination_credential_id,
+            job.form().profile.destination_credential_id,
             "destination-alice"
         );
-        assert!(job.form.source_password.is_empty());
-        assert!(job.form.destination_password.is_empty());
+        assert!(job.form().source_password.is_empty());
+        assert!(job.form().destination_password.is_empty());
 
         let mut base = Form::default();
         base.profile.source_credential_id = "shared-source".into();
@@ -1288,37 +1284,32 @@ mod tests {
             .filter(|(key, _)| key != "source_credential_id" && key != "destination_credential_id")
             .collect();
         let inherited = bulk_import::job_from_values(inherited_values, &base, 3, false).unwrap();
-        assert_eq!(inherited.form.profile.source_credential_id, "shared-source");
         assert_eq!(
-            inherited.form.profile.destination_credential_id,
+            inherited.form().profile.source_credential_id,
+            "shared-source"
+        );
+        assert_eq!(
+            inherited.form().profile.destination_credential_id,
             "shared-destination"
         );
     }
 
     #[test]
     fn bulk_keyring_apply_fills_only_missing_source_references() {
-        let mut with_password = BulkJob {
-            label: "password".into(),
-            form: Form::default(),
-            state: "Ready".into(),
+        let password_form = Form {
+            source_password: String::from("already-present").into(),
+            ..Form::default()
         };
-        with_password.form.source_password = String::from("already-present").into();
-        let mut with_reference = BulkJob {
-            label: "reference".into(),
-            form: Form::default(),
-            state: "Ready".into(),
-        };
-        with_reference.form.profile.source_credential_id = "existing".into();
-        let empty = BulkJob {
-            label: "empty".into(),
-            form: Form::default(),
-            state: "Ready".into(),
-        };
+        let with_password = BulkJob::from_form("password".into(), password_form, "Ready".into());
+        let mut reference_form = Form::default();
+        reference_form.profile.source_credential_id = "existing".into();
+        let with_reference = BulkJob::from_form("reference".into(), reference_form, "Ready".into());
+        let empty = BulkJob::from_form("empty".into(), Form::default(), "Ready".into());
         let mut jobs = vec![with_password, with_reference, empty];
         assert_eq!(apply_keyring_id(&mut jobs, "shared-source", true), 1);
-        assert!(jobs[0].form.profile.source_credential_id.is_empty());
-        assert_eq!(jobs[1].form.profile.source_credential_id, "existing");
-        assert_eq!(jobs[2].form.profile.source_credential_id, "shared-source");
+        assert!(jobs[0].form().profile.source_credential_id.is_empty());
+        assert_eq!(jobs[1].form().profile.source_credential_id, "existing");
+        assert_eq!(jobs[2].form().profile.source_credential_id, "shared-source");
     }
 
     #[test]
@@ -1621,16 +1612,8 @@ mod tests {
         let mut second = first.clone();
         second.profile.source_user = "different@example".into();
         let jobs = vec![
-            BulkJob {
-                label: "first".into(),
-                form: first,
-                state: "Ready".into(),
-            },
-            BulkJob {
-                label: "second".into(),
-                form: second,
-                state: "Ready".into(),
-            },
+            BulkJob::from_form("first".into(), first, "Ready".into()),
+            BulkJob::from_form("second".into(), second, "Ready".into()),
         ];
         assert!(duplicate_destination(&jobs).unwrap().is_some());
     }
@@ -1643,16 +1626,8 @@ mod tests {
         let mut second = first.clone();
         second.profile.destination_host = "mail.example:993".into();
         let jobs = vec![
-            BulkJob {
-                label: "first".into(),
-                form: first,
-                state: "Ready".into(),
-            },
-            BulkJob {
-                label: "second".into(),
-                form: second,
-                state: "Ready".into(),
-            },
+            BulkJob::from_form("first".into(), first, "Ready".into()),
+            BulkJob::from_form("second".into(), second, "Ready".into()),
         ];
         assert!(duplicate_destination(&jobs).unwrap().is_some());
     }
@@ -1666,20 +1641,12 @@ mod tests {
         let mut second = first.clone();
         second.profile.destination_port = "1993".into();
         let jobs = vec![
-            BulkJob {
-                label: "first".into(),
-                form: first,
-                state: "Ready".into(),
-            },
-            BulkJob {
-                label: "second".into(),
-                form: second,
-                state: "Ready".into(),
-            },
+            BulkJob::from_form("first".into(), first, "Ready".into()),
+            BulkJob::from_form("second".into(), second, "Ready".into()),
         ];
         assert!(duplicate_destination(&jobs).unwrap().is_none());
         assert_eq!(
-            canonical_destination_identity(&jobs[0].form.profile).unwrap(),
+            canonical_destination_identity(&jobs[0].form().profile).unwrap(),
             "endpoint:mail.example:143:user@example"
         );
     }
@@ -1689,11 +1656,7 @@ mod tests {
         let mut form = Form::default();
         form.profile.destination_host = "mail.example:not-a-port".into();
         form.profile.destination_user = "user@example".into();
-        let jobs = vec![BulkJob {
-            label: "invalid".into(),
-            form,
-            state: "Ready".into(),
-        }];
+        let jobs = vec![BulkJob::from_form("invalid".into(), form, "Ready".into())];
         assert!(duplicate_destination(&jobs).is_err());
     }
 

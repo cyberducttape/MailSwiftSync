@@ -12,7 +12,10 @@ use quick_xml::events::Event as XmlEvent;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::{
+    Arc,
+    mpsc::{self, Receiver},
+};
 use std::thread;
 
 fn plaintext_secrets_allowed(value: Option<&str>) -> bool {
@@ -27,11 +30,104 @@ fn allow_plaintext_secrets() -> bool {
     )
 }
 
+/// Immutable settings shared by all rows imported from one batch plan.
+/// Mailbox-specific identities and credentials live in `BulkJob` deltas so a
+/// large import does not clone the complete profile for every row.
+#[derive(Clone)]
+pub(crate) struct BatchPlanDefaults {
+    pub(crate) profile: Arc<crate::Profile>,
+    pub(crate) dry_run: bool,
+}
+
 #[derive(Clone)]
 pub(crate) struct BulkJob {
     pub(crate) label: String,
-    pub(crate) form: Form,
+    pub(crate) defaults: Arc<BatchPlanDefaults>,
+    pub(crate) source_host: String,
+    pub(crate) source_user: String,
+    pub(crate) source_credential_id: String,
+    pub(crate) source_password: SecretString,
+    pub(crate) destination_host: String,
+    pub(crate) destination_user: String,
+    pub(crate) destination_credential_id: String,
+    pub(crate) destination_password: SecretString,
+    pub(crate) profile_name: Option<String>,
     pub(crate) state: String,
+}
+
+impl BulkJob {
+    pub(crate) fn defaults_from_form(form: &Form) -> Arc<BatchPlanDefaults> {
+        let mut profile = form.profile.clone();
+        profile.source_host.clear();
+        profile.source_user.clear();
+        profile.source_credential_id.clear();
+        profile.destination_host.clear();
+        profile.destination_user.clear();
+        profile.destination_credential_id.clear();
+        Arc::new(BatchPlanDefaults {
+            profile: Arc::new(profile),
+            dry_run: form.dry_run,
+        })
+    }
+
+    pub(crate) fn from_form(label: String, form: Form, state: String) -> Self {
+        let defaults = Self::defaults_from_form(&form);
+        Self::from_form_with_defaults(label, form, state, defaults)
+    }
+
+    pub(crate) fn from_form_with_defaults(
+        label: String,
+        form: Form,
+        state: String,
+        defaults: Arc<BatchPlanDefaults>,
+    ) -> Self {
+        let source_host = form.profile.source_host.clone();
+        let source_user = form.profile.source_user.clone();
+        let source_credential_id = form.profile.source_credential_id.clone();
+        let source_password = form.source_password.clone();
+        let destination_host = form.profile.destination_host.clone();
+        let destination_user = form.profile.destination_user.clone();
+        let destination_credential_id = form.profile.destination_credential_id.clone();
+        let destination_password = form.destination_password.clone();
+        let profile_name = (!form.profile.name.is_empty()).then(|| form.profile.name.clone());
+        Self {
+            label,
+            defaults,
+            source_host,
+            source_user,
+            source_credential_id,
+            source_password,
+            destination_host,
+            destination_user,
+            destination_credential_id,
+            destination_password,
+            profile_name,
+            state,
+        }
+    }
+
+    pub(crate) fn form(&self) -> Form {
+        let mut profile = (*self.defaults.profile).clone();
+        profile.source_host = self.source_host.clone();
+        profile.source_user = self.source_user.clone();
+        profile.source_credential_id = self.source_credential_id.clone();
+        profile.destination_host = self.destination_host.clone();
+        profile.destination_user = self.destination_user.clone();
+        profile.destination_credential_id = self.destination_credential_id.clone();
+        if let Some(name) = &self.profile_name {
+            profile.name = name.clone();
+        }
+        Form {
+            profile,
+            source_password: self.source_password.clone(),
+            destination_password: self.destination_password.clone(),
+            dry_run: self.defaults.dry_run,
+        }
+    }
+
+    pub(crate) fn profile(&self) -> crate::Profile {
+        self.form().profile
+    }
 }
 
 pub(crate) struct PendingSheetImport {
@@ -109,6 +205,7 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
             crate::MAX_BULK_IMPORT_COLUMNS
         ));
     }
+    let defaults = BulkJob::defaults_from_form(base);
     let mut jobs = Vec::new();
     for (index, record) in reader.records().enumerate() {
         if index >= crate::MAX_BULK_IMPORT_ROWS {
@@ -120,11 +217,12 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
         let record = record.map_err(|error| error.to_string())?;
         let row_number = index + 2;
         let values = record_values(&headers, record.iter(), row_number)?;
-        jobs.push(job_from_values(
+        jobs.push(job_from_values_with_defaults(
             values,
             base,
             row_number,
             allow_plaintext_secrets,
+            Arc::clone(&defaults),
         )?);
     }
     if jobs.is_empty() {
@@ -175,6 +273,7 @@ pub(crate) fn read_sheet(
     }
     let allow_plaintext_secrets = allow_plaintext_secrets();
     validate_headers(&headers, allow_plaintext_secrets)?;
+    let defaults = BulkJob::defaults_from_form(base);
     let mut jobs = Vec::new();
     for (index, row) in rows.enumerate() {
         if index >= crate::MAX_BULK_IMPORT_ROWS {
@@ -192,11 +291,12 @@ pub(crate) fn read_sheet(
             row.iter().map(|value| value.to_string()),
             row_number,
         )?;
-        jobs.push(job_from_values(
+        jobs.push(job_from_values_with_defaults(
             values,
             base,
             row_number,
             allow_plaintext_secrets,
+            Arc::clone(&defaults),
         )?);
     }
     if jobs.is_empty() {
@@ -582,11 +682,28 @@ where
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn job_from_values(
+    values: HashMap<String, String>,
+    base: &Form,
+    row: usize,
+    allow_plaintext_secrets: bool,
+) -> Result<BulkJob, String> {
+    job_from_values_with_defaults(
+        values,
+        base,
+        row,
+        allow_plaintext_secrets,
+        BulkJob::defaults_from_form(base),
+    )
+}
+
+fn job_from_values_with_defaults(
     mut values: HashMap<String, String>,
     base: &Form,
     row: usize,
     allow_plaintext_secrets: bool,
+    defaults: Arc<BatchPlanDefaults>,
 ) -> Result<BulkJob, String> {
     let source_password = values.remove("source_password").unwrap_or_default();
     let destination_password = values.remove("destination_password").unwrap_or_default();
@@ -640,11 +757,12 @@ pub(crate) fn job_from_values(
                 form.profile.source_user, form.profile.destination_user
             )
         });
-    Ok(BulkJob {
+    Ok(BulkJob::from_form_with_defaults(
         label,
         form,
-        state: "imported".into(),
-    })
+        "imported".into(),
+        defaults,
+    ))
 }
 
 pub(crate) fn validate_headers(
@@ -788,7 +906,7 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
 #[cfg(test)]
 mod tests {
     use super::{
-        job_from_values, open_import_workbook, parse_xlsx_cell_reference,
+        BulkJob, job_from_values, open_import_workbook, parse_xlsx_cell_reference,
         plaintext_secrets_allowed, validate_xlsx_shared_strings,
         validate_xlsx_sheet_entry_dimensions,
     };
@@ -796,6 +914,7 @@ mod tests {
     use calamine::{DataType, Reader};
     use std::collections::HashMap;
     use std::io::Cursor;
+    use std::sync::Arc;
     use zip::write::SimpleFileOptions;
 
     fn write_minimal_xlsx(path: &std::path::Path, worksheet_xml: &str) {
@@ -833,6 +952,44 @@ mod tests {
             assert!(!plaintext_secrets_allowed(value));
         }
         assert!(plaintext_secrets_allowed(Some("1")));
+    }
+
+    #[test]
+    fn bulk_rows_share_defaults_and_hydrate_mailbox_deltas() {
+        let mut base = Form::default();
+        base.profile.engine = crate::core::Engine::Dovecot;
+        base.profile.source_tls = "starttls".into();
+        base.profile.source_host = "source.example".into();
+        base.profile.destination_host = "destination.example".into();
+        let defaults = BulkJob::defaults_from_form(&base);
+        let mut first = base.clone_without_credentials();
+        first.profile.source_host = "source-a.example".into();
+        first.profile.source_user = "a@example.com".into();
+        first.profile.destination_host = "destination-a.example".into();
+        first.profile.destination_user = "a@new.example".into();
+        let first = BulkJob::from_form_with_defaults(
+            "a".into(),
+            first,
+            "imported".into(),
+            Arc::clone(&defaults),
+        );
+        let mut second = base.clone_without_credentials();
+        second.profile.source_host = "source-b.example".into();
+        second.profile.source_user = "b@example.com".into();
+        second.profile.destination_host = "destination-b.example".into();
+        second.profile.destination_user = "b@new.example".into();
+        let second = BulkJob::from_form_with_defaults(
+            "b".into(),
+            second,
+            "imported".into(),
+            Arc::clone(&defaults),
+        );
+
+        assert!(Arc::ptr_eq(&first.defaults, &second.defaults));
+        assert!(first.defaults.profile.source_host.is_empty());
+        assert_eq!(first.form().profile.source_user, "a@example.com");
+        assert_eq!(second.form().profile.destination_user, "b@new.example");
+        assert_eq!(first.form().profile.source_tls, "starttls");
     }
 
     #[test]
@@ -980,7 +1137,7 @@ mod tests {
         ]);
 
         let job = job_from_values(values, &Form::default(), 2, false).unwrap();
-        assert_eq!(job.form.profile.name, "Acme Corp cutover");
+        assert_eq!(job.form().profile.name, "Acme Corp cutover");
         assert_eq!(job.label, "finance mailbox");
     }
 
@@ -1000,8 +1157,8 @@ mod tests {
 
         let job = job_from_values(values, &base, 2, false).unwrap();
 
-        assert!(job.form.source_password.is_empty());
-        assert!(job.form.destination_password.is_empty());
+        assert!(job.form().source_password.is_empty());
+        assert!(job.form().destination_password.is_empty());
     }
 
     #[test]

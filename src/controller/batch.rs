@@ -338,11 +338,7 @@ mod tests {
     }
 
     fn job(state: &str) -> BulkJob {
-        BulkJob {
-            label: state.into(),
-            form: Form::default(),
-            state: state.into(),
-        }
+        BulkJob::from_form(state.into(), Form::default(), state.into())
     }
 
     #[test]

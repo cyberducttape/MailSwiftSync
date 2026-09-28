@@ -120,7 +120,7 @@ pub(crate) fn admit_batch_launch(
                     .is_some_and(|id| selection_scope.contains(Some(id))),
                 visible: true,
                 durable_state: durable_states[index].as_deref(),
-                destructive: job.form.profile.delete2,
+                destructive: job.defaults.profile.delete2,
             })
             .collect::<Vec<_>>();
         let plan =
@@ -166,10 +166,11 @@ pub(crate) fn admit_batch_launch(
     let mailboxes = source_jobs
         .iter()
         .map(|job| {
-            let config = durable_batch_profile_config(&job.form.profile)?;
+            let profile = job.profile();
+            let config = durable_batch_profile_config(&profile)?;
             Ok((
-                job.form.profile.source_user.clone(),
-                job.form.profile.destination_user.clone(),
+                profile.source_user.clone(),
+                profile.destination_user.clone(),
                 config,
             ))
         })
@@ -234,24 +235,22 @@ pub(crate) fn batch_project_identity(
     jobs: &[BulkJob],
     fallback_profile: &Profile,
 ) -> BatchProjectIdentity {
-    let queue_profile = jobs
-        .first()
-        .map(|job| &job.form.profile)
-        .unwrap_or(fallback_profile);
+    let queue_profile = jobs.first().map(BulkJob::profile);
+    let queue_profile_ref = queue_profile.as_ref().unwrap_or(fallback_profile);
     let configured_fallback = fallback_profile.name.trim();
     let profile = if !configured_fallback.is_empty()
         && !matches!(
             configured_fallback,
             "New migration" | "Batch migration" | "Batch validation"
         )
-        && (queue_profile.name.trim().is_empty()
+        && (queue_profile_ref.name.trim().is_empty()
             || matches!(
-                queue_profile.name.trim(),
+                queue_profile_ref.name.trim(),
                 "New migration" | "Batch migration" | "Batch validation"
             )) {
         fallback_profile
     } else {
-        queue_profile
+        queue_profile_ref
     };
     BatchProjectIdentity {
         name: super::batch::suggested_batch_project_name(profile),
@@ -283,10 +282,10 @@ pub(crate) fn selection_value(
         .map(|(_, job)| {
             serde_json::json!({
                 "label": job.label,
-                "source_host": job.form.profile.source_host,
-                "source_user": job.form.profile.source_user,
-                "destination_host": job.form.profile.destination_host,
-                "destination_user": job.form.profile.destination_user,
+                "source_host": job.source_host,
+                "source_user": job.source_user,
+                "destination_host": job.destination_host,
+                "destination_user": job.destination_user,
                 "state": crate::ui::display_state_key(&job.state),
             })
         })
@@ -345,7 +344,8 @@ pub(crate) fn durable_single_identity_matches(
 pub(crate) fn duplicate_destination(jobs: &[BulkJob]) -> Result<Option<String>, String> {
     let mut destinations = HashSet::new();
     for (index, job) in jobs.iter().enumerate() {
-        let key = canonical_destination_identity(&job.form.profile)?;
+        let profile = job.profile();
+        let key = canonical_destination_identity(&profile)?;
         if !destinations.insert(key) {
             return Ok(Some(format!(
                 "Mailbox {} targets a destination mailbox already used by another batch row; concurrent writes to one mailbox are blocked.",
@@ -447,7 +447,8 @@ pub(crate) fn prepare_selected_batch_jobs(
                 )
             ) || preflight
                 != Some(
-                    crate::plan_identity::fingerprint_digest(&job.form.plan_fingerprint()).as_str(),
+                    crate::plan_identity::fingerprint_digest(&job.form().plan_fingerprint())
+                        .as_str(),
                 )
             {
                 return Err(format!(
@@ -464,7 +465,9 @@ pub(crate) fn prepare_selected_batch_jobs(
                 .get(index)
                 .cloned()
                 .ok_or_else(|| format!("Batch queue row {} no longer exists.", index + 1))?;
-            job.form.dry_run = mode.is_preflight();
+            let mut form = job.form();
+            form.dry_run = mode.is_preflight();
+            job = BulkJob::from_form(job.label.clone(), form, job.state.clone());
             Ok(SelectedBatchJob {
                 queue_index: index,
                 durable_job_id: String::new(),
@@ -475,16 +478,14 @@ pub(crate) fn prepare_selected_batch_jobs(
         .collect::<Result<Vec<_>, String>>()?;
     for selected in &mut selected_jobs {
         let queue_index = selected.queue_index;
+        let mut form = selected.job.form();
         let credential_load = if mode.is_live() {
             // Do not mint queue-wide OAuth access tokens here. A selected
             // mailbox may wait behind many workers; its live worker refreshes
             // immediately before authentication and engine launch.
-            selected
-                .job
-                .form
-                .load_static_configured_keyring_credentials()
+            form.load_static_configured_keyring_credentials()
         } else {
-            selected.job.form.load_configured_keyring_credentials()
+            form.load_configured_keyring_credentials()
         };
         if let Err(error) = credential_load {
             return Err(format!(
@@ -494,7 +495,7 @@ pub(crate) fn prepare_selected_batch_jobs(
             ));
         }
         if mode.is_live() {
-            let current = selected.job.form.credential_binding_fingerprint();
+            let current = form.credential_binding_fingerprint();
             let expected = expected_credential_fingerprints
                 .get(queue_index)
                 .and_then(Option::as_deref);
@@ -505,11 +506,13 @@ pub(crate) fn prepare_selected_batch_jobs(
                 ));
             }
         }
+        selected.job =
+            BulkJob::from_form(selected.job.label.clone(), form, selected.job.state.clone());
     }
     if let Some(selected) = selected_jobs.iter().find_map(|selected| {
         selected
             .job
-            .form
+            .form()
             .validate()
             .err()
             .map(|error| (selected, error))
@@ -523,7 +526,7 @@ pub(crate) fn prepare_selected_batch_jobs(
     if mode.is_live()
         && selected_jobs
             .iter()
-            .any(|selected| selected.job.form.requires_insecure_transport_ack())
+            .any(|selected| selected.job.form().requires_insecure_transport_ack())
     {
         return Err("Live batch blocked: explicitly acknowledge that plain IMAP exposes credentials and mail in transit for every affected row.".into());
     }
@@ -614,7 +617,7 @@ pub(crate) fn prepare_batch_run(
     let queue_checkpoints = selected_jobs
         .iter()
         .map(|selected| {
-            if mode.is_live() && selected.job.form.engine() == core::Engine::Dovecot {
+            if mode.is_live() && selected.job.form().engine() == core::Engine::Dovecot {
                 selected
                     .admission
                     .as_ref()
@@ -627,7 +630,7 @@ pub(crate) fn prepare_batch_run(
     let batch_plan_fingerprints = selected_jobs
         .iter()
         .map(|selected| {
-            crate::plan_identity::fingerprint_digest(&selected.job.form.plan_fingerprint())
+            crate::plan_identity::fingerprint_digest(&selected.job.form().plan_fingerprint())
         })
         .collect::<Vec<_>>();
     let expected_plans = if mode.is_live() {
@@ -639,10 +642,8 @@ pub(crate) fn prepare_batch_run(
     let mut child_plans = Vec::with_capacity(selected_jobs.len());
     let mut total_snapshot_bytes = 0usize;
     for (selected, checkpoint) in selected_jobs.iter().zip(queue_checkpoints.iter()) {
-        let plan_snapshot = selected
-            .job
-            .form
-            .plan_snapshot_with_checkpoint(checkpoint.as_deref())?;
+        let form = selected.job.form();
+        let plan_snapshot = form.plan_snapshot_with_checkpoint(checkpoint.as_deref())?;
         total_snapshot_bytes = total_snapshot_bytes
             .checked_add(plan_snapshot.len())
             .ok_or_else(|| "Batch plan snapshots exceed the aggregate size budget".to_owned())?;
@@ -654,7 +655,7 @@ pub(crate) fn prepare_batch_run(
         batch_digest.update((plan_snapshot.len() as u64).to_le_bytes());
         batch_digest.update(plan_snapshot.as_bytes());
         child_plans.push(core::BatchChildPlan {
-            engine: selected.job.form.engine().label().to_owned(),
+            engine: form.engine().label().to_owned(),
             plan_snapshot,
             engine_version: None,
         });
@@ -683,14 +684,14 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
     let mut applied = 0;
     for job in jobs {
         let password_empty = if source {
-            job.form.source_password.is_empty()
+            job.source_password.is_empty()
         } else {
-            job.form.destination_password.is_empty()
+            job.destination_password.is_empty()
         };
         let credential_id = if source {
-            &mut job.form.profile.source_credential_id
+            &mut job.source_credential_id
         } else {
-            &mut job.form.profile.destination_credential_id
+            &mut job.destination_credential_id
         };
         if password_empty && credential_id.trim().is_empty() {
             *credential_id = id.to_owned();
@@ -714,11 +715,11 @@ mod tests {
 
     #[test]
     fn selected_batch_preparation_fails_closed_without_durable_live_admission() {
-        let jobs = [BulkJob {
-            label: "mailbox".into(),
-            form: Form::default(),
-            state: "imported".into(),
-        }];
+        let jobs = [BulkJob::from_form(
+            "mailbox".into(),
+            Form::default(),
+            "imported".into(),
+        )];
         let error =
             prepare_selected_batch_jobs(&jobs, &[0], &[None], BatchExecutionMode::Live, &[])
                 .err()
@@ -728,11 +729,8 @@ mod tests {
 
     #[test]
     fn targeted_batch_run_maps_original_queue_index_to_full_durable_queue() {
-        let selected_job = BulkJob {
-            label: "third mailbox".into(),
-            form: Form::default(),
-            state: "imported".into(),
-        };
+        let selected_job =
+            BulkJob::from_form("third mailbox".into(), Form::default(), "imported".into());
         let prepared = prepare_batch_run(
             &[SelectedBatchJob {
                 queue_index: 2,
@@ -753,11 +751,11 @@ mod tests {
         form.profile.source_host = " imap.source.example ".into();
         form.profile.destination_host = "imap.destination.example".into();
         form.profile.name = "Customer cutover".into();
-        let jobs = [BulkJob {
-            label: "mailbox".into(),
-            form: form.clone(),
-            state: "imported".into(),
-        }];
+        let jobs = [BulkJob::from_form(
+            "mailbox".into(),
+            form.clone(),
+            "imported".into(),
+        )];
         let identity = batch_project_identity(&jobs, &Form::default().profile);
         assert_eq!(identity.name, "Customer cutover");
         assert_eq!(identity.source_endpoint, "imap.source.example");
@@ -770,11 +768,11 @@ mod tests {
         let mut queue_form = form.clone();
         queue_form.profile.name = "New migration".into();
         let fallback = batch_project_identity(
-            &[BulkJob {
-                label: "mailbox".into(),
-                form: queue_form,
-                state: "imported".into(),
-            }],
+            &[BulkJob::from_form(
+                "mailbox".into(),
+                queue_form,
+                "imported".into(),
+            )],
             &form.profile,
         );
         assert_eq!(fallback.name, "Customer cutover");
@@ -823,20 +821,16 @@ mod tests {
                     form.profile.destination_user = format!("destination-{index}@example.com");
                     form.source_password = "source-secret".into();
                     form.destination_password = "destination-secret".into();
-                    BulkJob {
-                        label: format!("mailbox-{index}"),
-                        form,
-                        state: "queued".into(),
-                    }
+                    BulkJob::from_form(format!("mailbox-{index}"), form, "queued".into())
                 })
                 .collect::<Vec<_>>();
             let mailboxes = jobs
                 .iter()
                 .map(|job| {
                     Ok((
-                        job.form.profile.source_user.clone(),
-                        job.form.profile.destination_user.clone(),
-                        super::durable_batch_profile_config(&job.form.profile)?,
+                        job.source_user.clone(),
+                        job.destination_user.clone(),
+                        super::durable_batch_profile_config(&job.profile())?,
                     ))
                 })
                 .collect::<Result<Vec<_>, String>>()
@@ -868,7 +862,7 @@ mod tests {
                 selection_scope: &selection_scope,
                 retry_scope: super::BulkRetryScope::All,
                 mode: BatchExecutionMode::Preflight,
-                fallback_profile: &jobs[0].form.profile,
+                fallback_profile: &jobs[0].profile(),
                 expected_credential_fingerprints: &[None, None, None, None],
                 expected_action_plan_hash: None,
                 run_id: "targeted-selection-test",
@@ -919,11 +913,7 @@ mod tests {
                 form.profile.destination_user = format!("destination-{index}@example.com");
                 form.source_password = "source-secret".into();
                 form.destination_password = "destination-secret".into();
-                BulkJob {
-                    label: format!("mailbox-{index}"),
-                    form,
-                    state: "imported".into(),
-                }
+                BulkJob::from_form(format!("mailbox-{index}"), form, "imported".into())
             })
             .collect::<Vec<_>>();
         let admission = admit_batch_launch(BatchLaunchRequest {
@@ -934,7 +924,7 @@ mod tests {
             selection_scope: &SelectionScope::all_matching(),
             retry_scope: super::BulkRetryScope::All,
             mode: BatchExecutionMode::Preflight,
-            fallback_profile: &jobs[0].form.profile,
+            fallback_profile: &jobs[0].profile(),
             expected_credential_fingerprints: &[],
             expected_action_plan_hash: None,
             run_id: "first-batch-admission-test",

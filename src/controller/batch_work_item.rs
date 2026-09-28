@@ -133,7 +133,8 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         oauth_refresh_locks,
     } = context;
     let live = mode.is_live();
-    while let Ok((index, job_id, child_run_id, checkpoint, mut job)) = job_rx.recv() {
+    while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
+        let mut form = job.form();
         if cancel.load(Ordering::Relaxed) {
             let _ = send_reliable_event(
                 &tx,
@@ -162,8 +163,8 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             job_id: job_id.clone(),
             text: format!("══ Job {}: {} ══", index + 1, job.label),
         });
-        let imapsync_output_profile = if job.form.engine() == core::Engine::ImapSync {
-            let identity = resolved_imapsync.get(&job.form.profile.imapsync_path);
+        let imapsync_output_profile = if form.engine() == core::Engine::ImapSync {
+            let identity = resolved_imapsync.get(&form.profile.imapsync_path);
             let version = identity
                 .map(|identity| identity.version.clone())
                 .unwrap_or_else(|| "unknown".into());
@@ -217,7 +218,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 // every selected mailbox. Refresh immediately before this
                 // worker authenticates and launches the engine, so waiting in
                 // a large queue cannot consume an expired bearer token.
-                if let Err(error) = refresh_live_credentials(&mut job.form, &oauth_refresh_locks) {
+                if let Err(error) = refresh_live_credentials(&mut form, &oauth_refresh_locks) {
                     failed.store(true, Ordering::Relaxed);
                     let _ = tx.send(Event::RunLine {
                         run_id: child_run_id.clone(),
@@ -250,7 +251,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     break;
                 }
             }
-            if live && let Err(error) = fresh_dual_imaps_authentication(&job.form) {
+            if live && let Err(error) = fresh_dual_imaps_authentication(&form) {
                 if should_retry_batch_error(&error, attempt, retry_count) {
                     let _ = tx.send(Event::RunLine {
                         run_id: child_run_id.clone(),
@@ -400,20 +401,18 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     },
                 );
             }
-            let prepared = job
-                .form
-                .prepared_command_with_throttle_divisor_and_checkpoint(
-                    concurrency,
-                    checkpoint.as_deref(),
-                );
+            let prepared = form.prepared_command_with_throttle_divisor_and_checkpoint(
+                concurrency,
+                checkpoint.as_deref(),
+            );
             let result = match prepared {
                 Ok(command) => {
                     let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
                     let verification = command.verification.clone();
                     let prefix = format!("[{}] ", index + 1);
                     let secrets = [
-                        job.form.source_password.clone(),
-                        job.form.destination_password.clone(),
+                        form.source_password.clone(),
+                        form.destination_password.clone(),
                     ];
                     let result = run_streaming(RunContext {
                         executable: &command.executable,
@@ -427,20 +426,20 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         cancel: &cancel,
                         secrets: &secrets,
                         timeout: Duration::from_secs(
-                            job.form.profile.migration_timeout_hours * 60 * 60,
+                            form.profile.migration_timeout_hours * 60 * 60,
                         ),
-                        dovecot_exit_two_is_delta: job.form.engine() == core::Engine::Dovecot
-                            && !job.form.dry_run,
+                        dovecot_exit_two_is_delta: form.engine() == core::Engine::Dovecot
+                            && !form.dry_run,
                         imapsync_output_profile,
                         diagnostic_logger: None,
                     })
                     .and_then(|stream| {
-                        if !job.form.dry_run
-                            && job.form.engine() == core::Engine::ImapSync
-                            && message_verification_enabled(&job.form)
+                        if !form.dry_run
+                            && form.engine() == core::Engine::ImapSync
+                            && message_verification_enabled(&form)
                         {
                             match run_imap_message_verification(
-                                &job.form,
+                                &form,
                                 &job_id,
                                 &child_run_id,
                                 &cancel,
@@ -458,8 +457,8 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                     let safe = crate::ui::redact_secrets(
                                         &error,
                                         [
-                                            job.form.source_password.as_str(),
-                                            job.form.destination_password.as_str(),
+                                            form.source_password.as_str(),
+                                            form.destination_password.as_str(),
                                         ],
                                     );
                                     verification_failure = Some(
@@ -475,9 +474,9 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                     });
                                 }
                             }
-                        } else if !job.form.dry_run
+                        } else if !form.dry_run
                             && terminal_evidence_source(
-                                &job.form,
+                                &form,
                                 false,
                                 stream.imapsync_evidence.is_some(),
                             ) == TerminalEvidenceSource::Engine
@@ -494,17 +493,15 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         Ok(stream.outcome)
                     });
                     let result = if result.is_ok()
-                        && job.form.dry_run
-                        && job.form.engine() == core::Engine::Dovecot
+                        && form.dry_run
+                        && form.engine() == core::Engine::Dovecot
                     {
                         result.and_then(|outcome| {
                             run_dovecot_destination_preflight(
-                                &job.form.dovecot_destination_preflight_commands(),
+                                &form.dovecot_destination_preflight_commands(),
                                 &tx,
                                 &cancel,
-                                Duration::from_secs(
-                                    job.form.profile.migration_timeout_hours * 60 * 60,
-                                ),
+                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
                                 &format!("[{}] ", index + 1),
                                 &child_run_id,
                                 &job_id,
@@ -515,12 +512,12 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         result
                     };
                     let result = if result.is_ok()
-                        && !job.form.dry_run
-                        && job.form.engine() == core::Engine::Dovecot
+                        && !form.dry_run
+                        && form.engine() == core::Engine::Dovecot
                     {
                         // Runtime verification shares the private config and
                         // source passfile prepared for the transfer.
-                        let verification_secret = job.form.source_password.clone();
+                        let verification_secret = form.source_password.clone();
                         let verification_env = Vec::new();
                         result.and_then(|outcome| {
                             run_dovecot_verification(
@@ -529,9 +526,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                 std::slice::from_ref(&verification_secret),
                                 &tx,
                                 &cancel,
-                                Duration::from_secs(
-                                    job.form.profile.migration_timeout_hours * 60 * 60,
-                                ),
+                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
                                 &format!("[{}] ", index + 1),
                                 &child_run_id,
                                 &job_id,
@@ -645,7 +640,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             }
         }
         if completed {
-            let terminal_state = if job.form.dry_run {
+            let terminal_state = if form.dry_run {
                 "ready"
             } else if delta_required {
                 "delta_required"
@@ -682,8 +677,8 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         },
                     )
                 },
-                if job.form.dry_run {
-                    Some(job.form.credential_binding_fingerprint())
+                if form.dry_run {
+                    Some(form.credential_binding_fingerprint())
                 } else {
                     None
                 },

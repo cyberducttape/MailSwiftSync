@@ -279,6 +279,10 @@ impl App {
                     return None;
                 }
             };
+            let mut defaults_by_profile = std::collections::HashMap::<
+                String,
+                std::sync::Arc<crate::bulk_import::BatchPlanDefaults>,
+            >::new();
             for job in jobs {
                 let profile = match decode_persisted_batch_profile(job.config.as_deref(), &job.id) {
                     Ok(profile) => profile,
@@ -291,16 +295,24 @@ impl App {
                 if profile.destination_tls.is_empty() {
                     profile.destination_tls = default_destination_tls();
                 }
-                restored_bulk_jobs.push(BulkJob {
-                    label: format!("{} → {}", job.source_mailbox, job.destination_mailbox),
-                    form: Form {
-                        profile,
-                        source_password: SecretString::default(),
-                        destination_password: SecretString::default(),
-                        dry_run: true,
-                    },
-                    state: display_job_state(&job.state).into(),
-                });
+                let form = Form {
+                    profile,
+                    source_password: SecretString::default(),
+                    destination_password: SecretString::default(),
+                    dry_run: true,
+                };
+                let defaults = BulkJob::defaults_from_form(&form);
+                let defaults_key = toml::to_string(defaults.profile.as_ref()).unwrap_or_default();
+                let defaults = defaults_by_profile
+                    .entry(defaults_key)
+                    .or_insert(defaults)
+                    .clone();
+                restored_bulk_jobs.push(BulkJob::from_form_with_defaults(
+                    format!("{} → {}", job.source_mailbox, job.destination_mailbox),
+                    form,
+                    display_job_state(&job.state).into(),
+                    defaults,
+                ));
                 restored_bulk_job_ids.push(job.id);
             }
             Some(project.id.clone())

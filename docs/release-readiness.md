@@ -241,29 +241,29 @@ and require the corresponding integration run.
 
 ## Required before calling it production-ready
 
-- **100k-row desktop scale gate:** the importer accepts up to 100,000 rows,
-  but the current GUI still holds queue forms in memory. The default unfiltered
-  mailbox view now avoids a full predicate scan after state updates, while
-  search/state filtering and import remain linear in the queue size. Before a
-  1.0 claim at this ceiling, publish reproducible 1k/10k/100k CSV and
-  10k/100k XLSX latency, memory, first-render, keystroke-filter, selection,
-  state-update, and reload measurements, then move the queue read model toward
-  indexed SQLite paging if those budgets are not met. The import portion is
-  reproducible with `scripts/benchmark-import-scale.sh`; it is intentionally
-  opt-in because the 100k XLSX case must run on the release host class. This
-  does not yet satisfy the full desktop gate: first-render measurement and
-  explicit release budgets still need to be captured.
+- **100k-row desktop scale gate:** the importer accepts up to 100,000 rows.
+  Imported rows now retain only mailbox identity/credential deltas and share
+  immutable batch defaults through an `Arc`; a full `Form` is hydrated only at
+  admission or worker execution. Restored rows reuse identical default-plan
+  objects after durable reload. The default unfiltered mailbox view avoids a
+  full predicate scan after state updates, while search filtering remains
+  linear in the in-memory working set. The durable ledger already provides
+  bounded SQLite paging for restart/read behavior. The remaining scale
+  limitation is that the live GUI queue itself is still an in-memory working
+  set rather than a fully SQLite-backed virtualized row store. The importer,
+  UI, and reload gates are reproducible with the three benchmark scripts below
+  and must be repeated on each supported release host class.
 
   A local release-mode baseline on 2026-09-27 (Linux x86_64, 16 CPUs, the
   cases run sequentially in one process) was:
 
   | Import | Rows | Elapsed | RSS after case |
   | --- | ---: | ---: | ---: |
-  | CSV | 1,000 | 2 ms | 8.5 MiB |
-  | CSV | 10,000 | 22 ms | 19.7 MiB |
-  | CSV | 100,000 | 226 ms | 131.1 MiB |
-  | XLSX | 10,000 | 54 ms | 31.6 MiB |
-  | XLSX | 100,000 | 565 ms | 177.7 MiB |
+  | CSV | 1,000 | 2 ms | 8.4 MiB |
+  | CSV | 10,000 | 20 ms | 14.2 MiB |
+  | CSV | 100,000 | 204 ms | 71.3 MiB |
+  | XLSX | 10,000 | 52 ms | 21.8 MiB |
+  | XLSX | 100,000 | 530 ms | 125.6 MiB |
 
   RSS is the process resident set reported by Linux and is cumulative because
   the cases run in one process; it is evidence for a baseline, not a portable
@@ -278,10 +278,10 @@ and require the corresponding integration run.
   `scripts/benchmark-ui-scale.sh`. It measures 100k-row filter keystroke,
   explicit selection-all, a 1,000-row state-update refresh, and a real
   virtualized egui first frame. The same local release baseline measured 4 ms
-  for filtering, 12 ms for selecting all 100,000 IDs, 3 ms for refreshing a
+  for filtering, 10 ms for selecting all 100,000 IDs, 3 ms for refreshing a
   1,000-row state update, and 2 ms for the virtualized first frame. The same
   script now renders the complete application shell with 100,000 rows; the
-  current baseline is 86 ms for that first frame. These are release-mode host
+  current baseline is 95 ms for that first frame. These are release-mode host
   baselines. The script enforces default budgets of 100 ms for filtering, 250
   ms for selection-all, 100 ms for state refresh, 100 ms for the virtualized
   first frame, and 500 ms for the full shell; qualified host classes may

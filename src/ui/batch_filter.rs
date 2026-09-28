@@ -71,10 +71,10 @@ impl App {
         search.is_empty()
             || [
                 job.label.as_str(),
-                job.form.profile.source_host.as_str(),
-                job.form.profile.source_user.as_str(),
-                job.form.profile.destination_host.as_str(),
-                job.form.profile.destination_user.as_str(),
+                job.source_host.as_str(),
+                job.source_user.as_str(),
+                job.destination_host.as_str(),
+                job.destination_user.as_str(),
             ]
             .iter()
             .any(|value| contains_ascii_case_insensitive(value, search))
@@ -93,10 +93,10 @@ impl App {
                     .insert(index);
                 [
                     job.label.as_str(),
-                    job.form.profile.source_host.as_str(),
-                    job.form.profile.source_user.as_str(),
-                    job.form.profile.destination_host.as_str(),
-                    job.form.profile.destination_user.as_str(),
+                    job.source_host.as_str(),
+                    job.source_user.as_str(),
+                    job.destination_host.as_str(),
+                    job.destination_user.as_str(),
                 ]
                 .join(" ")
                 .to_ascii_lowercase()
@@ -320,15 +320,17 @@ mod tests {
         ));
         let mut app = App::from_state_path(Some(&state_path));
         let base = Form::default();
+        let defaults = BulkJob::defaults_from_form(&base);
         for index in 0..rows {
             let mut form = base.clone();
             form.profile.source_user = format!("user{index}@source.example");
             form.profile.destination_user = format!("user{index}@destination.example");
-            app.bulk_jobs.push(BulkJob {
-                label: format!("Mailbox {index}"),
+            app.bulk_jobs.push(BulkJob::from_form_with_defaults(
+                format!("Mailbox {index}"),
                 form,
-                state: "queued".into(),
-            });
+                "queued".into(),
+                std::sync::Arc::clone(&defaults),
+            ));
             app.bulk_job_ids.push(format!("job-{index}"));
         }
         app.bulk_jobs_generation = 1;

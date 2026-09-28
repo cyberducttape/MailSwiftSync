@@ -88,7 +88,7 @@ impl App {
         if live
             && jobs
                 .iter()
-                .any(|job| crate::runner::automap_blocks_live_certification(&job.form))
+                .any(|job| crate::runner::automap_blocks_live_certification(&job.form()))
         {
             self.bulk_message = "Live batch blocked: one or more selected imapsync plans use automapping, which cannot currently be independently verified. Disable automap and rerun preflight for those mailboxes.".into();
             return;

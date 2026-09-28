@@ -82,8 +82,9 @@ pub(crate) fn spawn_batch_worker(
         // there is no first-wave subscriber race and no lossy metadata send.
         let mut resolved_imapsync = HashMap::<String, ResolvedImapsyncIdentity>::new();
         for job in &jobs {
-            if job.form.engine() == core::Engine::ImapSync {
-                let executable = job.form.profile.imapsync_path.clone();
+            let form = job.form();
+            if form.engine() == core::Engine::ImapSync {
+                let executable = form.profile.imapsync_path.clone();
                 resolved_imapsync
                     .entry(executable.clone())
                     .or_insert_with(|| resolve_imapsync_identity(&executable));

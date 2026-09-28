@@ -34,7 +34,7 @@ impl App {
                     selected: self.bulk_selected_ids.contains(id),
                     visible: self.mailbox_matches_filter(job),
                     durable_state: Some(job.state.as_str()),
-                    destructive: job.form.profile.delete2,
+                    destructive: job.defaults.profile.delete2,
                 })
             })
             .collect::<Vec<_>>();
@@ -355,8 +355,8 @@ impl App {
                             let accessible_name = self
                                 .language
                                 .text("Select {} → {}")
-                                .replace("{}", &job.form.profile.source_user)
-                                .replacen("{}", &job.form.profile.destination_user, 1);
+                                .replace("{}", &job.source_user)
+                                .replacen("{}", &job.destination_user, 1);
                             let response = ui.checkbox(&mut selected, "");
                             response.widget_info(|| {
                                 egui::WidgetInfo::selected(
@@ -378,16 +378,12 @@ impl App {
                             ui.label(&job.label);
                         });
                         row.col(|ui| {
-                            ui.label(format!(
-                                "{}\n{}",
-                                job.form.profile.source_host, job.form.profile.source_user
-                            ));
+                            ui.label(format!("{}\n{}", job.source_host, job.source_user));
                         });
                         row.col(|ui| {
                             ui.label(format!(
                                 "{}\n{}",
-                                job.form.profile.destination_host,
-                                job.form.profile.destination_user
+                                job.destination_host, job.destination_user
                             ));
                         });
                         row.col(|ui| {
@@ -454,7 +450,7 @@ impl App {
                 if !self.bulk_selected_ids.contains(job_id) {
                     continue;
                 }
-                let profile = &job.form.profile;
+                let profile = &job.defaults.profile;
                 let destructive = if profile.delete2 {
                     self.language
                         .text("DESTRUCTIVE: destination deletion enabled")
