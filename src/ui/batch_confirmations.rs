@@ -100,7 +100,7 @@ impl App {
                         selected: self.bulk_row_is_selected(index),
                         visible: self.mailbox_matches_filter(job),
                         durable_state: Some(job.state.as_str()),
-                        destructive: job.form.profile.delete2,
+                        destructive: job.defaults.profile.delete2,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -169,7 +169,7 @@ impl App {
                 );
                 for job_id in selected_ids.iter().take(5) {
                     if let Some(index) = self.bulk_job_ids.iter().position(|id| id == job_id) {
-                        let profile = &self.bulk_jobs[index].form.profile;
+                        let profile = &self.bulk_jobs[index].defaults.profile;
                         ui.label(
                             self.language
                                 .text("• {}: {} → {}")
