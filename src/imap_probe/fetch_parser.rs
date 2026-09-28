@@ -3,6 +3,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(test)]
+use sha2::{Digest, Sha256};
+
 /// Parse the live verifier's metadata-only FETCH response. Body fingerprints
 /// intentionally use a separate parser/API and are not produced here.
 #[cfg(test)]
@@ -72,6 +75,67 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
         offset = record_end;
     }
     Ok(messages)
+}
+
+/// Extract bounded SHA-256 fingerprints from a FETCH response containing
+/// `BODY[]` literals. This is deliberately separate from the default metadata
+/// parser: callers must explicitly opt into downloading message bodies and
+/// provide a per-message bound before content evidence can be produced.
+#[cfg(test)]
+pub(super) fn parse_message_fetch_body_hashes_response_bytes(
+    response: &[u8],
+    mailbox: &str,
+    uidvalidity: Option<u64>,
+    max_body_bytes: usize,
+) -> Result<HashMap<crate::core::MailboxMessageKey, String>, String> {
+    let mut fingerprints = HashMap::new();
+    let mut offset = 0;
+    while offset < response.len() {
+        let Some(relative_line_end) = response[offset..]
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+        else {
+            break;
+        };
+        let line_end = offset + relative_line_end;
+        let line = &response[offset..line_end];
+        let next_line = line_end + 2;
+        if !is_fetch_record_line_bytes(line) {
+            offset = next_fetch_record_start_bytes(response, offset);
+            continue;
+        }
+        let record_end = next_fetch_record_start_bytes(response, next_line);
+        let record = &response[offset..record_end.min(response.len())];
+        let first_line_end = record
+            .windows(2)
+            .position(|pair| pair == b"\r\n")
+            .ok_or_else(|| "IMAP body FETCH record had no line terminator".to_owned())?;
+        let first_line = String::from_utf8_lossy(&record[..first_line_end]);
+        let uid = fetch_number(&first_line, "UID")
+            .ok_or_else(|| "IMAP body FETCH record omitted UID".to_owned())?;
+        let body = fetch_body_literal(record)
+            .ok_or_else(|| format!("IMAP body FETCH UID {uid} omitted BODY[] literal"))?;
+        if body.len() > max_body_bytes {
+            return Err(format!(
+                "IMAP body FETCH UID {uid} exceeded the {max_body_bytes}-byte body-hash bound"
+            ));
+        }
+        let digest = Sha256::digest(body);
+        let key = crate::core::MailboxMessageKey::with_shared_mailbox(
+            Arc::from(mailbox),
+            uidvalidity,
+            uid.to_string(),
+        );
+        let fingerprint = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if fingerprints.insert(key, fingerprint).is_some() {
+            return Err(format!("duplicate body FETCH UID {uid}"));
+        }
+        offset = record_end;
+    }
+    Ok(fingerprints)
 }
 
 fn next_fetch_record_start_bytes(response: &[u8], mut offset: usize) -> usize {
@@ -153,6 +217,27 @@ fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
         + 2;
     let body = record.get(body_start..body_start + size)?;
     parse_message_id_header(&String::from_utf8_lossy(body))
+}
+
+#[cfg(test)]
+fn fetch_body_literal(record: &[u8]) -> Option<&[u8]> {
+    let marker = b"BODY[]";
+    let marker_start = record
+        .windows(marker.len())
+        .position(|part| part.eq_ignore_ascii_case(marker))?
+        + marker.len();
+    let literal = record[marker_start..].strip_prefix(b" ")?;
+    let literal_end = literal.windows(3).position(|part| part == b"}\r\n")?;
+    let size = std::str::from_utf8(&literal[1..literal_end])
+        .ok()?
+        .parse::<usize>()
+        .ok()?;
+    let body_start = marker_start
+        + record[marker_start..]
+            .windows(2)
+            .position(|part| part == b"\r\n")?
+        + 2;
+    record.get(body_start..body_start.checked_add(size)?)
 }
 
 pub(super) fn parse_message_id_header(body: &str) -> Option<String> {

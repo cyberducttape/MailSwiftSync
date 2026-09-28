@@ -2215,6 +2215,7 @@ pub(crate) fn fresh_imap_authentication_applies(form: &crate::Form) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::fetch_parser::parse_message_fetch_body_hashes_response_bytes;
     use super::{
         ListInventorySummary, MAX_DNS_ADDRESSES, MAX_ESTIMATED_FETCHED_STATE_BYTES,
         MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageStateBudget,
@@ -2742,6 +2743,31 @@ mod tests {
             messages[&key].message_id.as_deref(),
             Some("<raw@example.com>")
         );
+    }
+
+    #[test]
+    fn body_fetch_parser_hashes_exact_bounded_literal_bytes() {
+        let response = b"* 1 FETCH (UID 100 BODY[] {5}\r\nhello)\r\nv002 OK FETCH completed\r\n";
+        let fingerprints =
+            parse_message_fetch_body_hashes_response_bytes(response, "INBOX", Some(77), 5).unwrap();
+        let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "100");
+        assert_eq!(
+            fingerprints.get(&key).map(String::as_str),
+            Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+    }
+
+    #[test]
+    fn body_fetch_parser_fails_closed_on_missing_or_oversized_body() {
+        let missing = b"* 1 FETCH (UID 100 RFC822.SIZE 5)\r\nv002 OK FETCH completed\r\n";
+        let error = parse_message_fetch_body_hashes_response_bytes(missing, "INBOX", Some(77), 5)
+            .unwrap_err();
+        assert!(error.contains("omitted BODY[] literal"));
+
+        let oversized = b"* 1 FETCH (UID 100 BODY[] {6}\r\nhello!)\r\nv002 OK FETCH completed\r\n";
+        let error = parse_message_fetch_body_hashes_response_bytes(oversized, "INBOX", Some(77), 5)
+            .unwrap_err();
+        assert!(error.contains("exceeded the 5-byte body-hash bound"));
     }
 
     #[test]
