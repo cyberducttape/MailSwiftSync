@@ -125,6 +125,32 @@ impl UiLanguage {
             "The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected." => {
                 "Das Feld für zusätzliche imapsync-Optionen akzeptiert nur die dokumentierte Liste sicherer Tuning- und Diagnoseoptionen. Verbindungs-, Zugangsdaten-, TLS-, destruktive, Protokollierungs- und unbekannte Optionen werden abgelehnt."
             }
+            "Choose migration engine" => "Migrations-Engine auswählen",
+            "How should this migration run?" => "Wie soll diese Migration ausgeführt werden?",
+            "Select the execution engine that fits the destination. MailSwiftSync owns planning, safety gates, orchestration, and verification; the selected engine owns message transfer." => {
+                "Wählen Sie die zum Ziel passende Ausführungs-Engine. MailSwiftSync übernimmt Planung, Sicherheitsprüfungen, Orchestrierung und Verifizierung; die ausgewählte Engine übernimmt die Nachrichtenübertragung."
+            }
+            "Config" => "Konfiguration",
+            "Native Dovecot execution is local-only until a secret-safe broker is implemented." => {
+                "Native Dovecot-Ausführung ist nur lokal möglich, bis ein geheimnissicherer Broker implementiert ist."
+            }
+            "Dry mode only lists the destination mailbox. Native Dovecot uses the selected migration strategy; backup and sync -1 have different merge behavior." => {
+                "Der Probelauf listet nur das Zielpostfach. Native Dovecot-Ausführung verwendet die gewählte Migrationsstrategie; backup und sync -1 haben unterschiedliches Zusammenführungsverhalten."
+            }
+            "Engine and execution settings are locked while a migration is running." => {
+                "Engine- und Ausführungseinstellungen sind während einer laufenden Migration gesperrt."
+            }
+            "Continue to migration plan" => "Zum Migrationsplan",
+            "Choose worksheet" => "Arbeitsblatt auswählen",
+            "Select the migration worksheet" => "Migrationsarbeitsblatt auswählen",
+            "{} contains {} worksheet(s). Choose the sheet with the mailbox headers." => {
+                "{} enthält {} Arbeitsblatt/Arbeitsblätter. Wählen Sie das Blatt mit den Postfachüberschriften."
+            }
+            "Select a worksheet" => "Arbeitsblatt auswählen",
+            "The selected worksheet is parsed and validated in the background. Other worksheets are not imported." => {
+                "Das ausgewählte Arbeitsblatt wird im Hintergrund eingelesen und validiert. Andere Arbeitsblätter werden nicht importiert."
+            }
+            "Import selected worksheet" => "Ausgewähltes Arbeitsblatt importieren",
             "Review verification" => "Verifizierung prüfen",
             "Confirm live batch migration" => "Live-Stapel-Migration bestätigen",
             "This will change destination mailboxes" => "Dies ändert Zielpostfächer",
@@ -606,6 +632,18 @@ mod tests {
             "Delete destination messages missing from source  (--delete2)",
             "Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.",
             "The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.",
+            "Choose migration engine",
+            "How should this migration run?",
+            "Select the execution engine that fits the destination. MailSwiftSync owns planning, safety gates, orchestration, and verification; the selected engine owns message transfer.",
+            "Native Dovecot execution is local-only until a secret-safe broker is implemented.",
+            "Dry mode only lists the destination mailbox. Native Dovecot uses the selected migration strategy; backup and sync -1 have different merge behavior.",
+            "Engine and execution settings are locked while a migration is running.",
+            "Continue to migration plan",
+            "Choose worksheet",
+            "Select the migration worksheet",
+            "{} contains {} worksheet(s). Choose the sheet with the mailbox headers.",
+            "The selected worksheet is parsed and validated in the background. Other worksheets are not imported.",
+            "Import selected worksheet",
         ] {
             assert_ne!(
                 UiLanguage::German.text(key),

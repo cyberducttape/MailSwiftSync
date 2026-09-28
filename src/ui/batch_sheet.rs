@@ -19,22 +19,24 @@ impl App {
         let mut open = true;
         let mut cancel = false;
         let mut import = false;
-        egui::Window::new("Choose worksheet")
+        egui::Window::new(self.language.text("Choose worksheet"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading("Select the migration worksheet");
-                ui.label(format!(
-                    "{path_label} contains {} worksheet(s). Choose the sheet with the mailbox headers.",
-                    sheets.len()
-                ));
+                ui.heading(self.language.text("Select the migration worksheet"));
+                let worksheet_summary = self
+                    .language
+                    .text("{} contains {} worksheet(s). Choose the sheet with the mailbox headers.")
+                    .replacen("{}", &path_label, 1)
+                    .replacen("{}", &sheets.len().to_string(), 1);
+                ui.label(worksheet_summary);
                 egui::ComboBox::from_id_salt("bulk_sheet_selection")
                     .selected_text(
                         sheets
                             .get(self.bulk_sheet_index)
                             .map(String::as_str)
-                            .unwrap_or("Select a worksheet"),
+                            .unwrap_or(self.language.text("Select a worksheet")),
                     )
                     .show_ui(ui, |ui| {
                         for (index, name) in sheets.iter().enumerate() {
@@ -44,16 +46,16 @@ impl App {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(
-                        "The selected worksheet is parsed and validated in the background. Other worksheets are not imported.",
+                        self.language.text("The selected worksheet is parsed and validated in the background. Other worksheets are not imported."),
                     )
                     .size(11.0)
                     .color(self.theme_colors().text_secondary),
                 );
                 ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(self.language.text("Cancel")).clicked() {
                         cancel = true;
                     }
-                    if ui.button("Import selected worksheet").clicked() {
+                    if ui.button(self.language.text("Import selected worksheet")).clicked() {
                         import = true;
                     }
                 });
