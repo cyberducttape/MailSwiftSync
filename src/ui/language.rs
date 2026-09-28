@@ -740,6 +740,12 @@ impl UiLanguage {
             "Search" => "Suchen",
             "Loading mailbox verification…" => "Postfachverifizierung wird geladen …",
             "Durable mailbox reconciliation" => "Dauerhafter Postfachabgleich",
+            "Evidence includes bounded RFC822 body fingerprints from both accounts; provider-specific qualification remains required." => {
+                "Die Nachweise enthalten begrenzte RFC822-Körper-Fingerprints beider Konten; eine anbieterspezifische Qualifizierung bleibt erforderlich."
+            }
+            "Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared." => {
+                "Die Nachweisbezeichnungen beschreiben Metadaten- und aggregierten Abgleich; Nachrichtenkörper wurden nicht verglichen."
+            }
             "Export verification report…" => "Verifizierungsbericht exportieren …",
             "Accept residual difference" => "Verbleibende Abweichung akzeptieren",
             "Operator" => "Betreiber",
@@ -988,9 +994,6 @@ impl UiLanguage {
             "none recorded" => "keine erfasst",
             "found" => "gefunden",
             "Verification authority" => "Verifizierungsinstanz",
-            "Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared." => {
-                "Die Nachweislabels beschreiben Metadaten und den Gesamtabgleich; Nachrichteninhalte wurden nicht verglichen."
-            }
             "Verification method" => "Verifizierungsmethode",
             "Verification outcome" => "Verifizierungsergebnis",
             "Folders" => "Ordner",
@@ -1291,6 +1294,20 @@ mod tests {
                 UiLanguage::German.text(key),
                 key,
                 "missing German batch-health translation: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn verification_scope_explanations_are_translated() {
+        for key in [
+            "Evidence includes bounded RFC822 body fingerprints from both accounts; provider-specific qualification remains required.",
+            "Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared.",
+        ] {
+            assert_ne!(
+                UiLanguage::German.text(key),
+                key,
+                "missing German verification explanation: {key}"
             );
         }
     }

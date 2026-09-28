@@ -134,7 +134,15 @@ impl App {
                         ui.label(self.language.text("Durable mailbox reconciliation"));
                         ui.label(
                             RichText::new(
-                                self.language.text("Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared."),
+                                self.language.text(match evidence.evidence_scope() {
+                                    crate::core::EvidenceScope::BodyHashed => {
+                                        "Evidence includes bounded RFC822 body fingerprints from both accounts; provider-specific qualification remains required."
+                                    }
+                                    crate::core::EvidenceScope::EngineConfirmed
+                                    | crate::core::EvidenceScope::AggregateReconciled => {
+                                        "Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared."
+                                    }
+                                }),
                             )
                             .italics()
                             .color(self.theme_colors().text_secondary),
