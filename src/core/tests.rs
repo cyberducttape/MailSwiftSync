@@ -2987,6 +2987,77 @@ fn paged_workspace_reads_keep_large_mailbox_projects_bounded() {
 }
 
 #[test]
+#[ignore = "run via scripts/benchmark-reload-scale.sh"]
+fn workspace_reload_scale_benchmark() {
+    const MAILBOX_COUNT: usize = 100_000;
+    const PAGE_SIZE: u32 = 200;
+    let directory =
+        std::env::temp_dir().join(format!("mailswiftsync-reload-benchmark-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let database_path = directory.join("state.db");
+
+    let seed_started = std::time::Instant::now();
+    let project_id = {
+        let db = StateStore::open(&database_path).unwrap();
+        let project = db
+            .create_project("reload-benchmark", "source", "destination")
+            .unwrap();
+        let tx = db.connection.unchecked_transaction().unwrap();
+        for index in 0..MAILBOX_COUNT {
+            let source = format!("user-{index}@source.example");
+            let destination = format!("user-{index}@destination.example");
+            tx.execute(
+                "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')",
+                rusqlite::params![
+                    format!("job-{index}"),
+                    project.id,
+                    source,
+                    destination,
+                    format!("user-{index}@destination.example"),
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        project.id
+    };
+    let seed_elapsed = std::time::Instant::now().duration_since(seed_started);
+
+    let reload_started = std::time::Instant::now();
+    let db = StateStore::open(&database_path).unwrap();
+    let reload_elapsed = reload_started.elapsed();
+
+    let read_started = std::time::Instant::now();
+    let first_page = db.mailbox_page(&project_id, 0, PAGE_SIZE).unwrap();
+    let last_page = db
+        .mailbox_page(
+            &project_id,
+            (MAILBOX_COUNT as u32).saturating_sub(PAGE_SIZE),
+            PAGE_SIZE,
+        )
+        .unwrap();
+    let status_page = db.mailbox_status_page(&project_id, 0, PAGE_SIZE).unwrap();
+    let verification_page = db.verification_rows(&project_id, 0, PAGE_SIZE).unwrap();
+    let counts = db.mailbox_state_counts(&project_id).unwrap();
+    let read_elapsed = read_started.elapsed();
+
+    assert_eq!(first_page.len(), PAGE_SIZE as usize);
+    assert_eq!(last_page.len(), PAGE_SIZE as usize);
+    assert_eq!(status_page.len(), PAGE_SIZE as usize);
+    assert_eq!(verification_page.len(), PAGE_SIZE as usize);
+    assert_eq!(counts.total, MAILBOX_COUNT);
+    println!(
+        "workspace reload benchmark: rows={MAILBOX_COUNT} seed_ms={} reopen_ms={} bounded_reads_ms={}",
+        seed_elapsed.as_millis(),
+        reload_elapsed.as_millis(),
+        read_elapsed.as_millis()
+    );
+
+    drop(db);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn run_captures_project_phase_at_admission() {
     let db = StateStore::in_memory().unwrap();
     let project = db

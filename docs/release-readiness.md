@@ -251,8 +251,8 @@ and require the corresponding integration run.
   indexed SQLite paging if those budgets are not met. The import portion is
   reproducible with `scripts/benchmark-import-scale.sh`; it is intentionally
   opt-in because the 100k XLSX case must run on the release host class. This
-  does not yet satisfy the full desktop gate: first-render, filter, selection,
-  state-update, and reload measurements still need to be captured.
+  does not yet satisfy the full desktop gate: first-render measurement and
+  explicit release budgets still need to be captured.
 
   A local release-mode baseline on 2026-09-27 (Linux x86_64, 16 CPUs, the
   cases run sequentially in one process) was:
@@ -277,6 +277,14 @@ and require the corresponding integration run.
   local release baseline measured 4 ms for filtering, 11 ms for selecting all
   100,000 IDs, and 3 ms for refreshing a 1,000-row state update. These are
   pure read-model timings, not end-to-end GUI budgets.
+
+  Durable workspace restart/read behavior has a separate opt-in command,
+  `scripts/benchmark-reload-scale.sh`. It seeds and closes a file-backed
+  100,000-row project, reopens it, then reads bounded mailbox, status, and
+  verification pages plus aggregate counts. The local release baseline was
+  509 ms to seed, 771 ms to reopen, and 125 ms for those bounded reads. This
+  is evidence for the SQLite read path, not an egui first-frame measurement or
+  a release budget; capture both on each supported release host.
 - Provider consent flows and equivalent unattended secret-broker delivery
   remain outstanding: MailSwiftSync still does not implement an OAuth
   authorization flow, so an operator must register their own application and
