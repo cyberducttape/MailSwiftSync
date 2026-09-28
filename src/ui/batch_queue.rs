@@ -24,19 +24,21 @@ impl App {
             .filter_map(|(index, _)| self.bulk_job_ids.get(index).cloned())
             .collect();
         self.bulk_state_filter = "all".into();
-        self.bulk_message = format!(
-            "Selected {} mailbox row(s) for focused review.",
-            self.bulk_selected_ids.len()
-        );
+        self.bulk_message = self
+            .language
+            .text("Selected {} mailbox row(s) for focused review.")
+            .replace("{}", &self.bulk_selected_ids.len().to_string());
     }
 
     pub(crate) fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {
         match result {
             Ok(BulkImportResult::Jobs(jobs)) => {
-                self.bulk_message = format!(
-                    "Imported {} mailbox rows. Review them and run preflight before migration.",
-                    jobs.len()
-                );
+                self.bulk_message = self
+                    .language
+                    .text(
+                        "Imported {} mailbox rows. Review them and run preflight before migration.",
+                    )
+                    .replace("{}", &jobs.len().to_string());
                 if self.selected_project_id == self.bulk_project_id {
                     self.selected_project_id = None;
                 }
@@ -52,8 +54,10 @@ impl App {
             Ok(BulkImportResult::Workbook { path, sheets }) => {
                 self.bulk_sheet_index = 0;
                 self.pending_sheet_import = Some(PendingSheetImport { path, sheets });
-                self.bulk_message =
-                    "Choose the worksheet containing the migration rows before importing.".into();
+                self.bulk_message = self
+                    .language
+                    .text("Choose the worksheet containing the migration rows before importing.")
+                    .into();
             }
             Err(error) => self.bulk_message = error,
         }
@@ -61,15 +65,21 @@ impl App {
 
     pub(crate) fn begin_bulk_import(&mut self, path: std::path::PathBuf) {
         if self.bulk_import_receiver.is_some() {
-            self.bulk_message = "A mailbox file is already being imported.".into();
+            self.bulk_message = self
+                .language
+                .text("A mailbox file is already being imported.")
+                .into();
             return;
         }
-        self.bulk_message = format!(
-            "Importing {} in the background…",
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("mailbox file")
-        );
+        self.bulk_message = self
+            .language
+            .text("Importing {} in the background…")
+            .replace(
+                "{}",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("mailbox file"),
+            );
         self.bulk_import_receiver = Some(crate::bulk_import::spawn_import(
             path,
             self.form.clone_without_credentials(),
@@ -78,10 +88,16 @@ impl App {
 
     pub(crate) fn begin_sheet_import(&mut self, path: std::path::PathBuf, sheet_index: usize) {
         if self.bulk_import_receiver.is_some() {
-            self.bulk_message = "A mailbox file is already being imported.".into();
+            self.bulk_message = self
+                .language
+                .text("A mailbox file is already being imported.")
+                .into();
             return;
         }
-        self.bulk_message = "Importing the selected worksheet in the background…".into();
+        self.bulk_message = self
+            .language
+            .text("Importing the selected worksheet in the background…")
+            .into();
         self.bulk_import_receiver = Some(crate::bulk_import::spawn_sheet_import(
             path,
             self.form.clone_without_credentials(),
@@ -113,7 +129,10 @@ impl App {
         self.bulk_job_index_by_id.clear();
         self.bulk_retry_scope = BulkRetryScope::default();
         self.bulk_preflight_credential_fingerprints.clear();
-        self.bulk_message = "Queue cleared; its durable batch association was discarded.".into();
+        self.bulk_message = self
+            .language
+            .text("Queue cleared; its durable batch association was discarded.")
+            .into();
     }
 
     pub(crate) fn mark_bulk_jobs_changed(&mut self) {

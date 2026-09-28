@@ -43,6 +43,25 @@ impl UiLanguage {
             }
             "Dovecot strategy: {} — {}" => "Dovecot-Strategie: {} — {}",
             "Cancellation requested…" => "Abbruch angefordert…",
+            "Selected {} mailbox row(s) for focused review." => {
+                "{} Postfachzeile(n) zur gezielten Prüfung ausgewählt."
+            }
+            "Imported {} mailbox rows. Review them and run preflight before migration." => {
+                "{} Postfachzeile(n) importiert. Prüfen Sie sie und führen Sie vor der Migration eine Vorprüfung aus."
+            }
+            "Choose the worksheet containing the migration rows before importing." => {
+                "Wählen Sie vor dem Import das Arbeitsblatt mit den Migrationszeilen aus."
+            }
+            "A mailbox file is already being imported." => {
+                "Eine Postfachdatei wird bereits importiert."
+            }
+            "Importing {} in the background…" => "{} wird im Hintergrund importiert…",
+            "Importing the selected worksheet in the background…" => {
+                "Das ausgewählte Arbeitsblatt wird im Hintergrund importiert…"
+            }
+            "Queue cleared; its durable batch association was discarded." => {
+                "Warteschlange geleert; die dauerhafte Stapelzuordnung wurde verworfen."
+            }
             "Execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a migration." => {
                 "Die Ausführung ist blockiert, weil die dauerhafte Zustandsansicht veraltet ist. Beheben Sie den SQLite-Aktualisierungsfehler und aktualisieren Sie die Ansicht vor dem Start."
             }
@@ -1037,6 +1056,18 @@ mod tests {
             "A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.",
             "Elapsed {}",
             "{} visible of {} loaded",
+            "Selected {} mailbox row(s) for focused review.",
+            "Imported {} mailbox rows. Review them and run preflight before migration.",
+            "Choose the worksheet containing the migration rows before importing.",
+            "A mailbox file is already being imported.",
+            "Importing {} in the background…",
+            "Importing the selected worksheet in the background…",
+            "Queue cleared; its durable batch association was discarded.",
+            "Errors and attention",
+            "Running",
+            "Completed",
+            "All statuses",
+            "No durable runs recorded yet.",
             "Showing the newest 250 runs. Export the audit report for complete history.",
             "Run",
             "Mailbox",

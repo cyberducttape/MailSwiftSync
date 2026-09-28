@@ -171,17 +171,17 @@ impl App {
             );
             egui::ComboBox::from_id_salt("activity_status_filter")
                 .selected_text(match self.activity_status_filter.as_str() {
-                    "errors" => "Errors and attention",
-                    "running" => "Running",
-                    "completed" => "Completed",
-                    _ => "All statuses",
+                    "errors" => self.language.text("Errors and attention"),
+                    "running" => self.language.text("Running"),
+                    "completed" => self.language.text("Completed"),
+                    _ => self.language.text("All statuses"),
                 })
                 .show_ui(ui, |ui| {
                     for (value, label) in [
-                        ("all", "All statuses"),
-                        ("errors", "Errors and attention"),
-                        ("running", "Running"),
-                        ("completed", "Completed"),
+                        ("all", self.language.text("All statuses")),
+                        ("errors", self.language.text("Errors and attention")),
+                        ("running", self.language.text("Running")),
+                        ("completed", self.language.text("Completed")),
                     ] {
                         ui.selectable_value(&mut self.activity_status_filter, value.into(), label);
                     }
@@ -197,7 +197,7 @@ impl App {
         match runs {
             runs if runs.is_empty() => {
                 ui.label(
-                    RichText::new("No durable runs recorded yet.")
+                    RichText::new(self.language.text("No durable runs recorded yet."))
                         .color(self.theme_colors().text_secondary),
                 );
             }
