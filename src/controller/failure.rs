@@ -288,11 +288,18 @@ pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count:
 }
 
 pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
-    let base_millis = if classify_failure(error) == FailureClass::Capacity {
-        5_000_u64
-    } else {
-        1_000_u64
-    };
+    let provider_error =
+        crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error);
+    let base_millis = provider_error.suggested_retry_delay().map_or_else(
+        || {
+            if classify_failure(error) == FailureClass::Capacity {
+                5_000_u64
+            } else {
+                1_000_u64
+            }
+        },
+        |delay| delay.as_millis().min(u128::from(u64::MAX)) as u64,
+    );
     let multiplier = 1_u64 << attempt.min(5);
     let exponential = base_millis.saturating_mul(multiplier).min(120_000);
     // Add per-attempt entropy so concurrent workers do not wake on the same

@@ -1484,7 +1484,7 @@ mod tests {
             FailureClass::Capacity
         );
         let transport_delay = transient_retry_delay("connection reset by peer", 0);
-        assert!((Duration::from_secs(1)..=Duration::from_millis(1_500)).contains(&transport_delay));
+        assert!((Duration::from_secs(10)..=Duration::from_secs(15)).contains(&transport_delay));
         let capacity_delay = transient_retry_delay("server busy", 0);
         assert!((Duration::from_secs(5)..=Duration::from_millis(7_500)).contains(&capacity_delay));
         assert_eq!(
@@ -1494,6 +1494,19 @@ mod tests {
         assert_eq!(
             classified_failure_detail("too many requests"),
             "[attention_reason=capacity_limited] [class=capacity] too many requests"
+        );
+    }
+
+    #[test]
+    fn provider_rate_limit_recommendation_is_used_and_remains_bounded() {
+        let delay = transient_retry_delay("too many requests", 0);
+        assert!(
+            (Duration::from_secs(60)..=Duration::from_secs(90)).contains(&delay),
+            "rate-limit retry should start from the provider-intelligence recommendation"
+        );
+        assert_eq!(
+            transient_retry_delay("too many requests", 99),
+            Duration::from_secs(120)
         );
     }
 
