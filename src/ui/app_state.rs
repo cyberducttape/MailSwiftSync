@@ -145,6 +145,7 @@ pub(crate) struct App {
     /// `branding::OperatorBranding`.
     pub(crate) branding: crate::branding::OperatorBranding,
     pub(crate) bulk_live_confirm_open: bool,
+    pub(crate) bulk_live_confirm_focus_requested: bool,
     pub(crate) bulk_live_confirmed: bool,
     pub(crate) bulk_confirmation_summary: Option<BatchActionPlan>,
     /// Proof of what the operator saw when they opened the confirmation dialog.

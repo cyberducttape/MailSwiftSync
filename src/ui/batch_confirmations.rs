@@ -136,14 +136,9 @@ impl App {
         let selected_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
 
         let stored_identity = self.bulk_confirmation_identity.clone();
-        let mut open = self.bulk_live_confirm_open;
         let mut close = false;
 
-        egui::Window::new(self.language.text("Confirm live batch migration"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::new("live_batch_migration_confirmation")).show(ctx, |ui| {
                 ui.heading(
                     RichText::new(self.language.text("This will change destination mailboxes"))
                         .color(self.theme_colors().danger),
@@ -249,7 +244,12 @@ impl App {
                     .color(self.theme_colors().text_secondary),
                 );
                 ui.horizontal(|ui| {
-                    if ui.button(self.language.text("Cancel")).clicked() {
+                    let cancel = ui.button(self.language.text("Cancel"));
+                    if !self.bulk_live_confirm_focus_requested {
+                        cancel.request_focus();
+                        self.bulk_live_confirm_focus_requested = true;
+                    }
+                    if cancel.clicked() {
                         close = true;
                     }
                     if ui
@@ -286,8 +286,9 @@ impl App {
                     }
                 });
             });
-        self.bulk_live_confirm_open = open && !close;
+        self.bulk_live_confirm_open = !(close || response.should_close());
         if !self.bulk_live_confirm_open {
+            self.bulk_live_confirm_focus_requested = false;
             self.bulk_confirmation_summary = None;
             self.bulk_confirmation_identity = None;
         }

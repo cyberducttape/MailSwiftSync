@@ -31,6 +31,7 @@ impl App {
             BatchStartDecision::ConfirmLive => {
                 self.refresh_ui_snapshot_now();
                 self.bulk_live_confirm_open = true;
+                self.bulk_live_confirm_focus_requested = false;
                 self.bulk_confirmation_summary = None;
                 return;
             }

@@ -435,6 +435,7 @@ impl App {
             language: appearance.language,
             branding: crate::branding::OperatorBranding::load(),
             bulk_live_confirm_open: false,
+            bulk_live_confirm_focus_requested: false,
             bulk_live_confirmed: false,
             bulk_confirmation_summary: None,
             bulk_confirmation_identity: None,
