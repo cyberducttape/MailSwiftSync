@@ -177,7 +177,9 @@ impl App {
                 );
             }
             Err(error) => self.set_status(
-                format!("Could not create project: {error}"),
+                self.language
+                    .text("Could not create project: {error}")
+                    .replace("{error}", &error.to_string()),
                 StatusSeverity::Error,
             ),
         }
@@ -195,7 +197,9 @@ impl App {
         }
         if let Err(error) = self.form.validate() {
             self.set_status(
-                format!("Preflight input is invalid: {error}"),
+                self.language
+                    .text("Preflight input is invalid: {error}")
+                    .replace("{error}", &error),
                 StatusSeverity::Error,
             );
             return;
@@ -221,7 +225,9 @@ impl App {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 self.set_status(
-                    format!("Source readiness probe blocked: {error}"),
+                    self.language
+                        .text("Source readiness probe blocked: {error}")
+                        .replace("{error}", &error),
                     StatusSeverity::Error,
                 );
                 return;
@@ -234,7 +240,9 @@ impl App {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 self.set_status(
-                    format!("Destination readiness probe blocked: {error}"),
+                    self.language
+                        .text("Destination readiness probe blocked: {error}")
+                        .replace("{error}", &error),
                     StatusSeverity::Error,
                 );
                 return;
@@ -291,7 +299,9 @@ impl App {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 self.set_status(
-                    format!("Live authentication probe blocked: {error}"),
+                    self.language
+                        .text("Live authentication probe blocked: {error}")
+                        .replace("{error}", &error),
                     StatusSeverity::Error,
                 );
                 return;
@@ -304,7 +314,9 @@ impl App {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 self.set_status(
-                    format!("Live authentication probe blocked: {error}"),
+                    self.language
+                        .text("Live authentication probe blocked: {error}")
+                        .replace("{error}", &error),
                     StatusSeverity::Error,
                 );
                 return;
@@ -361,7 +373,11 @@ impl App {
                 let command = self.form.preview_command();
                 if let Err(validation_error) = &command {
                     ui.label(
-                        RichText::new(format!("⚠ Execution plan validation failed: {}", validation_error))
+                        RichText::new(
+                            self.language
+                                .text("⚠ Execution plan validation failed: {error}")
+                                .replace("{error}", &validation_error.to_string()),
+                        )
                             .color(colors.danger),
                     );
                     ui.label(

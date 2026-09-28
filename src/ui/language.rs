@@ -385,6 +385,20 @@ impl UiLanguage {
             "Cancel" => "Abbrechen",
             "I understand — start migration" => "Verstanden — Migration starten",
             "Execution plan" => "Ausführungsplan",
+            "Could not create project: {error}" => "Projekt konnte nicht erstellt werden: {error}",
+            "Preflight input is invalid: {error}" => "Vorprüfungsdaten sind ungültig: {error}",
+            "Source readiness probe blocked: {error}" => {
+                "Quell-Bereitschaftsprüfung blockiert: {error}"
+            }
+            "Destination readiness probe blocked: {error}" => {
+                "Ziel-Bereitschaftsprüfung blockiert: {error}"
+            }
+            "Live authentication probe blocked: {error}" => {
+                "Live-Authentifizierungsprüfung blockiert: {error}"
+            }
+            "⚠ Execution plan validation failed: {error}" => {
+                "⚠ Validierung des Ausführungsplans fehlgeschlagen: {error}"
+            }
             "Advanced migration options" => "Erweiterte Migrationsoptionen",
             "Passwords are redacted. This is an argument list for review, not a shell command to paste." => {
                 "Passwörter werden ausgeblendet. Dies ist eine Argumentliste zur Prüfung, kein Shell-Befehl zum Einfügen."
@@ -1141,6 +1155,12 @@ mod tests {
             "Reopen project",
             "Passwords are redacted. This is an argument list for review, not a shell command to paste.",
             "Fix the advanced options above before this plan can run.",
+            "Could not create project: {error}",
+            "Preflight input is invalid: {error}",
+            "Source readiness probe blocked: {error}",
+            "Destination readiness probe blocked: {error}",
+            "Live authentication probe blocked: {error}",
+            "⚠ Execution plan validation failed: {error}",
             "These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules.",
             "Delete destination messages missing from source  (--delete2)",
             "Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.",
