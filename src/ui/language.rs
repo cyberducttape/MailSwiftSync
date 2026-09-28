@@ -43,6 +43,33 @@ impl UiLanguage {
             }
             "Dovecot strategy: {} — {}" => "Dovecot-Strategie: {} — {}",
             "Cancellation requested…" => "Abbruch angefordert…",
+            "Execution completed without a durable run context" => {
+                "Ausführung ohne dauerhaften Laufkontext abgeschlossen"
+            }
+            "Migration result requires durable storage; retrying terminal commit" => {
+                "Migrationsergebnis benötigt dauerhafte Speicherung; Abschluss wird erneut versucht"
+            }
+            "Migration result requires durability review" => {
+                "Migrationsergebnis erfordert eine Prüfung der Dauerhaftigkeit"
+            }
+            "Migration failed: {error}" => "Migration fehlgeschlagen: {error}",
+            "Preflight completed successfully" => "Vorabprüfung erfolgreich abgeschlossen",
+            "Batch transfer completed; review per-mailbox verification results" => {
+                "Stapelübertragung abgeschlossen; prüfen Sie die Verifizierungsergebnisse je Postfach"
+            }
+            "Migration completed and verified" => "Migration abgeschlossen und verifiziert",
+            "Migration completed with accepted verification exceptions" => {
+                "Migration mit akzeptierten Verifizierungsausnahmen abgeschlossen"
+            }
+            "Dovecot synchronization completed with changes pending; repeat the final pass until exit code 0" => {
+                "Dovecot-Synchronisierung mit ausstehenden Änderungen abgeschlossen; wiederholen Sie den letzten Durchlauf bis zum Exit-Code 0"
+            }
+            "Migration completed; verification found differences requiring review" => {
+                "Migration abgeschlossen; die Verifizierung fand prüfpflichtige Unterschiede"
+            }
+            "Migration completed; verification requires operator review" => {
+                "Migration abgeschlossen; die Verifizierung erfordert eine Betreiberprüfung"
+            }
             "Provider readiness runbook" => "Anbieter-Betriebsleitfaden",
             "Read-only operational guidance. Preflight and live admission remain authoritative." => {
                 "Schreibgeschützte Betriebshinweise. Vorprüfung und Live-Zulassung bleiben maßgeblich."
@@ -1256,6 +1283,17 @@ mod tests {
             "Errors and attention",
             "Running",
             "Completed",
+            "Execution completed without a durable run context",
+            "Migration result requires durable storage; retrying terminal commit",
+            "Migration result requires durability review",
+            "Migration failed: {error}",
+            "Preflight completed successfully",
+            "Batch transfer completed; review per-mailbox verification results",
+            "Migration completed and verified",
+            "Migration completed with accepted verification exceptions",
+            "Dovecot synchronization completed with changes pending; repeat the final pass until exit code 0",
+            "Migration completed; verification found differences requiring review",
+            "Migration completed; verification requires operator review",
             "All statuses",
             "No durable runs recorded yet.",
             "Worksheet selection cancelled; no rows were imported.",

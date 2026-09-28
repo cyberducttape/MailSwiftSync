@@ -32,7 +32,7 @@ impl eframe::App for App {
                         ui.label(format!(
                             "{}: {}",
                             self.language.text("Phase"),
-                            format_phase_name(project.phase)
+                            self.language.text(format_phase_name(project.phase))
                         ));
                     }
                     ui.label(format!(

@@ -10,7 +10,8 @@ impl App {
         if let Some(r) = done {
             let Some(run_context) = active_run else {
                 self.set_status(
-                    "Execution completed without a durable run context",
+                    self.language
+                        .text("Execution completed without a durable run context"),
                     StatusSeverity::Error,
                 );
                 self.receiver = None;
@@ -250,32 +251,42 @@ impl App {
                 // recovery for a transient SQLite failure.
                 self.deferred_events.push_front(Event::Finished(r));
                 self.set_status(
-                    "Migration result requires durable storage; retrying terminal commit",
+                    self.language.text(
+                        "Migration result requires durable storage; retrying terminal commit",
+                    ),
                     StatusSeverity::Error,
                 );
                 return;
             }
             let (completion_status, completion_severity) = if self.durability_error {
                 (
-                    "Migration result requires durability review".to_owned(),
+                    self.language
+                        .text("Migration result requires durability review")
+                        .to_owned(),
                     StatusSeverity::Error,
                 )
             } else {
                 match r {
                     Ok(_) => (
-                        successful_run_status(
-                            run_context.dry_run,
-                            was_bulk_run,
-                            direct_final_state,
-                        )
-                        .to_owned(),
+                        self.language
+                            .text(successful_run_status(
+                                run_context.dry_run,
+                                was_bulk_run,
+                                direct_final_state,
+                            ))
+                            .to_owned(),
                         successful_run_severity(
                             run_context.dry_run,
                             was_bulk_run,
                             direct_final_state,
                         ),
                     ),
-                    Err(e) => (format!("Failed: {e}"), StatusSeverity::Error),
+                    Err(e) => (
+                        self.language
+                            .text("Migration failed: {error}")
+                            .replace("{error}", &e),
+                        StatusSeverity::Error,
+                    ),
                 }
             };
             self.set_status(completion_status, completion_severity);
