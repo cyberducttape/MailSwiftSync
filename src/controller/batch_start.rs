@@ -25,7 +25,7 @@ impl App {
             persistence_available: self.persistence_available,
         }) {
             BatchStartDecision::Block(block) => {
-                self.bulk_message = block.message().into();
+                self.bulk_message = self.language.text(block.message()).into();
                 return;
             }
             BatchStartDecision::ConfirmLive => {
@@ -40,9 +40,10 @@ impl App {
         if live {
             self.bulk_live_confirmed = false;
             if self.bulk_project_id.is_none() || self.bulk_job_ids.len() != self.bulk_jobs.len() {
-                self.bulk_message =
-                    "Run a successful preflight for this queue before starting live migrations."
-                        .into();
+                self.bulk_message = self
+                    .language
+                    .text("Run a successful preflight for this queue before starting live migrations.")
+                    .into();
                 return;
             }
         }
@@ -90,7 +91,7 @@ impl App {
                 .iter()
                 .any(|job| crate::runner::automap_blocks_live_certification(&job.form()))
         {
-            self.bulk_message = "Live batch blocked: one or more selected imapsync plans use automapping, which cannot currently be independently verified. Disable automap and rerun preflight for those mailboxes.".into();
+            self.bulk_message = self.language.text("Live batch blocked: one or more selected imapsync plans use automapping, which cannot currently be independently verified. Disable automap and rerun preflight for those mailboxes.").into();
             return;
         }
         let project_id = admission.project_id;

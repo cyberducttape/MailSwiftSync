@@ -43,6 +43,39 @@ impl UiLanguage {
             }
             "Dovecot strategy: {} — {}" => "Dovecot-Strategie: {} — {}",
             "Cancellation requested…" => "Abbruch angefordert…",
+            "Execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a migration." => {
+                "Die Ausführung ist blockiert, weil die dauerhafte Zustandsansicht veraltet ist. Beheben Sie den SQLite-Aktualisierungsfehler und aktualisieren Sie die Ansicht vor dem Start."
+            }
+            "Execution is blocked because the saved migration profile is unavailable; repair it before starting a migration." => {
+                "Die Ausführung ist blockiert, weil das gespeicherte Migrationsprofil nicht verfügbar ist. Reparieren Sie es vor dem Start."
+            }
+            "This project is being viewed read-only. Start a new migration to execute a plan." => {
+                "Dieses Projekt wird schreibgeschützt angezeigt. Starten Sie eine neue Migration, um einen Plan auszuführen."
+            }
+            "Execution is blocked until you confirm that no unverified migration process remains on this host." => {
+                "Die Ausführung ist blockiert, bis Sie bestätigen, dass auf diesem Host kein nicht verifizierter Migrationsprozess mehr läuft."
+            }
+            "Batch execution is blocked while the durable state view is stale. Resolve the SQLite refresh error and refresh before starting a queue." => {
+                "Die Stapelausführung ist blockiert, weil die dauerhafte Zustandsansicht veraltet ist. Beheben Sie den SQLite-Aktualisierungsfehler und aktualisieren Sie die Ansicht vor dem Start."
+            }
+            "Batch execution is blocked because the saved migration profile is unavailable; repair it before starting a queue." => {
+                "Die Stapelausführung ist blockiert, weil das gespeicherte Migrationsprofil nicht verfügbar ist. Reparieren Sie es vor dem Start."
+            }
+            "This project is being viewed read-only. Start a new migration to execute a batch." => {
+                "Dieses Projekt wird schreibgeschützt angezeigt. Starten Sie eine neue Migration, um einen Stapel auszuführen."
+            }
+            "Import a file before starting the queue." => {
+                "Importieren Sie eine Datei, bevor Sie die Warteschlange starten."
+            }
+            "Batch execution requires durable SQLite storage." => {
+                "Die Stapelausführung benötigt dauerhaften SQLite-Speicher."
+            }
+            "Run a successful preflight for this queue before starting live migrations." => {
+                "Führen Sie eine erfolgreiche Vorprüfung für diese Warteschlange durch, bevor Sie Live-Migrationen starten."
+            }
+            "Live batch blocked: one or more selected imapsync plans use automapping, which cannot currently be independently verified. Disable automap and rerun preflight for those mailboxes." => {
+                "Live-Stapel blockiert: Mindestens ein ausgewählter imapsync-Plan verwendet Automapping, das derzeit nicht unabhängig verifiziert werden kann. Deaktivieren Sie Automapping und führen Sie die Vorprüfung für diese Postfächer erneut aus."
+            }
             "Conservative default" => "Konservative Voreinstellung",
             "Dovecot native" => "Dovecot nativ",
             "imapsync fallback" => "imapsync-Fallback",

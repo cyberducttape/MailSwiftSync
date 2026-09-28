@@ -14,7 +14,7 @@ impl App {
             live_requires_confirmation,
         }) {
             SingleStartDecision::Block(block) => {
-                self.set_status(block.message(), StatusSeverity::Error);
+                self.set_status(self.language.text(block.message()), StatusSeverity::Error);
                 return;
             }
             SingleStartDecision::ConfirmLive => {
