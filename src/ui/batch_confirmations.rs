@@ -89,33 +89,12 @@ impl App {
             return;
         }
         if self.bulk_confirmation_summary.is_none() {
-            let rows = self
-                .bulk_jobs
-                .iter()
-                .enumerate()
-                .filter_map(|(index, job)| {
-                    let job_id = self.bulk_job_ids.get(index)?;
-                    Some(crate::controller::BatchActionRow {
-                        id: job_id,
-                        selected: self.bulk_row_is_selected(index),
-                        visible: self.mailbox_matches_filter(job),
-                        durable_state: Some(job.state.as_str()),
-                        destructive: job.defaults.profile.delete2,
-                    })
-                })
-                .collect::<Vec<_>>();
-            let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
-            let plan = crate::controller::build_batch_action_plan(
-                &rows,
-                self.bulk_retry_scope,
-                concurrency,
-                self.bulk_mode,
-            );
-            let selected_job_ids = rows
-                .iter()
-                .filter(|row| row.selected)
-                .map(|row| row.id.to_owned())
-                .collect::<Vec<_>>();
+            // Use the same complete row projection as the mailbox cockpit.
+            // In particular, selected IDs that are no longer present in the
+            // queue remain visible to the planner as blocked/missing rather
+            // than disappearing from the confirmation scope.
+            let plan = self.current_batch_action_plan(self.bulk_mode, self.bulk_retry_scope);
+            let selected_job_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
 
             self.bulk_confirmation_summary = Some(plan.clone());
 
@@ -123,7 +102,7 @@ impl App {
                 selected_job_ids,
                 retry_scope: self.bulk_retry_scope,
                 execution_mode: self.bulk_mode,
-                concurrency,
+                concurrency: plan.concurrency,
                 deletion_enabled: plan.destructive_count > 0,
                 action_plan_hash: plan.identity_hash,
             });

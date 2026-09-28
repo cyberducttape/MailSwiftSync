@@ -16,7 +16,7 @@ use eframe::egui::{self, Color32, RichText};
 use egui_extras::{Column, TableBuilder};
 
 impl App {
-    fn current_batch_action_plan(
+    pub(crate) fn current_batch_action_plan(
         &self,
         execution_mode: BatchExecutionMode,
         retry_scope: BulkRetryScope,

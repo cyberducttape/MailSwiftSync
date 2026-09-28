@@ -15,12 +15,6 @@ impl App {
         }
     }
 
-    pub(crate) fn bulk_row_is_selected(&self, index: usize) -> bool {
-        self.bulk_job_ids
-            .get(index)
-            .is_some_and(|job_id| self.bulk_selected_ids.contains(job_id))
-    }
-
     pub(crate) fn select_bulk_state_set(&mut self, set: BulkStateSet) {
         self.bulk_selected_ids = self
             .bulk_jobs
