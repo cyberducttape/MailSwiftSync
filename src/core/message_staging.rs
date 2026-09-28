@@ -161,7 +161,12 @@ impl MessageMetadataStage {
         };
         if let Err(error) = stage
             .initialize(true)
-            .and_then(|_| stage.bind_identity(identity))
+            .map_err(|error| format!("schema initialization: {error}"))
+            .and_then(|()| {
+                stage
+                    .bind_identity(identity)
+                    .map_err(|error| format!("identity binding: {error}"))
+            })
         {
             let path = stage.path.take();
             if let Some(connection) = stage.connection.take() {
