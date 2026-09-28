@@ -19,16 +19,14 @@ artifacts.
 
 ## Linux distribution gate
 
-Portable archives and the pinned container image are sufficient for the alpha
-preview. Before a stable Linux release, complete the
-Linux packaging beyond the portable alpha archive is tracked as repository-only
-release work: signed
-Debian/Ubuntu and RHEL-family repositories, x86_64 and ARM64 artifacts, shell
-completions, an installed man page, a dependency doctor, deterministic
-upgrade/uninstall behavior, and automated enforcement of the qualified
-imapsync `2.314` engine contract. Do not present the current package from a
-Linux distribution as verification-qualified merely because a transfer can
-run with it.
+Portable archives, a deterministic signed Debian package, and the pinned
+container image are sufficient for the alpha preview. Before a stable Linux
+release, complete the remaining Linux distribution work: signed Debian/Ubuntu
+and RHEL-family repositories, x86_64 and ARM64 artifacts, shell completions,
+deterministic upgrade/uninstall behavior, and automated enforcement of the
+qualified imapsync `2.314` engine contract. The Debian package installs the
+control plane and documentation only; do not present it as verification-
+qualified merely because a transfer can run with it.
 
 The container build uses immutable OCI digests for its Debian and Rust base
 images. The imapsync package is independently SHA-256 verified before
@@ -261,9 +259,9 @@ and require the corresponding integration run.
   | --- | ---: | ---: | ---: |
   | CSV | 1,000 | 2 ms | 8.4 MiB |
   | CSV | 10,000 | 21 ms | 14.2 MiB |
-  | CSV | 100,000 | 205 ms | 71.3 MiB |
-  | XLSX | 10,000 | 54 ms | 21.7 MiB |
-  | XLSX | 100,000 | 536 ms | 125.5 MiB |
+  | CSV | 100,000 | 226 ms | 71.3 MiB |
+  | XLSX | 10,000 | 57 ms | 21.4 MiB |
+  | XLSX | 100,000 | 590 ms | 125.1 MiB |
 
   RSS is the process resident set reported by Linux and is cumulative because
   the cases run in one process; it is evidence for a baseline, not a portable
@@ -277,11 +275,11 @@ and require the corresponding integration run.
   The pure cached-filter/selection path has a companion command,
   `scripts/benchmark-ui-scale.sh`. It measures 100k-row filter keystroke,
   explicit selection-all, a 1,000-row state-update refresh, and a real
-  virtualized egui first frame. The same local release baseline measured 3 ms
-  for filtering, 9 ms for selecting all 100,000 IDs, 3 ms for refreshing a
+  virtualized egui first frame. The current local release baseline measured 4 ms
+  for filtering, 11 ms for selecting all 100,000 IDs, 3 ms for refreshing a
   1,000-row state update, and 2 ms for the virtualized first frame. The same
   script now renders the complete application shell with 100,000 rows; the
-  current baseline is 82 ms for that first frame. These are release-mode host
+  current baseline is 100 ms for that first frame. These are release-mode host
   baselines. The script enforces default budgets of 100 ms for filtering, 250
   ms for selection-all, 100 ms for state refresh, 100 ms for the virtualized
   first frame, and 500 ms for the full shell; qualified host classes may
@@ -293,7 +291,7 @@ and require the corresponding integration run.
   `scripts/benchmark-reload-scale.sh`. It seeds and closes a file-backed
   100,000-row project, reopens it, then reads bounded mailbox, status, and
   verification pages plus aggregate counts. The local release baseline was
-  484 ms to seed, 743 ms to reopen, and 122 ms for those bounded reads. This
+  532 ms to seed, 834 ms to reopen, and 135 ms for those bounded reads. This
   is evidence for the SQLite read path, not an egui first-frame measurement or
   a release budget; capture both on each supported release host. The script
   enforces default budgets of 5,000 ms for seeding, 2,000 ms for reopen, and
@@ -311,7 +309,11 @@ and require the corresponding integration run.
   Remote Dovecot execution is deliberately disabled until the application has
   a delivery mechanism that cannot expose credentials through
   destination-host process inspection.
-- Signed portable release archives for Linux, Windows, and macOS, with checksums, platform signatures/notarization, and reproducible release instructions. Native OS-specific installer packages remain outside the current archive format.
+- Signed portable release archives for Linux, Windows, and macOS, plus a
+  deterministic signed Debian package for Linux, with checksums,
+  platform signatures/notarization, and reproducible release instructions.
+  RPM and native Windows/macOS installer packages remain outside the current
+  release format.
 - A compatibility matrix covering Dovecot versions, common hosted IMAP providers, TLS modes, folder namespaces, and authentication methods.
 - Preflight checks for DNS, TCP/TLS, authentication, folder inventory, and
   observed special-use folders are implemented for the authenticated IMAP

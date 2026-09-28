@@ -156,7 +156,7 @@ MailSwiftSync itself uses Rustls with bundled WebPKI certificate roots for its a
 
 ### 2. Download or build MailSwiftSync
 
-For released binaries, see [GitHub Releases](https://github.com/cyberducttape/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Every release tag must exactly equal `v` plus Cargo's package version (currently `v0.1.0-alpha.1`), so prerelease identifiers remain part of the binary and report provenance.
+For released binaries, see [GitHub Releases](https://github.com/cyberducttape/MailSwiftSync/releases). The release workflow produces portable Linux x86_64, Windows x86_64, and macOS arm64/x86_64 archives plus a Linux Debian package with SHA-256 checksums, platform signing/notarization when the release signing environment is configured, a Rust CycloneDX SBOM and final-image SPDX SBOM, and GitHub build-provenance attestations. Every release tag must exactly equal `v` plus Cargo's package version (currently `v0.1.0-alpha.1`), so prerelease identifiers remain part of the binary and report provenance.
 
 For contributors or users building from source:
 
@@ -165,10 +165,11 @@ cargo run --release
 ```
 
 Linux packaging targets for a stable release are tracked in the repository's
-release-readiness plan: signed
-Debian/Ubuntu and RHEL-family packages and repositories, x86_64/ARM64 builds,
-shell completions, a man page, and a dependency doctor. The alpha release
-continues to use portable archives and the pinned container image.
+release-readiness plan: signed Debian/Ubuntu and RHEL-family repositories,
+x86_64/ARM64 builds, shell completions, and deterministic upgrade/uninstall
+behavior. The alpha release provides a signed Debian package for the Linux
+host architecture, portable archives, and the pinned container image; RPM and
+APT repository metadata remain future release work.
 
 If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Preflight** selected and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
 
