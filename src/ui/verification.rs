@@ -22,7 +22,7 @@ impl App {
                     )
                 });
                 if ui.button(self.language.text("Export project report…")).clicked() { self.report_export_result("Project report", self.export_project_report()); }
-                if ui.button("Export project JSON…").clicked() { self.report_export_result("Project JSON", self.export_project_json()); }
+                if ui.button(self.language.text("Export project JSON…")).clicked() { self.report_export_result("Project JSON", self.export_project_json()); }
                 if ui
                     .add_enabled(
                         proof_ready,
@@ -36,7 +36,7 @@ impl App {
                     self.report_export_result("Customer proof", self.export_customer_proof());
                 }
                 if ui.button(self.language.text("Export support bundle…")).clicked() { self.report_export_result("Support bundle", self.export_support_bundle_dialog()); }
-                if ui.button("Export project health…").clicked() { self.report_export_result("Project health export", self.export_project_health()); }
+                if ui.button(self.language.text("Export project health…")).clicked() { self.report_export_result("Project health export", self.export_project_health()); }
                 if let Some(project) = self.ui_snapshot.project.as_ref() {
                     if customer_proof_ready(
                         project.phase,
@@ -46,14 +46,14 @@ impl App {
                     {
                         ui.label(
                             RichText::new(
-                                "Customer proof is ready: the durable project is Complete and no mailbox requires review.",
+                                self.language.text("Customer proof is ready: the durable project is Complete and no mailbox requires review."),
                             )
                             .color(self.theme_colors().success),
                         );
                     } else {
                         ui.label(
                             RichText::new(
-                                "Customer proof remains gated until the durable project is Complete, every mailbox is verified, and the state view is current.",
+                                self.language.text("Customer proof remains gated until the durable project is Complete, every mailbox is verified, and the state view is current."),
                             )
                             .color(self.theme_colors().warning),
                         );
@@ -66,7 +66,7 @@ impl App {
                     let mailbox_counts = self.ui_snapshot.mailbox_counts;
                     ui.separator();
                     ui.heading(self.language.text("Mailbox evidence"));
-                    ui.label(format!("{verified} of {} verified · {review} require review", mailbox_counts.total, verified = mailbox_counts.verified, review = mailbox_counts.needs_review));
+                    ui.label(self.language.text("{} of {} verified · {} require review").replace("{}", &mailbox_counts.verified.to_string()).replacen("{}", &mailbox_counts.total.to_string(), 1).replacen("{}", &mailbox_counts.needs_review.to_string(), 1));
                     ui.horizontal_wrapped(|ui| {
                         ui.label(self.language.text("Search"));
                         ui.add(egui::TextEdit::singleline(&mut self.verification_search).hint_text(self.language.text("mailbox or destination")).desired_width(220.0));
@@ -84,7 +84,7 @@ impl App {
                     ui.label(RichText::new(format!("{} visible on page · showing {}–{} of {}", visible.len(), self.verification_offset + 1, (self.verification_offset as usize + verification_rows.len()).min(mailbox_counts.total), mailbox_counts.total)).color(self.theme_colors().text_secondary));
                     egui::ScrollArea::vertical().id_salt("verification_mailbox_list").max_height(360.0).show_rows(ui, 32.0, visible.len(), |ui, visible_rows| {
                         egui::Grid::new("verification_mailboxes").striped(true).min_col_width(140.0).show(ui, |ui| {
-                            if visible_rows.start == 0 { ui.strong("Mailbox"); ui.strong("Evidence"); ui.strong("Result"); ui.end_row(); }
+                            if visible_rows.start == 0 { ui.strong(self.language.text("Mailbox")); ui.strong(self.language.text("Evidence")); ui.strong(self.language.text("Result")); ui.end_row(); }
                             for row in visible_rows {
                                 let mailbox = &verification_rows[visible[row]];
                                 let evidence_label = mailbox.evidence.as_ref().map(|(_, evidence, _)| evidence.verification_outcome().display_label()).unwrap_or("No evidence");
@@ -97,55 +97,55 @@ impl App {
                         });
                     });
                     ui.horizontal(|ui| {
-                        let previous = ui.add_enabled(self.verification_offset > 0, egui::Button::new("← Previous")).clicked();
-                        let next = ui.add_enabled(self.verification_offset as usize + verification_rows.len() < mailbox_counts.total, egui::Button::new("Next →")).clicked();
+                        let previous = ui.add_enabled(self.verification_offset > 0, egui::Button::new(self.language.text("← Previous"))).clicked();
+                        let next = ui.add_enabled(self.verification_offset as usize + verification_rows.len() < mailbox_counts.total, egui::Button::new(self.language.text("Next →"))).clicked();
                         if previous { self.verification_offset = self.verification_offset.saturating_sub(200); }
                         else if next { self.verification_offset = self.verification_offset.saturating_add(200); }
                     });
                 } else {
                     ui.separator();
-                    ui.label(RichText::new("Loading mailbox verification…").color(self.theme_colors().text_secondary));
+                    ui.label(RichText::new(self.language.text("Loading mailbox verification…")).color(self.theme_colors().text_secondary));
                 }
             }
             let selected_mailbox = self.job_id.as_deref().and_then(|job_id| self.cached_report_mailbox(job_id)).cloned();
             if let Some(mailbox) = selected_mailbox {
                 let assurance = mailbox.assurance();
                 ui.separator();
-                ui.heading("Assurance");
+                ui.heading(self.language.text("Assurance"));
                 ui.label(if assurance.unresolved {
-                    "Attention required: this mailbox is not currently safe to close."
+                    self.language.text("Attention required: this mailbox is not currently safe to close.")
                 } else if assurance.transfer_completed && assurance.inventory_reconciled {
-                    "Transfer and inventory evidence support this mailbox's current state."
+                    self.language.text("Transfer and inventory evidence support this mailbox's current state.")
                 } else {
-                    "Assurance is incomplete; review the missing facts before proceeding."
+                    self.language.text("Assurance is incomplete; review the missing facts before proceeding.")
                 });
                 for (label, value) in [
-                    ("Transfer", if assurance.transfer_completed { "completed" } else { "not complete" }),
-                    ("Destination reachable", match assurance.destination_reachable { Some(true) => "confirmed", Some(false) => "failed", None => "unknown" }),
-                    ("Inventory reconciled", if assurance.inventory_reconciled { "confirmed" } else { "not confirmed" }),
-                    ("Message-level evidence", if assurance.message_level_evidence { "collected" } else { "not collected" }),
-                    ("Differences", if assurance.differences_found == 0 { "none recorded" } else { "found" }),
-                    ("Verification authority", assurance.verification_authority.as_deref().unwrap_or("unknown")),
+                    (self.language.text("Transfer"), if assurance.transfer_completed { self.language.text("completed") } else { self.language.text("not complete") }),
+                    (self.language.text("Destination reachable"), match assurance.destination_reachable { Some(true) => self.language.text("confirmed"), Some(false) => self.language.text("failed"), None => self.language.text("unknown") }),
+                    (self.language.text("Inventory reconciled"), if assurance.inventory_reconciled { self.language.text("confirmed") } else { self.language.text("not confirmed") }),
+                    (self.language.text("Message-level evidence"), if assurance.message_level_evidence { self.language.text("collected") } else { self.language.text("not collected") }),
+                    (self.language.text("Differences"), if assurance.differences_found == 0 { self.language.text("none recorded") } else { self.language.text("found") }),
+                    (self.language.text("Verification authority"), assurance.verification_authority.as_deref().unwrap_or(self.language.text("unknown"))),
                 ] {
                     ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); });
                 }
                 match mailbox.evidence.as_ref() {
                     Some((_, evidence, _)) => {
-                        ui.label("Durable mailbox reconciliation");
+                        ui.label(self.language.text("Durable mailbox reconciliation"));
                         ui.label(
                             RichText::new(
-                                "Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared.",
+                                self.language.text("Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared."),
                             )
                             .italics()
                             .color(self.theme_colors().text_secondary),
                         );
-                        if ui.button("Export verification report…").clicked() { self.report_export_result("Verification report", self.export_verification_report()); }
+                        if ui.button(self.language.text("Export verification report…")).clicked() { self.report_export_result("Verification report", self.export_verification_report()); }
                         for (label, value) in [("Verification method", evidence.verification_method().as_str().into()), ("Verification outcome", evidence.verification_outcome().display_label().into()), ("Folders", format!("{} source / {} destination", evidence.source_folders, evidence.destination_folders)), ("Messages", format!("{} source / {} destination", evidence.source_messages, evidence.destination_messages)), ("Bytes", format!("{} source / {} destination", evidence.source_bytes, evidence.destination_bytes)), ("Unresolved", evidence.unresolved_count().map_or_else(|| "unknown".into(), |count| count.to_string())), ("Missing", evidence.missing_count().to_string()), ("Extra", evidence.extra_count().to_string()), ("Modified", evidence.modified_count().to_string()), ("Failed", evidence.failed_messages.to_string()), ("Reason", evidence.verification_reason().unwrap_or("none").into())] {
                             ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); });
                         }
                     }
                     None => {
-                        ui.label(RichText::new("The transfer finished, but no mailbox-level evidence has been captured yet.").color(self.theme_colors().danger));
+                        ui.label(RichText::new(self.language.text("The transfer finished, but no mailbox-level evidence has been captured yet.")).color(self.theme_colors().danger));
                     }
                 }
                 match mailbox.job.state.as_str() {

@@ -500,6 +500,9 @@ impl UiLanguage {
             "Customer proof remains gated until the durable project is Complete, every mailbox is verified, and the state view is current." => {
                 "Der Kundennachweis bleibt gesperrt, bis das dauerhafte Projekt abgeschlossen, jedes Postfach verifiziert und die Zustandsansicht aktuell ist."
             }
+            "{} of {} verified · {} require review" => {
+                "{} von {} verifiziert · {} erfordern Prüfung"
+            }
             "mailbox or destination" => "Postfach oder Ziel",
             "Needs review" => "Prüfung erforderlich",
             "Differences" => "Abweichungen",
@@ -510,6 +513,31 @@ impl UiLanguage {
             "No evidence" => "Kein Nachweis",
             "← Previous" => "← Zurück",
             "Next →" => "Weiter →",
+            "Assurance" => "Nachweissicherheit",
+            "Attention required: this mailbox is not currently safe to close." => {
+                "Maßnahme erforderlich: Dieses Postfach ist derzeit nicht sicher abschließbar."
+            }
+            "Transfer and inventory evidence support this mailbox's current state." => {
+                "Übertragungs- und Inventarnachweise stützen den aktuellen Zustand dieses Postfachs."
+            }
+            "Assurance is incomplete; review the missing facts before proceeding." => {
+                "Der Nachweis ist unvollständig; prüfen Sie die fehlenden Fakten vor dem Fortfahren."
+            }
+            "Transfer" => "Übertragung",
+            "completed" => "abgeschlossen",
+            "not complete" => "nicht abgeschlossen",
+            "Destination reachable" => "Ziel erreichbar",
+            "confirmed" => "bestätigt",
+            "failed" => "fehlgeschlagen",
+            "unknown" => "unbekannt",
+            "Inventory reconciled" => "Inventar abgeglichen",
+            "not confirmed" => "nicht bestätigt",
+            "Message-level evidence" => "Nachweis auf Nachrichtenebene",
+            "collected" => "erfasst",
+            "not collected" => "nicht erfasst",
+            "none recorded" => "keine erfasst",
+            "found" => "gefunden",
+            "Verification authority" => "Verifizierungsinstanz",
             "Evidence labels describe metadata and aggregate reconciliation; message bodies were not compared." => {
                 "Die Nachweislabels beschreiben Metadaten und den Gesamtabgleich; Nachrichteninhalte wurden nicht verglichen."
             }
@@ -658,6 +686,18 @@ mod tests {
             "Task center",
             "Migration running",
             "No active migration",
+            "Export verification report…",
+            "Customer proof is ready: the durable project is Complete and no mailbox requires review.",
+            "Customer proof remains gated until the durable project is Complete, every mailbox is verified, and the state view is current.",
+            "Assurance",
+            "Attention required: this mailbox is not currently safe to close.",
+            "Transfer and inventory evidence support this mailbox's current state.",
+            "Assurance is incomplete; review the missing facts before proceeding.",
+            "Destination reachable",
+            "Inventory reconciled",
+            "Message-level evidence",
+            "Verification authority",
+            "The transfer finished, but no mailbox-level evidence has been captured yet.",
         ] {
             assert_ne!(
                 UiLanguage::German.text(key),
