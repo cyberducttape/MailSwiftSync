@@ -75,14 +75,14 @@ very large accounts.
 | Connection exhaustion | ⚠️ Partial | Generic bounded concurrency and failure handling; no provider-specific connection-pool controller |
 | Provider unavailability | ⚠️ Partial | Generic failure classification wired in controller; provider-specific intelligence not yet integrated |
 
-### Recovery & Durability ✅ DURABLE CORE; DASHBOARD PROTOTYPE
+### Recovery & Durability ✅ DURABLE CORE; GUIDANCE PARTIALLY WIRED
 | Feature | Status | Implementation |
 |---------|--------|-----------------|
 | Checkpoint persistence | ✅ | Durable run/checkpoint state is wired |
 | Resume from interruption | ✅ | Controller recovery and retry paths are wired |
 | Crash recovery | ✅ | Startup process identity/recovery paths are wired |
-| Time-to-completion estimates | ⚠️ CLI only | `RecoveryPlanner` is exposed through `recovery-guidance`; no dashboard rendering |
-| Recovery guidance | ⚠️ CLI only | Fail-closed guidance is exposed through `recovery-guidance`; no dashboard rendering |
+| Time-to-completion estimates | ⚠️ CLI only | RecoveryPlanner is exposed through recovery-guidance; estimates are not yet rendered in the GUI |
+| Recovery guidance | ⚠️ Partial GUI | Activity renders localized fail-closed guidance for interruption, transport, and throttling attention states; configuration and verification findings retain their dedicated remediation views |
 
 ---
 
@@ -291,8 +291,7 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 
 The system provides a durable, safety-gated migration controller suitable for
 technical-preview use. It does not yet provide body-content proof or
-provider-specific execution intelligence; several internal helpers remain
-available through CLI entry points even though runbook and recovery guidance
-are not yet surfaced in the GUI workflow.
+provider-specific execution intelligence; provider runbooks remain CLI-only and
+recovery time estimates are not yet surfaced in the GUI workflow.
 
 **Next milestone:** Live validation with real provider mailboxes to reach GA 1.0 status.

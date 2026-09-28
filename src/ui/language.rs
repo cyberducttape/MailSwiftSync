@@ -43,6 +43,96 @@ impl UiLanguage {
             }
             "Dovecot strategy: {} — {}" => "Dovecot-Strategie: {} — {}",
             "Cancellation requested…" => "Abbruch angefordert…",
+            "Recovery guidance" => "Wiederherstellungshinweise",
+            "Do not resume until the current endpoint and durable state have been reviewed." => {
+                "Setzen Sie erst fort, nachdem der aktuelle Endpunkt und der dauerhafte Zustand geprüft wurden."
+            }
+            "Migration was paused by operator" => "Die Migration wurde vom Betreiber pausiert",
+            "Review any configuration changes since pause" => {
+                "Prüfen Sie alle Konfigurationsänderungen seit der Pause"
+            }
+            "Click 'Resume' to continue from the last checkpoint" => {
+                "Klicken Sie auf „Fortsetzen“, um ab dem letzten Prüfpunkt fortzufahren"
+            }
+            "Network connection to provider was lost" => {
+                "Die Netzwerkverbindung zum Anbieter wurde unterbrochen"
+            }
+            "Retry delay may reduce a transient failure, but does not prove recovery" => {
+                "Eine Wiederholungsverzögerung kann einen vorübergehenden Fehler verringern, beweist aber keine Wiederherstellung"
+            }
+            "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming" => {
+                "Prüfen Sie DNS, TCP, TLS, Authentifizierung und IMAP-Fähigkeiten vor dem Fortsetzen erneut"
+            }
+            "Check firewall rules and VPN if applicable" => {
+                "Prüfen Sie gegebenenfalls Firewall-Regeln und VPN"
+            }
+            "Resume uses the engine's checkpoint semantics; reconcile aggregate evidence afterward" => {
+                "Das Fortsetzen verwendet die Prüfpunktsemantik der Engine; gleichen Sie anschließend die aggregierten Nachweise ab"
+            }
+            "The provider or IMAP server returned a throttling signal" => {
+                "Der Anbieter oder IMAP-Server meldete eine Drosselung"
+            }
+            "Wait for the configured retry delay; elapsed time does not prove that the limit has reset" => {
+                "Warten Sie die konfigurierte Wiederholungsverzögerung ab; verstrichene Zeit beweist nicht, dass das Limit zurückgesetzt wurde"
+            }
+            "Resume with conservative profile message/byte limits and monitor for another server response" => {
+                "Setzen Sie mit konservativen Nachrichten-/Byte-Limits fort und beobachten Sie weitere Serverantworten"
+            }
+            "Source or destination mailbox became unavailable" => {
+                "Das Quell- oder Zielpostfach ist nicht mehr verfügbar"
+            }
+            "Verify the source mailbox is accessible and credentials are still valid" => {
+                "Prüfen Sie, ob das Quellpostfach erreichbar und die Zugangsdaten noch gültig sind"
+            }
+            "Check destination mailbox quota and disk space" => {
+                "Prüfen Sie das Kontingent des Zielpostfachs und den Speicherplatz"
+            }
+            "If source is a shared mailbox, verify access permissions haven't changed" => {
+                "Prüfen Sie bei einem gemeinsam genutzten Quellpostfach, ob sich die Zugriffsrechte geändert haben"
+            }
+            "Test connectivity with a manual IMAP connection before resuming" => {
+                "Testen Sie die Verbindung vor dem Fortsetzen mit einer manuellen IMAP-Verbindung"
+            }
+            "Migration process was terminated (killed, system reboot, etc.)" => {
+                "Der Migrationsprozess wurde beendet (Abbruch, Systemneustart usw.)"
+            }
+            "Controller state and completed engine evidence are durably stored; in-flight work requires reconciliation" => {
+                "Controllerstatus und abgeschlossene Engine-Nachweise sind dauerhaft gespeichert; laufende Arbeit muss abgeglichen werden"
+            }
+            "Review system logs to understand why termination occurred" => {
+                "Prüfen Sie die Systemprotokolle, um den Grund der Beendigung zu ermitteln"
+            }
+            "If termination was due to resource constraints, increase available memory or CPU" => {
+                "Erhöhen Sie verfügbaren Speicher oder CPU, wenn Ressourcenmangel die Beendigung verursacht hat"
+            }
+            "Revalidate endpoints and review aggregate evidence before resuming from the engine checkpoint" => {
+                "Prüfen Sie die Endpunkte erneut und bewerten Sie aggregierte Nachweise, bevor Sie vom Engine-Prüfpunkt fortsetzen"
+            }
+            "Application or system crashed unexpectedly" => {
+                "Die Anwendung oder das System ist unerwartet abgestürzt"
+            }
+            "The durable ledger preserves recorded controller state; it does not prove the outcome of in-flight engine work" => {
+                "Das dauerhafte Journal bewahrt den aufgezeichneten Controllerstatus, beweist aber nicht das Ergebnis laufender Engine-Arbeit"
+            }
+            "Review application logs (support bundle) to diagnose the crash" => {
+                "Prüfen Sie die Anwendungsprotokolle (Support-Bundle), um den Absturz zu untersuchen"
+            }
+            "Ensure system has adequate disk space and memory available" => {
+                "Stellen Sie ausreichenden Speicherplatz und Arbeitsspeicher sicher"
+            }
+            "Review the engine checkpoint and aggregate evidence before attempting resume" => {
+                "Prüfen Sie den Engine-Prüfpunkt und die aggregierten Nachweise, bevor Sie fortsetzen"
+            }
+            "Interruption cause is unknown" => "Die Ursache der Unterbrechung ist unbekannt",
+            "Review the support bundle for detailed diagnostic information" => {
+                "Prüfen Sie das Support-Bundle auf detaillierte Diagnoseinformationen"
+            }
+            "Verify network connectivity, provider status, and endpoint accessibility" => {
+                "Prüfen Sie Netzwerkverbindung, Anbieterstatus und Erreichbarkeit der Endpunkte"
+            }
+            "Contact support if recovery fails after resume" => {
+                "Wenden Sie sich an den Support, wenn die Wiederherstellung nach dem Fortsetzen fehlschlägt"
+            }
             "Selected {} mailbox row(s) for focused review." => {
                 "{} Postfachzeile(n) zur gezielten Prüfung ausgewählt."
             }
@@ -1203,6 +1293,21 @@ mod tests {
                 reason.recommended_action(),
                 "missing German attention action"
             );
+        }
+        for interruption in [
+            crate::core::recovery_dashboard::InterruptionReason::ProcessTerminated,
+            crate::core::recovery_dashboard::InterruptionReason::NetworkTimeout,
+            crate::core::recovery_dashboard::InterruptionReason::ProviderThrottled,
+        ] {
+            for step in
+                crate::core::recovery_dashboard::RecoveryPlanner::generate_guidance(interruption)
+            {
+                assert_ne!(
+                    UiLanguage::German.text(step),
+                    step,
+                    "missing German recovery guidance: {step}"
+                );
+            }
         }
     }
 }

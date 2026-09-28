@@ -65,7 +65,7 @@ production_supported = false
 [capabilities.recovery_guidance]
 code = "implemented"
 controller = "wired"
-ui = "not_wired"
+ui = "partial"
 generic_lab = "passed"
 gmail_live = false
 m365_live = false

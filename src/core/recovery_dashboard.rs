@@ -1,6 +1,8 @@
 #[cfg(test)]
 use std::time::Duration;
 
+use super::state::AttentionReason;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptionReason {
     /// User explicitly stopped the migration
@@ -20,6 +22,20 @@ pub enum InterruptionReason {
 }
 
 impl InterruptionReason {
+    /// Map only durable attention categories whose evidence supports a
+    /// recovery checklist. Configuration and verification findings need their
+    /// own remediation path and must not be presented as resumable outages.
+    pub fn from_attention_reason(reason: AttentionReason) -> Option<Self> {
+        Some(match reason {
+            AttentionReason::Interrupted | AttentionReason::ProcessIdentityUnverified => {
+                Self::ProcessTerminated
+            }
+            AttentionReason::TransportFailed => Self::NetworkTimeout,
+            AttentionReason::CapacityLimited => Self::ProviderThrottled,
+            _ => return None,
+        })
+    }
+
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
             "user_initiated" => Self::UserInitiated,
@@ -51,53 +67,53 @@ pub struct RecoveryPlanner;
 
 impl RecoveryPlanner {
     /// Generate recovery guidance based on interruption reason.
-    pub fn generate_guidance(reason: InterruptionReason) -> Vec<String> {
+    pub fn generate_guidance(reason: InterruptionReason) -> Vec<&'static str> {
         match reason {
             InterruptionReason::UserInitiated => vec![
-                "Migration was paused by operator".to_string(),
-                "Review any configuration changes since pause".to_string(),
-                "Click 'Resume' to continue from the last checkpoint".to_string(),
+                "Migration was paused by operator",
+                "Review any configuration changes since pause",
+                "Click 'Resume' to continue from the last checkpoint",
             ],
             InterruptionReason::NetworkTimeout => vec![
-                "Network connection to provider was lost".to_string(),
-                "Retry delay may reduce a transient failure, but does not prove recovery".to_string(),
-                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming".to_string(),
-                "Check firewall rules and VPN if applicable".to_string(),
-                "Resume uses the engine's checkpoint semantics; reconcile aggregate evidence afterward".to_string(),
+                "Network connection to provider was lost",
+                "Retry delay may reduce a transient failure, but does not prove recovery",
+                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming",
+                "Check firewall rules and VPN if applicable",
+                "Resume uses the engine's checkpoint semantics; reconcile aggregate evidence afterward",
             ],
             InterruptionReason::ProviderThrottled => vec![
-                "The provider or IMAP server returned a throttling signal".to_string(),
-                "Wait for the configured retry delay; elapsed time does not prove that the limit has reset".to_string(),
-                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming".to_string(),
-                "Resume with conservative profile message/byte limits and monitor for another server response".to_string(),
+                "The provider or IMAP server returned a throttling signal",
+                "Wait for the configured retry delay; elapsed time does not prove that the limit has reset",
+                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming",
+                "Resume with conservative profile message/byte limits and monitor for another server response",
             ],
             InterruptionReason::EndpointUnavailable => vec![
-                "Source or destination mailbox became unavailable".to_string(),
-                "Verify the source mailbox is accessible and credentials are still valid".to_string(),
-                "Check destination mailbox quota and disk space".to_string(),
-                "If source is a shared mailbox, verify access permissions haven't changed".to_string(),
-                "Test connectivity with a manual IMAP connection before resuming".to_string(),
+                "Source or destination mailbox became unavailable",
+                "Verify the source mailbox is accessible and credentials are still valid",
+                "Check destination mailbox quota and disk space",
+                "If source is a shared mailbox, verify access permissions haven't changed",
+                "Test connectivity with a manual IMAP connection before resuming",
             ],
             InterruptionReason::ProcessTerminated => vec![
-                "Migration process was terminated (killed, system reboot, etc.)".to_string(),
-                "Controller state and completed engine evidence are durably stored; in-flight work requires reconciliation".to_string(),
-                "Review system logs to understand why termination occurred".to_string(),
-                "If termination was due to resource constraints, increase available memory or CPU".to_string(),
-                "Revalidate endpoints and review aggregate evidence before resuming from the engine checkpoint".to_string(),
+                "Migration process was terminated (killed, system reboot, etc.)",
+                "Controller state and completed engine evidence are durably stored; in-flight work requires reconciliation",
+                "Review system logs to understand why termination occurred",
+                "If termination was due to resource constraints, increase available memory or CPU",
+                "Revalidate endpoints and review aggregate evidence before resuming from the engine checkpoint",
             ],
             InterruptionReason::CrashOrShutdown => vec![
-                "Application or system crashed unexpectedly".to_string(),
-                "The durable ledger preserves recorded controller state; it does not prove the outcome of in-flight engine work".to_string(),
-                "Review application logs (support bundle) to diagnose the crash".to_string(),
-                "Ensure system has adequate disk space and memory available".to_string(),
-                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming".to_string(),
-                "Review the engine checkpoint and aggregate evidence before attempting resume".to_string(),
+                "Application or system crashed unexpectedly",
+                "The durable ledger preserves recorded controller state; it does not prove the outcome of in-flight engine work",
+                "Review application logs (support bundle) to diagnose the crash",
+                "Ensure system has adequate disk space and memory available",
+                "Revalidate DNS, TCP, TLS, authentication, and IMAP capability before resuming",
+                "Review the engine checkpoint and aggregate evidence before attempting resume",
             ],
             InterruptionReason::Unknown => vec![
-                "Interruption cause is unknown".to_string(),
-                "Review the support bundle for detailed diagnostic information".to_string(),
-                "Verify network connectivity, provider status, and endpoint accessibility".to_string(),
-                "Contact support if recovery fails after resume".to_string(),
+                "Interruption cause is unknown",
+                "Review the support bundle for detailed diagnostic information",
+                "Verify network connectivity, provider status, and endpoint accessibility",
+                "Contact support if recovery fails after resume",
             ],
         }
     }
@@ -203,6 +219,30 @@ mod tests {
         let guidance = RecoveryPlanner::generate_guidance(InterruptionReason::UserInitiated);
         assert!(!guidance.is_empty());
         assert!(guidance.iter().any(|g| g.contains("Resume")));
+    }
+
+    #[test]
+    fn only_interruptions_with_recovery_evidence_map_to_guidance() {
+        assert_eq!(
+            InterruptionReason::from_attention_reason(AttentionReason::Interrupted),
+            Some(InterruptionReason::ProcessTerminated)
+        );
+        assert_eq!(
+            InterruptionReason::from_attention_reason(AttentionReason::TransportFailed),
+            Some(InterruptionReason::NetworkTimeout)
+        );
+        assert_eq!(
+            InterruptionReason::from_attention_reason(AttentionReason::CapacityLimited),
+            Some(InterruptionReason::ProviderThrottled)
+        );
+        assert_eq!(
+            InterruptionReason::from_attention_reason(AttentionReason::ConfigurationInvalid),
+            None
+        );
+        assert_eq!(
+            InterruptionReason::from_attention_reason(AttentionReason::VerificationDifference),
+            None
+        );
     }
 
     #[test]

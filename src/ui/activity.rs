@@ -49,6 +49,45 @@ impl App {
         ui.heading(self.language.text("Activity"));
         ui.label(RichText::new(self.language.text("Live output is retained here for operator review. Durable run history remains available after restart.")).color(self.theme_colors().text_secondary));
         ui.add_space(12.0);
+        let selected_recovery_guidance = self
+            .job_id
+            .as_deref()
+            .and_then(|job_id| self.cached_report_mailbox(job_id))
+            .and_then(|mailbox| {
+                mailbox.attention_reason.and_then(|reason| {
+                    crate::core::recovery_dashboard::InterruptionReason::from_attention_reason(
+                        reason,
+                    )
+                    .map(|interruption| {
+                        (
+                            reason.label(),
+                            crate::core::recovery_dashboard::RecoveryPlanner::generate_guidance(
+                                interruption,
+                            ),
+                        )
+                    })
+                })
+            });
+        if let Some((reason_label, guidance)) = selected_recovery_guidance {
+            ui.group(|ui| {
+                ui.heading(self.language.text("Recovery guidance"));
+                ui.label(
+                    RichText::new(self.language.text(reason_label))
+                        .color(self.theme_colors().warning),
+                );
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("Do not resume until the current endpoint and durable state have been reviewed."),
+                    )
+                    .color(self.theme_colors().text_secondary),
+                );
+                for step in guidance {
+                    ui.label(format!("• {}", self.language.text(step)));
+                }
+            });
+            ui.add_space(8.0);
+        }
         if !self.workspace_read_only
             && let Some(job) = self.job_id.as_deref()
         {
