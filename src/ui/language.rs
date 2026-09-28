@@ -597,6 +597,9 @@ impl UiLanguage {
             "Evidence" => "Nachweis",
             "Result" => "Ergebnis",
             "No evidence" => "Kein Nachweis",
+            "{} visible on page · showing {}–{} of {}" => {
+                "{} auf der Seite sichtbar · {}–{} von {} werden angezeigt"
+            }
             "← Previous" => "← Zurück",
             "Next →" => "Weiter →",
             "Assurance" => "Nachweissicherheit",
@@ -658,6 +661,9 @@ impl UiLanguage {
             "No active project selected" => "Kein aktives Projekt ausgewählt",
             "Run a migration to create a durable mailbox evidence record." => {
                 "Führen Sie eine Migration aus, um einen dauerhaften Postfachnachweis zu erstellen."
+            }
+            "The selected mailbox is not present in the cached project snapshot. Refresh the workspace before viewing or exporting its evidence." => {
+                "Das ausgewählte Postfach ist nicht im zwischengespeicherten Projektsnapshot enthalten. Aktualisieren Sie den Arbeitsbereich, bevor Sie seine Nachweise anzeigen oder exportieren."
             }
             "Settings" => "Einstellungen",
             "Operator settings" => "Betreibereinstellungen",
@@ -794,6 +800,7 @@ mod tests {
             "Message-level evidence",
             "Verification authority",
             "The transfer finished, but no mailbox-level evidence has been captured yet.",
+            "{} visible on page · showing {}–{} of {}",
             "MIGRATION LIFECYCLE",
             "ATTENTION REQUIRED",
             "A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.",
@@ -816,6 +823,7 @@ mod tests {
             "No active project selected",
             "Verified with exceptions",
             "Run a migration to create a durable mailbox evidence record.",
+            "The selected mailbox is not present in the cached project snapshot. Refresh the workspace before viewing or exporting its evidence.",
             "Discovery",
             "Seed",
             "Catch-up",

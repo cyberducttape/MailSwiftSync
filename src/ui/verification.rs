@@ -81,7 +81,7 @@ impl App {
                     self.refresh_verification_filter_cache();
                     let verification_rows = &self.ui_snapshot.verification_rows;
                     let visible = &self.verification_visible_indices;
-                    ui.label(RichText::new(format!("{} visible on page · showing {}–{} of {}", visible.len(), self.verification_offset + 1, (self.verification_offset as usize + verification_rows.len()).min(mailbox_counts.total), mailbox_counts.total)).color(self.theme_colors().text_secondary));
+                    ui.label(RichText::new(self.language.text("{} visible on page · showing {}–{} of {}").replacen("{}", &visible.len().to_string(), 1).replacen("{}", &(self.verification_offset + 1).to_string(), 1).replacen("{}", &((self.verification_offset as usize + verification_rows.len()).min(mailbox_counts.total)).to_string(), 1).replacen("{}", &mailbox_counts.total.to_string(), 1)).color(self.theme_colors().text_secondary));
                     egui::ScrollArea::vertical().id_salt("verification_mailbox_list").max_height(360.0).show_rows(ui, 32.0, visible.len(), |ui, visible_rows| {
                         egui::Grid::new("verification_mailboxes").striped(true).min_col_width(140.0).show(ui, |ui| {
                             if visible_rows.start == 0 { ui.strong(self.language.text("Mailbox")); ui.strong(self.language.text("Evidence")); ui.strong(self.language.text("Result")); ui.end_row(); }
@@ -176,7 +176,7 @@ impl App {
                     _ => {}
                 }
             } else if self.job_id.is_some() && selected_project.is_some() {
-                ui.label(RichText::new("The selected mailbox is not present in the cached project snapshot. Refresh the workspace before viewing or exporting its evidence.").color(self.theme_colors().danger));
+                ui.label(RichText::new(self.language.text("The selected mailbox is not present in the cached project snapshot. Refresh the workspace before viewing or exporting its evidence.")).color(self.theme_colors().danger));
             } else {
                 ui.label(self.language.text("Run a migration to create a durable mailbox evidence record."));
             }
