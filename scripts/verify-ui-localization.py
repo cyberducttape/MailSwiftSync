@@ -45,9 +45,12 @@ def translation_keys() -> set[str]:
 def raw_ui_literals() -> list[str]:
     violations: list[str] = []
     patterns = (
-        re.compile(r"\bui\.(?:label|heading|button|small|strong)\(\s*\"([^\"]+)\""),
+        re.compile(
+            r"\bui\.(?:label|heading|button|small|strong|monospace)\(\s*\"([^\"]+)\""
+        ),
         re.compile(r"egui::(?:Window|Modal)::new\(\s*\"([^\"]+)\""),
         re.compile(r"egui::Button::new\(\s*\"([^\"]+)\""),
+        re.compile(r"RichText::new\(\s*\"([^\"]+)\""),
     )
     for path in UI_DIR.glob("*.rs"):
         if path.name in {"language.rs", "theme.rs"}:
