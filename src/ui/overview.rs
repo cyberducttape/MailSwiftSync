@@ -554,9 +554,9 @@ impl App {
             .unwrap_or(usize::MAX);
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("MIGRATION LIFECYCLE").size(11.0).strong().color(self.theme_colors().text_secondary));
+                ui.label(RichText::new(self.language.text("MIGRATION LIFECYCLE")).size(11.0).strong().color(self.theme_colors().text_secondary));
                 if current == core::Phase::Attention {
-                    ui.label(RichText::new("ATTENTION REQUIRED").strong().color(self.theme_colors().danger));
+                    ui.label(RichText::new(self.language.text("ATTENTION REQUIRED")).strong().color(self.theme_colors().danger));
                 }
             });
             ui.horizontal_wrapped(|ui| {
@@ -584,7 +584,7 @@ impl App {
                 }
             });
             if current == core::Phase::Attention {
-                ui.label(RichText::new("A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.").size(11.0).color(self.theme_colors().danger));
+                ui.label(RichText::new(self.language.text("A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.")).size(11.0).color(self.theme_colors().danger));
             }
         });
     }

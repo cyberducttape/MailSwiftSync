@@ -357,6 +357,11 @@ impl UiLanguage {
             "Migration workspace" => "Migrationsarbeitsbereich",
             "PREFLIGHT" => "VORABPRÜFUNG",
             "LIVE MIGRATION" => "LIVE-MIGRATION",
+            "MIGRATION LIFECYCLE" => "MIGRATIONSLEBENSZYKLUS",
+            "ATTENTION REQUIRED" => "PRÜFUNG ERFORDERLICH",
+            "A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved." => {
+                "Ein Postfach oder eine Ausführung erfordert eine Prüfung durch den Betreiber. Der normale Lebenszyklus ist bis zur Klärung angehalten."
+            }
             "Recommended next step: run preflight, review blockers, then select a small pilot mailbox." => {
                 "Empfohlener nächster Schritt: Vorabprüfung ausführen, Blockierungen prüfen und anschließend ein kleines Pilotpostfach auswählen."
             }
@@ -789,6 +794,9 @@ mod tests {
             "Message-level evidence",
             "Verification authority",
             "The transfer finished, but no mailbox-level evidence has been captured yet.",
+            "MIGRATION LIFECYCLE",
+            "ATTENTION REQUIRED",
+            "A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.",
             "Elapsed {}",
             "{} visible of {} loaded",
             "Showing the newest 250 runs. Export the audit report for complete history.",
