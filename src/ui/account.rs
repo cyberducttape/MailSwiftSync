@@ -37,9 +37,13 @@ pub(crate) fn render_account(
     };
     let inline_error = |ui: &mut egui::Ui, label: &str, value: &str, required: bool| {
         let message = if required && value.trim().is_empty() {
-            Some(format!("{label} is required."))
+            Some(language.text("{} is required.").replace("{}", label))
         } else if !value.is_empty() && value.chars().any(char::is_control) {
-            Some(format!("{label} contains an invalid control character."))
+            Some(
+                language
+                    .text("{} contains an invalid control character.")
+                    .replace("{}", label),
+            )
         } else {
             None
         };
@@ -66,12 +70,12 @@ pub(crate) fn render_account(
             ui.label(language.text("Server"));
             ui.add_enabled(editable, egui::TextEdit::singleline(host));
         });
-        inline_error(ui, "Server", host, true);
+        inline_error(ui, language.text("Server"), host, true);
         ui.horizontal(|ui| {
             ui.label(language.text("User"));
             ui.add_enabled(editable, egui::TextEdit::singleline(user));
         });
-        inline_error(ui, "User", user, true);
+        inline_error(ui, language.text("User"), user, true);
         ui.horizontal(|ui| {
             ui.label(language.text("Authentication"));
             egui::ComboBox::from_id_salt(("auth_method", title))
@@ -144,11 +148,11 @@ pub(crate) fn render_account(
         } else {
             inline_error(
                 ui,
-                if auth_method_is_oauth(auth_method) {
+                language.text(if auth_method_is_oauth(auth_method) {
                     "Access token"
                 } else {
                     "Password"
-                },
+                }),
                 password.as_str(),
                 password_required && !saved_credential,
             );

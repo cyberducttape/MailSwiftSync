@@ -312,6 +312,10 @@ impl UiLanguage {
             }
             "Server" => "Server",
             "User" => "Benutzer",
+            "{} is required." => "{} ist erforderlich.",
+            "{} contains an invalid control character." => {
+                "{} enthält ein ungültiges Steuerzeichen."
+            }
             "Authentication" => "Authentifizierung",
             "Local Dovecot account" => "Lokales Dovecot-Konto",
             "IMAP connection" => "IMAP-Verbindung",
@@ -895,6 +899,8 @@ mod tests {
             "Accept and mark verified with exceptions",
             "Verification exception recorded durably",
             "Could not accept verification exception: {error}",
+            "{} is required.",
+            "{} contains an invalid control character.",
             "Saved OAuth credential configured; session token not required.",
             "Saved credential configured; session password not required.",
             "Source credential stored in OS keyring",
