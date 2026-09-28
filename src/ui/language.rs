@@ -142,6 +142,11 @@ impl UiLanguage {
             }
             "Continue to migration plan" => "Zum Migrationsplan",
             "Choose worksheet" => "Arbeitsblatt auswählen",
+            "Workspace" => "Arbeitsbereich",
+            "No project selected" => "Kein Projekt ausgewählt",
+            "Task center" => "Aufgabenzentrale",
+            "Migration running" => "Migration läuft",
+            "No active migration" => "Keine aktive Migration",
             "Select the migration worksheet" => "Migrationsarbeitsblatt auswählen",
             "{} contains {} worksheet(s). Choose the sheet with the mailbox headers." => {
                 "{} enthält {} Arbeitsblatt/Arbeitsblätter. Wählen Sie das Blatt mit den Postfachüberschriften."
@@ -644,6 +649,11 @@ mod tests {
             "{} contains {} worksheet(s). Choose the sheet with the mailbox headers.",
             "The selected worksheet is parsed and validated in the background. Other worksheets are not imported.",
             "Import selected worksheet",
+            "Workspace",
+            "No project selected",
+            "Task center",
+            "Migration running",
+            "No active migration",
         ] {
             assert_ne!(
                 UiLanguage::German.text(key),

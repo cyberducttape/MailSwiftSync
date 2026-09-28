@@ -1,3 +1,4 @@
+use crate::ui::format_phase_name;
 use crate::ui::status_color;
 use crate::*;
 
@@ -13,9 +14,58 @@ impl eframe::App for App {
         ui.painter()
             .rect_filled(ui.max_rect(), 0.0, colors.background);
 
-        ui.vertical(|ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("MailSwiftSync");
+        egui::Panel::top("project_header")
+            .resizable(false)
+            .default_size(44.0)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("MailSwiftSync");
+                    ui.separator();
+                    let project_name = self
+                        .ui_snapshot
+                        .project
+                        .as_ref()
+                        .map(|project| project.name.as_str())
+                        .unwrap_or_else(|| self.language.text("No project selected"));
+                    ui.label(project_name);
+                    if let Some(project) = self.ui_snapshot.project.as_ref() {
+                        ui.label(format!(
+                            "{}: {}",
+                            self.language.text("Phase"),
+                            format_phase_name(project.phase)
+                        ));
+                    }
+                    ui.label(format!(
+                        "{}: {}",
+                        self.language.text("Engine"),
+                        self.form.engine().label()
+                    ));
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(&self.status.text)
+                            .color(status_color(self.status.severity, self.theme_colors())),
+                    );
+                    if self.running() && ui.button(self.language.text("Stop")).clicked() {
+                        self.stop_confirm_open = true;
+                    }
+                    if self.ui_snapshot.is_stale() {
+                        ui.label(
+                            egui::RichText::new(
+                                self.ui_snapshot
+                                    .stale_notice()
+                                    .unwrap_or_else(|| "Durable view is stale".to_owned()),
+                            )
+                            .color(self.theme_colors().warning),
+                        );
+                    }
+                });
+            });
+
+        egui::Panel::left("workspace_navigation")
+            .resizable(true)
+            .default_size(190.0)
+            .show(ui, |ui| {
+                ui.heading(self.language.text("Workspace"));
                 ui.separator();
                 for (view, label) in [
                     (WorkspaceView::Overview, "Overview"),
@@ -32,42 +82,37 @@ impl eframe::App for App {
                         self.refresh_ui_snapshot_now();
                     }
                 }
+                ui.add_space(12.0);
                 if ui.button(self.language.text("Projects")).clicked() {
                     self.projects_open = true;
                 }
                 if ui.button(self.language.text("Settings")).clicked() {
                     self.settings_open = true;
                 }
-            });
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new(&self.status.text)
-                        .color(status_color(self.status.severity, self.theme_colors())),
-                );
-                if self.running() && ui.button(self.language.text("Stop")).clicked() {
-                    self.stop_confirm_open = true;
-                }
-                if self.ui_snapshot.is_stale() {
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    ui.separator();
+                    ui.label(self.language.text("Task center"));
                     ui.label(
-                        egui::RichText::new(
-                            self.ui_snapshot
-                                .stale_notice()
-                                .unwrap_or_else(|| "Durable view is stale".to_owned()),
-                        )
-                        .color(self.theme_colors().warning),
+                        egui::RichText::new(if self.running() {
+                            self.language.text("Migration running")
+                        } else {
+                            self.language.text("No active migration")
+                        })
+                        .color(self.theme_colors().text_secondary),
                     );
-                }
+                });
             });
-            ui.separator();
 
-            match self.active_view {
-                WorkspaceView::Overview => self.overview_view(ui),
-                WorkspaceView::Plan => self.plan_view(ui),
-                WorkspaceView::Mailboxes => self.mailbox_view(ui),
-                WorkspaceView::Activity => self.activity_view(ui),
-                WorkspaceView::Verification => self.verification_view(ui),
-            }
+        egui::CentralPanel::default().show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| match self.active_view {
+                    WorkspaceView::Overview => self.overview_view(ui),
+                    WorkspaceView::Plan => self.plan_view(ui),
+                    WorkspaceView::Mailboxes => self.mailbox_view(ui),
+                    WorkspaceView::Activity => self.activity_view(ui),
+                    WorkspaceView::Verification => self.verification_view(ui),
+                });
         });
 
         self.projects_dialog(&ctx);
