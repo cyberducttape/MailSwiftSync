@@ -71,6 +71,47 @@ impl UiLanguage {
             "Advanced preservation mode using doveadm sync -1; review merge behavior and Dovecot load carefully." => {
                 "Erweiterter Erhaltungsmodus mit doveadm sync -1; prüfen Sie Zusammenführungsverhalten und Dovecot-Auslastung sorgfältig."
             }
+            "Interrupted; recovery review required" => {
+                "Unterbrochen; Wiederherstellungsprüfung erforderlich"
+            }
+            "Verification evidence is incomplete" => "Verifizierungsnachweise sind unvollständig",
+            "Verification found differences" => "Verifizierung hat Unterschiede gefunden",
+            "Process ownership could not be verified" => {
+                "Prozesszugehörigkeit konnte nicht verifiziert werden"
+            }
+            "Authentication failed" => "Authentifizierung fehlgeschlagen",
+            "Network or remote-service failure" => "Netzwerk- oder Remote-Dienstfehler",
+            "Blocked by migration policy" => "Durch Migrationsrichtlinie blockiert",
+            "Configuration is invalid" => "Konfiguration ist ungültig",
+            "Capacity or rate limit reached" => "Kapazitäts- oder Ratenlimit erreicht",
+            "A message was rejected by the destination" => {
+                "Eine Nachricht wurde vom Ziel abgelehnt"
+            }
+            "Operator review required" => "Bedienerprüfung erforderlich",
+            "Confirm no migration process remains, then retry" => {
+                "Bestätigen Sie, dass kein Migrationsprozess mehr läuft, und versuchen Sie es erneut"
+            }
+            "Review the evidence and reconcile before retrying or completing" => {
+                "Prüfen und gleichen Sie die Nachweise ab, bevor Sie es erneut versuchen oder abschließen"
+            }
+            "Verify credentials and endpoint permissions before retrying" => {
+                "Prüfen Sie Zugangsdaten und Endpunktberechtigungen vor einem erneuten Versuch"
+            }
+            "Check endpoint health and retry with bounded backoff" => {
+                "Prüfen Sie den Endpunktstatus und versuchen Sie es mit begrenztem Backoff erneut"
+            }
+            "Correct the migration configuration or policy, then rerun preflight" => {
+                "Korrigieren Sie Migrationskonfiguration oder Richtlinie und führen Sie die Vorabprüfung erneut aus"
+            }
+            "Reduce concurrency or rate and retry after capacity recovers" => {
+                "Reduzieren Sie Parallelität oder Rate und versuchen Sie es nach Wiederherstellung der Kapazität erneut"
+            }
+            "Review rejected-message detail and destination policy before retrying" => {
+                "Prüfen Sie Details abgelehnter Nachrichten und die Zielrichtlinie vor einem erneuten Versuch"
+            }
+            "Inspect the durable run detail before choosing an action" => {
+                "Prüfen Sie die dauerhaften Laufdetails, bevor Sie eine Aktion wählen"
+            }
             "Customer proof ready" => "Kundennachweis bereit",
             "Each item names the durable reason and the next safe operator action." => {
                 "Jeder Eintrag nennt den dauerhaft gespeicherten Grund und die nächste sichere Bedieneraktion."

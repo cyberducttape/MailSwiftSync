@@ -400,8 +400,10 @@ impl App {
                                     .and_then(|mailbox| mailbox.attention_reason.as_ref())
                                 {
                                     ui.label(
-                                        RichText::new(reason.recommended_action())
-                                            .color(self.theme_colors().text_secondary),
+                                        RichText::new(
+                                            self.language.text(reason.recommended_action()),
+                                        )
+                                        .color(self.theme_colors().text_secondary),
                                     );
                                 } else {
                                     ui.label(

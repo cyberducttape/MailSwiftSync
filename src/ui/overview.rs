@@ -365,9 +365,14 @@ impl App {
                         "{} → {}",
                         mailbox.job.source_mailbox, mailbox.job.destination_mailbox
                     ));
-                    ui.label(RichText::new(reason.as_str()).color(colors.warning));
+                    ui.label(
+                        RichText::new(self.language.text(reason.label())).color(colors.warning),
+                    );
                 });
-                ui.label(RichText::new(reason.recommended_action()).color(colors.text_secondary));
+                ui.label(
+                    RichText::new(self.language.text(reason.recommended_action()))
+                        .color(colors.text_secondary),
+                );
             }
             if attention.len() > 5 {
                 ui.label(
