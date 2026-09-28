@@ -43,6 +43,14 @@ impl UiLanguage {
             }
             "Dovecot strategy: {} — {}" => "Dovecot-Strategie: {} — {}",
             "Cancellation requested…" => "Abbruch angefordert…",
+            "Provider readiness runbook" => "Anbieter-Betriebsleitfaden",
+            "Read-only operational guidance. Preflight and live admission remain authoritative." => {
+                "Schreibgeschützte Betriebshinweise. Vorprüfung und Live-Zulassung bleiben maßgeblich."
+            }
+            "Guidance version: {}" => "Leitfadenversion: {}",
+            "Why:" => "Warum:",
+            "Success:" => "Erfolg:",
+            "Known provider issues" => "Bekannte Anbieterprobleme",
             "Recovery guidance" => "Wiederherstellungshinweise",
             "Do not resume until the current endpoint and durable state have been reviewed." => {
                 "Setzen Sie erst fort, nachdem der aktuelle Endpunkt und der dauerhafte Zustand geprüft wurden."
@@ -1080,6 +1088,12 @@ mod tests {
             "Clear mailbox queue?",
             "Advanced migration options",
             "Review verification",
+            "Provider readiness runbook",
+            "Read-only operational guidance. Preflight and live admission remain authoritative.",
+            "Guidance version: {}",
+            "Why:",
+            "Success:",
+            "Known provider issues",
             "! Source transport is cleartext by explicit configuration",
             "✓ Encrypted source transport with certificate verification",
             "Plain IMAP can expose the source password and mailbox data in transit.",

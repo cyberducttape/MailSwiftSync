@@ -242,6 +242,7 @@ impl App {
                 &mut self.form.profile.destination_tls,
             );
         });
+        self.provider_runbook_panel(ui);
         ui.horizontal(|ui| {
             ui.label(self.language.text("Engine"));
             ui.selectable_value(
@@ -347,5 +348,62 @@ impl App {
             self.apply_provider_preset(source, selected);
             ui.label(egui::RichText::new(self.language.text(selected.defaults().note)).size(11.0));
         }
+    }
+
+    fn provider_runbook_panel(&self, ui: &mut egui::Ui) {
+        let runbook = crate::core::provider_runbooks::RunbookGenerator::generate(
+            self.source_provider.runbook_name(),
+            self.destination_provider.runbook_name(),
+        );
+        ui.collapsing(
+            self.language.text("Provider readiness runbook"),
+            |ui| {
+                ui.label(
+                    self.language
+                        .text("Read-only operational guidance. Preflight and live admission remain authoritative."),
+                );
+                ui.label(
+                    self.language
+                        .text("Guidance version: {}")
+                        .replace("{}", &runbook.guidance_version),
+                );
+                ui.label(
+                    egui::RichText::new(runbook.provider)
+                        .strong()
+                        .color(self.theme_colors().info),
+                );
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for step in &runbook.pre_migration_checklist {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{}. {}",
+                                    step.step_number, step.action
+                                ))
+                                .strong(),
+                            );
+                            ui.label(format!("{} {}", self.language.text("Why:"), step.why));
+                            ui.label(format!(
+                                "{} {}",
+                                self.language.text("Success:"),
+                                step.success_indicator
+                            ));
+                        }
+                        if !runbook.known_issues.is_empty() {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(self.language.text("Known provider issues"))
+                                    .strong()
+                                    .color(self.theme_colors().warning),
+                            );
+                            for issue in &runbook.known_issues {
+                                ui.label(format!("{}: {}", issue.issue, issue.workaround));
+                            }
+                        }
+                    });
+            },
+        );
     }
 }

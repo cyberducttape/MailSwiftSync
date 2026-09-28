@@ -63,7 +63,7 @@ very large accounts.
 |----------|--------|---------|
 | PROVIDER_SETUP.md | ✅ | Step-by-step setup for all providers |
 | OAUTH_SETUP.md | ✅ | OAuth token lifecycle and configuration |
-| provider_runbooks.rs | ✅ CLI | `mailswiftsync runbook <source-provider> <destination-provider>` |
+| provider_runbooks.rs | ✅ CLI + partial GUI | `mailswiftsync runbook <source-provider> <destination-provider>`; Migration plan includes a read-only provider checklist |
 | provider_testing_guide.md | ✅ | How to validate providers with live accounts |
 
 ### Error Handling ⚠️ PARTIAL
@@ -199,7 +199,7 @@ new metadata verifier against real accounts.
 - ⚠️ Observed provider-signal classification prototype (adaptive control not live-wired)
 - ✅ Durable controller recovery and maintenance-window supervision
 - ✅ Recovery dashboard/planner CLI command (`recovery-guidance`)
-- ✅ Provider runbook generation CLI command (`runbook`)
+- ✅ Provider runbook generation CLI command (`runbook`) and read-only provider checklist in the Migration plan
 - ⚠️ Pre/post-migration reporting helpers (not live-wired)
 - ✅ Comprehensive setup documentation
 - ✅ OAuth token lifecycle management
@@ -291,7 +291,8 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 
 The system provides a durable, safety-gated migration controller suitable for
 technical-preview use. It does not yet provide body-content proof or
-provider-specific execution intelligence; provider runbooks remain CLI-only and
-recovery time estimates are not yet surfaced in the GUI workflow.
+provider-specific execution intelligence; provider runbooks are guidance only,
+not provider-specific execution or qualification, and recovery time estimates
+are not yet surfaced in the GUI workflow.
 
 **Next milestone:** Live validation with real provider mailboxes to reach GA 1.0 status.

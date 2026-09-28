@@ -56,7 +56,7 @@ production_supported = false
 [capabilities.provider_runbooks]
 code = "implemented"
 controller = "wired"
-ui = "not_wired"
+ui = "partial"
 generic_lab = "passed"
 gmail_live = false
 m365_live = false

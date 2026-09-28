@@ -43,6 +43,16 @@ impl ProviderPreset {
         }
     }
 
+    pub(crate) fn runbook_name(self) -> &'static str {
+        match self {
+            Self::GenericImap => "generic",
+            Self::GoogleWorkspace => "gmail",
+            Self::Microsoft365 => "microsoft365",
+            Self::Fastmail => "fastmail",
+            Self::ZohoMail => "zoho",
+        }
+    }
+
     pub(crate) fn defaults(self) -> ProviderDefaults {
         match self {
             Self::GenericImap => ProviderDefaults {
@@ -103,5 +113,8 @@ mod tests {
         assert_eq!(ProviderPreset::ALL.len(), 5);
         assert!(ProviderPreset::GoogleWorkspace.label().ends_with(" preset"));
         assert!(ProviderPreset::Microsoft365.label().ends_with(" preset"));
+        assert_eq!(ProviderPreset::GoogleWorkspace.runbook_name(), "gmail");
+        assert_eq!(ProviderPreset::Microsoft365.runbook_name(), "microsoft365");
+        assert_eq!(ProviderPreset::Fastmail.runbook_name(), "fastmail");
     }
 }
