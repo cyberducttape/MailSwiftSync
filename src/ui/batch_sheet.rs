@@ -62,7 +62,10 @@ impl App {
             });
         if cancel || !open {
             self.pending_sheet_import = None;
-            self.bulk_message = "Worksheet selection cancelled; no rows were imported.".into();
+            self.bulk_message = self
+                .language
+                .text("Worksheet selection cancelled; no rows were imported.")
+                .into();
         } else if import && let Some(pending) = self.pending_sheet_import.take() {
             self.begin_sheet_import(pending.path, self.bulk_sheet_index);
         }

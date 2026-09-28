@@ -149,8 +149,11 @@ impl App {
         });
         let Some(_project) = self.active_project_id().map(str::to_owned) else {
             ui.label(
-                RichText::new("Create or restore a project to see durable runs.")
-                    .color(self.theme_colors().text_secondary),
+                RichText::new(
+                    self.language
+                        .text("Create or restore a project to see durable runs."),
+                )
+                .color(self.theme_colors().text_secondary),
             );
             return;
         };

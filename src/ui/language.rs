@@ -639,6 +639,9 @@ impl UiLanguage {
             "No durable runs recorded yet." => {
                 "Bisher sind keine dauerhaften Ausführungen erfasst."
             }
+            "Worksheet selection cancelled; no rows were imported." => {
+                "Arbeitsblattauswahl abgebrochen; es wurden keine Zeilen importiert."
+            }
             "Migration projects" => "Migrationsprojekte",
             "New migration plan" => "Neuen Migrationsplan erstellen",
             "No historical project is selected." => "Es ist kein früheres Projekt ausgewählt.",
@@ -1068,6 +1071,8 @@ mod tests {
             "Completed",
             "All statuses",
             "No durable runs recorded yet.",
+            "Worksheet selection cancelled; no rows were imported.",
+            "Create or restore a project to see durable runs.",
             "Showing the newest 250 runs. Export the audit report for complete history.",
             "Run",
             "Mailbox",
