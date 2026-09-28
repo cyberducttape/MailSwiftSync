@@ -6,6 +6,21 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Encrypted imapsync verification now persists fetched-page cursors and opt-in
+  body fingerprints in a private SQLite stage, resumes staged pages after a
+  controller restart, and binds retained data to a SHA-256 plan identity.
+  Successful verification or a changed plan clears the stage; provider-scale
+  interruption qualification remains outstanding.
+- Verification failures now surface their bounded diagnostic reason in
+  operator attention state, making incomplete evidence actionable.
+- The doctor command now reports engine-specific qualification requirements:
+  it checks the trusted imapsync version for imapsync runs without incorrectly
+  requiring imapsync for native Dovecot runs.
+- German completion and safety statuses now use the translation catalog, and
+  the localization guard covers additional visible UI text patterns.
+- The disposable destination storage-fault lab now retries temporary-directory
+  cleanup after Dovecot shutdown, preventing a socket-removal race from
+  turning successful fault assertions into a CI failure.
 - Added a persisted English/German language choice for the desktop interface,
   with German navigation, settings, account setup, overview, activity, and
   verification labels. CLI output and generated reports remain English.
@@ -24,7 +39,8 @@ operator distribution archives.
   full source/destination folder and UID evidence.
 - Updated the capability manifest to reflect that SQLite-backed streaming
   reconciliation is wired into live verification; large-account qualification
-  and durable per-message checkpoint/restart semantics remain outstanding.
+  and externally fault-injected per-message resume qualification remain
+  outstanding. Durable verification-page checkpoints are now implemented.
 - Microsoft 365 Basic-auth admission now identifies canonical hostnames when
   endpoints include ports or trailing dots, and no longer misclassifies hosts
   that merely contain a Microsoft domain as a substring.
