@@ -4,7 +4,7 @@ use crate::process::{
     CapturedOutput, collect_redacted_lines_with_callback, configure_process_group,
     wait_with_timeout,
 };
-use crate::{migration_plan::Form, verification::ImapsyncOutputProfile};
+use crate::{core::Engine, migration_plan::Form, verification::ImapsyncOutputProfile};
 use fs2::available_space;
 use serde::Serialize;
 use std::{
@@ -37,13 +37,28 @@ pub(crate) struct DoctorReport {
 pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
     let mut checks = Vec::new();
     let profile = Form::load().ok();
-    let imapsync_path = profile
+    let selected_engine = profile
         .as_ref()
-        .map(|form| form.profile.imapsync_path.trim())
-        .filter(|path| !path.is_empty())
-        .unwrap_or("imapsync");
-
-    checks.push(check_imapsync(imapsync_path));
+        .map(|form| form.profile.engine)
+        .unwrap_or(Engine::ImapSync);
+    match selected_engine {
+        Engine::Dovecot => {
+            let doveadm_path = profile
+                .as_ref()
+                .map(|form| form.profile.doveadm_path.trim())
+                .filter(|path| !path.is_empty())
+                .unwrap_or("doveadm");
+            checks.push(check_doveadm(doveadm_path));
+        }
+        Engine::Auto | Engine::ImapSync => {
+            let imapsync_path = profile
+                .as_ref()
+                .map(|form| form.profile.imapsync_path.trim())
+                .filter(|path| !path.is_empty())
+                .unwrap_or("imapsync");
+            checks.push(check_imapsync(imapsync_path));
+        }
+    }
     checks.push(DoctorCheck {
         name: "verification parser",
         status: "ready",
@@ -109,6 +124,18 @@ pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
 }
 
 fn check_imapsync(path: &str) -> DoctorCheck {
+    check_executable_version(path, "imapsync executable", Some(is_qualified_version))
+}
+
+fn check_doveadm(path: &str) -> DoctorCheck {
+    check_executable_version(path, "doveadm executable", None)
+}
+
+fn check_executable_version(
+    path: &str,
+    name: &'static str,
+    qualification: Option<fn(&str) -> bool>,
+) -> DoctorCheck {
     let mut command = Command::new(path);
     command
         .arg("--version")
@@ -120,7 +147,7 @@ fn check_imapsync(path: &str) -> DoctorCheck {
         Ok(child) => child,
         Err(error) => {
             return DoctorCheck {
-                name: "imapsync executable",
+                name,
                 status: "blocked",
                 detail: format!("could not execute {path}: {error}"),
             };
@@ -129,7 +156,7 @@ fn check_imapsync(path: &str) -> DoctorCheck {
     let Some(stdout) = child.stdout.take() else {
         let _ = wait_with_timeout(&mut child, Duration::from_secs(1), &AtomicBool::new(true));
         return DoctorCheck {
-            name: "imapsync executable",
+            name,
             status: "blocked",
             detail: format!("{path}: could not capture version output"),
         };
@@ -137,7 +164,7 @@ fn check_imapsync(path: &str) -> DoctorCheck {
     let Some(stderr) = child.stderr.take() else {
         let _ = wait_with_timeout(&mut child, Duration::from_secs(1), &AtomicBool::new(true));
         return DoctorCheck {
-            name: "imapsync executable",
+            name,
             status: "blocked",
             detail: format!("{path}: could not capture version diagnostics"),
         };
@@ -150,12 +177,12 @@ fn check_imapsync(path: &str) -> DoctorCheck {
     let stderr = stderr_thread.join().ok().and_then(Result::ok);
     match outcome {
         Ok(outcome) if outcome.timed_out => DoctorCheck {
-            name: "imapsync executable",
+            name,
             status: "blocked",
             detail: format!("{path} did not return --version within 5 seconds"),
         },
         Ok(outcome) if outcome.cancelled => DoctorCheck {
-            name: "imapsync executable",
+            name,
             status: "blocked",
             detail: format!("{path} version probe was cancelled"),
         },
@@ -163,24 +190,24 @@ fn check_imapsync(path: &str) -> DoctorCheck {
             let version = first_captured_line(stdout.as_ref())
                 .or_else(|| first_captured_line(stderr.as_ref()))
                 .unwrap_or_else(|| "(no version output)".into());
-            let status = if is_qualified_version(&version) {
-                "qualified"
-            } else {
-                "review"
+            let status = match qualification {
+                Some(qualification) if qualification(&version) => "qualified",
+                Some(_) => "review",
+                None => "available",
             };
             DoctorCheck {
-                name: "imapsync executable",
+                name,
                 status,
                 detail: format!("{path}: {version}"),
             }
         }
         Ok(outcome) => DoctorCheck {
-            name: "imapsync executable",
+            name,
             status: "blocked",
             detail: format!("{path} exited with {:?}", outcome.exit_code),
         },
         Err(error) => DoctorCheck {
-            name: "imapsync executable",
+            name,
             status: "blocked",
             detail: format!("{path} version probe failed: {error}"),
         },
