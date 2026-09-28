@@ -272,6 +272,10 @@ and require the corresponding integration run.
   with the documented `MAILSWIFTSYNC_IMPORT_*_BUDGET_MS` variables; an absent
   or malformed result fails the script.
 
+  The tagged-release quality job runs all three scale scripts on its Linux
+  runner, so the documented budgets are release gates rather than an
+  unexecuted local benchmark recipe.
+
   The pure cached-filter/selection path has a companion command,
   `scripts/benchmark-ui-scale.sh`. It measures 100k-row filter keystroke,
   explicit selection-all, a 1,000-row state-update refresh, and a real
