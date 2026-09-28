@@ -309,6 +309,15 @@ impl UiLanguage {
             "MAILBOXES" => "POSTFÄCHER",
             "EVIDENCE" => "NACHWEISE",
             "Recommended next step" => "Empfohlener nächster Schritt",
+            "Open migration plan  →" => "Migrationsplan öffnen  →",
+            "Refresh preflight assessment" => "Vorabprüfung aktualisieren",
+            "Preflight is the default" => "Vorabprüfung ist der Standard",
+            "Saved profiles exclude passwords" => "Gespeicherte Profile enthalten keine Passwörter",
+            "Source mail is read-only by default" => {
+                "Quellnachrichten sind standardmäßig schreibgeschützt"
+            }
+            "{} shown · {} total need review" => "{} angezeigt · insgesamt {} erfordern Prüfung",
+            "{}/{} configuration items complete" => "{}/{} Konfigurationselemente abgeschlossen",
             "None configured" => "Noch nicht eingerichtet",
             "Use Mailboxes to review scope before running anything." => {
                 "Prüfen Sie den Umfang unter „Postfächer“, bevor Sie einen Vorgang starten."
@@ -800,6 +809,13 @@ mod tests {
             "Message-level evidence",
             "Verification authority",
             "The transfer finished, but no mailbox-level evidence has been captured yet.",
+            "Open migration plan  →",
+            "Refresh preflight assessment",
+            "Preflight is the default",
+            "Saved profiles exclude passwords",
+            "Source mail is read-only by default",
+            "{} shown · {} total need review",
+            "{}/{} configuration items complete",
             "{} visible on page · showing {}–{} of {}",
             "MIGRATION LIFECYCLE",
             "ATTENTION REQUIRED",

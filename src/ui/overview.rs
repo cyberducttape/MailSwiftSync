@@ -231,7 +231,7 @@ impl App {
                 if ui
                     .add_enabled(
                         !self.workspace_read_only,
-                        egui::Button::new("Open migration plan  →"),
+                        egui::Button::new(self.language.text("Open migration plan  →")),
                     )
                     .clicked()
                 {
@@ -240,7 +240,7 @@ impl App {
                 if ui
                     .add_enabled(
                         !self.workspace_read_only,
-                        egui::Button::new("Refresh preflight assessment"),
+                        egui::Button::new(self.language.text("Refresh preflight assessment")),
                     )
                     .clicked()
                 {
@@ -249,7 +249,7 @@ impl App {
                 if ui
                     .add_enabled(
                         !self.workspace_read_only,
-                        egui::Button::new("Import mailbox list"),
+                        egui::Button::new(self.language.text("Import mailbox list")),
                     )
                     .clicked()
                 {
@@ -258,14 +258,17 @@ impl App {
             });
         });
         ui.add_space(14.0);
-        ui.label(RichText::new("Safety contract").strong());
+        ui.label(RichText::new(self.language.text("Safety contract")).strong());
         ui.horizontal_wrapped(|ui| {
             for text in [
                 "Preflight is the default",
                 "Saved profiles exclude passwords",
                 "Source mail is read-only by default",
             ] {
-                ui.label(RichText::new(format!("✓ {text}")).color(self.theme_colors().success));
+                ui.label(
+                    RichText::new(format!("✓ {}", self.language.text(text)))
+                        .color(self.theme_colors().success),
+                );
             }
             if self.form.profile.source_tls == "plain" {
                 ui.label(
@@ -326,11 +329,16 @@ impl App {
                         .color(colors.warning),
                 );
                 ui.label(
-                    RichText::new(format!(
-                        "{} shown · {} total need review",
-                        attention.len(),
-                        self.ui_snapshot.mailbox_counts.needs_review
-                    ))
+                    RichText::new(
+                        self.language
+                            .text("{} shown · {} total need review")
+                            .replacen("{}", &attention.len().to_string(), 1)
+                            .replacen(
+                                "{}",
+                                &self.ui_snapshot.mailbox_counts.needs_review.to_string(),
+                                1,
+                            ),
+                    )
                     .color(colors.text_secondary),
                 );
                 if ui.button(self.language.text("Open verification")).clicked() {
@@ -446,7 +454,7 @@ impl App {
                 ui.heading(self.language.text("Migration workspace"));
                 ui.label(RichText::new(self.language.text(if self.form.dry_run { "PREFLIGHT" } else { "LIVE MIGRATION" })).strong().color(if self.form.dry_run { self.theme_colors().success } else { self.theme_colors().danger }));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{passed}/{total} configuration items complete")).strong().color(if passed == total { self.theme_colors().success } else { self.theme_colors().danger }));
+                    ui.label(RichText::new(self.language.text("{}/{} configuration items complete").replacen("{}", &passed.to_string(), 1).replacen("{}", &total.to_string(), 1)).strong().color(if passed == total { self.theme_colors().success } else { self.theme_colors().danger }));
                 });
             });
             ui.add_space(5.0);
