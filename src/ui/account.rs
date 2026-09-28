@@ -129,11 +129,11 @@ pub(crate) fn render_account(
         });
         if saved_credential && password.is_empty() {
             ui.label(
-                RichText::new(if auth_method_is_oauth(auth_method) {
+                RichText::new(language.text(if auth_method_is_oauth(auth_method) {
                     "Saved OAuth credential configured; session token not required."
                 } else {
                     "Saved credential configured; session password not required."
-                })
+                }))
                 .color(if ui.visuals().dark_mode {
                     ThemeColors::dark().success
                 } else {
@@ -192,19 +192,19 @@ impl App {
                         };
                         if ui.button(source_label).clicked() {
                             match self.form.store_keyring_password(true) {
-                                Ok(()) => self.set_status("Source credential stored in OS keyring", StatusSeverity::Success),
+                                Ok(()) => self.set_status(self.language.text("Source credential stored in OS keyring"), StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
                         if ui.button(self.language.text("Load source")).clicked() {
                             match self.form.load_keyring_password(true) {
-                                Ok(()) => self.set_status("Source credential loaded", StatusSeverity::Success),
+                                Ok(()) => self.set_status(self.language.text("Source credential loaded"), StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
                         if ui.button(self.language.text("Delete source")).clicked() {
                             match self.form.delete_keyring_password(true) {
-                                Ok(()) => self.set_status("Source credential deleted from OS keyring", StatusSeverity::Success),
+                                Ok(()) => self.set_status(self.language.text("Source credential deleted from OS keyring"), StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
@@ -217,19 +217,19 @@ impl App {
                         };
                         if ui.button(destination_label).clicked() {
                             match self.form.store_keyring_password(false) {
-                                Ok(()) => self.set_status("Destination credential stored in OS keyring", StatusSeverity::Success),
+                                Ok(()) => self.set_status(self.language.text("Destination credential stored in OS keyring"), StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
                         if ui.button(self.language.text("Load destination")).clicked() {
                             match self.form.load_keyring_password(false) {
-                                Ok(()) => self.set_status("Destination credential loaded", StatusSeverity::Success),
+                                Ok(()) => self.set_status(self.language.text("Destination credential loaded"), StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
                         if ui.button(self.language.text("Delete destination")).clicked() {
                             match self.form.delete_keyring_password(false) {
-                                Ok(()) => self.set_status("Destination credential deleted from OS keyring", StatusSeverity::Success),
+                                Ok(()) => self.set_status(self.language.text("Destination credential deleted from OS keyring"), StatusSeverity::Success),
                                 Err(error) => self.set_status(error, StatusSeverity::Error),
                             }
                         }
@@ -241,7 +241,7 @@ impl App {
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(
-                        "This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering.",
+                        self.language.text("This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering."),
                     )
                     .size(11.0)
                     .color(self.theme_colors().danger),
@@ -331,7 +331,7 @@ impl App {
                 if ui.button(self.language.text("Delete source refresh config")).clicked() {
                     match self.form.delete_oauth_refresh_config(true) {
                         Ok(()) => self.set_status(
-                            "Source OAuth refresh configuration deleted",
+                            self.language.text("Source OAuth refresh configuration deleted"),
                             StatusSeverity::Success,
                         ),
                         Err(error) => self.set_status(error, StatusSeverity::Error),
@@ -340,7 +340,7 @@ impl App {
                 if ui.button(self.language.text("Delete destination refresh config")).clicked() {
                     match self.form.delete_oauth_refresh_config(false) {
                         Ok(()) => self.set_status(
-                            "Destination OAuth refresh configuration deleted",
+                            self.language.text("Destination OAuth refresh configuration deleted"),
                             StatusSeverity::Success,
                         ),
                         Err(error) => self.set_status(error, StatusSeverity::Error),
@@ -351,22 +351,28 @@ impl App {
     }
 
     fn run_manual_oauth_refresh(&mut self, source: bool) {
-        let side = if source { "Source" } else { "Destination" };
+        let side = self
+            .language
+            .text(if source { "Source" } else { "Destination" });
         match self.form.refresh_oauth_access_token(source) {
             Ok(crate::migration_plan::OAuthRefreshOutcome::Refreshed { expires_in }) => {
                 let message = match expires_in {
-                    Some(seconds) => {
-                        format!("{side} OAuth access token refreshed (expires in {seconds}s)")
-                    }
-                    None => format!("{side} OAuth access token refreshed"),
+                    Some(seconds) => self
+                        .language
+                        .text("{} OAuth access token refreshed (expires in {}s)")
+                        .replacen("{}", side, 1)
+                        .replacen("{}", &seconds.to_string(), 1),
+                    None => self
+                        .language
+                        .text("{} OAuth access token refreshed")
+                        .replace("{}", side),
                 };
                 self.set_status(message, StatusSeverity::Success);
             }
             Ok(crate::migration_plan::OAuthRefreshOutcome::NotConfigured) => self.set_status(
-                format!(
-                    "No automatic refresh is configured for the {}",
-                    side.to_lowercase()
-                ),
+                self.language
+                    .text("No automatic refresh is configured for the {}")
+                    .replace("{}", &side.to_lowercase()),
                 StatusSeverity::Info,
             ),
             Err(error) => self.set_status(error, StatusSeverity::Error),
@@ -380,10 +386,14 @@ impl App {
             client_secret: std::mem::take(&mut self.oauth_refresh_editor_client_secret),
             refresh_token: std::mem::take(&mut self.oauth_refresh_editor_refresh_token),
         };
-        let side = if source { "Source" } else { "Destination" };
+        let side = self
+            .language
+            .text(if source { "Source" } else { "Destination" });
         match self.form.store_oauth_refresh_config(source, &config) {
             Ok(()) => self.set_status(
-                format!("{side} OAuth refresh configuration stored in OS keyring"),
+                self.language
+                    .text("{} OAuth refresh configuration stored in OS keyring")
+                    .replace("{}", side),
                 StatusSeverity::Success,
             ),
             Err(error) => self.set_status(error, StatusSeverity::Error),

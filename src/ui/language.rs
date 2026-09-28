@@ -271,6 +271,45 @@ impl UiLanguage {
             }
             "Profile saved without credential material." => "Profil ohne Zugangsdaten gespeichert.",
             "Could not save profile" => "Profil konnte nicht gespeichert werden",
+            "Saved OAuth credential configured; session token not required." => {
+                "Gespeicherte OAuth-Zugangsdaten konfiguriert; Sitzungstoken nicht erforderlich."
+            }
+            "Saved credential configured; session password not required." => {
+                "Gespeicherte Zugangsdaten konfiguriert; Sitzungspasswort nicht erforderlich."
+            }
+            "Source credential stored in OS keyring" => {
+                "Quellzugangsdaten im Betriebssystem-Schlüsselbund gespeichert"
+            }
+            "Source credential loaded" => "Quellzugangsdaten geladen",
+            "Source credential deleted from OS keyring" => {
+                "Quellzugangsdaten aus dem Betriebssystem-Schlüsselbund gelöscht"
+            }
+            "Destination credential stored in OS keyring" => {
+                "Zielzugangsdaten im Betriebssystem-Schlüsselbund gespeichert"
+            }
+            "Destination credential loaded" => "Zielzugangsdaten geladen",
+            "Destination credential deleted from OS keyring" => {
+                "Zielzugangsdaten aus dem Betriebssystem-Schlüsselbund gelöscht"
+            }
+            "This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering." => {
+                "Dies ist eine Passwortablage, keine OAuth-/Modern-Auth-Konfiguration. Verwenden Sie sie nicht als Ersatz für anbieterspezifische OAuth-Einrichtung oder unbeaufsichtigte Zugangsdatenvermittlung."
+            }
+            "Source OAuth refresh configuration deleted" => {
+                "OAuth-Erneuerungskonfiguration der Quelle gelöscht"
+            }
+            "Destination OAuth refresh configuration deleted" => {
+                "OAuth-Erneuerungskonfiguration des Ziels gelöscht"
+            }
+            "{} OAuth access token refreshed (expires in {}s)" => {
+                "{} OAuth-Zugriffstoken erneuert (läuft in {} s ab)"
+            }
+            "{} OAuth access token refreshed" => "{} OAuth-Zugriffstoken erneuert",
+            "No automatic refresh is configured for the {}" => {
+                "Für {} ist keine automatische Erneuerung konfiguriert"
+            }
+            "{} OAuth refresh configuration stored in OS keyring" => {
+                "OAuth-Erneuerungskonfiguration für {} im Betriebssystem-Schlüsselbund gespeichert"
+            }
             "Server" => "Server",
             "User" => "Benutzer",
             "Authentication" => "Authentifizierung",
@@ -856,6 +895,21 @@ mod tests {
             "Accept and mark verified with exceptions",
             "Verification exception recorded durably",
             "Could not accept verification exception: {error}",
+            "Saved OAuth credential configured; session token not required.",
+            "Saved credential configured; session password not required.",
+            "Source credential stored in OS keyring",
+            "Source credential loaded",
+            "Source credential deleted from OS keyring",
+            "Destination credential stored in OS keyring",
+            "Destination credential loaded",
+            "Destination credential deleted from OS keyring",
+            "This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering.",
+            "Source OAuth refresh configuration deleted",
+            "Destination OAuth refresh configuration deleted",
+            "{} OAuth access token refreshed (expires in {}s)",
+            "{} OAuth access token refreshed",
+            "No automatic refresh is configured for the {}",
+            "{} OAuth refresh configuration stored in OS keyring",
             "No active project selected",
             "Verified with exceptions",
             "Run a migration to create a durable mailbox evidence record.",
