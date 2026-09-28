@@ -214,12 +214,7 @@ impl MessageMetadataStage {
         // PRAGMA mutation that some packaged SQLite builds reject while still
         // retaining crash-safe defaults.
         self.connection_ref().execute_batch(
-            "-- Staged mailbox metadata is sensitive. Keep SQLite's transient
-             -- Staged mailbox metadata is sensitive. Keep SQLite's transient
-             -- sort/join structures out of the process-wide temp directory;
-             -- durable staging itself remains in the private run directory.
-             PRAGMA temp_store=MEMORY;
-             CREATE TABLE IF NOT EXISTS staged_messages(
+            "CREATE TABLE IF NOT EXISTS staged_messages(
                  side INTEGER NOT NULL CHECK(side IN (0,1)),
                  mailbox TEXT NOT NULL,
                  match_mailbox TEXT NOT NULL,
@@ -237,7 +232,15 @@ impl MessageMetadataStage {
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
              CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));",
-        )
+        )?;
+        if !durable {
+            // Ephemeral stages are disposable and may use an in-memory temp
+            // store. Durable stages must not mutate connection settings: the
+            // packaged engine can expose a read-only SQLite wrapper.
+            self.connection_ref()
+                .execute_batch("PRAGMA temp_store=MEMORY;")?;
+        }
+        Ok(())
     }
 
     fn bind_identity(&mut self, identity: &str) -> rusqlite::Result<()> {
