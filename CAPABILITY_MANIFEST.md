@@ -27,7 +27,7 @@ that status layout against the machine-readable source.
 | Native IMAP message transfer (Dovecot) | yes | yes | no | pending | Dedicated native-engine fixture added; no successful CI execution has yet been recorded |
 | Folder/label mapping | yes | yes | integration | pending | Integration coverage is through generic imapsync mapping/automap; no provider-specific namespace translation engine |
 | Message extraction (imapsync) | yes | yes (TLS live path) | unit | pending | Post-transfer verifier enumerates selectable folders and fetches bounded UID, Message-ID, size, and date metadata; live-provider evidence is pending |
-| Message extraction (Dovecot) | yes | partial | unit | pending | Native Dovecot aggregate verification remains live; the generic IMAP metadata verifier currently services imapsync runs |
+| Message extraction (Dovecot) | yes | partial | unit | pending | Native Dovecot aggregate verification includes mailbox UIDVALIDITY context for safe resume binding; the generic IMAP metadata verifier currently services imapsync runs |
 
 ---
 
@@ -38,7 +38,7 @@ that status layout against the machine-readable source.
 | **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Exercised by imapsync against local Dovecot server fixtures; native-Dovecot coverage pending |
 | **Message-level mismatch detection** | yes | yes (TLS imapsync path) | unit+scenario | pending | Folder-aware verifier is called after successful imapsync transfers; failures remain operator-reviewable and are never downgraded to aggregate success |
 | **Named message evidence levels** | yes | partial | unit+integration | pending | Metadata reconciliation is the default; explicit encrypted-imapsync body-hash runs emit a distinct Level 4-style bounded body-proof outcome after complete coverage |
-| **Checkpoint persistence** per message | no | no | none | no | NOT implemented; evidence persists per run, not per message |
+| **Checkpoint persistence** per message | no | no | none | no | Not implemented; Dovecot run-level checkpoints are now bound to a complete source/destination UIDVALIDITY digest, while evidence persists per run |
 | **Crash recovery** | partial | partial | unit | no | Run-level recovery works; message-level recovery not wired |
 | **Exception acceptance workflow** | yes | yes | unit | no | UI accepts exceptions, stored durably |
 
@@ -142,7 +142,7 @@ particular target.
 ## What Doesn't Exist
 
 ❌ **Not implemented:**
-- UIDVALIDITY-aware durable checkpoint context and per-message checkpoint/restart persistence
+- Per-message checkpoint/restart persistence (Dovecot run-level checkpoints are UIDVALIDITY-context-bound)
 - Provider throttling enforcement (adaptive rate limiting)
 - Automatic retry with provider-specific backoff
 - Pre-migration risk report generation during migration
@@ -161,7 +161,7 @@ particular target.
    - The default path uses Message-ID, INTERNALDATE, and RFC822.SIZE; an explicit encrypted-imapsync forensic mode also hashes bounded RFC822 bodies with SHA-256
    - Bounded fetch pages, account/message limits, and any unstable folder fail closed; partial account evidence is not emitted
    - Live verification stages fetched metadata in SQLite and reconciles it in bounded batches; the estimated 256 MiB fetched-state budget is an admission guard, not a whole-process peak-memory guarantee
-   - Large-account/provider qualification remains outstanding; mismatch details are still accumulated for evidence persistence, and durable UIDVALIDITY/per-message checkpoint restart semantics remain future work
+   - Large-account/provider qualification remains outstanding; mismatch details are still accumulated for evidence persistence, and durable per-message checkpoint restart semantics remain future work
 
 2. **Provider throttling is not enforced**
    - Configurations defined for Gmail, O365, Fastmail

@@ -560,6 +560,30 @@ mod tests {
     }
 
     #[test]
+    fn dovecot_checkpoint_context_requires_complete_and_stable_uidvalidity() {
+        let mut source = DovecotStatusAccumulator::default();
+        let mut destination = DovecotStatusAccumulator::default();
+        source.observe("INBOX messages=2 vsize=40 uidvalidity=17");
+        destination.observe("INBOX messages=2 vsize=40 uidvalidity=23");
+        let context = dovecot_checkpoint_context_digest(&source, &destination).unwrap();
+        assert_eq!(context.len(), 64);
+
+        let mut changed_destination = DovecotStatusAccumulator::default();
+        changed_destination.observe("INBOX messages=2 vsize=40 uidvalidity=24");
+        assert_ne!(
+            Some(context),
+            dovecot_checkpoint_context_digest(&source, &changed_destination)
+        );
+
+        let mut incomplete = DovecotStatusAccumulator::default();
+        incomplete.observe("INBOX messages=2 vsize=40");
+        assert_eq!(
+            dovecot_checkpoint_context_digest(&source, &incomplete),
+            None
+        );
+    }
+
+    #[test]
     fn dovecot_accumulator_rejects_incomplete_status_lines() {
         let mut status = DovecotStatusAccumulator::default();
         status.observe("mailbox messages=not-a-number vsize=40");

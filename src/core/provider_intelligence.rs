@@ -4,8 +4,9 @@ use std::time::Duration;
 /// Observed IMAP/transport error classification and recommended actions.
 ///
 /// This module does not encode provider API quotas or pretend that an IMAP
-/// message-per-second value can be inferred from them. It remains a library
-/// prototype until the controller consumes its classifications.
+/// message-per-second value can be inferred from them. Its classifications
+/// are consumed by controller retry policy; provider-specific quota and
+/// throttle telemetry remains an explicit qualification concern.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderErrorType {
     /// A structured transport-layer failure emitted by an adapter.
