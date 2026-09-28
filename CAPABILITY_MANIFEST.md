@@ -205,7 +205,7 @@ To reach GA 1.0, the following work is required:
 **Immediate (Before shipping v0.1):**
 - [x] Wire metadata-level message verification into the imapsync migration pipeline
 - [x] Add bounded opt-in content-fingerprint verification for encrypted imapsync
-- [ ] Implement UIDVALIDITY-aware and per-message checkpoint persistence
+- [x] Implement UIDVALIDITY-aware run-level checkpoint binding; per-message checkpoint persistence remains open
 - [x] Add supported recovery guidance to the operator Activity UI
 - [ ] Validate OAuth with real provider accounts
 - [ ] Test provider throttling with real connections
@@ -220,7 +220,7 @@ To reach GA 1.0, the following work is required:
 **Medium-term (v1.0 GA):**
 - [x] Implement SQLite-backed streaming reconciliation in the live metadata-verification path
 - [ ] Qualify large-account performance and memory behavior with 100k+ message load tests
-- [ ] Implement durable per-message checkpoints and restart semantics
+- [ ] Implement durable per-message checkpoints and restart semantics (run-level Dovecot restart binding is implemented)
 - [ ] Performance benchmarks with 100k+ message mailboxes
 - [ ] Provider edge case testing
 - [ ] Production support runbooks

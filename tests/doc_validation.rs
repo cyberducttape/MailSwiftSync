@@ -124,7 +124,7 @@ fn capability_manifest_is_current() {
     );
     assert_eq!(
         capabilities["capabilities"]["uidvalidity_delta_checkpoints"]["code"].as_str(),
-        Some("planned")
+        Some("implemented")
     );
 
     let manifest = fs::read_to_string("CAPABILITY_MANIFEST.md")

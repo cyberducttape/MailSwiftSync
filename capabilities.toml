@@ -72,8 +72,8 @@ m365_live = false
 production_supported = false
 
 [capabilities.uidvalidity_delta_checkpoints]
-code = "planned"
-controller = "not_wired"
+code = "implemented"
+controller = "wired"
 ui = "not_claimed"
 generic_lab = "not_run"
 gmail_live = false
