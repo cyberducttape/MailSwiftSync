@@ -105,8 +105,12 @@ impl App {
         } else {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("{} mailbox jobs in scope", self.bulk_jobs.len()))
-                        .strong(),
+                    RichText::new(
+                        self.language
+                            .text("{} mailbox jobs in scope")
+                            .replace("{}", &self.bulk_jobs.len().to_string()),
+                    )
+                    .strong(),
                 );
                 if ui
                     .button(self.language.text("Import CSV / XLSX…"))
@@ -119,25 +123,60 @@ impl App {
             ui.group(|ui| {
                 ui.label(RichText::new(self.language.text("QUEUE HEALTH")).strong().size(11.0));
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("{} imported", summary.imported));
-                    ui.label(format!("{} queued", summary.queued));
-                    ui.label(format!("{} preflight", summary.preflight));
-                    ui.label(format!("{} ready", summary.ready));
-                    ui.label(format!("{} running", summary.running));
-                    ui.label(format!("{} verified", summary.verified));
+                    for (count, label) in [
+                        (summary.imported, "{} imported"),
+                        (summary.queued, "{} queued"),
+                        (summary.preflight, "{} preflight"),
+                        (summary.ready, "{} ready"),
+                        (summary.running, "{} running"),
+                        (summary.verified, "{} verified"),
+                    ] {
+                        ui.label(
+                            self.language
+                                .text(label)
+                                .replace("{}", &count.to_string()),
+                        );
+                    }
                     if summary.attention > 0 {
-                        ui.label(RichText::new(format!("{} attention", summary.attention)).color(colors.warning));
+                        ui.label(
+                            RichText::new(
+                                self.language
+                                    .text("{} attention")
+                                    .replace("{}", &summary.attention.to_string()),
+                            )
+                            .color(colors.warning),
+                        );
                     }
                     if summary.failed > 0 {
-                        ui.label(RichText::new(format!("{} failed", summary.failed)).color(colors.danger));
+                        ui.label(
+                            RichText::new(
+                                self.language
+                                    .text("{} failed")
+                                    .replace("{}", &summary.failed.to_string()),
+                            )
+                            .color(colors.danger),
+                        );
                     }
                     if summary.delta_required > 0 {
-                        ui.label(format!("{} delta required", summary.delta_required));
+                        ui.label(
+                            self.language
+                                .text("{} delta required")
+                                .replace("{}", &summary.delta_required.to_string()),
+                        );
                     }
                     let unresolved = summary.unresolved();
-                    ui.label(RichText::new(format!("{} unresolved", unresolved)).color(
-                        if unresolved == 0 { colors.success } else { colors.danger },
-                    ));
+                    ui.label(
+                        RichText::new(
+                            self.language
+                                .text("{} unresolved")
+                                .replace("{}", &unresolved.to_string()),
+                        )
+                        .color(if unresolved == 0 {
+                            colors.success
+                        } else {
+                            colors.danger
+                        }),
+                    );
                 });
                 ui.label(RichText::new(self.language.text("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.")).size(11.0).color(colors.text_secondary));
             });

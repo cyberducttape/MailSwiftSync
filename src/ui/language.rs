@@ -776,6 +776,17 @@ impl UiLanguage {
             }
             "Import / edit queue" => "Warteschlange importieren / bearbeiten",
             "QUEUE HEALTH" => "WARTESCHLANGENSTATUS",
+            "{} mailbox jobs in scope" => "{} Postfachaufträge im Umfang",
+            "{} imported" => "{} importiert",
+            "{} queued" => "{} wartend",
+            "{} preflight" => "{} Vorabprüfung",
+            "{} ready" => "{} bereit",
+            "{} running" => "{} läuft",
+            "{} verified" => "{} verifiziert",
+            "{} attention" => "{} Prüfung erforderlich",
+            "{} failed" => "{} fehlgeschlagen",
+            "{} delta required" => "{} Delta erforderlich",
+            "{} unresolved" => "{} offen",
             "Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight." => {
                 "Nutzen Sie Statusfilter und „Sichtbare auswählen“, um gezielt zu arbeiten. Eine Live-Ausführung erfordert weiterhin eine passende Vorabprüfung."
             }
@@ -1257,6 +1268,29 @@ mod tests {
                 UiLanguage::German.text(key),
                 key,
                 "missing German translation: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_health_counts_are_translated() {
+        for key in [
+            "{} mailbox jobs in scope",
+            "{} imported",
+            "{} queued",
+            "{} preflight",
+            "{} ready",
+            "{} running",
+            "{} verified",
+            "{} attention",
+            "{} failed",
+            "{} delta required",
+            "{} unresolved",
+        ] {
+            assert_ne!(
+                UiLanguage::German.text(key),
+                key,
+                "missing German batch-health translation: {key}"
             );
         }
     }
