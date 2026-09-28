@@ -48,14 +48,11 @@ impl App {
                 } else {
                     let deletion_enabled = self.form.profile.delete2;
                     ui.label(
-                        RichText::new(format!(
-                            "{}",
-                            self.language.text(if deletion_enabled {
-                                "Destination deletion: ENABLED ⚠"
-                            } else {
-                                "Destination deletion: disabled"
-                            })
-                        ))
+                        RichText::new(self.language.text(if deletion_enabled {
+                            "Destination deletion: ENABLED ⚠"
+                        } else {
+                            "Destination deletion: disabled"
+                        }))
                         .color(if deletion_enabled {
                             self.theme_colors().danger
                         } else {

@@ -485,6 +485,6 @@ mod tests {
         assert_eq!(assurance.destination_reachable, None);
         assert!(!assurance.inventory_reconciled);
         assert!(!assurance.message_level_evidence);
-        assert!(assurance.unresolved == false);
+        assert!(!assurance.unresolved);
     }
 }

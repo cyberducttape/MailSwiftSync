@@ -263,7 +263,7 @@ impl App {
                         .clicked()
                     {
                         let current_concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
-                        let identity_matches = stored_identity.as_ref().map_or(false, |stored| {
+                        let identity_matches = stored_identity.as_ref().is_some_and(|stored| {
                             stored.concurrency == current_concurrency
                                 && stored.retry_scope == self.bulk_retry_scope
                                 && stored.execution_mode == self.bulk_mode
