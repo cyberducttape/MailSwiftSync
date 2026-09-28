@@ -1071,4 +1071,69 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn dynamic_engine_and_attention_copy_is_translated() {
+        for engine in [
+            crate::core::Engine::Auto,
+            crate::core::Engine::Dovecot,
+            crate::core::Engine::ImapSync,
+        ] {
+            assert_ne!(
+                UiLanguage::German.text(engine.label()),
+                engine.label(),
+                "missing German engine label: {}",
+                engine.label()
+            );
+            assert_ne!(
+                UiLanguage::German.text(engine.description()),
+                engine.description(),
+                "missing German engine description: {}",
+                engine.description()
+            );
+        }
+        for strategy in [
+            crate::migration_plan::DovecotMigrationStrategy::InitialMirror,
+            crate::migration_plan::DovecotMigrationStrategy::IncrementalMirror,
+            crate::migration_plan::DovecotMigrationStrategy::FinalPreservationPass,
+            crate::migration_plan::DovecotMigrationStrategy::DestinationAlreadyActive,
+        ] {
+            assert_ne!(
+                UiLanguage::German.text(strategy.label()),
+                strategy.label(),
+                "missing German Dovecot strategy label: {}",
+                strategy.label()
+            );
+            assert_ne!(
+                UiLanguage::German.text(strategy.description()),
+                strategy.description(),
+                "missing German Dovecot strategy description"
+            );
+        }
+        for reason in [
+            crate::core::AttentionReason::Interrupted,
+            crate::core::AttentionReason::VerificationIncomplete,
+            crate::core::AttentionReason::VerificationDifference,
+            crate::core::AttentionReason::ProcessIdentityUnverified,
+            crate::core::AttentionReason::AuthenticationFailed,
+            crate::core::AttentionReason::TransportFailed,
+            crate::core::AttentionReason::PolicyBlocked,
+            crate::core::AttentionReason::ConfigurationInvalid,
+            crate::core::AttentionReason::CapacityLimited,
+            crate::core::AttentionReason::MessageRejected,
+            crate::core::AttentionReason::Unknown,
+        ] {
+            assert_ne!(
+                UiLanguage::German.text(reason.label()),
+                reason.label(),
+                "missing German attention label: {}",
+                reason.label()
+            );
+            assert_ne!(
+                UiLanguage::German.text(reason.recommended_action()),
+                reason.recommended_action(),
+                "missing German attention action"
+            );
+        }
+    }
 }
