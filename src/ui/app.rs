@@ -38,7 +38,7 @@ impl eframe::App for App {
                     ui.label(format!(
                         "{}: {}",
                         self.language.text("Engine"),
-                        self.form.engine().label()
+                        self.language.text(self.form.engine().label())
                     ));
                     ui.separator();
                     ui.label(

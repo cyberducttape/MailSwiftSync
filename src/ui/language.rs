@@ -38,6 +38,39 @@ impl UiLanguage {
             "Project: {}" => "Projekt: {}",
             "Executable: {}" => "Ausführbare Datei: {}",
             "in progress" => "läuft",
+            "This will invoke {} with the current credentials and rules." => {
+                "Dies ruft {} mit den aktuellen Zugangsdaten und Regeln auf."
+            }
+            "Dovecot strategy: {} — {}" => "Dovecot-Strategie: {} — {}",
+            "Cancellation requested…" => "Abbruch angefordert…",
+            "Conservative default" => "Konservative Voreinstellung",
+            "Dovecot native" => "Dovecot nativ",
+            "imapsync fallback" => "imapsync-Fallback",
+            "Use imapsync as the conservative default; select Dovecot native explicitly when appropriate." => {
+                "Verwenden Sie imapsync als konservative Voreinstellung; wählen Sie Dovecot nativ nur bei passender Umgebung."
+            }
+            "Use destination-side doveadm/dsync when the destination is Dovecot and admin access is available." => {
+                "Verwenden Sie doveadm/dsync auf dem Ziel, wenn das Ziel Dovecot ist und Administrationszugriff besteht."
+            }
+            "Use imapsync when both ends are arbitrary IMAP servers or no destination admin stack is available." => {
+                "Verwenden Sie imapsync bei beliebigen IMAP-Servern oder wenn kein Administrationsstapel am Ziel verfügbar ist."
+            }
+            "Initial mirror" => "Erstspiegelung",
+            "Incremental mirror" => "Inkrementelle Spiegelung",
+            "Final preservation pass" => "Finaler Erhaltungslauf",
+            "Destination already active" => "Ziel bereits aktiv",
+            "doveadm backup: mirror source mail to the destination; destination-only changes may be replaced. Dovecot may need to replace INBOX, which some Maildir targets refuse; test the exact target storage before migration." => {
+                "doveadm backup: Quellnachrichten auf das Ziel spiegeln; nur am Ziel vorhandene Änderungen können ersetzt werden. Dovecot muss möglicherweise INBOX ersetzen, was manche Maildir-Ziele ablehnen; testen Sie den genauen Zielspeicher vor der Migration."
+            }
+            "doveadm backup with the durable checkpoint: repeat an initial mirror before cutover. Maildir targets may refuse INBOX replacement; test the exact storage format." => {
+                "doveadm backup mit dauerhaftem Prüfpunkt: Vor dem Umschalten eine Erstspiegelung wiederholen. Maildir-Ziele können das Ersetzen von INBOX ablehnen; testen Sie das genaue Speicherformat."
+            }
+            "doveadm sync -1: preserve destination-side changes for the final cutover pass." => {
+                "doveadm sync -1: Änderungen am Ziel für den finalen Umschaltlauf erhalten."
+            }
+            "Advanced preservation mode using doveadm sync -1; review merge behavior and Dovecot load carefully." => {
+                "Erweiterter Erhaltungsmodus mit doveadm sync -1; prüfen Sie Zusammenführungsverhalten und Dovecot-Auslastung sorgfältig."
+            }
             "Customer proof ready" => "Kundennachweis bereit",
             "Each item names the durable reason and the next safe operator action." => {
                 "Jeder Eintrag nennt den dauerhaft gespeicherten Grund und die nächste sichere Bedieneraktion."

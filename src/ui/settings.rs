@@ -161,7 +161,7 @@ pub(crate) fn show(
                     action = Some(SettingsAction::OpenProjectBrowser);
                     close_requested = true;
                 }
-                ui.label(RichText::new(format!("{} {}. {}", language.text("Current engine:"), engine.label(), language.text("Connection, credentials, advanced options, and readiness are available from the Migration plan."))).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                ui.label(RichText::new(format!("{} {}. {}", language.text("Current engine:"), language.text(engine.label()), language.text("Connection, credentials, advanced options, and readiness are available from the Migration plan."))).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
             });
         });
     *open = window_open && !close_requested;

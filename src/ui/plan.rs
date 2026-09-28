@@ -25,10 +25,11 @@ impl App {
                     )
                     .color(self.theme_colors().danger),
                 );
-                ui.label(format!(
-                    "This will invoke {} with the current credentials and rules.",
-                    self.form.engine().label()
-                ));
+                ui.label(
+                    self.language
+                        .text("This will invoke {} with the current credentials and rules.")
+                        .replace("{}", self.language.text(self.form.engine().label())),
+                );
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(
@@ -45,11 +46,22 @@ impl App {
                 ui.label(self.language.text("Source mail: not deleted by default"));
                 if self.form.engine() == crate::core::Engine::Dovecot {
                     ui.label(
-                        RichText::new(format!(
-                            "Dovecot strategy: {} — {}",
-                            self.form.profile.dovecot_strategy.label(),
-                            self.form.profile.dovecot_strategy.description()
-                        ))
+                        RichText::new(
+                            self.language
+                                .text("Dovecot strategy: {} — {}")
+                                .replacen(
+                                    "{}",
+                                    self.language
+                                        .text(self.form.profile.dovecot_strategy.label()),
+                                    1,
+                                )
+                                .replacen(
+                                    "{}",
+                                    self.language
+                                        .text(self.form.profile.dovecot_strategy.description()),
+                                    1,
+                                ),
+                        )
                         .color(self.theme_colors().warning),
                     );
                 } else {
@@ -430,7 +442,7 @@ impl App {
                         ui.group(|ui| {
                             ui.heading(self.language.text("Dovecot migration strategy"));
                             egui::ComboBox::from_id_salt("dovecot_strategy")
-                                .selected_text(self.form.profile.dovecot_strategy.label())
+                .selected_text(self.language.text(self.form.profile.dovecot_strategy.label()))
                                 .show_ui(ui, |ui| {
                                     for strategy in [
                                         crate::migration_plan::DovecotMigrationStrategy::InitialMirror,
@@ -441,12 +453,15 @@ impl App {
                                         ui.selectable_value(
                                             &mut self.form.profile.dovecot_strategy,
                                             strategy,
-                                            strategy.label(),
+                                            self.language.text(strategy.label()),
                                         );
                                     }
                                 });
                             ui.label(
-                                RichText::new(self.form.profile.dovecot_strategy.description())
+                                RichText::new(
+                                    self.language
+                                        .text(self.form.profile.dovecot_strategy.description()),
+                                )
                                     .size(11.0)
                                     .color(self.theme_colors().text_secondary),
                             );

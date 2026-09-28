@@ -21,9 +21,13 @@ impl App {
                 let editable = !self.running();
                 ui.add_enabled_ui(editable, |ui| {
                     for engine in [core::Engine::Auto, core::Engine::Dovecot, core::Engine::ImapSync] {
-                        ui.radio_value(&mut self.form.profile.engine, engine, engine.label());
+                        ui.radio_value(
+                            &mut self.form.profile.engine,
+                            engine,
+                            self.language.text(engine.label()),
+                        );
                         if self.form.profile.engine == engine {
-                            ui.label(RichText::new(engine.description()).size(11.0).color(self.theme_colors().text_secondary));
+                            ui.label(RichText::new(self.language.text(engine.description())).size(11.0).color(self.theme_colors().text_secondary));
                         }
                     }
                     if self.form.profile.engine == core::Engine::Dovecot {

@@ -31,7 +31,10 @@ impl App {
                         if let Some(cancel) = &self.cancel_requested {
                             cancel.store(true, Ordering::Relaxed);
                         }
-                        self.set_status("Cancellation requested…", StatusSeverity::Warning);
+                        self.set_status(
+                            self.language.text("Cancellation requested…"),
+                            StatusSeverity::Warning,
+                        );
                         close_requested = true;
                     }
                 });
