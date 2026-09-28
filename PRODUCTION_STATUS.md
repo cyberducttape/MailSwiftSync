@@ -70,7 +70,7 @@ very large accounts.
 ### Error Handling ⚠️ PARTIAL
 | Scenario | Status | Handling |
 |----------|--------|----------|
-| Rate limiting | ⚠️ Configured limits + generic retry | Profile-supplied imapsync limits apply; no provider-specific rate constants or adaptive controller are claimed |
+| Rate limiting | ⚠️ Configured limits + observed adaptive cooldown | Profile-supplied imapsync limits apply; batch launches now apply bounded endpoint-scoped cooldowns after observed capacity/rate-limit signals, but provider-specific quotas remain unqualified |
 | Network timeouts | ✅ | Process and webhook timeout paths are wired |
 | Authentication failures | ✅ | Clear error with remediation steps |
 | Connection exhaustion | ⚠️ Partial | Generic bounded concurrency and failure handling; no provider-specific connection-pool controller |
@@ -197,7 +197,7 @@ new metadata verifier against real accounts.
 
 ### Completed (This Release)
 - ✅ TLS imapsync metadata-level message reconciliation wired into live runs; bounded opt-in body proof is wired but remains provider-unqualified
-- ⚠️ Observed provider-signal classification prototype (adaptive control not live-wired)
+- ⚠️ Observed provider-signal classification with bounded endpoint-scoped adaptive launch cooldown; live provider qualification remains pending
 - ✅ Durable controller recovery and maintenance-window supervision
 - ✅ Recovery dashboard/planner CLI command (`recovery-guidance`)
 - ✅ Provider runbook generation CLI command (`runbook`) and read-only provider checklist in the Migration plan

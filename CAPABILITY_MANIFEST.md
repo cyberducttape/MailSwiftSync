@@ -65,7 +65,7 @@ that status layout against the machine-readable source.
 |------------|------|-------|--------|---------------|-------|
 | **Generic error classification** | yes | yes | integration | generic-lab | src/controller/failure.rs consumes shared provider-intelligence signals and maps them to durable controller classes |
 | **Provider-specific classification** | yes | partial | unit | no | Generic provider-intelligence patterns are now wired into controller retry classification; provider-context-specific rules remain pending |
-| **Automatic retry with backoff** | yes | yes | integration | generic-lab | Transient failures auto-retry with bounded backoff (src/controller/batch_work_item.rs); also uses imapsync's native retry |
+| **Automatic retry with backoff** | yes | yes | integration | generic-lab | Transient failures auto-retry with bounded backoff; observed capacity/rate-limit failures also cool down later launches for the same endpoint pair (src/controller/batch_work_item.rs) |
 | **Rate limit detection** | yes | partial | unit | no | Pattern matching implemented for generic rate limits; provider-specific patterns NOT applied |
 | **Connection exhaustion handling** | yes | partial | unit | no | Configured per provider; generic connection failures retried; provider-specific limits NOT applied |
 
@@ -127,7 +127,7 @@ particular target.
 ⚠️ **Code exists but not fully qualified:**
 - Content-level mismatch detection (bounded body hashing is an explicit encrypted-imapsync forensic mode; provider qualification is outstanding)
 - Provider-context-specific error classification (generic provider-intelligence mapping is now applied; provider-specific context remains pending)
-- Provider-specific throttling (not implemented; generic profile throttles are enforced)
+- Provider-specific throttling quotas (not implemented; generic profile throttles and observed endpoint cooldowns are enforced)
 - Pre/post-migration reports (available as explicit CLI exports, not automatically generated for every live run)
 - Dedicated recovery dashboard (supported recovery guidance is visible in Activity; a multi-run dashboard remains future work)
 
@@ -143,7 +143,7 @@ particular target.
 
 ❌ **Not implemented:**
 - Per-message checkpoint/restart persistence (Dovecot run-level checkpoints are UIDVALIDITY-context-bound)
-- Provider throttling enforcement (adaptive rate limiting)
+- Provider-specific throttling enforcement (adaptive cooldown reacts to observed signals, but provider quota policies are not encoded)
 - Automatic retry with provider-specific backoff
 - Pre-migration risk report generation during migration
 - Post-migration exception report generation
@@ -163,10 +163,10 @@ particular target.
    - Live verification stages fetched metadata in SQLite and reconciles it in bounded batches; the estimated 256 MiB fetched-state budget is an admission guard, not a whole-process peak-memory guarantee
    - Large-account/provider qualification remains outstanding; mismatch details are still accumulated for evidence persistence, and durable per-message checkpoint restart semantics remain future work
 
-2. **Provider throttling is not enforced**
-   - Configurations defined for Gmail, O365, Fastmail
-   - Adaptive throttling not applied to actual IMAP operations
-   - Imapsync's built-in backoff is used instead
+2. **Provider-specific throttling is not qualified**
+   - Configurations are defined for Gmail, O365, Fastmail
+   - Profile limits and observed endpoint-scoped cooldowns are applied before launches
+   - Provider quota policies and live throttle behavior still require qualification
 
 3. **OAuth works for token refresh, but needs live testing**
    - Scopes corrected (Gmail, O365)
@@ -190,7 +190,7 @@ particular target.
 - Early adoption with careful operator oversight
 
 **Not yet ready for:**
-- Unattended migrations (no adaptive throttling or recovery approval)
+- Unattended migrations (no external scheduler/recovery approval and provider quotas remain unqualified)
 - Large-scale deployments without a qualified provider pilot or large-account load qualification
 - Unattended very-large migrations requiring durable per-message checkpoint/restart semantics
 - Critical customer mailboxes (lacking live provider validation)

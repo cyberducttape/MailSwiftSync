@@ -15,13 +15,103 @@ use std::{
         mpsc,
     },
     thread,
+    time::{Duration, Instant},
 };
 
 const BATCH_PROCESS_STARTS_PER_SECOND: usize = 2;
 const MAX_BATCH_PENDING_EVENTS: usize = 4_096;
+const MAX_ADAPTIVE_PROVIDER_KEYS: usize = 4_096;
 
 type BatchWorkItem = (usize, String, String, Option<String>, BulkJob);
 pub(crate) type OAuthRefreshLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+
+struct ProviderCooldown {
+    blocked_until: Instant,
+    consecutive_capacity_failures: u8,
+}
+
+/// Shared, endpoint-scoped capacity control for one batch wave.
+///
+/// This reacts only to observed capacity/rate-limit failures. It deliberately
+/// does not encode undocumented provider quotas. A cooldown affects later
+/// launches for the same source/destination endpoint pair, while unrelated
+/// provider pairs continue to make progress.
+pub(crate) struct AdaptiveProviderLimiter {
+    state: Mutex<HashMap<String, ProviderCooldown>>,
+}
+
+impl AdaptiveProviderLimiter {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(crate) fn wait(&self, key: &str, cancel: &AtomicBool) -> bool {
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            let wait = {
+                let mut state = match self.state.lock() {
+                    Ok(state) => state,
+                    Err(_) => return false,
+                };
+                let now = Instant::now();
+                match state.get(key).map(|value| value.blocked_until) {
+                    Some(blocked_until) if blocked_until > now => blocked_until - now,
+                    Some(_) => {
+                        state.remove(key);
+                        return true;
+                    }
+                    None => return true,
+                }
+            };
+            thread::sleep(wait.min(Duration::from_millis(100)));
+        }
+    }
+
+    pub(crate) fn observe_failure(&self, key: &str, error: &str) {
+        if crate::controller::failure::classify_failure(error)
+            != crate::controller::failure::FailureClass::Capacity
+        {
+            return;
+        }
+        let base =
+            crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error)
+                .suggested_retry_delay()
+                .unwrap_or(Duration::from_secs(5));
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+        let now = Instant::now();
+        state.retain(|_, value| value.blocked_until > now);
+        if state.len() >= MAX_ADAPTIVE_PROVIDER_KEYS && !state.contains_key(key) {
+            return;
+        }
+        let entry = state.entry(key.to_owned()).or_insert(ProviderCooldown {
+            blocked_until: now,
+            consecutive_capacity_failures: 0,
+        });
+        let multiplier = 1u32 << entry.consecutive_capacity_failures.min(5);
+        let cooldown = base
+            .saturating_mul(multiplier)
+            .min(Duration::from_secs(120));
+        entry.blocked_until = entry.blocked_until.max(now + cooldown);
+        entry.consecutive_capacity_failures = entry.consecutive_capacity_failures.saturating_add(1);
+    }
+}
+
+pub(crate) fn provider_scope_key(form: &crate::Form) -> String {
+    format!(
+        "{}:{}|{}:{}",
+        form.profile.source_host.trim().to_ascii_lowercase(),
+        form.profile.source_port.trim(),
+        form.profile.destination_host.trim().to_ascii_lowercase(),
+        form.profile.destination_port.trim(),
+    )
+}
 
 pub(crate) struct BatchWorkerLaunch {
     pub(crate) cancel: Arc<AtomicBool>,
@@ -73,6 +163,7 @@ pub(crate) fn spawn_batch_worker(
         jobs,
     } = context;
     let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
+    let provider_limiter = Arc::new(AdaptiveProviderLimiter::new());
     let oauth_refresh_locks: OAuthRefreshLocks = Arc::new(Mutex::new(HashMap::new()));
     thread::spawn(move || {
         let failed = Arc::new(AtomicBool::new(false));
@@ -109,6 +200,7 @@ pub(crate) fn spawn_batch_worker(
             let tx = tx.clone();
             let cancel = Arc::clone(&cancel);
             let launch_limiter = Arc::clone(&launch_limiter);
+            let provider_limiter = Arc::clone(&provider_limiter);
             let batch_project_id = batch_project_id.clone();
             let batch_run_id = batch_run_id.clone();
             let resolved_imapsync = Arc::clone(&resolved_imapsync);
@@ -124,6 +216,7 @@ pub(crate) fn spawn_batch_worker(
                     failed,
                     terminal_jobs,
                     launch_limiter,
+                    provider_limiter,
                     batch_project_id,
                     batch_run_id,
                     resolved_imapsync,
@@ -233,4 +326,28 @@ pub(crate) fn spawn_batch_worker(
             eprintln!("reliable batch terminal event delivery failed: {error}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AdaptiveProviderLimiter;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn adaptive_provider_limiter_scopes_capacity_and_honors_cancellation() {
+        let limiter = AdaptiveProviderLimiter::new();
+        let key = "imap.gmail.com:993|imap.destination.example:993";
+        limiter.observe_failure(key, "too many requests");
+        let state = limiter.state.lock().unwrap();
+        assert!(
+            state
+                .get(key)
+                .is_some_and(|cooldown| cooldown.blocked_until > std::time::Instant::now())
+        );
+        drop(state);
+
+        let cancel = AtomicBool::new(true);
+        assert!(!limiter.wait(key, &cancel));
+        assert!(!limiter.wait("other-provider:993|other-destination:993", &cancel));
+    }
 }

@@ -1,7 +1,7 @@
 //! Per-mailbox batch execution worker.
 
 use super::batch::BatchExecutionMode;
-use super::batch_worker::OAuthRefreshLocks;
+use super::batch_worker::{AdaptiveProviderLimiter, OAuthRefreshLocks, provider_scope_key};
 use crate::{
     Event, StreamOutcome,
     bulk_import::BulkJob,
@@ -70,6 +70,7 @@ pub(crate) struct BatchWorkerContext {
     pub(crate) failed: Arc<AtomicBool>,
     pub(crate) terminal_jobs: Arc<Mutex<HashSet<usize>>>,
     pub(crate) launch_limiter: Arc<ProcessLaunchLimiter>,
+    pub(crate) provider_limiter: Arc<AdaptiveProviderLimiter>,
     pub(crate) batch_project_id: String,
     pub(crate) batch_run_id: String,
     pub(crate) resolved_imapsync: Arc<std::collections::HashMap<String, ResolvedImapsyncIdentity>>,
@@ -127,6 +128,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         failed,
         terminal_jobs,
         launch_limiter,
+        provider_limiter,
         batch_project_id,
         batch_run_id,
         resolved_imapsync,
@@ -209,8 +211,12 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         let mut delta_required = false;
         let mut claimed = false;
         let mut verification_failure: Option<String> = None;
+        let provider_key = provider_scope_key(&form);
         for attempt in 0..=retry_count {
             if !launch_limiter.acquire(&cancel) {
+                break;
+            }
+            if !provider_limiter.wait(&provider_key, &cancel) {
                 break;
             }
             if live {
@@ -253,6 +259,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             }
             if live && let Err(error) = fresh_dual_imaps_authentication(&form) {
                 if should_retry_batch_error(&error, attempt, retry_count) {
+                    provider_limiter.observe_failure(&provider_key, &error);
                     let _ = tx.send(Event::RunLine {
                         run_id: child_run_id.clone(),
                         job_id: job_id.clone(),
@@ -599,6 +606,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     break;
                 }
                 Err(error) if should_retry_batch_error(&error, attempt, retry_count) => {
+                    provider_limiter.observe_failure(&provider_key, &error);
                     let _ = tx.send(Event::RunLine {
                         run_id: child_run_id.clone(),
                         job_id: job_id.clone(),
