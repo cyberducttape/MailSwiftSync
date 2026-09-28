@@ -918,6 +918,21 @@ impl Form {
     pub(crate) fn extra_options_valid(&self) -> Result<(), String> {
         engine::validate_extra_options(&self.profile.extra_options)
     }
+
+    /// Build the exact secret-free command shown by the execution-plan
+    /// preview. The imapsync branch returns the same validated canonical
+    /// argument vector that the runtime command builder is permitted to use;
+    /// it must never fall back to silently omitting an invalid expert option.
+    pub(crate) fn preview_command(&self) -> Result<(String, Vec<String>), String> {
+        self.validate_internal(false)?;
+        if self.engine() == core::Engine::Dovecot {
+            return Ok(self.command(true));
+        }
+        Ok((
+            self.profile.imapsync_path.clone(),
+            engine::try_imapsync_preview_args(&self.profile, self.dry_run, 1)?,
+        ))
+    }
     #[cfg(test)]
     pub(crate) fn prepared_command(&self) -> Result<PreparedCommand, String> {
         self.prepare_command_with_dialect(1, None, Some(DovecotConfigDialect::Modern24))

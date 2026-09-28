@@ -1031,6 +1031,15 @@ mod tests {
     }
 
     #[test]
+    fn preview_command_rejects_invalid_extra_options_before_rendering() {
+        let mut form = dovecot_form();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.extra_options = "--timeout nope".into();
+        let error = form.preview_command().unwrap_err();
+        assert!(error.contains("requires an integer"));
+    }
+
+    #[test]
     fn validation_bounds_extra_option_input() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;

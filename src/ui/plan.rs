@@ -346,8 +346,8 @@ impl App {
                     .color(colors.text_secondary),
                 );
 
-                let validation_result = crate::engine::try_imapsync_preview_args(&self.form.profile, true, 1);
-                if let Err(validation_error) = &validation_result {
+                let command = self.form.preview_command();
+                if let Err(validation_error) = &command {
                     ui.label(
                         RichText::new(format!("⚠ Execution plan validation failed: {}", validation_error))
                             .color(colors.danger),
@@ -359,7 +359,7 @@ impl App {
                     return;
                 }
 
-                let (exe, args) = self.form.command(true);
+                let (exe, args) = command.expect("preview command was validated above");
                 ui.label(
                     RichText::new(self.language.text("Executable: {}").replace("{}", &exe))
                         .monospace(),
