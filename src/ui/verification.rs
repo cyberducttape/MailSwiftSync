@@ -151,25 +151,25 @@ impl App {
                 match mailbox.job.state.as_str() {
                     "verification_difference" => {
                         ui.separator();
-                        ui.heading("Accept residual difference");
-                        ui.label(RichText::new("This records an auditable exception; it does not change the underlying evidence or claim exact equality.").color(self.theme_colors().text_secondary));
-                        ui.horizontal(|ui| { ui.label("Operator"); ui.add(egui::TextEdit::singleline(&mut self.verification_exception_operator).desired_width(220.0)); });
-                        ui.add(egui::TextEdit::multiline(&mut self.verification_exception_reason).hint_text("Why is this difference acceptable? Include the change-ticket or customer approval reference.").desired_rows(3));
+                        ui.heading(self.language.text("Accept residual difference"));
+                        ui.label(RichText::new(self.language.text("This records an auditable exception; it does not change the underlying evidence or claim exact equality.")).color(self.theme_colors().text_secondary));
+                        ui.horizontal(|ui| { ui.label(self.language.text("Operator")); ui.add(egui::TextEdit::singleline(&mut self.verification_exception_operator).desired_width(220.0)); });
+                        ui.add(egui::TextEdit::multiline(&mut self.verification_exception_reason).hint_text(self.language.text("Why is this difference acceptable? Include the change-ticket or customer approval reference.")).desired_rows(3));
                         let can_accept = !self.verification_exception_operator.trim().is_empty() && !self.verification_exception_reason.trim().is_empty();
-                        if ui.add_enabled(can_accept, egui::Button::new("Accept and mark verified with exceptions")).clicked() {
+                        if ui.add_enabled(can_accept, egui::Button::new(self.language.text("Accept and mark verified with exceptions"))).clicked() {
                             match selected_project.as_deref() {
                                 Some(project_id) => match self.store.accept_verification_difference(project_id, &mailbox.job.id, &self.verification_exception_operator, &self.verification_exception_reason) {
-                                    Ok(()) => { self.set_status("Verification exception recorded durably", StatusSeverity::Success); self.verification_exception_reason.clear(); }
-                                    Err(error) => self.set_status(format!("Could not accept verification exception: {error}"), StatusSeverity::Error),
+                                    Ok(()) => { self.set_status(self.language.text("Verification exception recorded durably"), StatusSeverity::Success); self.verification_exception_reason.clear(); }
+                                    Err(error) => self.set_status(self.language.text("Could not accept verification exception: {error}").replace("{error}", &error.to_string()), StatusSeverity::Error),
                                 },
-                                None => self.set_status("No active project selected", StatusSeverity::Warning),
+                                None => self.set_status(self.language.text("No active project selected"), StatusSeverity::Warning),
                             }
                         }
                     }
                     "verified_with_exceptions" => {
                         if let Some(acceptance) = mailbox.acceptance.as_ref() {
                             ui.separator();
-                            ui.label(RichText::new("Verified with exceptions").strong().color(colors.warning));
+                            ui.label(RichText::new(self.language.text("Verified with exceptions")).strong().color(colors.warning));
                             ui.label(format!("Accepted by {} at {}: {}", acceptance.operator, acceptance.accepted_at, acceptance.reason));
                         }
                     }
@@ -178,7 +178,7 @@ impl App {
             } else if self.job_id.is_some() && selected_project.is_some() {
                 ui.label(RichText::new("The selected mailbox is not present in the cached project snapshot. Refresh the workspace before viewing or exporting its evidence.").color(self.theme_colors().danger));
             } else {
-                ui.label("Run a migration to create a durable mailbox evidence record.");
+                ui.label(self.language.text("Run a migration to create a durable mailbox evidence record."));
             }
         });
     }

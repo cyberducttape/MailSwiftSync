@@ -634,6 +634,13 @@ impl UiLanguage {
             "Accept and mark verified with exceptions" => {
                 "Akzeptieren und als mit Ausnahmen verifiziert markieren"
             }
+            "Verification exception recorded durably" => {
+                "Verifizierungs-Ausnahme dauerhaft aufgezeichnet"
+            }
+            "Could not accept verification exception: {error}" => {
+                "Verifizierungs-Ausnahme konnte nicht akzeptiert werden: {error}"
+            }
+            "No active project selected" => "Kein aktives Projekt ausgewählt",
             "Run a migration to create a durable mailbox evidence record." => {
                 "Führen Sie eine Migration aus, um einen dauerhaften Postfachnachweis zu erstellen."
             }
@@ -772,6 +779,16 @@ mod tests {
             "Message-level evidence",
             "Verification authority",
             "The transfer finished, but no mailbox-level evidence has been captured yet.",
+            "Accept residual difference",
+            "This records an auditable exception; it does not change the underlying evidence or claim exact equality.",
+            "Operator",
+            "Why is this difference acceptable? Include the change-ticket or customer approval reference.",
+            "Accept and mark verified with exceptions",
+            "Verification exception recorded durably",
+            "Could not accept verification exception: {error}",
+            "No active project selected",
+            "Verified with exceptions",
+            "Run a migration to create a durable mailbox evidence record.",
             "Discovery",
             "Seed",
             "Catch-up",
