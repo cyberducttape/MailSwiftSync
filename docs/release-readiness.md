@@ -318,7 +318,7 @@ and require the corresponding integration run.
   probe. Quota capacity, source-size forecasting, and provider-specific
   destination readiness remain explicit unknowns where the server cannot
   provide a reliable query.
-- Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints remain engine resume tokens, not UIDVALIDITY-aware message proof.
+- Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints retain the opaque engine state but are now envelope-bound to a complete source/destination mailbox UIDVALIDITY digest; legacy or incomplete-context checkpoints fail closed.
 - Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
 - Independent metadata-level message mismatch reporting and reconciliation is wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. An explicit forensic mode now fetches bounded RFC822 bodies, retains SHA-256 fingerprints for both sides, and emits `body_hash` evidence only when coverage and total-byte limits hold. The default path remains metadata-only; representative live body-hash evidence and live-provider/large-mailbox qualification remain outstanding.
 - Published migration evidence from representative datasets, including failures and recovery results.
@@ -335,7 +335,7 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 1. Add provider OAuth/Modern Auth and a secret-safe remote execution path.
 2. Expand the compatibility matrix with provider-specific dry/live pilots,
    interruption recovery, and evidence exports.
-3. Add UIDVALIDITY-aware durable checkpoints and per-message checkpoints; qualify the opt-in body-hash path against representative providers and large mailboxes.
+3. Add durable per-message checkpoints; qualify the UIDVALIDITY-bound Dovecot resume path and opt-in body-hash path against representative providers and large mailboxes.
 4. Add controller crash/restart, storage-fault, and cross-platform supervision
    tests against disposable servers.
 5. Publish signed native installers, upgrade/rollback guidance, and results

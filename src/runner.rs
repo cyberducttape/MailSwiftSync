@@ -58,6 +58,7 @@ use crate::{
 pub(crate) struct StreamResult {
     pub(crate) outcome: StreamOutcome,
     pub(crate) imapsync_evidence: Option<core::MailboxEvidence>,
+    pub(crate) dovecot_checkpoint: Option<String>,
 }
 
 /// Whether this plan carries the metadata needed for exact message-level
@@ -804,19 +805,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 .lock()
                 .map_err(|_| "Dovecot checkpoint collector was poisoned".to_owned())?
                 .clone();
-            if let Some(value) = &checkpoint {
-                send_reliable_event(
-                    tx,
-                    Event::Checkpoint {
-                        run_id: run_id.to_owned(),
-                        job_id: job_id.to_owned(),
-                        value: value.clone(),
-                    },
-                )?;
-            }
             Ok(StreamResult {
                 outcome,
                 imapsync_evidence,
+                dovecot_checkpoint: checkpoint,
             })
         }
         result => {
@@ -1288,7 +1280,7 @@ pub(crate) fn run_dovecot_verification(
     prefix: &str,
     run_id: &str,
     job_id: &str,
-) -> Result<core::MailboxEvidence, String> {
+) -> Result<DovecotVerificationResult, String> {
     let mut reports = Vec::with_capacity(commands.len());
     for (index, (verify_exe, verify_args)) in commands.iter().enumerate() {
         let accumulator = Arc::new(Mutex::new(verification::DovecotStatusAccumulator::default()));
@@ -1350,29 +1342,75 @@ pub(crate) fn run_dovecot_verification(
     if reports.len() < 2 {
         return Err("Dovecot verification returned incomplete reports".into());
     }
-    verification::dovecot_evidence_from_accumulators(&reports[0].1, &reports[1].1).ok_or_else(
-        || {
-            let summarize = |status: &verification::DovecotStatusAccumulator| {
-                format!(
-                    "{} folders, {} messages, {} bytes, {} malformed status lines{}",
-                    status.folders,
-                    status.messages,
-                    status.bytes,
-                    status.malformed_lines,
-                    if status.overflowed {
-                        ", counters overflowed"
-                    } else {
-                        ""
-                    }
-                )
-            };
+    let evidence = verification::dovecot_evidence_from_accumulators(&reports[0].1, &reports[1].1)
+        .ok_or_else(|| {
+        let summarize = |status: &verification::DovecotStatusAccumulator| {
             format!(
-                "Dovecot status output was incomplete (source: {}; destination: {})",
-                summarize(&reports[0].1),
-                summarize(&reports[1].1)
+                "{} folders, {} messages, {} bytes, {} malformed status lines{}",
+                status.folders,
+                status.messages,
+                status.bytes,
+                status.malformed_lines,
+                if status.overflowed {
+                    ", counters overflowed"
+                } else {
+                    ""
+                }
             )
-        },
-    )
+        };
+        format!(
+            "Dovecot status output was incomplete (source: {}; destination: {})",
+            summarize(&reports[0].1),
+            summarize(&reports[1].1)
+        )
+    })?;
+    Ok(DovecotVerificationResult {
+        evidence,
+        checkpoint_context: verification::dovecot_checkpoint_context_digest(
+            &reports[0].1,
+            &reports[1].1,
+        ),
+    })
+}
+
+pub(crate) struct DovecotVerificationResult {
+    pub(crate) evidence: core::MailboxEvidence,
+    pub(crate) checkpoint_context: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_dovecot_checkpoint_context(
+    commands: &[(String, Vec<String>)],
+    verification_env: &[(String, SecretString)],
+    secret: &SecretString,
+    expected_context: &str,
+    tx: &mpsc::SyncSender<crate::Event>,
+    cancel: &AtomicBool,
+    timeout: Duration,
+    prefix: &str,
+    run_id: &str,
+    job_id: &str,
+) -> Result<(), String> {
+    let result = run_dovecot_verification(
+        commands,
+        verification_env,
+        std::slice::from_ref(secret),
+        tx,
+        cancel,
+        timeout,
+        prefix,
+        run_id,
+        job_id,
+    )?;
+    match result.checkpoint_context.as_deref() {
+        Some(actual) if actual == expected_context => Ok(()),
+        Some(actual) => Err(format!(
+            "Dovecot checkpoint UIDVALIDITY context changed (saved {expected_context}, current {actual}); refusing resume"
+        )),
+        None => Err(
+            "Dovecot checkpoint could not be validated because UIDVALIDITY was not present for every mailbox".into(),
+        ),
+    }
 }
 
 #[cfg(all(test, unix))]

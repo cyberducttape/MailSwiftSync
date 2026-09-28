@@ -630,6 +630,19 @@ pub(crate) fn prepare_batch_run(
             }
         })
         .collect::<Vec<_>>();
+    for (selected, checkpoint) in selected_jobs.iter().zip(&queue_checkpoints) {
+        if mode.is_live()
+            && selected.job.form().engine() == core::Engine::Dovecot
+            && checkpoint
+                .as_deref()
+                .is_some_and(|value| core::dovecot_checkpoint_context(value).is_none())
+        {
+            return Err(format!(
+                "Mailbox {} has a legacy Dovecot checkpoint without UIDVALIDITY context; run a fresh full pass before resuming.",
+                selected.durable_job_id
+            ));
+        }
+    }
     let batch_plan_fingerprints = selected_jobs
         .iter()
         .map(|selected| {

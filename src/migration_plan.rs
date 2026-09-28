@@ -1291,7 +1291,10 @@ impl Form {
             // Dovecot prints a new state string when -s is supplied. An
             // empty state requests an initial stateful pass; a prior
             // committed checkpoint makes later passes incremental.
-            args.extend(["-s".into(), checkpoint.unwrap_or_default().to_owned()]);
+            args.extend([
+                "-s".into(),
+                core::dovecot_checkpoint_state(checkpoint.unwrap_or_default()).to_owned(),
+            ]);
             if preservation_sync {
                 args.push("-1".into());
             }
@@ -1361,8 +1364,7 @@ impl Form {
             "status".into(),
             "-u".into(),
             self.profile.source_user.clone(),
-            "-t".into(),
-            "messages vsize".into(),
+            "messages vsize uidvalidity".into(),
             "*".into(),
         ]);
         let mut destination = Vec::new();
@@ -1376,8 +1378,7 @@ impl Form {
             "status".into(),
             "-u".into(),
             self.profile.destination_user.clone(),
-            "-t".into(),
-            "messages vsize".into(),
+            "messages vsize uidvalidity".into(),
             "*".into(),
         ]);
         vec![
@@ -1498,7 +1499,7 @@ mod tests {
             assert!(verification.iter().all(|(_, arguments)| {
                 arguments
                     .iter()
-                    .any(|argument| argument == "messages vsize")
+                    .any(|argument| argument == "messages vsize uidvalidity")
             }));
         }
     }

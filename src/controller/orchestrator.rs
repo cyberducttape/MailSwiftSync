@@ -6,6 +6,7 @@ use crate::{
         persist_engine_identity_before_launch, probe_engine_version, resolve_imapsync_identity,
         run_dovecot_destination_preflight, run_dovecot_verification, run_imap_message_verification,
         run_streaming, send_reliable_event, terminal_evidence_source,
+        validate_dovecot_checkpoint_context,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -39,6 +40,7 @@ pub(crate) struct SingleRunWorkerSpec {
     pub(crate) timeout: Duration,
     pub(crate) project_id: String,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
+    pub(crate) dovecot_checkpoint: Option<String>,
 }
 
 pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
@@ -63,6 +65,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             timeout,
             project_id,
             diagnostic_logger,
+            dovecot_checkpoint,
         } = spec;
         let _cleanup_guard = CleanupGuard::new(cleanup);
         // Resolve the executable before launch. Imapsync's result selects the
@@ -102,21 +105,51 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             });
         }
         let worker_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut result = run_streaming(RunContext {
-                executable: &executable,
-                args: &args,
-                env: &env,
-                tx: &tx,
-                run_id: &run_id,
-                job_id: &job_id,
-                project_id: &project_id,
-                prefix: "",
-                cancel: &cancel,
-                secrets: &output_secrets,
-                timeout,
-                dovecot_exit_two_is_delta: engine == core::Engine::Dovecot && !dry_run,
-                imapsync_output_profile,
-                diagnostic_logger: diagnostic_logger.clone(),
+            let checkpoint_validation = if engine == core::Engine::Dovecot
+                && !dry_run
+                && let Some(checkpoint) = dovecot_checkpoint.as_deref()
+            {
+                match core::dovecot_checkpoint_context(checkpoint) {
+                    Some(context) => validate_dovecot_checkpoint_context(
+                        &verification,
+                        &verification_env,
+                        &verification_secret,
+                        context,
+                        &tx,
+                        &cancel,
+                        timeout,
+                        "",
+                        &run_id,
+                        &job_id,
+                    ),
+                    None => Err(
+                        "saved Dovecot checkpoint has no UIDVALIDITY context; refusing resume"
+                            .into(),
+                    ),
+                }
+            } else {
+                Ok(())
+            };
+            if let Err(error) = &checkpoint_validation {
+                let _ = send_reliable_event(&tx, Event::VerificationFailed(error.clone()));
+            }
+            let mut result = checkpoint_validation.and_then(|()| {
+                run_streaming(RunContext {
+                    executable: &executable,
+                    args: &args,
+                    env: &env,
+                    tx: &tx,
+                    run_id: &run_id,
+                    job_id: &job_id,
+                    project_id: &project_id,
+                    prefix: "",
+                    cancel: &cancel,
+                    secrets: &output_secrets,
+                    timeout,
+                    dovecot_exit_two_is_delta: engine == core::Engine::Dovecot && !dry_run,
+                    imapsync_output_profile,
+                    diagnostic_logger: diagnostic_logger.clone(),
+                })
             });
             if result.is_ok() && !destination_preflight.is_empty() {
                 result = result.and_then(|outcome| {
@@ -145,8 +178,26 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                         &run_id,
                         &job_id,
                     )
-                    .and_then(|evidence| {
-                        send_reliable_event(&tx, Event::Evidence(evidence)).map(|_| stream)
+                    .and_then(|verification_result| {
+                        if let (Some(state), Some(context)) = (
+                            stream.dovecot_checkpoint.as_deref(),
+                            verification_result.checkpoint_context.as_deref(),
+                        ) {
+                            let value = core::encode_dovecot_checkpoint(state, context)
+                                .ok_or_else(|| {
+                                    "Dovecot produced an invalid checkpoint context".to_owned()
+                                })?;
+                            send_reliable_event(
+                                &tx,
+                                Event::Checkpoint {
+                                    run_id: run_id.clone(),
+                                    job_id: job_id.clone(),
+                                    value,
+                                },
+                            )?;
+                        }
+                        send_reliable_event(&tx, Event::Evidence(verification_result.evidence))
+                            .map(|_| stream)
                     })
                     .map_err(|error| {
                         let detail =

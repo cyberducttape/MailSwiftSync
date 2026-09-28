@@ -256,6 +256,15 @@ impl App {
         } else {
             None
         };
+        if let Some(checkpoint) = dovecot_checkpoint.as_deref()
+            && core::dovecot_checkpoint_context(checkpoint).is_none()
+        {
+            self.set_status(
+                "The saved Dovecot checkpoint has no UIDVALIDITY context; run a fresh full Dovecot pass before resuming.",
+                StatusSeverity::Error,
+            );
+            return;
+        }
         let plan_snapshot = match self
             .form
             .plan_snapshot_with_checkpoint(dovecot_checkpoint.as_deref())
@@ -371,6 +380,7 @@ impl App {
             output_secrets,
             timeout: migration_timeout,
             diagnostic_logger: self.diagnostic_logger.clone(),
+            dovecot_checkpoint,
         });
     }
 }

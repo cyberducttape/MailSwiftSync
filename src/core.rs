@@ -65,6 +65,7 @@ pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 
 pub(crate) use policy::{
     MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES, attention_reason_for,
+    dovecot_checkpoint_context, dovecot_checkpoint_state, encode_dovecot_checkpoint,
     normalized_destination_identity, valid_dovecot_checkpoint, valid_mailbox_transition,
 };
 

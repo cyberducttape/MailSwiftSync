@@ -42,6 +42,34 @@ pub(crate) fn normalized_destination_identity(
 }
 
 const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;
+const DOVECOT_CHECKPOINT_CONTEXT_BYTES: usize = 64;
+
+/// A checkpoint context binds an opaque dsync state token to the mailbox
+/// identity inventory observed after the run. The engine still receives only
+/// the state token; the context is control-plane metadata used to fail closed
+/// before resuming against a recreated mailbox.
+pub(crate) fn encode_dovecot_checkpoint(state: &str, context: &str) -> Option<String> {
+    if !valid_dovecot_checkpoint_raw(state)
+        || context.len() != DOVECOT_CHECKPOINT_CONTEXT_BYTES
+        || !context.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let value = format!("{state}.{context}");
+    (value.len() <= MAX_DOVECOT_CHECKPOINT_BYTES).then_some(value)
+}
+
+pub(crate) fn dovecot_checkpoint_state(value: &str) -> &str {
+    value.split_once('.').map_or(value, |(state, _)| state)
+}
+
+pub(crate) fn dovecot_checkpoint_context(value: &str) -> Option<&str> {
+    let (state, context) = value.split_once('.')?;
+    (valid_dovecot_checkpoint_raw(state)
+        && context.len() == DOVECOT_CHECKPOINT_CONTEXT_BYTES
+        && context.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then_some(context)
+}
 pub(crate) fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<AttentionReason> {
     if mailbox_state == "verification_difference" {
         return Some(AttentionReason::VerificationDifference);
@@ -92,6 +120,13 @@ pub(crate) fn attention_reason_for(mailbox_state: &str, detail: &str) -> Option<
 }
 
 pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
+    if let Some((state, context)) = value.split_once('.') {
+        return encode_dovecot_checkpoint(state, context).as_deref() == Some(value);
+    }
+    valid_dovecot_checkpoint_raw(value)
+}
+
+fn valid_dovecot_checkpoint_raw(value: &str) -> bool {
     if value != value.trim()
         || value.len() < 8
         || value.len() > MAX_DOVECOT_CHECKPOINT_BYTES
@@ -152,6 +187,7 @@ pub(crate) fn valid_dovecot_checkpoint(value: &str) -> bool {
     hasher.update(&decoded[..checksum_offset]);
     hasher.finalize() == expected
 }
+
 pub(crate) fn phase_rank(phase: Phase) -> u8 {
     match phase {
         Phase::Discovery => 0,
@@ -231,5 +267,30 @@ pub(crate) fn valid_mailbox_transition(current: &str, next: &str) -> bool {
                 | MailboxState::Attention
         ),
         MailboxState::Attention => matches!(next, MailboxState::Running),
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::{
+        dovecot_checkpoint_context, dovecot_checkpoint_state, encode_dovecot_checkpoint,
+        valid_dovecot_checkpoint,
+    };
+
+    const STATE: &str = "AQAAAHm4+Jk=";
+    const CONTEXT: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn checkpoint_context_round_trips_without_changing_engine_state() {
+        let encoded = encode_dovecot_checkpoint(STATE, CONTEXT).unwrap();
+        assert!(valid_dovecot_checkpoint(&encoded));
+        assert_eq!(dovecot_checkpoint_state(&encoded), STATE);
+        assert_eq!(dovecot_checkpoint_context(&encoded), Some(CONTEXT));
+    }
+
+    #[test]
+    fn malformed_checkpoint_context_is_rejected() {
+        assert!(!valid_dovecot_checkpoint(&format!("{STATE}.not-a-digest")));
+        assert_eq!(dovecot_checkpoint_context(STATE), None);
     }
 }

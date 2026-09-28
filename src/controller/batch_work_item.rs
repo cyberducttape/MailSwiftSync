@@ -17,7 +17,7 @@ use crate::{
         ResolvedImapsyncIdentity, RunContext, TerminalEvidenceSource, message_verification_enabled,
         persist_engine_identity_before_launch, run_dovecot_destination_preflight,
         run_dovecot_verification, run_imap_message_verification, run_streaming,
-        send_reliable_event, terminal_evidence_source,
+        send_reliable_event, terminal_evidence_source, validate_dovecot_checkpoint_context,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -414,7 +414,32 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         form.source_password.clone(),
                         form.destination_password.clone(),
                     ];
-                    let result = run_streaming(RunContext {
+                    let checkpoint_validation = if !form.dry_run
+                        && form.engine() == core::Engine::Dovecot
+                        && let Some(saved_checkpoint) = checkpoint.as_deref()
+                    {
+                        match core::dovecot_checkpoint_context(saved_checkpoint) {
+                            Some(context) => validate_dovecot_checkpoint_context(
+                                &verification,
+                                &[],
+                                &form.source_password,
+                                context,
+                                &tx,
+                                &cancel,
+                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
+                                &prefix,
+                                &child_run_id,
+                                &job_id,
+                            ),
+                            None => Err(
+                                "saved Dovecot checkpoint has no UIDVALIDITY context; refusing resume"
+                                    .into(),
+                            ),
+                        }
+                    } else {
+                        Ok(())
+                    };
+                    let result = checkpoint_validation.and_then(|()| run_streaming(RunContext {
                         executable: &command.executable,
                         args: &command.args,
                         env: &command.env,
@@ -432,7 +457,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             && !form.dry_run,
                         imapsync_output_profile,
                         diagnostic_logger: None,
-                    })
+                    }))
                     .and_then(|stream| {
                         if !form.dry_run
                             && form.engine() == core::Engine::ImapSync
@@ -490,13 +515,54 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             })
                             .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
                         }
+                        if !form.dry_run && form.engine() == core::Engine::Dovecot {
+                            let verification_secret = form.source_password.clone();
+                            let verification_env = Vec::new();
+                            let verification_result = run_dovecot_verification(
+                                &verification,
+                                &verification_env,
+                                std::slice::from_ref(&verification_secret),
+                                &tx,
+                                &cancel,
+                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
+                                &prefix,
+                                &child_run_id,
+                                &job_id,
+                            )?;
+                            if let (Some(state), Some(context)) = (
+                                stream.dovecot_checkpoint.as_deref(),
+                                verification_result.checkpoint_context.as_deref(),
+                            ) {
+                                let value = core::encode_dovecot_checkpoint(state, context)
+                                    .ok_or_else(|| {
+                                        "Dovecot produced an invalid checkpoint context".to_owned()
+                                    })?;
+                                send_reliable_event(
+                                    &tx,
+                                    Event::Checkpoint {
+                                        run_id: child_run_id.clone(),
+                                        job_id: job_id.clone(),
+                                        value,
+                                    },
+                                )?;
+                            }
+                            send_reliable_event(
+                                &tx,
+                                Event::BatchEvidence {
+                                    job_id: job_id.clone(),
+                                    child_run_id: child_run_id.clone(),
+                                    evidence: verification_result.evidence,
+                                    mismatches: Vec::new(),
+                                },
+                            )?;
+                        }
                         Ok(stream.outcome)
                     });
                     let result = if result.is_ok()
                         && form.dry_run
                         && form.engine() == core::Engine::Dovecot
                     {
-                        result.and_then(|outcome| {
+                        result.and_then(|stream| {
                             run_dovecot_destination_preflight(
                                 &form.dovecot_destination_preflight_commands(),
                                 &tx,
@@ -506,46 +572,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                 &child_run_id,
                                 &job_id,
                             )
-                            .map(|_| outcome)
-                        })
-                    } else {
-                        result
-                    };
-                    let result = if result.is_ok()
-                        && !form.dry_run
-                        && form.engine() == core::Engine::Dovecot
-                    {
-                        // Runtime verification shares the private config and
-                        // source passfile prepared for the transfer.
-                        let verification_secret = form.source_password.clone();
-                        let verification_env = Vec::new();
-                        result.and_then(|outcome| {
-                            run_dovecot_verification(
-                                &verification,
-                                &verification_env,
-                                std::slice::from_ref(&verification_secret),
-                                &tx,
-                                &cancel,
-                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
-                                &format!("[{}] ", index + 1),
-                                &child_run_id,
-                                &job_id,
-                            )
-                            .and_then(|evidence| {
-                                send_reliable_event(
-                                    &tx,
-                                    Event::BatchEvidence {
-                                        job_id: job_id.clone(),
-                                        child_run_id: child_run_id.clone(),
-                                        evidence,
-                                        mismatches: Vec::new(),
-                                    },
-                                )
-                                .map(|_| outcome)
-                                .map_err(|error| {
-                                    format!("batch verification evidence delivery failed: {error}")
-                                })
-                            })
+                            .map(|_| stream)
                         })
                     } else {
                         result

@@ -1,4 +1,6 @@
 use crate::core;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Output grammar covered by the packaged integration fixture. A version is
 /// deliberately part of the contract: a future imapsync release may change
@@ -193,14 +195,22 @@ pub(crate) struct DovecotStatusAccumulator {
     /// Saturation must never turn an overflowing inventory into an apparently
     /// exact aggregate match.
     pub(crate) overflowed: bool,
+    /// Mailbox names make duplicate status records fail closed instead of
+    /// silently double-counting a report.
+    pub(crate) mailboxes: BTreeSet<String>,
+    /// UIDVALIDITY is optional for compatibility with older Dovecot output;
+    /// when complete, it supplies the resume-context identity.
+    pub(crate) uidvalidities: BTreeMap<String, u64>,
 }
 
 impl DovecotStatusAccumulator {
     pub(crate) fn observe(&mut self, line: &str) {
         let mut message_count = None;
         let mut virtual_size = None;
+        let mut uidvalidity = None;
         let mut saw_status_field = false;
-        for token in line.split_whitespace() {
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        for token in &tokens {
             if let Some(value) = token.strip_prefix("messages=") {
                 saw_status_field = true;
                 if message_count.is_none() {
@@ -211,12 +221,30 @@ impl DovecotStatusAccumulator {
                 if virtual_size.is_none() {
                     virtual_size = Some(value.parse::<u64>());
                 }
+            } else if let Some(value) = token.strip_prefix("uidvalidity=") {
+                saw_status_field = true;
+                if uidvalidity.is_none() {
+                    uidvalidity = Some(value.parse::<u64>());
+                }
             }
         }
         if !saw_status_field {
             return;
         }
         if let (Some(Ok(message_count)), Some(Ok(virtual_size))) = (message_count, virtual_size) {
+            let mailbox = tokens
+                .iter()
+                .find_map(|token| token.strip_prefix("mailbox="))
+                .or_else(|| tokens.iter().find(|token| !token.contains('=')).copied())
+                .map(str::to_owned);
+            let Some(mailbox) = mailbox else {
+                self.malformed_lines = self.malformed_lines.saturating_add(1);
+                return;
+            };
+            if !self.mailboxes.insert(mailbox.clone()) {
+                self.malformed_lines = self.malformed_lines.saturating_add(1);
+                return;
+            }
             let Some(folders) = self.folders.checked_add(1) else {
                 self.overflowed = true;
                 return;
@@ -232,10 +260,45 @@ impl DovecotStatusAccumulator {
             self.folders = folders;
             self.messages = messages;
             self.bytes = bytes;
+            if let Some(Ok(uidvalidity)) = uidvalidity {
+                self.uidvalidities.insert(mailbox, uidvalidity);
+            }
         } else {
             self.malformed_lines = self.malformed_lines.saturating_add(1);
         }
     }
+}
+
+pub(crate) fn dovecot_checkpoint_context_digest(
+    source: &DovecotStatusAccumulator,
+    destination: &DovecotStatusAccumulator,
+) -> Option<String> {
+    if source.uidvalidities.len() != source.mailboxes.len()
+        || destination.uidvalidities.len() != destination.mailboxes.len()
+    {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    for (side, values) in [
+        ("source", &source.uidvalidities),
+        ("destination", &destination.uidvalidities),
+    ] {
+        digest.update(side.as_bytes());
+        digest.update([0]);
+        for (mailbox, uidvalidity) in values {
+            digest.update(mailbox.as_bytes());
+            digest.update([0]);
+            digest.update(uidvalidity.to_le_bytes());
+        }
+        digest.update([0xff]);
+    }
+    Some(
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
 }
 
 pub(crate) fn dovecot_evidence_from_accumulators(
@@ -485,9 +548,9 @@ mod tests {
     fn dovecot_accumulator_reduces_large_reports_without_retaining_lines() {
         let mut source = DovecotStatusAccumulator::default();
         let mut destination = DovecotStatusAccumulator::default();
-        for _ in 0..100_000 {
-            source.observe("mailbox messages=2 vsize=40");
-            destination.observe("mailbox messages=2 vsize=40");
+        for index in 0..100_000 {
+            source.observe(&format!("mailbox-{index} messages=2 vsize=40"));
+            destination.observe(&format!("mailbox-{index} messages=2 vsize=40"));
         }
         let evidence = dovecot_evidence_from_accumulators(&source, &destination).unwrap();
         assert_eq!(evidence.source_folders, 100_000);
@@ -510,6 +573,8 @@ mod tests {
             bytes: 40,
             malformed_lines: 0,
             overflowed: false,
+            mailboxes: BTreeSet::from(["mailbox".into()]),
+            uidvalidities: BTreeMap::new(),
         };
         assert!(dovecot_evidence_from_accumulators(&valid, &status).is_none());
     }
@@ -522,6 +587,8 @@ mod tests {
             bytes: 0,
             malformed_lines: 0,
             overflowed: false,
+            mailboxes: BTreeSet::new(),
+            uidvalidities: BTreeMap::new(),
         };
         status.observe("mailbox messages=1 vsize=1");
         assert!(status.overflowed);
@@ -532,6 +599,8 @@ mod tests {
             bytes: 1,
             malformed_lines: 0,
             overflowed: false,
+            mailboxes: BTreeSet::from(["mailbox".into()]),
+            uidvalidities: BTreeMap::new(),
         };
         assert!(dovecot_evidence_from_accumulators(&valid, &status).is_none());
     }
