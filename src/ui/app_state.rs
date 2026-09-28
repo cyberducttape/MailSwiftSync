@@ -105,11 +105,13 @@ pub(crate) struct App {
     pub(crate) source_capabilities: Option<core::ServerCapabilities>,
     pub(crate) destination_capabilities: Option<core::ServerCapabilities>,
     pub(crate) live_confirm_open: bool,
+    pub(crate) live_confirm_focus_requested: bool,
     pub(crate) live_confirmed: bool,
     pub(crate) live_confirmation_plan: Option<String>,
     pub(crate) durability_error: bool,
     pub(crate) durability_recovery_pending: bool,
     pub(crate) stop_confirm_open: bool,
+    pub(crate) stop_confirm_focus_requested: bool,
     pub(crate) keyring_open: bool,
     /// Session-only editor buffers for an automatic OAuth refresh
     /// configuration. Populated by the operator, then written into the OS

@@ -15,13 +15,9 @@ impl App {
         if !self.live_confirm_open {
             return;
         }
-        let mut open = self.live_confirm_open;
         let mut close_requested = false;
-        egui::Window::new(self.language.text("Confirm live migration"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
+        let response =
+            egui::Modal::new(egui::Id::new("live_migration_confirmation")).show(ctx, |ui| {
                 ui.heading(
                     RichText::new(
                         self.language
@@ -69,7 +65,12 @@ impl App {
                 }
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button(self.language.text("Cancel")).clicked() {
+                    let cancel = ui.button(self.language.text("Cancel"));
+                    if !self.live_confirm_focus_requested {
+                        cancel.request_focus();
+                        self.live_confirm_focus_requested = true;
+                    }
+                    if cancel.clicked() {
                         close_requested = true;
                     }
                     if ui
@@ -90,7 +91,10 @@ impl App {
                     }
                 });
             });
-        self.live_confirm_open = open && !close_requested;
+        self.live_confirm_open = !(close_requested || response.should_close());
+        if !self.live_confirm_open {
+            self.live_confirm_focus_requested = false;
+        }
     }
     pub(crate) fn requires_live_imaps_auth_probe(&self) -> bool {
         crate::imap_probe::fresh_imap_authentication_applies(&self.form)

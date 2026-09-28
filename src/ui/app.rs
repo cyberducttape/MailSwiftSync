@@ -47,6 +47,7 @@ impl eframe::App for App {
                     );
                     if self.running() && ui.button(self.language.text("Stop")).clicked() {
                         self.stop_confirm_open = true;
+                        self.stop_confirm_focus_requested = false;
                     }
                     if self.ui_snapshot.is_stale() {
                         ui.label(

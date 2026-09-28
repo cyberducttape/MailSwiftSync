@@ -13,18 +13,18 @@ impl App {
         if !self.stop_confirm_open || !self.running() {
             return;
         }
-        let mut open = self.stop_confirm_open;
         let mut close_requested = false;
-        egui::Window::new(self.language.text("Stop migration?"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
+        let response = egui::Modal::new(egui::Id::new("stop_migration_confirmation")).show(ctx, |ui| {
                 ui.heading(RichText::new(self.language.text("The migration will stop where it is")).color(self.theme_colors().danger));
                 ui.label(self.language.text("The destination may be partially migrated. A later preflight, delta, or verification pass may be required before continuing."));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button(self.language.text("Keep running")).clicked() {
+                    let keep_running = ui.button(self.language.text("Keep running"));
+                    if !self.stop_confirm_focus_requested {
+                        keep_running.request_focus();
+                        self.stop_confirm_focus_requested = true;
+                    }
+                    if keep_running.clicked() {
                         close_requested = true;
                     }
                     if ui.add(egui::Button::new(RichText::new(self.language.text("Stop migration")).color(Color32::WHITE)).fill(self.theme_colors().danger)).clicked() {
@@ -36,7 +36,10 @@ impl App {
                     }
                 });
             });
-        self.stop_confirm_open = open && !close_requested;
+        self.stop_confirm_open = !(close_requested || response.should_close());
+        if !self.stop_confirm_open {
+            self.stop_confirm_focus_requested = false;
+        }
     }
 
     pub(crate) fn activity_view(&mut self, ui: &mut egui::Ui) {
@@ -110,6 +113,7 @@ impl App {
                 });
                 if running && ui.button(self.language.text("Stop migration")).clicked() {
                     self.stop_confirm_open = true;
+                    self.stop_confirm_focus_requested = false;
                 }
             });
             egui::ScrollArea::vertical()

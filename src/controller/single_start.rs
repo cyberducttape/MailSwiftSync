@@ -21,6 +21,7 @@ impl App {
                 self.live_confirmed = false;
                 self.live_confirmation_plan = None;
                 self.live_confirm_open = true;
+                self.live_confirm_focus_requested = false;
                 return;
             }
             SingleStartDecision::Proceed => {}
