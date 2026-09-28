@@ -363,6 +363,8 @@ impl App {
             bulk_visible_indices: Vec::new(),
             bulk_search_values: Vec::new(),
             bulk_state_indices: HashMap::new(),
+            bulk_search_match_indices: Vec::new(),
+            bulk_search_matches_valid: false,
             bulk_filter_cache_search: String::new(),
             bulk_filter_cache_state: String::new(),
             bulk_filter_cache_generation: u64::MAX,

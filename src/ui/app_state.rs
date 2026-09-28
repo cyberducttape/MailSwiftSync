@@ -30,6 +30,11 @@ pub(crate) struct App {
     /// State membership is maintained incrementally so a state-only filter
     /// does not scan every mailbox after each worker transition.
     pub(crate) bulk_state_indices: HashMap<String, HashSet<usize>>,
+    /// Search matches are independent of durable state. Keeping this index
+    /// separate means a worker state transition only intersects the changed
+    /// state bucket instead of rescanning every searchable mailbox.
+    pub(crate) bulk_search_match_indices: Vec<usize>,
+    pub(crate) bulk_search_matches_valid: bool,
     pub(crate) bulk_filter_cache_search: String,
     pub(crate) bulk_filter_cache_state: String,
     pub(crate) bulk_filter_cache_generation: u64,

@@ -121,6 +121,8 @@ impl App {
         self.bulk_summary = None;
         self.bulk_search_values.clear();
         self.bulk_state_indices.clear();
+        self.bulk_search_match_indices.clear();
+        self.bulk_search_matches_valid = false;
         self.bulk_filter_cache_generation = u64::MAX;
     }
 
