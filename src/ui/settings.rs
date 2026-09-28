@@ -89,7 +89,7 @@ pub(crate) fn show(
                     ui.horizontal(|ui| {
                         ui.label(language.text("Theme"));
                         ui.label(RichText::new(theme.label()).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
-                        ui.label(RichText::new("(fixed palette)").size(10.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                        ui.label(RichText::new(language.text("(fixed palette)")).size(10.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                     });
                 }
                 ui.horizontal(|ui| {

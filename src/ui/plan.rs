@@ -30,7 +30,14 @@ impl App {
                     self.form.engine().label()
                 ));
                 ui.add_space(8.0);
-                ui.label(RichText::new(format!("Project: {}", self.form.profile.name)).strong());
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("Project: {}")
+                            .replace("{}", &self.form.profile.name),
+                    )
+                    .strong(),
+                );
                 ui.label(format!(
                     "{}  →  {}",
                     self.form.profile.source_host, self.form.profile.destination_host
@@ -353,7 +360,10 @@ impl App {
                 }
 
                 let (exe, args) = self.form.command(true);
-                ui.label(RichText::new(format!("Executable: {exe}")).monospace());
+                ui.label(
+                    RichText::new(self.language.text("Executable: {}").replace("{}", &exe))
+                        .monospace(),
+                );
                 egui::ScrollArea::vertical()
                     .max_height(360.0)
                     .show(ui, |ui| {

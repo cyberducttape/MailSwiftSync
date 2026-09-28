@@ -288,7 +288,11 @@ impl App {
                                         },
                                     ));
                                     ui.label(&run.started_at);
-                                    ui.label(run.finished_at.as_deref().unwrap_or("in progress"));
+                                    ui.label(
+                                        run.finished_at
+                                            .as_deref()
+                                            .unwrap_or(self.language.text("in progress")),
+                                    );
                                     ui.label(if run.detail.is_empty() {
                                         "—"
                                     } else {

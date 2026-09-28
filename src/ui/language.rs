@@ -27,6 +27,51 @@ impl UiLanguage {
         }
         match source {
             "Overview" => "Übersicht",
+            "ATTENTION CENTER" => "ZENTRALE FÜR AUFMERKSAMKEIT",
+            "Batch queue loaded" => "Stapelwarteschlange geladen",
+            "Check" => "Prüfung",
+            "Current engine:" => "Aktuelle Engine:",
+            "0 selected · 0 visible · 0 hidden by current filter" => {
+                "0 ausgewählt · 0 sichtbar · 0 durch aktuellen Filter verborgen"
+            }
+            "(fixed palette)" => "(feste Palette)",
+            "Project: {}" => "Projekt: {}",
+            "Executable: {}" => "Ausführbare Datei: {}",
+            "in progress" => "läuft",
+            "Customer proof ready" => "Kundennachweis bereit",
+            "Each item names the durable reason and the next safe operator action." => {
+                "Jeder Eintrag nennt den dauerhaft gespeicherten Grund und die nächste sichere Bedieneraktion."
+            }
+            "Imported rows are not durable until preflight admission succeeds." => {
+                "Importierte Zeilen sind erst nach erfolgreicher Vorabprüfung dauerhaft gespeichert."
+            }
+            "No project yet" => "Noch kein Projekt",
+            "Not available" => "Nicht verfügbar",
+            "Open Verification to export the customer-safe evidence artifact." => {
+                "Öffnen Sie die Verifizierung, um den kundensicheren Nachweis zu exportieren."
+            }
+            "Open Verification to review evidence; customer proof remains gated until the durable state is complete." => {
+                "Öffnen Sie die Verifizierung, um Nachweise zu prüfen; der Kundennachweis bleibt gesperrt, bis der dauerhafte Status vollständig ist."
+            }
+            "Open migration plan" => "Migrationsplan öffnen",
+            "Open verification" => "Verifizierung öffnen",
+            "Project created" => "Projekt erstellt",
+            "Retry prepared as a dry preflight. Review the exact plan before any live run." => {
+                "Wiederholung als Vorabprüfung vorbereitet. Prüfen Sie den exakten Plan vor jedem Live-Lauf."
+            }
+            "Review required" => "Prüfung erforderlich",
+            "Review the imported rows, then run a durable preflight." => {
+                "Prüfen Sie die importierten Zeilen und führen Sie anschließend eine dauerhafte Vorabprüfung aus."
+            }
+            "Start by configuring endpoints or importing a mailbox list." => {
+                "Beginnen Sie mit der Konfiguration der Endpunkte oder dem Import einer Postfachliste."
+            }
+            "State is durable and ready for review." => {
+                "Der Status ist dauerhaft gespeichert und zur Prüfung bereit."
+            }
+            "The highlighted step is the current operator focus. A completed-looking step never bypasses the durable execution gates." => {
+                "Der hervorgehobene Schritt ist der aktuelle Bedienerfokus. Ein abgeschlossen wirkender Schritt umgeht niemals die dauerhaften Ausführungsprüfungen."
+            }
             "Discovery" => "Entdeckung",
             "Preflight" => "Vorabprüfung",
             "Pilot" => "Pilot",
