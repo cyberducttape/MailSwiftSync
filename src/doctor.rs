@@ -1,10 +1,10 @@
 //! Read-only qualification-envelope diagnostics for operators.
 
-use crate::migration_plan::Form;
 use crate::process::{
     CapturedOutput, collect_redacted_lines_with_callback, configure_process_group,
     wait_with_timeout,
 };
+use crate::{migration_plan::Form, verification::ImapsyncOutputProfile};
 use fs2::available_space;
 use serde::Serialize;
 use std::{
@@ -45,9 +45,9 @@ pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
 
     checks.push(check_imapsync(imapsync_path));
     checks.push(DoctorCheck {
-        name: "qualified verification engine",
-        status: "qualified",
-        detail: "trusted imapsync evidence parser: version 2.314".into(),
+        name: "verification parser",
+        status: "ready",
+        detail: "trusted imapsync evidence parser contract: version 2.314".into(),
     });
     checks.push(DoctorCheck {
         name: "keyring configuration",
@@ -163,7 +163,7 @@ fn check_imapsync(path: &str) -> DoctorCheck {
             let version = first_captured_line(stdout.as_ref())
                 .or_else(|| first_captured_line(stderr.as_ref()))
                 .unwrap_or_else(|| "(no version output)".into());
-            let status = if version.contains("2.314") {
+            let status = if is_qualified_version(&version) {
                 "qualified"
             } else {
                 "review"
@@ -185,6 +185,13 @@ fn check_imapsync(path: &str) -> DoctorCheck {
             detail: format!("{path} version probe failed: {error}"),
         },
     }
+}
+
+fn is_qualified_version(version_line: &str) -> bool {
+    matches!(
+        crate::verification::imapsync_output_profile(Some(version_line)),
+        ImapsyncOutputProfile::Packaged2314
+    )
 }
 
 fn capture_doctor_output<R: std::io::Read>(reader: R) -> std::io::Result<CapturedOutput> {
@@ -291,5 +298,13 @@ mod tests {
                 .any(|line| line.contains("line truncated by MailSwiftSync"))
         );
         assert!(captured.lines.iter().map(String::len).sum::<usize>() <= 2 * 1024 * 1024 + 128);
+    }
+
+    #[test]
+    fn doctor_requires_an_exact_qualified_engine_version() {
+        assert!(is_qualified_version("imapsync 2.314"));
+        assert!(is_qualified_version("v2.314"));
+        assert!(!is_qualified_version("imapsync 2.3140"));
+        assert!(!is_qualified_version("imapsync 12.314"));
     }
 }
