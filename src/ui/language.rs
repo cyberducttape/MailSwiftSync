@@ -1018,6 +1018,31 @@ impl UiLanguage {
             "Verification authority" => "Verifizierungsinstanz",
             "Verification method" => "Verifizierungsmethode",
             "Verification outcome" => "Verifizierungsergebnis",
+            "aggregate_engine" => "Aggregierte Engine-Prüfung",
+            "metadata_reconciliation" => "Metadaten-Abgleich",
+            "body_hash" => "Inhalts-Hash",
+            "native_dovecot" => "Native Dovecot-Prüfung",
+            "Exact body match — bounded RFC822 SHA-256 fingerprints compared" => {
+                "Exakte Inhaltsübereinstimmung — begrenzte RFC822-SHA-256-Fingerabdrücke verglichen"
+            }
+            "Exact metadata match — message bodies not compared" => {
+                "Exakte Metadatenübereinstimmung — Nachrichtentexte nicht verglichen"
+            }
+            "Probable metadata match — message bodies not compared" => {
+                "Wahrscheinliche Metadatenübereinstimmung — Nachrichtentexte nicht verglichen"
+            }
+            "Ambiguous metadata result — message bodies not compared" => {
+                "Mehrdeutiges Metadatenergebnis — Nachrichtentexte nicht verglichen"
+            }
+            "Missing messages detected" => "Fehlende Nachrichten erkannt",
+            "Changed messages detected" => "Geänderte Nachrichten erkannt",
+            "Unexpected messages detected" => "Unerwartete Nachrichten erkannt",
+            "Verification evidence incomplete" => "Verifizierungsnachweise unvollständig",
+            "Verification failed" => "Verifizierung fehlgeschlagen",
+            "none" => "keine",
+            "Accepted by {operator} at {time}: {reason}" => {
+                "Akzeptiert von {operator} um {time}: {reason}"
+            }
             "Folders" => "Ordner",
             "Messages" => "Nachrichten",
             "Bytes" => "Bytes",
@@ -1336,6 +1361,32 @@ mod tests {
                 UiLanguage::German.text(key),
                 key,
                 "missing German verification explanation: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn verification_detail_labels_are_translated() {
+        for key in [
+            "aggregate_engine",
+            "metadata_reconciliation",
+            "body_hash",
+            "native_dovecot",
+            "Exact body match — bounded RFC822 SHA-256 fingerprints compared",
+            "Exact metadata match — message bodies not compared",
+            "Probable metadata match — message bodies not compared",
+            "Ambiguous metadata result — message bodies not compared",
+            "Missing messages detected",
+            "Changed messages detected",
+            "Unexpected messages detected",
+            "Verification evidence incomplete",
+            "Verification failed",
+            "Accepted by {operator} at {time}: {reason}",
+        ] {
+            assert_ne!(
+                UiLanguage::German.text(key),
+                key,
+                "missing German verification detail translation: {key}"
             );
         }
     }

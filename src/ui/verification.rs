@@ -148,7 +148,19 @@ impl App {
                             .color(self.theme_colors().text_secondary),
                         );
                         if ui.button(self.language.text("Export verification report…")).clicked() { self.report_export_result("Verification report", self.export_verification_report()); }
-                        for (label, value) in [("Verification method", evidence.verification_method().as_str().into()), ("Verification outcome", evidence.verification_outcome().display_label().into()), ("Folders", format!("{} source / {} destination", evidence.source_folders, evidence.destination_folders)), ("Messages", format!("{} source / {} destination", evidence.source_messages, evidence.destination_messages)), ("Bytes", format!("{} source / {} destination", evidence.source_bytes, evidence.destination_bytes)), ("Unresolved", evidence.unresolved_count().map_or_else(|| "unknown".into(), |count| count.to_string())), ("Missing", evidence.missing_count().to_string()), ("Extra", evidence.extra_count().to_string()), ("Modified", evidence.modified_count().to_string()), ("Failed", evidence.failed_messages.to_string()), ("Reason", evidence.verification_reason().unwrap_or("none").into())] {
+                        for (label, value) in [
+                            (self.language.text("Verification method"), self.language.text(evidence.verification_method().as_str()).to_owned()),
+                            (self.language.text("Verification outcome"), self.language.text(evidence.verification_outcome().display_label()).to_owned()),
+                            (self.language.text("Folders"), format!("{} / {}", evidence.source_folders, evidence.destination_folders)),
+                            (self.language.text("Messages"), format!("{} / {}", evidence.source_messages, evidence.destination_messages)),
+                            (self.language.text("Bytes"), format!("{} / {}", evidence.source_bytes, evidence.destination_bytes)),
+                            (self.language.text("Unresolved"), evidence.unresolved_count().map_or_else(|| self.language.text("unknown").to_owned(), |count| count.to_string())),
+                            (self.language.text("Missing"), evidence.missing_count().to_string()),
+                            (self.language.text("Extra"), evidence.extra_count().to_string()),
+                            (self.language.text("Modified"), evidence.modified_count().to_string()),
+                            (self.language.text("Failed"), evidence.failed_messages.to_string()),
+                            (self.language.text("Reason"), evidence.verification_reason().map_or_else(|| self.language.text("none").to_owned(), ToOwned::to_owned)),
+                        ] {
                             ui.horizontal(|ui| { ui.label(RichText::new(label).strong()); ui.label(value); });
                         }
                     }
@@ -178,7 +190,10 @@ impl App {
                         if let Some(acceptance) = mailbox.acceptance.as_ref() {
                             ui.separator();
                             ui.label(RichText::new(self.language.text("Verified with exceptions")).strong().color(colors.warning));
-                            ui.label(format!("Accepted by {} at {}: {}", acceptance.operator, acceptance.accepted_at, acceptance.reason));
+                            ui.label(self.language.text("Accepted by {operator} at {time}: {reason}")
+                                .replace("{operator}", &acceptance.operator)
+                                .replace("{time}", &acceptance.accepted_at)
+                                .replace("{reason}", &acceptance.reason));
                         }
                     }
                     _ => {}
