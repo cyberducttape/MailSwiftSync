@@ -205,16 +205,14 @@ impl MessageMetadataStage {
     }
 
     fn initialize(&mut self, durable: bool) -> rusqlite::Result<()> {
-        let pragmas = if durable {
-            // The private runtime directory used by packaged/headless
-            // deployments may not permit SQLite's WAL shared-memory file.
-            // DELETE journaling with FULL synchronization still gives the
-            // stage crash durability without that extra filesystem object.
-            "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;"
-        } else {
-            "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
-        };
-        self.connection_ref().execute_batch(pragmas)?;
+        if !durable {
+            self.connection_ref()
+                .execute_batch("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;")?;
+        }
+        // Durable stages intentionally leave SQLite's default rollback
+        // journal and FULL synchronization untouched. This avoids a runtime
+        // PRAGMA mutation that some packaged SQLite builds reject while still
+        // retaining crash-safe defaults.
         self.connection_ref().execute_batch(
             "-- Staged mailbox metadata is sensitive. Keep SQLite's transient
              -- Staged mailbox metadata is sensitive. Keep SQLite's transient
