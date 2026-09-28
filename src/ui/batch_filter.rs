@@ -81,10 +81,16 @@ impl App {
     }
 
     pub(crate) fn rebuild_bulk_search_values(&mut self) {
+        self.bulk_state_indices.clear();
         self.bulk_search_values = self
             .bulk_jobs
             .iter()
-            .map(|job| {
+            .enumerate()
+            .map(|(index, job)| {
+                self.bulk_state_indices
+                    .entry(display_state_key(&job.state))
+                    .or_default()
+                    .insert(index);
                 [
                     job.label.as_str(),
                     job.form.profile.source_host.as_str(),
@@ -124,17 +130,55 @@ impl App {
             self.bulk_filter_cache_generation = self.bulk_jobs_generation;
             return;
         }
-        filter_batch_indices(
-            &self.bulk_search_values,
-            self.bulk_jobs.iter().map(|job| job.state.as_str()),
-            &normalized_search,
-            &self.bulk_state_filter,
-            &mut self.bulk_visible_indices,
-        );
+        let candidates = self
+            .bulk_state_indices
+            .iter()
+            .filter(|(state, _)| {
+                state.as_str() == self.bulk_state_filter
+                    || (self.bulk_state_filter == "delta_required" && state.contains("delta"))
+                    || (self.bulk_state_filter == "verification_difference"
+                        && state.contains("verification"))
+            })
+            .flat_map(|(_, indices)| indices.iter().copied())
+            .collect::<Vec<_>>();
+        let mut candidates = candidates;
+        candidates.sort_unstable();
+        if self.bulk_state_filter.is_empty() || self.bulk_state_filter == "all" {
+            filter_batch_indices(
+                &self.bulk_search_values,
+                self.bulk_jobs.iter().map(|job| job.state.as_str()),
+                &normalized_search,
+                &self.bulk_state_filter,
+                &mut self.bulk_visible_indices,
+            );
+        } else if !candidates.is_empty() {
+            filter_batch_indices_subset(
+                &self.bulk_search_values,
+                &candidates,
+                &normalized_search,
+                &mut self.bulk_visible_indices,
+            );
+        }
         self.bulk_filter_cache_search = raw_search;
         self.bulk_filter_cache_state = self.bulk_state_filter.clone();
         self.bulk_filter_cache_generation = self.bulk_jobs_generation;
     }
+}
+
+fn filter_batch_indices_subset(
+    search_values: &[String],
+    candidates: &[usize],
+    search: &str,
+    visible_indices: &mut Vec<usize>,
+) {
+    let normalized_search = search.trim().to_ascii_lowercase();
+    visible_indices.extend(candidates.iter().copied().filter(|index| {
+        search_values.get(*index).is_some_and(|value| {
+            normalized_search.is_empty()
+                || value.contains(&normalized_search)
+                || (!normalized_search.is_ascii() && contains_ascii_case_insensitive(value, search))
+        })
+    }));
 }
 
 #[cfg(test)]

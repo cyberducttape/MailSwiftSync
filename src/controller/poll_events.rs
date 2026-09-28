@@ -214,9 +214,16 @@ impl App {
                                 .get(&job_id)
                                 .copied()
                                 .unwrap_or(index);
-                            if let Some(job) = self.bulk_jobs.get_mut(bulk_index) {
-                                job.state = state.clone();
+                            let old_key =
+                                crate::ui::display_state_key(&self.bulk_jobs[bulk_index].state);
+                            if let Some(indices) = self.bulk_state_indices.get_mut(&old_key) {
+                                indices.remove(&bulk_index);
                             }
+                            self.bulk_state_indices
+                                .entry(crate::ui::display_state_key(&state))
+                                .or_default()
+                                .insert(bulk_index);
+                            self.bulk_jobs[bulk_index].state = state.clone();
                             *bulk_state_changed = true;
                             // JobState is deliberately presentation-only. The
                             // worker has already received an acknowledged
@@ -311,9 +318,19 @@ impl App {
                             if completion_persisted
                                 && let Some(bulk_index) =
                                     self.bulk_job_index_by_id.get(&job_id).copied()
-                                && let Some(job) = self.bulk_jobs.get_mut(bulk_index)
+                                && self.bulk_jobs.get(bulk_index).is_some()
                             {
-                                job.state = display_job_state(&final_state).into();
+                                let state = display_job_state(&final_state).to_owned();
+                                let old_key =
+                                    crate::ui::display_state_key(&self.bulk_jobs[bulk_index].state);
+                                if let Some(indices) = self.bulk_state_indices.get_mut(&old_key) {
+                                    indices.remove(&bulk_index);
+                                }
+                                self.bulk_state_indices
+                                    .entry(crate::ui::display_state_key(&state))
+                                    .or_default()
+                                    .insert(bulk_index);
+                                self.bulk_jobs[bulk_index].state = state;
                                 *bulk_state_changed = true;
                             }
                             if let Err(error) = result {

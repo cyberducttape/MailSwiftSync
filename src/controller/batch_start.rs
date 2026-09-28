@@ -115,9 +115,7 @@ impl App {
         self.locked_profile = Some(self.form.profile.clone());
         self.active_run = Some(active_run);
         for &index in &selected_indices {
-            if let Some(job) = self.bulk_jobs.get_mut(index) {
-                job.state = "Queued".into();
-            }
+            self.set_bulk_job_state(index, "Queued".into());
         }
         self.mark_bulk_state_changed();
         let worker = launch_batch_worker(BatchExecutionContext {

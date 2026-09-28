@@ -27,6 +27,9 @@ pub(crate) struct App {
     /// Lowercase searchable mailbox fields, rebuilt only when queue rows are
     /// imported or otherwise structurally changed.
     pub(crate) bulk_search_values: Vec<String>,
+    /// State membership is maintained incrementally so a state-only filter
+    /// does not scan every mailbox after each worker transition.
+    pub(crate) bulk_state_indices: HashMap<String, HashSet<usize>>,
     pub(crate) bulk_filter_cache_search: String,
     pub(crate) bulk_filter_cache_state: String,
     pub(crate) bulk_filter_cache_generation: u64,

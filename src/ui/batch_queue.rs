@@ -126,6 +126,7 @@ impl App {
         self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
         self.bulk_summary = None;
         self.bulk_search_values.clear();
+        self.bulk_state_indices.clear();
         self.bulk_filter_cache_generation = u64::MAX;
     }
 
@@ -142,6 +143,23 @@ impl App {
         self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
         self.bulk_summary = None;
         self.bulk_filter_cache_generation = u64::MAX;
+    }
+
+    pub(crate) fn set_bulk_job_state(&mut self, index: usize, state: String) {
+        if let Some(job) = self.bulk_jobs.get(index) {
+            let old_key = crate::ui::display_state_key(&job.state);
+            if let Some(indices) = self.bulk_state_indices.get_mut(&old_key) {
+                indices.remove(&index);
+            }
+        }
+        let new_key = crate::ui::display_state_key(&state);
+        self.bulk_state_indices
+            .entry(new_key)
+            .or_default()
+            .insert(index);
+        if let Some(job) = self.bulk_jobs.get_mut(index) {
+            job.state = state;
+        }
     }
 
     pub(crate) fn bulk_queue_summary(&mut self) -> crate::controller::BulkQueueSummary {
