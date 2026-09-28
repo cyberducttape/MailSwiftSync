@@ -169,10 +169,74 @@ impl UiLanguage {
                 "Prüfen Sie den Umfang unter „Postfächer“, bevor Sie einen Vorgang starten."
             }
             "Safety contract" => "Sicherheitsregeln",
+            "! Source transport is cleartext by explicit configuration" => {
+                "! Quelltransport ist aufgrund der Konfiguration unverschlüsselt"
+            }
+            "✓ Encrypted source transport with certificate verification" => {
+                "✓ Verschlüsselter Quelltransport mit Zertifikatsprüfung"
+            }
             "INSECURE SOURCE TRANSPORT" => "UNSICHERER QUELLTRANSPORT",
             "Plain IMAP can expose the source password and mailbox data in transit." => {
                 "Unverschlüsseltes IMAP kann das Quellpasswort und Postfachdaten während der Übertragung offenlegen."
             }
+            "I understand and explicitly allow cleartext source transport" => {
+                "Ich verstehe dies und erlaube den unverschlüsselten Quelltransport ausdrücklich"
+            }
+            "Use IMAPS or STARTTLS whenever possible. This acknowledgement is required before any authenticated operation, including dry preflight, and is included in the preflight fingerprint." => {
+                "Verwenden Sie nach Möglichkeit IMAPS oder STARTTLS. Diese Bestätigung ist vor jedem authentifizierten Vorgang einschließlich der Vorabprüfung erforderlich und wird in den Vorabprüfungs-Fingerabdruck aufgenommen."
+            }
+            "Start a safe migration" => "Sichere Migration starten",
+            "MailSwiftSync guides every migration through a reviewed preflight before any destination changes are allowed." => {
+                "MailSwiftSync führt jede Migration durch eine geprüfte Vorabprüfung, bevor Änderungen am Ziel zulässig sind."
+            }
+            "Connect" => "Verbinden",
+            "Configure source and destination" => "Quelle und Ziel konfigurieren",
+            "Preflight" => "Vorabprüfung",
+            "Authenticate and review blockers" => "Authentifizieren und Blockierungen prüfen",
+            "Pilot" => "Pilot",
+            "Start with a small mailbox set" => "Mit wenigen Postfächern beginnen",
+            "Import mailbox list" => "Postfachliste importieren",
+            "For one mailbox, continue with the migration plan below." => {
+                "Für ein Postfach fahren Sie unten mit dem Migrationsplan fort."
+            }
+            "PROCESS OWNERSHIP REVIEW REQUIRED" => "PRÜFUNG DER PROZESSZUGEHÖRIGKEIT ERFORDERLICH",
+            "MailSwiftSync could not prove that a previously recorded migration process is gone. Do not start another migration until you have checked the host process list and confirmed no MailSwiftSync engine remains." => {
+                "MailSwiftSync konnte nicht nachweisen, dass ein zuvor erfasster Migrationsprozess beendet ist. Starten Sie keine weitere Migration, bevor Sie die Host-Prozessliste geprüft und bestätigt haben, dass keine MailSwiftSync-Engine mehr läuft."
+            }
+            "I confirmed no unverified migration process remains" => {
+                "Ich habe bestätigt, dass kein ungeprüfter Migrationsprozess mehr läuft"
+            }
+            "HISTORICAL PROJECT · READ ONLY" => "HISTORISCHES PROJEKT · NUR LESEN",
+            "You are viewing durable history for this project. The editable migration plan and execution controls are detached until you start a new migration." => {
+                "Sie sehen den dauerhaften Verlauf dieses Projekts. Der bearbeitbare Migrationsplan und die Ausführungssteuerung sind getrennt, bis Sie eine neue Migration starten."
+            }
+            "Start a new migration" => "Neue Migration starten",
+            "Migration workspace" => "Migrationsarbeitsbereich",
+            "PREFLIGHT" => "VORABPRÜFUNG",
+            "LIVE MIGRATION" => "LIVE-MIGRATION",
+            "Recommended next step: run preflight, review blockers, then select a small pilot mailbox." => {
+                "Empfohlener nächster Schritt: Vorabprüfung ausführen, Blockierungen prüfen und anschließend ein kleines Pilotpostfach auswählen."
+            }
+            "Preflight & readiness" => "Vorabprüfung und Bereitschaft",
+            "Plan completeness is separate from live network checks. Run the authenticated probe before live migration." => {
+                "Die Planvollständigkeit ist von den Live-Netzwerkprüfungen getrennt. Führen Sie vor der Live-Migration die authentifizierte Prüfung aus."
+            }
+            "Run authenticated readiness probe" => {
+                "Authentifizierte Bereitschaftsprüfung ausführen"
+            }
+            "Refresh assessment" => "Bewertung aktualisieren",
+            "Create project from plan" => "Projekt aus Plan erstellen",
+            "Dovecot preflight checks the configured imapc source; destination readiness still requires administrative review." => {
+                "Die Dovecot-Vorabprüfung kontrolliert die konfigurierte imapc-Quelle; die Zielbereitschaft erfordert weiterhin eine administrative Prüfung."
+            }
+            "No preflight assessment has been recorded for the current plan." => {
+                "Für den aktuellen Plan wurde noch keine Vorabprüfung aufgezeichnet."
+            }
+            "Project controls" => "Projektsteuerung",
+            "This project is complete and read-only. Reopening requires an audit reason and returns it to Attention." => {
+                "Dieses Projekt ist abgeschlossen und schreibgeschützt. Zum erneuten Öffnen ist ein Prüfgrund erforderlich; anschließend wird es zur Prüfung zurückgesetzt."
+            }
+            "Reopen project" => "Projekt erneut öffnen",
             "Do not trust a completed process until the destination reconciles with the source." => {
                 "Ein abgeschlossener Prozess gilt erst dann als bestätigt, wenn das Ziel mit der Quelle abgeglichen wurde."
             }
@@ -466,6 +530,18 @@ mod tests {
             "Clear mailbox queue?",
             "Advanced migration options",
             "Review verification",
+            "! Source transport is cleartext by explicit configuration",
+            "✓ Encrypted source transport with certificate verification",
+            "Plain IMAP can expose the source password and mailbox data in transit.",
+            "I understand and explicitly allow cleartext source transport",
+            "PROCESS OWNERSHIP REVIEW REQUIRED",
+            "I confirmed no unverified migration process remains",
+            "HISTORICAL PROJECT · READ ONLY",
+            "Start a new migration",
+            "Run authenticated readiness probe",
+            "Create project from plan",
+            "No preflight assessment has been recorded for the current plan.",
+            "Reopen project",
         ] {
             assert_ne!(
                 UiLanguage::German.text(key),
