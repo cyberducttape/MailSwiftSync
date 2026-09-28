@@ -169,13 +169,13 @@ impl App {
                 );
                 for job_id in selected_ids.iter().take(5) {
                     if let Some(index) = self.bulk_job_ids.iter().position(|id| id == job_id) {
-                        let profile = &self.bulk_jobs[index].defaults.profile;
+                        let job = &self.bulk_jobs[index];
                         ui.label(
                             self.language
                                 .text("• {}: {} → {}")
-                                .replace("{}", &self.bulk_jobs[index].label)
-                                .replacen("{}", &profile.source_user, 1)
-                                .replacen("{}", &profile.destination_user, 1),
+                                .replace("{}", &job.label)
+                                .replacen("{}", &job.source_user, 1)
+                                .replacen("{}", &job.destination_user, 1),
                         );
                     }
                 }

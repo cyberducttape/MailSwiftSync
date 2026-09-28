@@ -459,14 +459,8 @@ impl App {
                 };
                 ui.group(|ui| {
                     ui.label(RichText::new(&job.label).strong());
-                    ui.label(format!(
-                        "{} → {}",
-                        profile.source_user, profile.destination_user
-                    ));
-                    ui.label(format!(
-                        "{} → {}",
-                        profile.source_host, profile.destination_host
-                    ));
+                    ui.label(format!("{} → {}", job.source_user, job.destination_user));
+                    ui.label(format!("{} → {}", job.source_host, job.destination_host));
                     ui.label(
                         self.language
                             .text("State: {} · {}")
