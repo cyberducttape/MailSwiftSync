@@ -353,8 +353,10 @@ Treat either representation as sensitive operational data; see
 
 `doctor` is a read-only qualification-envelope check. It reports the
 operating system, configured engine/TLS/auth modes, keyring reference
-presence, database state, free space, and the installed imapsync version
-against the exact 2.314 verification qualification. It never prints
+presence, database state, free space, and the selected transfer executable.
+For imapsync it requires the exact 2.314 verification qualification; for
+native Dovecot it reports the configured `doveadm` availability without
+claiming provider or storage-format qualification. It never prints
 credential material. A `review` result means the host may still be usable for
 a technical preview, but the operator is outside a qualified envelope and
 should resolve the reported condition before claiming trusted verification.
