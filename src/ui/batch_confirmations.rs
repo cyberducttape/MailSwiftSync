@@ -17,10 +17,11 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(self.language.text("Discard the current queue?"));
-                ui.label(format!(
-                    "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.",
-                    self.bulk_jobs.len()
-                ));
+                ui.label(
+                    self.language
+                        .text("This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.")
+                        .replace("{}", &self.bulk_jobs.len().to_string()),
+                );
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     if ui.button(self.language.text("Keep queue")).clicked() {
@@ -58,10 +59,12 @@ impl App {
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(self.language.text("Replace the current queue?"));
-                ui.label(format!(
-                    "Importing {path_label} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.",
-                    self.bulk_jobs.len()
-                ));
+                ui.label(
+                    self.language
+                        .text("Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.")
+                        .replace("{}", &path_label)
+                        .replacen("{}", &self.bulk_jobs.len().to_string(), 1),
+                );
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     if ui.button(self.language.text("Keep current queue")).clicked() {
@@ -172,11 +175,21 @@ impl App {
                 for job_id in selected_ids.iter().take(5) {
                     if let Some(index) = self.bulk_job_ids.iter().position(|id| id == job_id) {
                         let profile = &self.bulk_jobs[index].form.profile;
-                        ui.label(format!("• {}: {} → {}", self.bulk_jobs[index].label, profile.source_user, profile.destination_user));
+                        ui.label(
+                            self.language
+                                .text("• {}: {} → {}")
+                                .replace("{}", &self.bulk_jobs[index].label)
+                                .replacen("{}", &profile.source_user, 1)
+                                .replacen("{}", &profile.destination_user, 1),
+                        );
                     }
                 }
                 if selected_ids.len() > 5 {
-                    ui.label(format!("… plus {} more selected", selected_ids.len() - 5));
+                    ui.label(
+                        self.language
+                            .text("… plus {} more selected")
+                            .replace("{}", &(selected_ids.len() - 5).to_string()),
+                    );
                 }
                 if summary.hidden_selection_count > 0
                     && ui

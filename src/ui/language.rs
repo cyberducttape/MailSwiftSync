@@ -184,10 +184,16 @@ impl UiLanguage {
                 "Bestätigung veraltet: Parallelität, Umfang oder Einstellungen wurden während des Dialogs geändert. Prüfen Sie die Warteschlange und versuchen Sie es erneut."
             }
             "Clear mailbox queue?" => "Postfachwarteschlange leeren?",
+            "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace." => {
+                "Dies entfernt {} Postfachzeile(n), die Auswahl, Passwörter im Speicher und die dauerhafte Stapelzuordnung aus diesem Arbeitsbereich."
+            }
             "Discard the current queue?" => "Aktuelle Warteschlange verwerfen?",
             "Keep queue" => "Warteschlange behalten",
             "Clear queue" => "Warteschlange leeren",
             "Replace mailbox queue?" => "Postfachwarteschlange ersetzen?",
+            "Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association." => {
+                "Der Import von {} ersetzt {} aktuelle(n) Postfachzeile(n), die Auswahl, Passwörter im Speicher und die dauerhafte Stapelzuordnung."
+            }
             "Replace the current queue?" => "Aktuelle Warteschlange ersetzen?",
             "Keep current queue" => "Aktuelle Warteschlange behalten",
             "Replace queue" => "Warteschlange ersetzen",
@@ -417,6 +423,7 @@ impl UiLanguage {
             "All states" => "Alle Status",
             "Verified with exceptions" => "Mit Ausnahmen verifiziert",
             "… plus {} more selected" => "… plus {} weitere ausgewählt",
+            "• {}: {} → {}" => "• {}: {} → {} (ausgewählt)",
             "OS keyring credentials" => "Zugangsdaten im Betriebssystem-Schlüsselbund",
             "Source ID" => "Quell-ID",
             "Destination ID" => "Ziel-ID",
@@ -686,6 +693,9 @@ mod tests {
             "Task center",
             "Migration running",
             "No active migration",
+            "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.",
+            "Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.",
+            "• {}: {} → {}",
             "Export verification report…",
             "Customer proof is ready: the durable project is Complete and no mailbox requires review.",
             "Customer proof remains gated until the durable project is Complete, every mailbox is verified, and the state view is current.",
