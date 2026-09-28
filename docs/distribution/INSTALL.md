@@ -65,6 +65,22 @@ checks.
 4. Extract the verified archive. The release archive contains the
   MailSwiftSync binary, README, license, and operator installation guides.
 
+## Install the Debian package
+
+Linux release artifacts also include a host-architecture `.deb` package. Keep
+the package and adjacent checksum together, then verify and install it:
+
+```bash
+sha256sum -c mailswiftsync_*.deb.sha256
+gpg --verify mailswiftsync_*.deb.sha256.asc mailswiftsync_*.deb.sha256
+sudo dpkg -i mailswiftsync_*.deb
+```
+
+The package installs the MailSwiftSync binary, documentation, and man page. It
+does not install or configure imapsync or Dovecot; follow the engine steps
+below. APT repository metadata, RPM packages, and cross-architecture Debian
+builds remain release work.
+
 ## Configure the migration engine
 
 5. Install the engine required by the migration:
@@ -90,8 +106,9 @@ review gates in place; a service-manager deployment is not equivalent to
 unattended production approval. Provider OAuth consent, secret-safe remote
 Dovecot execution, and independent message-level reconciliation are not
 included yet. Portable release archives are signed when the release signing
-environment is configured; native OS-specific installer packages are not
-currently published.
+environment is configured; Linux releases include a signed Debian package,
+while RPM and native Windows/macOS installer packages are not currently
+published.
 
 On macOS, process identity checks are deliberately conservative. If the
 native process query cannot prove that a recorded child is the expected

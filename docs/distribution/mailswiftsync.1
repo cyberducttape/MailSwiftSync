@@ -1,0 +1,40 @@
+.TH MAILSWIFTSYNC 1
+.SH NAME
+mailswiftsync \- local-first mailbox migration workbench
+.SH SYNOPSIS
+.B mailswiftsync
+.RI [ command ]
+.SH DESCRIPTION
+MailSwiftSync plans, executes, verifies, and audits mailbox migrations. It
+keeps migration state in a local durable ledger and requires preflight and
+operator confirmation before live destination changes.
+.PP
+The application does not bundle or configure imapsync or Dovecot. Install and
+qualify the selected transfer engine separately, then run a dry preflight.
+.SH COMMANDS
+.TP
+.B supervise STATE [POLL] [RETRIES] [WINDOW]
+Run automation-safe supervision for queued and retryable work.
+.TP
+.B status STATE [PROJECT]
+Print credential-free project status.
+.TP
+.B recover STATE
+Inspect and recover interrupted work conservatively.
+.TP
+.B support-bundle STATE OUTPUT
+Write a sanitized diagnostic bundle.
+.TP
+.B runbook SOURCE DESTINATION
+Print provider setup guidance.
+.SH SAFETY
+Use the dry preflight and review the generated execution plan before any live
+run. Do not treat process exit status as proof of mailbox equality; review the
+durable verification evidence and exceptions.
+.SH FILES
+The ledger location is selected through the application's normal state-path
+configuration. Credentials are held in the operating-system keyring or
+short-lived private runtime files; passwords are not stored in the ledger.
+.SH SEE ALSO
+.BR imapsync (1),
+.BR doveadm (1)

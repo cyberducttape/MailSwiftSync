@@ -69,7 +69,7 @@ counts, exception counts, and aggregate missing/extra/modified message totals.
 
 ## Project status
 
-MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, bounded metadata-level reconciliation, and explicitly opt-in bounded body-content proof for encrypted imapsync runs are available today. Treat credential delivery, provider qualification, packaged installers, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured, but native installers are not currently shipped.
+MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, bounded metadata-level reconciliation, and explicitly opt-in bounded body-content proof for encrypted imapsync runs are available today. Treat credential delivery, provider qualification, packaged installers, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured. Linux releases also include a signed Debian package; RPM and native Windows/macOS installers are not currently shipped.
 
 Stable today:
 

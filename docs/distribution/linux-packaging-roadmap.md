@@ -1,6 +1,7 @@
 # Linux packaging roadmap
 
-Portable archives are the current alpha distribution. A stable Linux release
+Portable archives and a deterministic signed Debian package are the current
+alpha distribution. A stable Linux release
 should provide deterministic installation and upgrade paths for operators who
 cannot safely assemble a migration control plane from unrelated archives and
 packages.
@@ -9,7 +10,7 @@ The release gate is:
 
 | Target | Requirement |
 |---|---|
-| Debian/Ubuntu | Signed `.deb` and signed APT repository metadata |
+| Debian/Ubuntu | Signed `.deb` is implemented; signed APT repository metadata remains |
 | RHEL/Alma/Rocky | Signed `.rpm` and signed YUM/DNF repository metadata |
 | Architectures | x86_64 and ARM64 artifacts, each tested on its target architecture |
 | Shell integration | Bash, Zsh, and Fish completions generated from the shipped CLI |
