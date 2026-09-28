@@ -383,6 +383,9 @@ impl UiLanguage {
                 "⚠ {} Postfach/er sind ausgewählt, aber durch den aktuellen Filter verborgen. Sie bleiben in Stapelvorgängen enthalten."
             }
             "Review selected ({})" => "Auswahl prüfen ({})",
+            "Selected mailbox scope remains explicit while this drawer is open." => {
+                "Der ausgewählte Postfachumfang bleibt ausdrücklich, solange diese Leiste geöffnet ist."
+            }
             "No mailboxes selected." => "Keine Postfächer ausgewählt.",
             "DESTRUCTIVE: destination deletion enabled" => "DESTRUKTIV: Löschen am Ziel aktiviert",
             "destination deletion disabled" => "Löschen am Ziel deaktiviert",
@@ -637,6 +640,7 @@ mod tests {
             "Delete destination messages missing from source  (--delete2)",
             "Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.",
             "The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.",
+            "Selected mailbox scope remains explicit while this drawer is open.",
             "Choose migration engine",
             "How should this migration run?",
             "Select the execution engine that fits the destination. MailSwiftSync owns planning, safety gates, orchestration, and verification; the selected engine owns message transfer.",

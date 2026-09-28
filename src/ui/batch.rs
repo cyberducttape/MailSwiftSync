@@ -220,53 +220,6 @@ impl App {
                     .color(self.theme_colors().warning),
                 );
             }
-            egui::CollapsingHeader::new(
-                self.language
-                    .text("Review selected ({})")
-                    .replace("{}", &self.bulk_selected_ids.len().to_string()),
-            )
-            .default_open(true)
-            .show(ui, |ui| {
-                if self.bulk_selected_ids.is_empty() {
-                    ui.label(
-                        RichText::new(self.language.text("No mailboxes selected."))
-                            .color(self.theme_colors().text_secondary),
-                    );
-                } else {
-                    for (index, job) in self.bulk_jobs.iter().enumerate() {
-                        let Some(job_id) = self.bulk_job_ids.get(index) else {
-                            continue;
-                        };
-                        if !self.bulk_selected_ids.contains(job_id) {
-                            continue;
-                        }
-                        let profile = &job.form.profile;
-                        let destructive = if profile.delete2 {
-                            self.language
-                                .text("DESTRUCTIVE: destination deletion enabled")
-                        } else {
-                            self.language.text("destination deletion disabled")
-                        };
-                        ui.group(|ui| {
-                            ui.label(RichText::new(&job.label).strong());
-                            ui.label(format!(
-                                "{} → {}",
-                                profile.source_user, profile.destination_user
-                            ));
-                            ui.label(format!(
-                                "{} → {}",
-                                profile.source_host, profile.destination_host
-                            ));
-                            ui.label(
-                                self.language
-                                    .text("State: {} · {}")
-                                    .replace("{}", &display_state_key(&job.state))
-                                    .replacen("{}", destructive, 1),
-                            );
-                        });
-                    }
-                }
-            });
             let has_selection = !self.bulk_selected_ids.is_empty();
             let live_plan =
                 self.current_batch_action_plan(BatchExecutionMode::Live, BulkRetryScope::All);
@@ -465,5 +418,63 @@ impl App {
                     .color(self.theme_colors().text_secondary),
             );
         }
+    }
+
+    pub(crate) fn selection_review_drawer(&self, ui: &mut egui::Ui) {
+        ui.heading(
+            self.language
+                .text("Review selected ({})")
+                .replace("{}", &self.bulk_selected_ids.len().to_string()),
+        );
+        ui.label(
+            RichText::new(
+                self.language
+                    .text("Selected mailbox scope remains explicit while this drawer is open."),
+            )
+            .size(11.0)
+            .color(self.theme_colors().text_secondary),
+        );
+        ui.separator();
+        if self.bulk_selected_ids.is_empty() {
+            ui.label(
+                RichText::new(self.language.text("No mailboxes selected."))
+                    .color(self.theme_colors().text_secondary),
+            );
+            return;
+        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for (index, job) in self.bulk_jobs.iter().enumerate() {
+                let Some(job_id) = self.bulk_job_ids.get(index) else {
+                    continue;
+                };
+                if !self.bulk_selected_ids.contains(job_id) {
+                    continue;
+                }
+                let profile = &job.form.profile;
+                let destructive = if profile.delete2 {
+                    self.language
+                        .text("DESTRUCTIVE: destination deletion enabled")
+                } else {
+                    self.language.text("destination deletion disabled")
+                };
+                ui.group(|ui| {
+                    ui.label(RichText::new(&job.label).strong());
+                    ui.label(format!(
+                        "{} → {}",
+                        profile.source_user, profile.destination_user
+                    ));
+                    ui.label(format!(
+                        "{} → {}",
+                        profile.source_host, profile.destination_host
+                    ));
+                    ui.label(
+                        self.language
+                            .text("State: {} · {}")
+                            .replace("{}", &display_state_key(&job.state))
+                            .replacen("{}", destructive, 1),
+                    );
+                });
+            }
+        });
     }
 }

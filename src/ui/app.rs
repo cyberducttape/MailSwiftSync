@@ -101,6 +101,13 @@ impl eframe::App for App {
                 });
             });
 
+        if self.active_view == WorkspaceView::Mailboxes && !self.bulk_jobs.is_empty() {
+            egui::Panel::right("selection_review_drawer")
+                .resizable(true)
+                .default_size(320.0)
+                .show(ui, |ui| self.selection_review_drawer(ui));
+        }
+
         egui::CentralPanel::default().show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
