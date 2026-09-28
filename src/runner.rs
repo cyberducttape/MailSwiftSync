@@ -197,7 +197,8 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_port,
     )?;
     let mut stage = if let Some(path) = durable_stage_path {
-        core::MessageMetadataStage::open_durable(path.to_owned(), &form.plan_fingerprint())?
+        let identity = crate::plan_identity::fingerprint_digest(&form.plan_fingerprint());
+        core::MessageMetadataStage::open_durable(path.to_owned(), &identity)?
     } else {
         core::MessageMetadataStage::open_ephemeral()?
     };
