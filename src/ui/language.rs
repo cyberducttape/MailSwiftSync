@@ -67,6 +67,64 @@ impl UiLanguage {
             "I understand — start migration" => "Verstanden — Migration starten",
             "Execution plan" => "Ausführungsplan",
             "Advanced migration options" => "Erweiterte Migrationsoptionen",
+            "Passwords are redacted. This is an argument list for review, not a shell command to paste." => {
+                "Passwörter werden ausgeblendet. Dies ist eine Argumentliste zur Prüfung, kein Shell-Befehl zum Einfügen."
+            }
+            "Fix the advanced options above before this plan can run." => {
+                "Korrigieren Sie die erweiterten Optionen, bevor dieser Plan ausgeführt werden kann."
+            }
+            "These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules." => {
+                "Diese Einstellungen betreffen den imapsync-Fallback. Native Dovecot-Migrationen verwenden doveadm und serverseitige Konsistenzregeln."
+            }
+            "Reliability and metadata" => "Zuverlässigkeit und Metadaten",
+            "Sync internal dates  (--syncinternaldates)" => {
+                "Interne Datumswerte synchronisieren  (--syncinternaldates)"
+            }
+            "Use message UIDs when available  (--useuid)" => {
+                "Nachrichten-UIDs verwenden, sofern verfügbar  (--useuid)"
+            }
+            "Use imapsync cache  (--usecache)" => "imapsync-Cache verwenden  (--usecache)",
+            "Allow message-size mismatch  (--allowsizemismatch)" => {
+                "Abweichende Nachrichtengröße erlauben  (--allowsizemismatch)"
+            }
+            "Performance" => "Leistung",
+            "Fast I/O for source  (--fastio1)" => "Schnelle I/O für die Quelle  (--fastio1)",
+            "Uses imapsync's faster source I/O path; test this with the provider before a production cutover." => {
+                "Verwendet den schnelleren I/O-Pfad der Quelle; testen Sie dies vor einer Produktivumschaltung mit dem Anbieter."
+            }
+            "Fast I/O for destination  (--fastio2)" => "Schnelle I/O für das Ziel  (--fastio2)",
+            "Uses imapsync's faster destination I/O path; provider behavior varies." => {
+                "Verwendet den schnelleren I/O-Pfad des Ziels; das Verhalten hängt vom Anbieter ab."
+            }
+            "Messages/second target (0 = unlimited)" => "Nachrichten/Sekunde-Ziel (0 = unbegrenzt)",
+            "Bytes/second target (0 = unlimited)" => "Bytes/Sekunde-Ziel (0 = unbegrenzt)",
+            "For a batch this is an aggregate target: MailSwiftSync divides it across concurrent imapsync workers. A single run uses the value unchanged." => {
+                "Für einen Stapel ist dies ein Gesamtziel: MailSwiftSync teilt es auf parallele imapsync-Prozesse auf. Ein Einzelvorgang verwendet den Wert unverändert."
+            }
+            "Process timeout (hours)" => "Prozesszeitlimit (Stunden)",
+            "Maximum wall-clock time for one engine process. It is a safety bound, not an estimate of completion time." => {
+                "Maximale Echtzeitdauer eines Engine-Prozesses. Dies ist eine Sicherheitsgrenze, keine Schätzung der Fertigstellungszeit."
+            }
+            "Batch targets are divided across workers and process starts are globally paced; provider-side limits still take precedence. A finite target must be at least the worker count." => {
+                "Stapelziele werden auf Prozesse verteilt und Prozessstarts global getaktet; Anbietergrenzen haben weiterhin Vorrang. Ein begrenztes Ziel muss mindestens der Prozessanzahl entsprechen."
+            }
+            "Dovecot migration strategy" => "Dovecot-Migrationsstrategie",
+            "Dovecot has no MailSwiftSync throttle; source load may be high. Initial backup may fail if the target Maildir refuses INBOX replacement. Test the exact destination storage before cutover; repeat final passes after exit code 2." => {
+                "Dovecot hat keine MailSwiftSync-Drosselung; die Quellenlast kann hoch sein. Die erste Sicherung kann fehlschlagen, wenn das Ziel-Maildir den INBOX-Ersatz ablehnt. Testen Sie den exakten Zielspeicher vor der Umschaltung und wiederholen Sie Abschlussläufe nach Exit-Code 2."
+            }
+            "Destructive destination option" => "Destruktive Zieloption",
+            "Delete destination messages missing from source  (--delete2)" => {
+                "Zielnachrichten löschen, die in der Quelle fehlen  (--delete2)"
+            }
+            "Use only for an intentionally exact backup after a tested preflight. This can remove destination mail." => {
+                "Nur für eine ausdrücklich exakte Sicherung nach getesteter Vorabprüfung verwenden. Dadurch können Nachrichten am Ziel gelöscht werden."
+            }
+            "Advanced plan settings are locked while a migration is running." => {
+                "Erweiterte Planeinstellungen sind während einer laufenden Migration gesperrt."
+            }
+            "The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected." => {
+                "Das Feld für zusätzliche imapsync-Optionen akzeptiert nur die dokumentierte Liste sicherer Tuning- und Diagnoseoptionen. Verbindungs-, Zugangsdaten-, TLS-, destruktive, Protokollierungs- und unbekannte Optionen werden abgelehnt."
+            }
             "Review verification" => "Verifizierung prüfen",
             "Confirm live batch migration" => "Live-Stapel-Migration bestätigen",
             "This will change destination mailboxes" => "Dies ändert Zielpostfächer",
@@ -542,6 +600,12 @@ mod tests {
             "Create project from plan",
             "No preflight assessment has been recorded for the current plan.",
             "Reopen project",
+            "Passwords are redacted. This is an argument list for review, not a shell command to paste.",
+            "Fix the advanced options above before this plan can run.",
+            "These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules.",
+            "Delete destination messages missing from source  (--delete2)",
+            "Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.",
+            "The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.",
         ] {
             assert_ne!(
                 UiLanguage::German.text(key),
