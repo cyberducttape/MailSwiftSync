@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     io::{Read, Write},
+    path::Path,
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -161,6 +162,7 @@ pub(crate) fn run_imap_message_verification(
     job_id: &str,
     run_id: &str,
     cancel: &AtomicBool,
+    durable_stage_path: Option<&Path>,
 ) -> Result<(core::MailboxEvidence, Vec<core::MessageMismatch>), String> {
     if !message_verification_enabled(form) {
         return Err(
@@ -194,7 +196,11 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_host,
         &form.profile.destination_port,
     )?;
-    let mut stage = core::MessageMetadataStage::open_ephemeral()?;
+    let mut stage = if let Some(path) = durable_stage_path {
+        core::MessageMetadataStage::open_durable(path.to_owned(), &form.plan_fingerprint())?
+    } else {
+        core::MessageMetadataStage::open_ephemeral()?
+    };
     let source = crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes(
         &source_host,
         &form.profile.source_user,
@@ -299,6 +305,7 @@ pub(crate) fn run_imap_message_verification(
             &folder_mapping,
         )?
     } else {
+        stage.reset_reconciliation()?;
         core::MessageVerification::detect_mismatches_from_stage(
             job_id,
             run_id,
@@ -352,6 +359,9 @@ pub(crate) fn run_imap_message_verification(
         modified_messages: summary.changed_count,
         probable_messages: summary.probable_matches,
     };
+    if durable_stage_path.is_some() {
+        stage.finish()?;
+    }
     Ok((evidence, mismatches))
 }
 

@@ -100,7 +100,7 @@ Experimental or planned:
   provider's own tooling).
 - Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
 - A scheduler/API that can survive the desktop closing. (`supervise` provides a foreground, maintenance-window-aware batch controller; body hashing is currently an explicit per-mailbox opt-in rather than a default batch mode.)
-- UIDVALIDITY-aware delta checkpoint binding is implemented for native Dovecot; per-message checkpoint persistence remains planned.
+- UIDVALIDITY-aware delta checkpoint binding is implemented for native Dovecot; encrypted-imapsync verification persists bounded metadata pages, body fingerprints, and UID cursors across controller interruption, while provider qualification and large-mailbox recovery evidence remain outstanding.
 - Published large-scale migration case studies and compatibility matrix.
 
 The current tested scope and explicit gaps are tracked in the

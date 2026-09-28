@@ -6,12 +6,31 @@ use std::{
     path::PathBuf,
 };
 
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use super::{ExtractedMessage, ExtractedMessages, MailboxMessageKey, sqlite_i64};
 
 pub(crate) const STAGE_BATCH_SIZE: i64 = 512;
+
+pub(crate) fn durable_stage_path(state_path: &std::path::Path, job_id: &str) -> PathBuf {
+    let safe_id = job_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(96)
+        .collect::<String>();
+    state_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("verification-stages")
+        .join(format!("{safe_id}.sqlite"))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StagedMessageSide {
@@ -36,6 +55,7 @@ pub(crate) struct StagedMessage {
 pub(crate) struct MessageMetadataStage {
     connection: Option<Connection>,
     path: Option<PathBuf>,
+    retain_on_drop: bool,
     /// Body fingerprints are retained only for the explicitly enabled
     /// forensic verification path. Metadata-only verification remains fully
     /// staged in SQLite and does not retain content hashes in memory.
@@ -73,9 +93,10 @@ impl MessageMetadataStage {
         let mut stage = Self {
             connection: Some(connection),
             path: Some(path),
+            retain_on_drop: false,
             content_fingerprints: HashMap::new(),
         };
-        if let Err(error) = stage.initialize() {
+        if let Err(error) = stage.initialize(false) {
             let path = stage.path.take();
             if let Some(connection) = stage.connection.take() {
                 let _ = connection.close();
@@ -96,10 +117,85 @@ impl MessageMetadataStage {
         let mut stage = Self {
             connection: Some(Connection::open_in_memory()?),
             path: None,
+            retain_on_drop: false,
             content_fingerprints: HashMap::new(),
         };
-        stage.initialize()?;
+        stage.initialize(false)?;
         Ok(stage)
+    }
+
+    /// Open the private, restartable staging database for one verification.
+    /// The caller removes it after verification has produced durable evidence;
+    /// retaining it on an interrupted run is what makes page-level recovery
+    /// possible after the controller process is restarted.
+    pub(crate) fn open_durable(path: PathBuf, identity: &str) -> Result<Self, String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "verification stage path has no parent directory".to_owned())?;
+        crate::credentials::ensure_private_directory(parent)
+            .map_err(|error| format!("could not secure verification stage directory: {error}"))?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        }
+        if let Ok(metadata) = fs::symlink_metadata(&path)
+            && metadata.file_type().is_symlink()
+        {
+            return Err("verification stage path is a symbolic link".to_owned());
+        }
+        options
+            .open(&path)
+            .map_err(|error| format!("could not create durable verification stage: {error}"))?;
+        let connection = Connection::open(&path)
+            .map_err(|error| format!("could not open durable verification stage: {error}"))?;
+        let mut stage = Self {
+            connection: Some(connection),
+            path: Some(path),
+            retain_on_drop: true,
+            content_fingerprints: HashMap::new(),
+        };
+        if let Err(error) = stage
+            .initialize(true)
+            .and_then(|_| stage.bind_identity(identity))
+        {
+            let path = stage.path.take();
+            if let Some(connection) = stage.connection.take() {
+                let _ = connection.close();
+            }
+            if let Some(path) = path {
+                let _ = fs::remove_file(path);
+            }
+            return Err(format!(
+                "could not initialize durable verification stage: {error}"
+            ));
+        }
+        stage.load_content_fingerprints().map_err(|error| {
+            format!("could not load durable verification fingerprints: {error}")
+        })?;
+        Ok(stage)
+    }
+
+    pub(crate) fn finish(&mut self) -> Result<(), String> {
+        self.retain_on_drop = false;
+        if let Some(path) = self.path.take() {
+            if let Some(connection) = self.connection.take() {
+                connection
+                    .close()
+                    .map_err(|(_, error)| format!("could not close verification stage: {error}"))?;
+            }
+            fs::remove_file(&path)
+                .map_err(|error| format!("could not remove verification stage: {error}"))?;
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
+                let _ = fs::remove_file(sidecar);
+            }
+        }
+        Ok(())
     }
 
     fn connection_ref(&self) -> &Connection {
@@ -108,15 +204,20 @@ impl MessageMetadataStage {
             .expect("verification stage is open")
     }
 
-    fn initialize(&mut self) -> rusqlite::Result<()> {
+    fn initialize(&mut self, durable: bool) -> rusqlite::Result<()> {
+        let pragmas = if durable {
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"
+        } else {
+            "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
+        };
+        self.connection_ref().execute_batch(pragmas)?;
         self.connection_ref().execute_batch(
-            "PRAGMA journal_mode=OFF;
-             PRAGMA synchronous=OFF;
+            "-- Staged mailbox metadata is sensitive. Keep SQLite's transient
              -- Staged mailbox metadata is sensitive. Keep SQLite's transient
              -- sort/join structures out of the process-wide temp directory;
              -- durable staging itself remains in the private run directory.
              PRAGMA temp_store=MEMORY;
-             CREATE TABLE staged_messages(
+             CREATE TABLE IF NOT EXISTS staged_messages(
                  side INTEGER NOT NULL CHECK(side IN (0,1)),
                  mailbox TEXT NOT NULL,
                  match_mailbox TEXT NOT NULL,
@@ -128,10 +229,75 @@ impl MessageMetadataStage {
                  size_bytes INTEGER CHECK(size_bytes IS NULL OR size_bytes >= 0),
                  PRIMARY KEY(side,mailbox,uidvalidity,uid)
              );
-             CREATE INDEX staged_messages_id ON staged_messages(side,message_id,mailbox,uidvalidity,uid);
-             CREATE INDEX staged_messages_metadata ON staged_messages(side,date_key,size_bytes,mailbox,uidvalidity,uid);
-             CREATE INDEX staged_messages_match_metadata ON staged_messages(side,match_mailbox,date_key,size_bytes,uidvalidity,uid);",
+             CREATE INDEX IF NOT EXISTS staged_messages_id ON staged_messages(side,message_id,mailbox,uidvalidity,uid);
+             CREATE INDEX IF NOT EXISTS staged_messages_metadata ON staged_messages(side,date_key,size_bytes,mailbox,uidvalidity,uid);
+             CREATE INDEX IF NOT EXISTS staged_messages_match_metadata ON staged_messages(side,match_mailbox,date_key,size_bytes,uidvalidity,uid);
+             CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
+             CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));",
         )
+    }
+
+    fn bind_identity(&mut self, identity: &str) -> rusqlite::Result<()> {
+        if identity.len() > 256 {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let existing: Option<String> = self
+            .connection_ref()
+            .query_row(
+                "SELECT value FROM stage_metadata WHERE key='identity'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if existing.as_deref() != Some(identity) {
+            let tx = self.connection_ref().unchecked_transaction()?;
+            tx.execute("DELETE FROM staged_messages", [])?;
+            tx.execute("DELETE FROM stage_fingerprints", [])?;
+            tx.execute("DELETE FROM stage_cursors", [])?;
+            tx.execute("DELETE FROM stage_metadata", [])?;
+            tx.execute(
+                "INSERT INTO stage_metadata(key,value) VALUES('identity',?1)",
+                [identity],
+            )?;
+            tx.commit()?;
+        }
+        Ok(())
+    }
+
+    fn load_content_fingerprints(&mut self) -> rusqlite::Result<()> {
+        let mut statement = self
+            .connection_ref()
+            .prepare("SELECT side,mailbox,uidvalidity,uid,fingerprint FROM stage_fingerprints")?;
+        let rows = statement.query_map([], |row| {
+            let side: i64 = row.get(0)?;
+            let side = match side {
+                0 => StagedMessageSide::Source,
+                1 => StagedMessageSide::Destination,
+                _ => return Err(rusqlite::Error::InvalidQuery),
+            };
+            let uidvalidity: i64 = row.get(2)?;
+            let uidvalidity = u64::try_from(uidvalidity)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, uidvalidity))?;
+            Ok((
+                (
+                    side,
+                    MailboxMessageKey::with_shared_mailbox(
+                        std::sync::Arc::from(row.get::<_, String>(1)?),
+                        Some(uidvalidity),
+                        row.get::<_, String>(3)?,
+                    ),
+                ),
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        for row in rows {
+            let (key, fingerprint) = row;
+            self.content_fingerprints.insert(key, fingerprint);
+        }
+        Ok(())
     }
 
     pub(crate) fn insert_messages(
@@ -161,7 +327,7 @@ impl MessageMetadataStage {
         let mut ordered_messages = messages.iter().collect::<Vec<_>>();
         ordered_messages.sort_by(|(left, _), (right, _)| left.cmp(right));
         {
-            let mut insert = tx.prepare_cached("INSERT INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8)").map_err(|e| e.to_string())?;
+            let mut insert = tx.prepare_cached("INSERT OR REPLACE INTO staged_messages(side,mailbox,match_mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes) VALUES(?1,?2,?2,?3,?4,?5,?6,?7,?8)").map_err(|e| e.to_string())?;
             for (key, message) in ordered_messages {
                 let uidvalidity = key
                     .uidvalidity
@@ -192,6 +358,18 @@ impl MessageMetadataStage {
         for (key, fingerprint) in fingerprints {
             self.content_fingerprints
                 .insert((side, key.clone()), fingerprint.clone());
+            let uidvalidity = key
+                .uidvalidity
+                .map(sqlite_i64)
+                .transpose()
+                .map_err(|e| e.to_string())?
+                .unwrap_or(-1);
+            self.connection_ref()
+                .execute(
+                    "INSERT OR REPLACE INTO stage_fingerprints(side,mailbox,uidvalidity,uid,fingerprint) VALUES(?1,?2,?3,?4,?5)",
+                    params![side.as_i64(), key.mailbox.as_ref(), uidvalidity, key.uid, fingerprint],
+                )
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -210,8 +388,82 @@ impl MessageMetadataStage {
                 "DELETE FROM staged_messages WHERE side=?1 AND mailbox=?2",
                 params![side.as_i64(), mailbox],
             )
+            .map_err(|e| e.to_string())?;
+        self.connection_ref()
+            .execute(
+                "DELETE FROM stage_fingerprints WHERE side=?1 AND mailbox=?2",
+                params![side.as_i64(), mailbox],
+            )
+            .map_err(|e| e.to_string())?;
+        self.connection_ref()
+            .execute(
+                "DELETE FROM stage_cursors WHERE side=?1 AND mailbox=?2",
+                params![side.as_i64(), mailbox],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub(crate) fn resume_cursor(
+        &self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        uidvalidity: u64,
+    ) -> rusqlite::Result<Option<u64>> {
+        self.connection_ref().query_row(
+            "SELECT last_uid,completed FROM stage_cursors WHERE side=?1 AND mailbox=?2 AND uidvalidity=?3",
+            params![side.as_i64(), mailbox, sqlite_i64(uidvalidity).map_err(|_| rusqlite::Error::InvalidQuery)?],
+            |row| {
+                let last_uid: i64 = row.get(0)?;
+                let completed: i64 = row.get(1)?;
+                let last_uid = u64::try_from(last_uid)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, last_uid))?;
+                Ok(if completed == 1 { u64::MAX } else { last_uid })
+            },
+        ).optional()
+    }
+
+    pub(crate) fn checkpoint_page(
+        &mut self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        uidvalidity: u64,
+        last_uid: u64,
+    ) -> Result<(), String> {
+        self.connection_ref()
+            .execute(
+                "INSERT INTO stage_cursors(side,mailbox,uidvalidity,last_uid,completed) VALUES(?1,?2,?3,?4,0) ON CONFLICT(side,mailbox) DO UPDATE SET uidvalidity=excluded.uidvalidity,last_uid=excluded.last_uid,completed=0",
+                params![side.as_i64(), mailbox, sqlite_i64(uidvalidity).map_err(|e| e.to_string())?, sqlite_i64(last_uid).map_err(|e| e.to_string())?],
+            )
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn complete_mailbox(
+        &mut self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        uidvalidity: u64,
+        last_uid: u64,
+    ) -> Result<(), String> {
+        self.connection_ref()
+            .execute(
+                "INSERT INTO stage_cursors(side,mailbox,uidvalidity,last_uid,completed) VALUES(?1,?2,?3,?4,1) ON CONFLICT(side,mailbox) DO UPDATE SET uidvalidity=excluded.uidvalidity,last_uid=excluded.last_uid,completed=1",
+                params![side.as_i64(), mailbox, sqlite_i64(uidvalidity).map_err(|e| e.to_string())?, sqlite_i64(last_uid).map_err(|e| e.to_string())?],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn reset_reconciliation(&mut self) -> Result<(), String> {
+        self.connection_ref()
+            .execute_batch(
+                "DROP TABLE IF EXISTS staged_matched;
+                 DROP TABLE IF EXISTS staged_folder_mapping;
+                 DROP TABLE IF EXISTS staged_fingerprint_buckets;
+                 DROP TABLE IF EXISTS staged_duplicate_ids;",
+            )
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn count(&self, side: StagedMessageSide) -> rusqlite::Result<u64> {
@@ -373,7 +625,9 @@ impl Drop for MessageMetadataStage {
         if let Some(connection) = self.connection.take() {
             let _ = connection.close();
         }
-        if let Some(path) = self.path.take() {
+        if !self.retain_on_drop
+            && let Some(path) = self.path.take()
+        {
             let _ = fs::remove_file(&path);
             if let Some(directory) = path.parent() {
                 let _ = fs::remove_dir(directory);
@@ -426,5 +680,59 @@ mod tests {
                 .content_fingerprints(StagedMessageSide::Source)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn durable_stage_reopens_with_cursor_and_identity_binding() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let key = MailboxMessageKey::with_uidvalidity("INBOX", 42, "7");
+        let mut messages = ExtractedMessages::new();
+        messages.insert(
+            key.clone(),
+            ExtractedMessage {
+                message_id: Some("<seven@example.test>".into()),
+                uid: Some("7".into()),
+                size_bytes: Some(128),
+                internal_date: None,
+            },
+        );
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+        stage
+            .insert_messages_with_fingerprints(
+                StagedMessageSide::Source,
+                &messages,
+                &HashMap::from([(key.clone(), "abc".into())]),
+            )
+            .unwrap();
+        stage
+            .checkpoint_page(StagedMessageSide::Source, "INBOX", 42, 7)
+            .unwrap();
+        drop(stage);
+
+        let stage = MessageMetadataStage::open_durable(path.clone(), "plan-a").unwrap();
+        assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 1);
+        assert_eq!(
+            stage
+                .resume_cursor(StagedMessageSide::Source, "INBOX", 42)
+                .unwrap(),
+            Some(7)
+        );
+        assert_eq!(
+            stage.content_fingerprints(StagedMessageSide::Source).len(),
+            1
+        );
+        drop(stage);
+
+        let stage = MessageMetadataStage::open_durable(path.clone(), "plan-b").unwrap();
+        assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 0);
+        assert_eq!(
+            stage
+                .resume_cursor(StagedMessageSide::Source, "INBOX", 42)
+                .unwrap(),
+            None
+        );
+        drop(stage);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

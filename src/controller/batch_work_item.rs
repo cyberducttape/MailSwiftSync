@@ -75,6 +75,7 @@ pub(crate) struct BatchWorkerContext {
     pub(crate) batch_run_id: String,
     pub(crate) resolved_imapsync: Arc<std::collections::HashMap<String, ResolvedImapsyncIdentity>>,
     pub(crate) oauth_refresh_locks: OAuthRefreshLocks,
+    pub(crate) verification_state_path: Option<std::path::PathBuf>,
 }
 
 fn refresh_live_credentials(
@@ -133,6 +134,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         batch_run_id,
         resolved_imapsync,
         oauth_refresh_locks,
+        verification_state_path,
     } = context;
     let live = mode.is_live();
     while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
@@ -475,6 +477,9 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                 &job_id,
                                 &child_run_id,
                                 &cancel,
+                                verification_state_path.as_deref().map(|path| {
+                                    core::durable_stage_path(path, &job_id)
+                                }).as_deref(),
                             ) {
                                 Ok((evidence, mismatches)) => {
                                     send_reliable_event(&tx, Event::BatchEvidence {

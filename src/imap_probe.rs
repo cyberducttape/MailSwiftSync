@@ -573,6 +573,25 @@ trait MessageSink {
     }
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
+    fn resume_after_uid(&self, _mailbox: &str, _uidvalidity: u64) -> Result<Option<u64>, String> {
+        Ok(None)
+    }
+    fn checkpoint_page(
+        &mut self,
+        _mailbox: &str,
+        _uidvalidity: u64,
+        _last_uid: u64,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn complete_mailbox(
+        &mut self,
+        _mailbox: &str,
+        _uidvalidity: u64,
+        _last_uid: u64,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct StageMessageSink<'a> {
@@ -610,6 +629,32 @@ impl MessageSink for StageMessageSink<'_> {
 
     fn len(&self) -> usize {
         self.count
+    }
+
+    fn resume_after_uid(&self, mailbox: &str, uidvalidity: u64) -> Result<Option<u64>, String> {
+        self.stage
+            .resume_cursor(self.side, mailbox, uidvalidity)
+            .map_err(|error| error.to_string())
+    }
+
+    fn checkpoint_page(
+        &mut self,
+        mailbox: &str,
+        uidvalidity: u64,
+        last_uid: u64,
+    ) -> Result<(), String> {
+        self.stage
+            .checkpoint_page(self.side, mailbox, uidvalidity, last_uid)
+    }
+
+    fn complete_mailbox(
+        &mut self,
+        mailbox: &str,
+        uidvalidity: u64,
+        last_uid: u64,
+    ) -> Result<(), String> {
+        self.stage
+            .complete_mailbox(self.side, mailbox, uidvalidity, last_uid)
     }
 }
 
@@ -1715,6 +1760,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     let mut state_reservation = StateReservation::new(state_budget);
     let mut page_number = 0usize;
     let mailbox_context: std::sync::Arc<str> = std::sync::Arc::from(mailbox);
+    let resume_after_uid = sink.resume_after_uid(mailbox, start_uidvalidity)?;
     let searched_uid_count = enumerate_uid_pages(
         stream,
         host,
@@ -1723,6 +1769,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         &mut response,
         &mut buffer,
         budget,
+        resume_after_uid,
         |stream, buffer, uid_page| {
             budget.check()?;
             let tag = format!("v{:03}", page_number + 3);
@@ -1823,6 +1870,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                     "{host}: folder {mailbox}: message count exceeds {MAX_MESSAGE_FETCH_RECORDS}"
                 ));
             }
+            if let Some(last_uid) = uid_page.last().copied() {
+                sink.checkpoint_page(mailbox, start_uidvalidity, last_uid)?;
+            }
             Ok(())
         },
     )?;
@@ -1873,6 +1923,8 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             "{host}: mailbox {mailbox} changed during verification (UIDVALIDITY {start_uidvalidity:?}->{end_uidvalidity:?}, UIDNEXT {uidnext}->{end_uidnext:?}, message count {start_exists}->{end_exists}); retry required"
         )));
     }
+    let last_uid = uidnext.saturating_sub(1);
+    sink.complete_mailbox(mailbox, start_uidvalidity, last_uid)?;
     state_reservation.commit();
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.
@@ -1936,6 +1988,7 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     response: &mut String,
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
+    resume_after_uid: Option<u64>,
     mut consume_page: F,
 ) -> Result<u64, String>
 where
@@ -1985,7 +2038,11 @@ where
         }
         searched_uid_count = searched_uid_count.saturating_add(uids.len() as u64);
         for uid_page in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize) {
-            consume_page(stream, buffer, uid_page)?;
+            if resume_after_uid
+                .is_none_or(|resume| uid_page.last().copied().is_none_or(|last| last > resume))
+            {
+                consume_page(stream, buffer, uid_page)?;
+            }
         }
         window_start = window_end.saturating_add(1);
     }

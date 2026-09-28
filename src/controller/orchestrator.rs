@@ -41,6 +41,7 @@ pub(crate) struct SingleRunWorkerSpec {
     pub(crate) project_id: String,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
     pub(crate) dovecot_checkpoint: Option<String>,
+    pub(crate) verification_stage_path: Option<PathBuf>,
 }
 
 pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
@@ -66,6 +67,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             project_id,
             diagnostic_logger,
             dovecot_checkpoint,
+            verification_stage_path,
         } = spec;
         let _cleanup_guard = CleanupGuard::new(cleanup);
         // Resolve the executable before launch. Imapsync's result selects the
@@ -217,7 +219,13 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                 && message_verification_enabled(&form)
             {
                 result = result.and_then(|stream| {
-                    match run_imap_message_verification(&form, &job_id, &run_id, &cancel) {
+                    match run_imap_message_verification(
+                        &form,
+                        &job_id,
+                        &run_id,
+                        &cancel,
+                        verification_stage_path.as_deref(),
+                    ) {
                         Ok((evidence, mismatches)) => {
                             send_reliable_event(
                                 &tx,

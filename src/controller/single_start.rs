@@ -360,6 +360,10 @@ impl App {
         ];
         let migration_timeout =
             Duration::from_secs(self.form.profile.migration_timeout_hours * 60 * 60);
+        let verification_stage_path = self
+            .state_path
+            .as_deref()
+            .map(|path| core::durable_stage_path(path, &run_job_id));
         spawn_single_run_worker(SingleRunWorkerSpec {
             form: self.form.clone(),
             executable: exe,
@@ -381,6 +385,7 @@ impl App {
             timeout: migration_timeout,
             diagnostic_logger: self.diagnostic_logger.clone(),
             dovecot_checkpoint,
+            verification_stage_path,
         });
     }
 }

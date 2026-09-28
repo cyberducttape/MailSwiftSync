@@ -134,6 +134,7 @@ impl App {
             batch_project_id: project_id.clone(),
             batch_run_id: run_id.clone(),
             jobs,
+            verification_state_path: self.state_path.clone(),
         });
         self.cancel_requested = Some(worker.cancel.clone());
         self.receiver = Some(worker.receiver);

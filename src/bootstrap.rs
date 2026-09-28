@@ -381,6 +381,7 @@ impl App {
             // changed from the migration plan when the endpoints are known.
             engine_open: false,
             store,
+            state_path,
             _instance_lock: instance_lock.and_then(Result::ok),
             process_review_required: unverified_process_count > 0,
             persistence_available: persistence_warning.is_none(),

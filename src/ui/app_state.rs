@@ -2,6 +2,7 @@
 
 use crate::controller::{BatchActionPlan, BatchConfirmationIdentity};
 use crate::*;
+use std::path::PathBuf;
 
 /// The application's full in-memory state. This struct lives in `ui` (rather
 /// than the crate root) because it is fundamentally UI/controller shared
@@ -43,6 +44,10 @@ pub(crate) struct App {
     pub(crate) advanced_open: bool,
     pub(crate) engine_open: bool,
     pub(crate) store: core::StateStore,
+    /// Persistent ledger path used to place interrupted verification stages
+    /// beside the private state database. None means the session is already
+    /// in-memory and cannot promise restartable staging.
+    pub(crate) state_path: Option<PathBuf>,
     /// Held for the lifetime of the application. An advisory OS lock is
     /// released automatically if the process crashes, so a later instance
     /// can safely perform orphan recovery without killing a live sibling.
