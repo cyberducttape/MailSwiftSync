@@ -272,11 +272,12 @@ and require the corresponding integration run.
 
   The pure cached-filter/selection path has a companion command,
   `scripts/benchmark-ui-scale.sh`. It measures 100k-row filter keystroke,
-  explicit selection-all, and a 1,000-row state-update refresh. It does not
-  yet measure egui first-frame rendering or application reload time. The same
-  local release baseline measured 4 ms for filtering, 11 ms for selecting all
-  100,000 IDs, and 3 ms for refreshing a 1,000-row state update. These are
-  pure read-model timings, not end-to-end GUI budgets.
+  explicit selection-all, a 1,000-row state-update refresh, and a real
+  virtualized egui first frame. The same local release baseline measured 4 ms
+  for filtering, 12 ms for selecting all 100,000 IDs, 3 ms for refreshing a
+  1,000-row state update, and 2 ms for the virtualized first frame. These are
+  release-mode host baselines, not yet explicit budgets or full application
+  startup/render measurements.
 
   Durable workspace restart/read behavior has a separate opt-in command,
   `scripts/benchmark-reload-scale.sh`. It seeds and closes a file-backed

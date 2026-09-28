@@ -228,8 +228,36 @@ mod tests {
         );
         let state_update_ms = started.elapsed().as_millis();
         assert_eq!(visible.len(), 1_000);
+
+        let context = eframe::egui::Context::default();
+        let first_frame_started = Instant::now();
+        let output = context.run_ui(
+            eframe::egui::RawInput {
+                screen_rect: Some(eframe::egui::Rect::from_min_size(
+                    eframe::egui::Pos2::ZERO,
+                    eframe::egui::vec2(1_280.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                eframe::egui::ScrollArea::vertical().show_rows(
+                    ui,
+                    42.0,
+                    rows,
+                    |ui, row_range| {
+                        for row in row_range {
+                            ui.label(format!(
+                                "Mailbox {row}: user{row}@source.example → user{row}@destination.example"
+                            ));
+                        }
+                    },
+                );
+            },
+        );
+        let first_frame_ms = first_frame_started.elapsed().as_millis();
+        assert!(!output.shapes.is_empty());
         eprintln!(
-            "scale-ui rows={rows} filter_ms={filter_ms} selection_all_ms={selection_all_ms} state_update_ms={state_update_ms}"
+            "scale-ui rows={rows} filter_ms={filter_ms} selection_all_ms={selection_all_ms} state_update_ms={state_update_ms} first_frame_ms={first_frame_ms}"
         );
     }
 }
