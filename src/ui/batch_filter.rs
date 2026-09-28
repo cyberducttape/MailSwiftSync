@@ -3,6 +3,7 @@
 use crate::App;
 use crate::bulk_import::BulkJob;
 use crate::ui::{contains_ascii_case_insensitive, display_state_key};
+use std::collections::HashSet;
 
 /// Filter the cached row projection without touching the owned queue forms.
 /// Keeping this pure makes the large-batch cost measurable independently from
@@ -32,6 +33,26 @@ pub(crate) fn filter_batch_indices<'a, I>(
             visible_indices.push(index);
         }
     }
+}
+
+pub(crate) fn selected_visibility_counts(
+    selected_ids: &HashSet<String>,
+    visible_indices: &[usize],
+    job_ids: &[String],
+) -> (usize, usize, usize) {
+    let visible_selected = visible_indices
+        .iter()
+        .filter(|index| {
+            job_ids
+                .get(**index)
+                .is_some_and(|job_id| selected_ids.contains(job_id))
+        })
+        .count();
+    (
+        selected_ids.len(),
+        visible_selected,
+        selected_ids.len().saturating_sub(visible_selected),
+    )
 }
 
 impl App {
@@ -118,7 +139,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::filter_batch_indices;
+    use super::{filter_batch_indices, selected_visibility_counts};
     use std::collections::HashSet;
     use std::time::Instant;
 
@@ -146,6 +167,22 @@ mod tests {
             &mut visible,
         );
         assert_eq!(visible, vec![1]);
+    }
+
+    #[test]
+    fn selection_status_counts_selected_rows_not_all_visible_rows() {
+        let job_ids = (0..100)
+            .map(|index| format!("job-{index}"))
+            .collect::<Vec<_>>();
+        let selected = (0..37)
+            .map(|index| format!("job-{index}"))
+            .collect::<HashSet<_>>();
+        let visible = (0..12).chain(50..88).collect::<Vec<_>>();
+
+        assert_eq!(
+            selected_visibility_counts(&selected, &visible, &job_ids),
+            (37, 12, 25)
+        );
     }
 
     #[test]

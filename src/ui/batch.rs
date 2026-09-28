@@ -9,6 +9,7 @@ use crate::controller::{
     BatchActionPlan, BatchActionRow, BatchExecutionMode, BulkRetryScope, BulkStateSet,
     build_batch_action_plan,
 };
+use crate::ui::batch_filter::selected_visibility_counts;
 use crate::ui::job_state_badge;
 use crate::ui::{WorkspaceView, display_state_key};
 use eframe::egui::{self, Color32, RichText};
@@ -195,23 +196,16 @@ impl App {
             self.refresh_bulk_filter_cache();
             let visible_indices = std::mem::take(&mut self.bulk_visible_indices);
 
-            let visible_and_selected = visible_indices
-                .iter()
-                .filter(|idx| {
-                    self.bulk_job_ids
-                        .get(**idx)
-                        .map_or(false, |id| self.bulk_selected_ids.contains(id))
-                })
-                .count();
-            let hidden_selected = self
-                .bulk_selected_ids
-                .len()
-                .saturating_sub(visible_and_selected);
+            let (_, visible_and_selected, hidden_selected) = selected_visibility_counts(
+                &self.bulk_selected_ids,
+                &visible_indices,
+                &self.bulk_job_ids,
+            );
 
             let status_text = format!(
                 "{} selected · {} visible · {} hidden by current filter",
                 self.bulk_selected_ids.len(),
-                visible_indices.len(),
+                visible_and_selected,
                 hidden_selected
             );
 
