@@ -462,7 +462,14 @@ impl App {
                         .desired_width(320.0));
                 });
                 ui.add_space(8.0);
-                ui.label(RichText::new(format!("{} project(s)", self.project_visible_indices.len())).color(self.theme_colors().text_secondary));
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("{} project(s)")
+                            .replace("{}", &self.project_visible_indices.len().to_string()),
+                    )
+                    .color(self.theme_colors().text_secondary),
+                );
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     egui::Grid::new("project_browser").striped(true).show(ui, |ui| {
                         ui.strong(self.language.text("Project"));

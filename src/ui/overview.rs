@@ -174,29 +174,42 @@ impl App {
                     ui.heading(self.language.text("None configured"));
                     ui.label(self.language.text("Use Mailboxes to review scope before running anything."));
                 } else if !has_durable_jobs {
-                    ui.heading(format!("{} queued", batch_summary.total));
-                    ui.label(format!(
-                        "{} imported · {} queued · {} preflight · {} ready · {} attention · {} unresolved",
-                        batch_summary.imported,
-                        batch_summary.queued,
-                        batch_summary.preflight,
-                        batch_summary.ready,
-                        batch_summary.attention,
-                        batch_summary.unresolved(),
-                    ));
+                    ui.heading(
+                        self.language
+                            .text("{} queued")
+                            .replace("{}", &batch_summary.total.to_string()),
+                    );
+                    ui.label(
+                        self.language
+                            .text("{} imported · {} queued · {} preflight · {} ready · {} attention · {} unresolved")
+                            .replacen("{}", &batch_summary.imported.to_string(), 1)
+                            .replacen("{}", &batch_summary.queued.to_string(), 1)
+                            .replacen("{}", &batch_summary.preflight.to_string(), 1)
+                            .replacen("{}", &batch_summary.ready.to_string(), 1)
+                            .replacen("{}", &batch_summary.attention.to_string(), 1)
+                            .replacen("{}", &batch_summary.unresolved().to_string(), 1),
+                    );
                     ui.label(self.language.text("Imported rows are not durable until preflight admission succeeds."));
                 } else {
-                    ui.heading(format!("{} total", mailbox_counts.total));
-                    ui.label(format!(
-                        "{} ready · {} running · {} verified",
-                        mailbox_counts.ready, mailbox_counts.running, mailbox_counts.verified,
-                    ));
+                    ui.heading(
+                        self.language
+                            .text("{} total")
+                            .replace("{}", &mailbox_counts.total.to_string()),
+                    );
+                    ui.label(
+                        self.language
+                            .text("{} ready · {} running · {} verified")
+                            .replacen("{}", &mailbox_counts.ready.to_string(), 1)
+                            .replacen("{}", &mailbox_counts.running.to_string(), 1)
+                            .replacen("{}", &mailbox_counts.verified.to_string(), 1),
+                    );
                     if attention_count > 0 {
                         ui.label(
-                            RichText::new(format!(
-                                "{} require operator attention",
-                                attention_count
-                            ))
+                            RichText::new(
+                                self.language
+                                    .text("{} require operator attention")
+                                    .replace("{}", &attention_count.to_string()),
+                            )
                             .color(self.theme_colors().danger),
                         );
                     }
@@ -376,8 +389,12 @@ impl App {
             }
             if attention.len() > 5 {
                 ui.label(
-                    RichText::new(format!("… plus {} more on this page", attention.len() - 5))
-                        .color(colors.text_secondary),
+                    RichText::new(
+                        self.language
+                            .text("… plus {} more on this page")
+                            .replace("{}", &(attention.len() - 5).to_string()),
+                    )
+                    .color(colors.text_secondary),
                 );
             }
         });

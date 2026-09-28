@@ -793,6 +793,14 @@ impl UiLanguage {
             "{} failed" => "{} fehlgeschlagen",
             "{} delta required" => "{} Delta erforderlich",
             "{} unresolved" => "{} offen",
+            "{} imported · {} queued · {} preflight · {} ready · {} attention · {} unresolved" => {
+                "{} importiert · {} wartend · {} Vorabprüfung · {} bereit · {} Prüfung erforderlich · {} offen"
+            }
+            "{} total" => "{} insgesamt",
+            "{} ready · {} running · {} verified" => "{} bereit · {} läuft · {} verifiziert",
+            "{} require operator attention" => "{} erfordern die Aufmerksamkeit des Betreibers",
+            "… plus {} more on this page" => "… plus {} weitere auf dieser Seite",
+            "{} project(s)" => "{} Projekt(e)",
             "Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight." => {
                 "Nutzen Sie Statusfilter und „Sichtbare auswählen“, um gezielt zu arbeiten. Eine Live-Ausführung erfordert weiterhin eine passende Vorabprüfung."
             }
