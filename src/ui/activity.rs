@@ -82,10 +82,11 @@ impl App {
                     self.language.text("No active run")
                 });
                 if let Some(started_at) = self.run_started_at {
-                    ui.label(format!(
-                        "Elapsed {}",
-                        crate::ui::format_elapsed(started_at.elapsed())
-                    ));
+                    ui.label(
+                        self.language
+                            .text("Elapsed {}")
+                            .replace("{}", &crate::ui::format_elapsed(started_at.elapsed())),
+                    );
                 }
                 ui.label(
                     RichText::new(&self.status.text)
@@ -230,16 +231,17 @@ impl App {
                     .map(|(index, _)| index)
                     .collect::<Vec<_>>();
                 ui.label(
-                    RichText::new(format!(
-                        "{} visible of {} loaded",
-                        visible.len(),
-                        runs.len()
-                    ))
+                    RichText::new(
+                        self.language
+                            .text("{} visible of {} loaded")
+                            .replacen("{}", &visible.len().to_string(), 1)
+                            .replacen("{}", &runs.len().to_string(), 1),
+                    )
                     .color(self.theme_colors().text_secondary),
                 );
                 if self.activity_show_all && runs.len() == MAX_ACTIVITY_HISTORY_ROWS as usize {
                     ui.label(
-                        RichText::new("Showing the newest 250 runs. Export the audit report for complete history.")
+                        RichText::new(self.language.text("Showing the newest 250 runs. Export the audit report for complete history."))
                             .color(self.theme_colors().text_secondary),
                     );
                 }
@@ -250,7 +252,7 @@ impl App {
                             "Run", "Mailbox", "Stage", "Engine", "Status", "Started", "Finished",
                             "Detail",
                         ] {
-                            ui.strong(label);
+                            ui.strong(self.language.text(label));
                         }
                         ui.end_row();
                     });

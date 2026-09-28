@@ -538,6 +538,7 @@ impl UiLanguage {
             "Prepare safe retry  →" => "Sicheren erneuten Versuch vorbereiten  →",
             "Run in progress" => "Ausführung läuft",
             "No active run" => "Keine aktive Ausführung",
+            "Elapsed {}" => "Dauer {}",
             "Copy support summary" => "Support-Zusammenfassung kopieren",
             "Raw output…" => "Rohe Ausgabe …",
             "May contain mailbox metadata" => "Kann Postfachmetadaten enthalten",
@@ -554,6 +555,16 @@ impl UiLanguage {
             "Running" => "Wird ausgeführt",
             "Completed" => "Abgeschlossen",
             "All statuses" => "Alle Status",
+            "{} visible of {} loaded" => "{} sichtbar von {} geladen",
+            "Showing the newest 250 runs. Export the audit report for complete history." => {
+                "Die neuesten 250 Ausführungen werden angezeigt. Exportieren Sie den Prüfbericht für den vollständigen Verlauf."
+            }
+            "Run" => "Ausführung",
+            "Mailbox" => "Postfach",
+            "Stage" => "Phase",
+            "Started" => "Gestartet",
+            "Finished" => "Beendet",
+            "Detail" => "Details",
             "The transfer engine is only one part of the migration. This report is the operator-facing proof of what arrived and what still needs attention." => {
                 "Die Übertragungs-Engine ist nur ein Teil der Migration. Dieser Bericht zeigt, was angekommen ist und wo noch Maßnahmen erforderlich sind."
             }
@@ -578,7 +589,6 @@ impl UiLanguage {
             "Needs review" => "Prüfung erforderlich",
             "Differences" => "Abweichungen",
             "All results" => "Alle Ergebnisse",
-            "Mailbox" => "Postfach",
             "Evidence" => "Nachweis",
             "Result" => "Ergebnis",
             "No evidence" => "Kein Nachweis",
@@ -779,6 +789,15 @@ mod tests {
             "Message-level evidence",
             "Verification authority",
             "The transfer finished, but no mailbox-level evidence has been captured yet.",
+            "Elapsed {}",
+            "{} visible of {} loaded",
+            "Showing the newest 250 runs. Export the audit report for complete history.",
+            "Run",
+            "Mailbox",
+            "Stage",
+            "Started",
+            "Finished",
+            "Detail",
             "Accept residual difference",
             "This records an auditable exception; it does not change the underlying evidence or claim exact equality.",
             "Operator",
