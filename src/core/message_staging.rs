@@ -206,7 +206,11 @@ impl MessageMetadataStage {
 
     fn initialize(&mut self, durable: bool) -> rusqlite::Result<()> {
         let pragmas = if durable {
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"
+            // The private runtime directory used by packaged/headless
+            // deployments may not permit SQLite's WAL shared-memory file.
+            // DELETE journaling with FULL synchronization still gives the
+            // stage crash durability without that extra filesystem object.
+            "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;"
         } else {
             "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
         };
