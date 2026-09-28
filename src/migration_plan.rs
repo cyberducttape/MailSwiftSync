@@ -1063,7 +1063,7 @@ impl Form {
             remove_option(&mut args, "--oauthaccesstoken2");
         }
         format!(
-            "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-ca-bundle-sha256={}\ndestination-ca-bundle={}\ndestination-ca-bundle-sha256={}\nsource-certificate-pin={}\ndestination-certificate-pin={}\nexecution-executable-sha256={}\ndovecot-config-sha256={}",
+            "{}\n{}\ncredential-source1={}\ncredential-source2={}\nsource-auth={}\ndestination-auth={}\ninsecure-source-transport-ack={}\nsource-ca-bundle={}\nsource-ca-bundle-sha256={}\ndestination-ca-bundle={}\ndestination-ca-bundle-sha256={}\nsource-certificate-pin={}\ndestination-certificate-pin={}\nexecution-executable-sha256={}\ndovecot-config-sha256={}\nbody-hash-verification={}\nbody-hash-max-bytes={}\nbody-hash-max-total-bytes={}",
             executable,
             args.join("\u{1f}"),
             self.profile.source_credential_id.trim(),
@@ -1085,6 +1085,9 @@ impl Form {
                 .to_ascii_lowercase(),
             executable_content_identity(&executable),
             configured_file_content_identity(&self.profile.dovecot_config),
+            self.profile.body_hash_verification,
+            self.profile.body_hash_max_bytes,
+            self.profile.body_hash_max_total_bytes,
         )
     }
 
@@ -1153,6 +1156,9 @@ impl Form {
                 batch_retry_count: profile.batch_retry_count,
                 max_messages_per_second: profile.max_messages_per_second,
                 max_bytes_per_second: profile.max_bytes_per_second,
+                body_hash_verification: profile.body_hash_verification,
+                body_hash_max_bytes: profile.body_hash_max_bytes,
+                body_hash_max_total_bytes: profile.body_hash_max_total_bytes,
                 migration_timeout_hours: profile.migration_timeout_hours,
                 automap: profile.automap,
                 addheader: profile.addheader,

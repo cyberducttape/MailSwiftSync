@@ -75,6 +75,7 @@ impl VerificationMethod {
 /// `MailboxEvidence::verification_outcome` is the single severity policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerificationOutcome {
+    ExactBodyMatch,
     ExactMetadataMatch,
     ProbableMatch,
     Ambiguous,
@@ -88,6 +89,7 @@ pub enum VerificationOutcome {
 impl VerificationOutcome {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ExactBodyMatch => "exact_body_match",
             Self::ExactMetadataMatch => "exact_metadata_match",
             Self::ProbableMatch => "probable_match",
             Self::Ambiguous => "ambiguous",
@@ -101,6 +103,9 @@ impl VerificationOutcome {
 
     pub fn display_label(self) -> &'static str {
         match self {
+            Self::ExactBodyMatch => {
+                "Exact body match — bounded RFC822 SHA-256 fingerprints compared"
+            }
             Self::ExactMetadataMatch => "Exact metadata match — message bodies not compared",
             Self::ProbableMatch => "Probable metadata match — message bodies not compared",
             Self::Ambiguous => "Ambiguous metadata result — message bodies not compared",
@@ -114,6 +119,7 @@ impl VerificationOutcome {
 
     pub fn parse(value: &str) -> Option<Self> {
         Some(match value {
+            "exact_body_match" => Self::ExactBodyMatch,
             "exact_metadata_match" => Self::ExactMetadataMatch,
             "probable_match" => Self::ProbableMatch,
             "ambiguous" => Self::Ambiguous,
@@ -224,6 +230,7 @@ pub struct ProjectReportSnapshot {
 pub enum EvidenceScope {
     EngineConfirmed,
     AggregateReconciled,
+    BodyHashed,
 }
 
 impl EvidenceScope {
@@ -231,6 +238,7 @@ impl EvidenceScope {
         match self {
             Self::EngineConfirmed => "engine-confirmed",
             Self::AggregateReconciled => "aggregate-reconciled",
+            Self::BodyHashed => "body-hash",
         }
     }
 }
@@ -255,7 +263,9 @@ impl VerificationEvidence {
     }
 
     pub fn evidence_scope(&self) -> EvidenceScope {
-        if self.authoritative {
+        if self.verification_method == VerificationMethod::BodyHash {
+            EvidenceScope::BodyHashed
+        } else if self.authoritative {
             EvidenceScope::EngineConfirmed
         } else {
             EvidenceScope::AggregateReconciled
@@ -286,7 +296,11 @@ impl VerificationEvidence {
         } else if self.unmatched_messages.is_some_and(|count| count > 0) {
             VerificationOutcome::Ambiguous
         } else if self.aggregate_totals_match() {
-            VerificationOutcome::ExactMetadataMatch
+            if self.verification_method == VerificationMethod::BodyHash {
+                VerificationOutcome::ExactBodyMatch
+            } else {
+                VerificationOutcome::ExactMetadataMatch
+            }
         } else {
             VerificationOutcome::Incomplete
         }
@@ -326,7 +340,9 @@ impl VerificationEvidence {
             return "Message-level mismatch";
         }
         let exact = self.aggregate_totals_match();
-        if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
+        if self.evidence_scope() == EvidenceScope::BodyHashed && exact {
+            "Level 4 — Bounded body-content reconciliation"
+        } else if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
             "Engine-confirmed exact match — not message-body proof"
         } else if exact {
             "Aggregate match — not message-body proof"
@@ -354,7 +370,7 @@ impl VerificationEvidence {
             VerificationOutcome::Ambiguous => {
                 Some("message identity could not be resolved unambiguously")
             }
-            VerificationOutcome::ExactMetadataMatch => None,
+            VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch => None,
         }
     }
 
@@ -367,6 +383,10 @@ impl VerificationEvidence {
         // cannot affect customer semantics.
         if self.unmatched_messages.is_none() || self.failed_messages > 0 {
             "Level 0 — Process completed, verification incomplete"
+        } else if self.verification_method == VerificationMethod::BodyHash
+            && self.verification_outcome() == VerificationOutcome::ExactBodyMatch
+        {
+            "Level 4 — Bounded body-content reconciliation"
         } else {
             "Level 2 — Aggregate reconciliation — not message-body proof"
         }
@@ -377,6 +397,11 @@ impl VerificationEvidence {
         if self.has_verification_exception() {
             return 0;
         }
+        if self.verification_method == VerificationMethod::BodyHash
+            && self.verification_outcome() == VerificationOutcome::ExactBodyMatch
+        {
+            return 100;
+        }
         let exact = self.aggregate_totals_match();
         if !self.authoritative {
             return if exact { 85 } else { 0 };
@@ -385,8 +410,10 @@ impl VerificationEvidence {
     }
 
     pub fn is_exact_match(&self) -> bool {
-        self.verification_outcome() == VerificationOutcome::ExactMetadataMatch
-            && self.aggregate_totals_match()
+        matches!(
+            self.verification_outcome(),
+            VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch
+        ) && self.aggregate_totals_match()
             && !self.has_verification_exception()
     }
 }
@@ -442,6 +469,40 @@ mod tests {
         assert_eq!(
             evidence.verification_method(),
             VerificationMethod::MetadataReconciliation
+        );
+    }
+
+    #[test]
+    fn body_hash_exact_evidence_is_not_labeled_as_metadata_only() {
+        let evidence = MailboxEvidence {
+            verification_method: VerificationMethod::BodyHash,
+            verification_outcome: None,
+            source_messages: 2,
+            destination_messages: 2,
+            source_bytes: 20,
+            destination_bytes: 20,
+            unmatched_messages: Some(0),
+            failed_messages: 0,
+            source_folders: 1,
+            destination_folders: 1,
+            authoritative: false,
+            missing_messages: 0,
+            extra_messages: 0,
+            modified_messages: 0,
+            probable_messages: 0,
+        };
+        assert_eq!(
+            evidence.verification_outcome(),
+            VerificationOutcome::ExactBodyMatch
+        );
+        assert_eq!(evidence.evidence_scope(), super::EvidenceScope::BodyHashed);
+        assert_eq!(evidence.confidence_percent(), 100);
+        assert!(evidence.is_exact_match());
+        assert!(
+            evidence
+                .verification_outcome()
+                .display_label()
+                .contains("SHA-256")
         );
     }
 

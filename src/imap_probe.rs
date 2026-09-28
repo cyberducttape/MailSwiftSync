@@ -18,6 +18,7 @@ use std::{
 
 #[path = "imap_probe/fetch_parser.rs"]
 mod fetch_parser;
+use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
 use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 #[cfg(test)]
 use fetch_parser::{parse_message_fetch_metadata_response_bytes, parse_message_id_header};
@@ -512,6 +513,45 @@ impl Drop for StateReservation<'_> {
     }
 }
 
+/// Shared admission budget for explicit RFC822 body hashing. The budget is
+/// consumed across both accounts and is intentionally not released after a
+/// page: every downloaded byte is part of the run's resource ceiling, even
+/// when a moving mailbox later causes that folder to be retried.
+pub(crate) struct BodyHashBudget {
+    max_total_bytes: usize,
+    consumed_bytes: AtomicUsize,
+}
+
+impl BodyHashBudget {
+    pub(crate) fn new(max_total_bytes: usize) -> Self {
+        Self {
+            max_total_bytes,
+            consumed_bytes: AtomicUsize::new(0),
+        }
+    }
+
+    fn reserve(&self, bytes: usize) -> Result<(), String> {
+        let reserved =
+            self.consumed_bytes
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                    let next = current.checked_add(bytes)?;
+                    (next <= self.max_total_bytes).then_some(next)
+                });
+        if reserved.is_err() {
+            return Err(format!(
+                "RFC822 body hashing exceeded the configured {}-byte total bound",
+                self.max_total_bytes
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct BodyHashOptions<'a> {
+    pub(crate) max_body_bytes: usize,
+    pub(crate) budget: &'a BodyHashBudget,
+}
+
 pub(crate) struct FetchedAccountSummary {
     pub(crate) mailboxes: HashSet<String>,
     pub(crate) mailbox_details: Vec<MailboxDescriptor>,
@@ -520,6 +560,17 @@ pub(crate) struct FetchedAccountSummary {
 
 trait MessageSink {
     fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String>;
+    fn insert_batch_with_fingerprints(
+        &mut self,
+        messages: &crate::core::ExtractedMessages,
+        fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
+    ) -> Result<(), String> {
+        if fingerprints.is_empty() {
+            self.insert_batch(messages)
+        } else {
+            Err("body fingerprints are not supported by this message sink".to_owned())
+        }
+    }
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
 }
@@ -533,6 +584,17 @@ struct StageMessageSink<'a> {
 impl MessageSink for StageMessageSink<'_> {
     fn insert_batch(&mut self, messages: &crate::core::ExtractedMessages) -> Result<(), String> {
         self.stage.insert_messages(self.side, messages)?;
+        self.count = self.count.saturating_add(messages.len());
+        Ok(())
+    }
+
+    fn insert_batch_with_fingerprints(
+        &mut self,
+        messages: &crate::core::ExtractedMessages,
+        fingerprints: &HashMap<crate::core::MailboxMessageKey, String>,
+    ) -> Result<(), String> {
+        self.stage
+            .insert_messages_with_fingerprints(self.side, messages, fingerprints)?;
         self.count = self.count.saturating_add(messages.len());
         Ok(())
     }
@@ -1606,6 +1668,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     mailbox: &str,
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
+    body_hash: Option<&BodyHashOptions<'_>>,
     sink: &mut C,
 ) -> Result<u64, MailboxFetchError> {
     budget.check()?;
@@ -1669,8 +1732,9 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 .map(u64::to_string)
                 .collect::<Vec<_>>()
                 .join(",");
+            let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
             let command = format!(
-                "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])\r\n"
+                "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]{body_field})\r\n"
             );
             write_imap_command(
                 stream,
@@ -1700,16 +1764,58 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 Some(start_uidvalidity),
             )?;
             validate_fetch_page_coverage(&page_messages, uid_page, host, mailbox)?;
-            for (key, message) in &page_messages {
-                state_reservation.reserve(estimated_message_record_bytes(key, message, None))?;
+            let body_page = body_hash
+                .map(|options| {
+                    parse_message_fetch_body_hashes_response_bytes(
+                        &raw_response,
+                        mailbox,
+                        Some(start_uidvalidity),
+                        options.max_body_bytes,
+                    )
+                })
+                .transpose()?;
+            if let (Some(options), Some(body_page)) = (body_hash, body_page.as_ref()) {
+                options.budget.reserve(body_page.total_bytes)?;
+                if body_page.fingerprints.len() != page_messages.len()
+                    || body_page.fingerprints.keys().collect::<HashSet<_>>()
+                        != page_messages.keys().collect::<HashSet<_>>()
+                {
+                    return Err(format!(
+                        "{host}: folder {mailbox}: body FETCH coverage mismatch (metadata {}, body {})",
+                        page_messages.len(),
+                        body_page.fingerprints.len()
+                    ));
+                }
             }
-            sink.insert_batch(&page_messages)?;
+            for (key, message) in &page_messages {
+                let fingerprint = body_page
+                    .as_ref()
+                    .and_then(|page| page.fingerprints.get(key));
+                state_reservation.reserve(estimated_message_record_bytes(
+                    key,
+                    message,
+                    fingerprint,
+                ))?;
+            }
+            if let Some(body_page) = body_page.as_ref() {
+                sink.insert_batch_with_fingerprints(&page_messages, &body_page.fingerprints)?;
+            } else {
+                sink.insert_batch(&page_messages)?;
+            }
             // The live sink stages the page into SQLite. Do not retain the
             // transient Rust estimate after durable staging succeeds.
             state_reservation.release(
                 page_messages
                     .iter()
-                    .map(|(key, message)| estimated_message_record_bytes(key, message, None))
+                    .map(|(key, message)| {
+                        estimated_message_record_bytes(
+                            key,
+                            message,
+                            body_page
+                                .as_ref()
+                                .and_then(|page| page.fingerprints.get(key)),
+                        )
+                    })
                     .sum(),
             );
             if sink.len() > MAX_MESSAGE_FETCH_RECORDS {
@@ -1779,12 +1885,20 @@ fn fetch_mailbox_with_stability_retry<S: Read + Write, C: MessageSink>(
     mailbox: &str,
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
+    body_hash: Option<&BodyHashOptions<'_>>,
     sink: &mut C,
 ) -> Result<u64, MailboxFetchError> {
     let mut last_error = None;
     for attempt in 0..MAX_MAILBOX_STABILITY_ATTEMPTS {
-        match fetch_mailbox_with_existing_stream(stream, host, mailbox, budget, state_budget, sink)
-        {
+        match fetch_mailbox_with_existing_stream(
+            stream,
+            host,
+            mailbox,
+            budget,
+            state_budget,
+            body_hash,
+            sink,
+        ) {
             Ok(result) => return Ok(result),
             Err(MailboxFetchError::Changed(error)) => {
                 if let Err(rollback) = sink.rollback_mailbox(mailbox) {
@@ -1950,6 +2064,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
     certificate_pin_sha256: &str,
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
+    body_hash: Option<&BodyHashOptions<'_>>,
     sink: &mut C,
 ) -> Result<FetchedAccountSummary, String> {
     budget.check()?;
@@ -2019,6 +2134,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
             &mailbox,
             budget,
             state_budget,
+            body_hash,
             sink,
         ) {
             Ok(folder_exists) => {
@@ -2075,7 +2191,7 @@ fn fetch_tls_account_messages_with_sink<C: MessageSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn fetch_tls_account_messages_to_stage(
+pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes(
     host: &str,
     user: &str,
     credential: &str,
@@ -2085,6 +2201,7 @@ pub(crate) fn fetch_tls_account_messages_to_stage(
     certificate_pin_sha256: &str,
     budget: &MessageFetchBudget<'_>,
     state_budget: &MessageStateBudget,
+    body_hash: Option<&BodyHashOptions<'_>>,
     stage: &mut crate::core::MessageMetadataStage,
     side: crate::core::StagedMessageSide,
 ) -> Result<FetchedAccountSummary, String> {
@@ -2100,6 +2217,7 @@ pub(crate) fn fetch_tls_account_messages_to_stage(
         certificate_pin_sha256,
         budget,
         state_budget,
+        body_hash,
         &mut sink,
     )
 }
@@ -2747,12 +2865,13 @@ mod tests {
 
     #[test]
     fn body_fetch_parser_hashes_exact_bounded_literal_bytes() {
-        let response = b"* 1 FETCH (UID 100 BODY[] {5}\r\nhello)\r\nv002 OK FETCH completed\r\n";
+        let response =
+            b"* 1 FETCH (UID 100 BODY.PEEK[] {5+}\r\nhello)\r\nv002 OK FETCH completed\r\n";
         let fingerprints =
             parse_message_fetch_body_hashes_response_bytes(response, "INBOX", Some(77), 5).unwrap();
         let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "100");
         assert_eq!(
-            fingerprints.get(&key).map(String::as_str),
+            fingerprints.fingerprints.get(&key).map(String::as_str),
             Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
         );
     }

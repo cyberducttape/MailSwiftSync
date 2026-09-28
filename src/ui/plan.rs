@@ -412,6 +412,43 @@ impl App {
                         ui.checkbox(&mut self.form.profile.useuid, self.language.text("Use message UIDs when available  (--useuid)"));
                         ui.checkbox(&mut self.form.profile.usecache, self.language.text("Use imapsync cache  (--usecache)"));
                         ui.checkbox(&mut self.form.profile.allowsizemismatch, self.language.text("Allow message-size mismatch  (--allowsizemismatch)"));
+                        if self.form.engine() == crate::core::Engine::ImapSync {
+                            ui.checkbox(
+                                &mut self.form.profile.body_hash_verification,
+                                self.language
+                                    .text("Enable bounded body-content verification (forensic)"),
+                            )
+                            .on_hover_text(self.language.text(
+                                "Downloads and hashes message bodies from both accounts. It is opt-in, bounded, and requires a stable metadata-preserving plan.",
+                            ));
+                        }
+                        if self.form.profile.body_hash_verification {
+                            ui.label(
+                                RichText::new(self.language.text(
+                                    "Body proof is resource-intensive. The run will stop rather than exceed either byte bound; successful evidence is labeled BodyHash.",
+                                ))
+                                .size(11.0)
+                                .color(self.theme_colors().warning),
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label(self.language.text("Maximum body bytes per message"));
+                                ui.add(
+                                    egui::DragValue::new(
+                                        &mut self.form.profile.body_hash_max_bytes,
+                                    )
+                                    .range(1..=64 * 1024 * 1024),
+                                );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(self.language.text("Maximum body bytes per verification"));
+                                ui.add(
+                                    egui::DragValue::new(
+                                        &mut self.form.profile.body_hash_max_total_bytes,
+                                    )
+                                    .range(1..=8 * 1024 * 1024 * 1024_u64),
+                                );
+                            });
+                        }
                     });
                     ui.add_space(8.0);
                     ui.group(|ui| {

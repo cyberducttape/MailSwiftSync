@@ -3,7 +3,6 @@ use std::{
     sync::Arc,
 };
 
-#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 /// Parse the live verifier's metadata-only FETCH response. Body fingerprints
@@ -81,14 +80,14 @@ pub(super) fn parse_message_fetch_metadata_response_bytes_with_mailbox(
 /// `BODY[]` literals. This is deliberately separate from the default metadata
 /// parser: callers must explicitly opt into downloading message bodies and
 /// provide a per-message bound before content evidence can be produced.
-#[cfg(test)]
 pub(super) fn parse_message_fetch_body_hashes_response_bytes(
     response: &[u8],
     mailbox: &str,
     uidvalidity: Option<u64>,
     max_body_bytes: usize,
-) -> Result<HashMap<crate::core::MailboxMessageKey, String>, String> {
+) -> Result<BodyHashPage, String> {
     let mut fingerprints = HashMap::new();
+    let mut total_bytes = 0usize;
     let mut offset = 0;
     while offset < response.len() {
         let Some(relative_line_end) = response[offset..]
@@ -120,6 +119,7 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
                 "IMAP body FETCH UID {uid} exceeded the {max_body_bytes}-byte body-hash bound"
             ));
         }
+        total_bytes = total_bytes.saturating_add(body.len());
         let digest = Sha256::digest(body);
         let key = crate::core::MailboxMessageKey::with_shared_mailbox(
             Arc::from(mailbox),
@@ -135,7 +135,16 @@ pub(super) fn parse_message_fetch_body_hashes_response_bytes(
         }
         offset = record_end;
     }
-    Ok(fingerprints)
+    Ok(BodyHashPage {
+        fingerprints,
+        total_bytes,
+    })
+}
+
+#[derive(Debug)]
+pub(super) struct BodyHashPage {
+    pub(super) fingerprints: HashMap<crate::core::MailboxMessageKey, String>,
+    pub(super) total_bytes: usize,
 }
 
 fn next_fetch_record_start_bytes(response: &[u8], mut offset: usize) -> usize {
@@ -206,8 +215,10 @@ fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
         + marker.len();
     let literal = record[marker_start..].strip_prefix(b" ")?;
     let literal_end = literal.windows(3).position(|part| part == b"}\r\n")?;
-    let size = std::str::from_utf8(&literal[1..literal_end])
-        .ok()?
+    let literal_size = std::str::from_utf8(&literal[1..literal_end]).ok()?;
+    let size = literal_size
+        .strip_suffix('+')
+        .unwrap_or(literal_size)
         .parse::<usize>()
         .ok()?;
     let body_start = marker_start
@@ -219,17 +230,22 @@ fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
     parse_message_id_header(&String::from_utf8_lossy(body))
 }
 
-#[cfg(test)]
 fn fetch_body_literal(record: &[u8]) -> Option<&[u8]> {
-    let marker = b"BODY[]";
-    let marker_start = record
-        .windows(marker.len())
-        .position(|part| part.eq_ignore_ascii_case(marker))?
-        + marker.len();
+    let (marker_start, marker_len) = [b"BODY.PEEK[]".as_slice(), b"BODY[]".as_slice()]
+        .iter()
+        .find_map(|marker| {
+            record
+                .windows(marker.len())
+                .position(|part| part.eq_ignore_ascii_case(marker))
+                .map(|start| (start, marker.len()))
+        })?;
+    let marker_start = marker_start + marker_len;
     let literal = record[marker_start..].strip_prefix(b" ")?;
     let literal_end = literal.windows(3).position(|part| part == b"}\r\n")?;
-    let size = std::str::from_utf8(&literal[1..literal_end])
-        .ok()?
+    let literal_size = std::str::from_utf8(&literal[1..literal_end]).ok()?;
+    let size = literal_size
+        .strip_suffix('+')
+        .unwrap_or(literal_size)
         .parse::<usize>()
         .ok()?;
     let body_start = marker_start

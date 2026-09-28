@@ -1,15 +1,10 @@
-use std::collections::HashMap;
-#[cfg(test)]
-use std::collections::{BTreeMap, HashSet, VecDeque};
-#[cfg(test)]
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::Arc;
 
-#[cfg(test)]
 use chrono::{DateTime, FixedOffset};
 use rusqlite::{OptionalExtension, params};
 
-#[cfg(test)]
 use super::message_extraction::ExtractedMessages;
 use super::{
     evidence::VerificationOutcome,
@@ -23,14 +18,12 @@ use super::{
 /// used by reconciliation. This is an estimate, not a process-wide peak RSS
 /// guarantee: hash tables, indexes, classification sets, and mismatch
 /// evidence can have allocator overhead beyond the per-record estimate.
-#[cfg(test)]
 const MAX_ESTIMATED_VERIFIER_STATE_BYTES: usize = 256 * 1024 * 1024;
 // Each fetched record participates in several borrowed indexes and
 // classification sets during reconciliation. This is deliberately
 // conservative: it accounts for hash-table entries, references, and
 // temporary membership bookkeeping that are not represented by the record
 // estimate itself.
-#[cfg(test)]
 const ESTIMATED_RECONCILIATION_INDEX_BYTES_PER_RECORD: usize = 128;
 /// Bound the owned mismatch evidence retained before the durable SQLite
 /// transaction. This is separate from fetched-state admission because a
@@ -106,7 +99,6 @@ pub struct MessageMismatch {
 
 /// Identity ownership produced by reconciliation. Every input key must occur
 /// in exactly one source or destination classification.
-#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct VerificationMembership<'a> {
     pub matched_source: HashSet<&'a MailboxMessageKey>,
@@ -120,7 +112,6 @@ pub struct VerificationMembership<'a> {
     pub changed_destination: HashSet<&'a MailboxMessageKey>,
 }
 
-#[cfg(test)]
 fn build_uid_folder_index(
     messages: &ExtractedMessages,
 ) -> HashMap<(Option<u64>, &str, &str), &MailboxMessageKey> {
@@ -135,7 +126,6 @@ fn build_uid_folder_index(
         .collect()
 }
 
-#[cfg(test)]
 fn mismatch_source_key<'a>(
     mismatch: &MessageMismatch,
     index: &HashMap<(Option<u64>, &str, &str), &'a MailboxMessageKey>,
@@ -149,7 +139,6 @@ fn mismatch_source_key<'a>(
         .copied()
 }
 
-#[cfg(test)]
 fn mismatch_destination_key<'a>(
     mismatch: &MessageMismatch,
     index: &HashMap<(Option<u64>, &str, &str), &'a MailboxMessageKey>,
@@ -167,7 +156,6 @@ fn mismatch_destination_key<'a>(
         .copied()
 }
 
-#[cfg(test)]
 fn estimated_verifier_record_bytes(key: &MailboxMessageKey, message: &ExtractedMessage) -> usize {
     512usize
         .saturating_add(key.mailbox.len())
@@ -176,7 +164,6 @@ fn estimated_verifier_record_bytes(key: &MailboxMessageKey, message: &ExtractedM
         .saturating_add(message.internal_date.as_deref().map_or(0, str::len))
 }
 
-#[cfg(test)]
 fn estimated_verifier_state_bytes(
     source_messages: &ExtractedMessages,
     dest_messages: &ExtractedMessages,
@@ -194,7 +181,6 @@ fn estimated_verifier_state_bytes(
     )
 }
 
-#[cfg(test)]
 fn enforce_verifier_state_budget(estimated_state_bytes: usize) -> Result<(), String> {
     if estimated_state_bytes > MAX_ESTIMATED_VERIFIER_STATE_BYTES {
         return Err(format!(
@@ -246,7 +232,6 @@ fn append_mismatch_with_budget(
 /// Core message verification engine.
 pub struct MessageVerification;
 
-#[cfg(test)]
 type ReconciliationPassResult<'a> = Result<
     (
         Vec<MessageMismatch>,
@@ -283,7 +268,6 @@ impl MessageVerification {
     /// independently fetched RFC822 bytes differ. Content hashes are only
     /// authoritative when both sides supplied a bounded SHA-256 fingerprint;
     /// missing fingerprints preserve the existing metadata-only result.
-    #[cfg(test)]
     pub fn detect_mismatches_with_content_fingerprints(
         job_id: &str,
         run_id: &str,
@@ -482,7 +466,6 @@ impl MessageVerification {
     /// in the mapping supplied by the caller, not in this generic verifier.
     /// Reconciliation Pass 1: Message-ID + exact metadata matching.
     /// Returns (mismatches created, source keys matched, dest keys matched).
-    #[cfg(test)]
     fn pass_1_message_id_exact_metadata<'a>(
         job_id: &Arc<str>,
         run_id: &Arc<str>,
@@ -581,7 +564,6 @@ impl MessageVerification {
     /// Reconciliation Pass 2: Wrong-folder detection for Message-ID matches.
     /// Finds messages with identical Message-ID and metadata but in unexpected folders.
     #[allow(clippy::too_many_arguments)]
-    #[cfg(test)]
     fn pass_2_wrong_folder_detection<'a>(
         job_id: &Arc<str>,
         run_id: &Arc<str>,
@@ -693,7 +675,6 @@ impl MessageVerification {
 
     /// Reconciliation Pass 3: Fingerprint fallback for unmatched messages.
     /// Only processes messages not matched in Passes 1-2.
-    #[cfg(test)]
     fn pass_3_fingerprint_fallback<'a>(
         source_messages: &'a ExtractedMessages,
         dest_messages: &'a ExtractedMessages,
@@ -735,7 +716,6 @@ impl MessageVerification {
     }
 
     #[allow(unused_assignments, clippy::collapsible_if, clippy::needless_borrow)]
-    #[cfg(test)]
     pub fn detect_mismatches_with_folder_mapping(
         job_id: &str,
         run_id: &str,
@@ -1428,7 +1408,6 @@ fn append_stage_mismatch(
 /// Validate that reconciliation accounting is consistent and complete.
 /// This catches bugs where messages are counted incorrectly or reconciled multiple times.
 #[allow(clippy::collapsible_if)]
-#[cfg(test)]
 pub fn validate_verification_summary<'a>(
     source_messages: &'a ExtractedMessages,
     dest_messages: &'a ExtractedMessages,
@@ -1520,7 +1499,6 @@ pub fn validate_verification_summary<'a>(
     Ok(())
 }
 
-#[cfg(test)]
 fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&MailboxMessageKey>> {
     let mut index = HashMap::new();
     for (uid, message) in messages {
@@ -1537,7 +1515,6 @@ fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&Mailb
     index
 }
 
-#[cfg(test)]
 fn pop_unused_destination<'a>(
     candidates: Option<&mut VecDeque<&'a MailboxMessageKey>>,
     used: &HashSet<&MailboxMessageKey>,
@@ -1551,7 +1528,6 @@ fn pop_unused_destination<'a>(
     None
 }
 
-#[cfg(test)]
 fn unique_fingerprint_index(
     fingerprints: &HashMap<MailboxMessageKey, String>,
 ) -> HashMap<&String, &MailboxMessageKey> {
@@ -1570,7 +1546,6 @@ fn unique_fingerprint_index(
     index
 }
 
-#[cfg(test)]
 fn index_by_fingerprint<'a>(
     messages: &'a ExtractedMessages,
     eligible: &HashSet<&'a MailboxMessageKey>,
@@ -1608,7 +1583,6 @@ fn expected_destination_folder<'a>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg(test)]
 enum NormalizedInternalDate<'a> {
     Epoch(i64),
     Raw(&'a str),
@@ -1618,13 +1592,11 @@ enum NormalizedInternalDate<'a> {
 /// Parsed IMAP dates use their UTC epoch; non-IMAP synthetic dates retain
 /// their original representation for compatibility with extracted fixtures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg(test)]
 struct MetadataFingerprint<'a> {
     internal_date: NormalizedInternalDate<'a>,
     size_bytes: u64,
 }
 
-#[cfg(test)]
 fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxMessageKey> {
     let mut sorted = keys.iter().copied().collect::<Vec<_>>();
     sorted.sort_by(|left, right| {
@@ -1636,7 +1608,6 @@ fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxM
     sorted
 }
 
-#[cfg(test)]
 fn metadata_fingerprint(message: &ExtractedMessage) -> Option<MetadataFingerprint<'_>> {
     Some(MetadataFingerprint {
         internal_date: normalize_internal_date(message.internal_date.as_deref()?),
@@ -1644,7 +1615,6 @@ fn metadata_fingerprint(message: &ExtractedMessage) -> Option<MetadataFingerprin
     })
 }
 
-#[cfg(test)]
 fn normalize_internal_date(value: &str) -> NormalizedInternalDate<'_> {
     DateTime::<FixedOffset>::parse_from_str(value.trim(), "%d-%b-%Y %H:%M:%S %z")
         .map(|date| NormalizedInternalDate::Epoch(date.timestamp()))

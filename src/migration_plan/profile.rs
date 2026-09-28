@@ -47,6 +47,12 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) batch_retry_count: usize,
     pub(crate) max_messages_per_second: u32,
     pub(crate) max_bytes_per_second: u64,
+    #[serde(default)]
+    pub(crate) body_hash_verification: bool,
+    #[serde(default = "default_body_hash_max_bytes")]
+    pub(crate) body_hash_max_bytes: u64,
+    #[serde(default = "default_body_hash_max_total_bytes")]
+    pub(crate) body_hash_max_total_bytes: u64,
     pub(crate) migration_timeout_hours: u64,
     pub(crate) automap: bool,
     pub(crate) addheader: bool,
@@ -170,6 +176,14 @@ pub(crate) struct Profile {
     pub(crate) max_messages_per_second: u32,
     #[serde(default)]
     pub(crate) max_bytes_per_second: u64,
+    /// Opt-in forensic verification mode. Disabled by default because it
+    /// downloads every message body from both accounts.
+    #[serde(default)]
+    pub(crate) body_hash_verification: bool,
+    #[serde(default = "default_body_hash_max_bytes")]
+    pub(crate) body_hash_max_bytes: u64,
+    #[serde(default = "default_body_hash_max_total_bytes")]
+    pub(crate) body_hash_max_total_bytes: u64,
     #[serde(default = "default_migration_timeout_hours")]
     pub(crate) migration_timeout_hours: u64,
     pub(crate) automap: bool,
@@ -219,6 +233,9 @@ impl Default for Profile {
             batch_retry_count: 0,
             max_messages_per_second: 0,
             max_bytes_per_second: 0,
+            body_hash_verification: false,
+            body_hash_max_bytes: default_body_hash_max_bytes(),
+            body_hash_max_total_bytes: default_body_hash_max_total_bytes(),
             migration_timeout_hours: default_migration_timeout_hours(),
             // Keep the default plan eligible for independent metadata
             // verification. imapsync's automapping cannot currently be
@@ -247,6 +264,12 @@ pub(crate) fn default_batch_concurrency() -> usize {
 }
 pub(crate) fn default_migration_timeout_hours() -> u64 {
     24
+}
+pub(crate) fn default_body_hash_max_bytes() -> u64 {
+    8 * 1024 * 1024
+}
+pub(crate) fn default_body_hash_max_total_bytes() -> u64 {
+    512 * 1024 * 1024
 }
 pub(crate) fn default_source_tls() -> String {
     "imaps".into()

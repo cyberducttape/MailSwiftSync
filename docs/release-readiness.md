@@ -320,7 +320,7 @@ and require the corresponding integration run.
   provide a reliable query.
 - Explicit retry/resume/delta semantics with idempotent recovery after interruption. Dovecot checkpoints remain engine resume tokens, not UIDVALIDITY-aware message proof.
 - Bounded concurrency and throttling are implemented; `supervise` now accepts an optional maintenance window (see above), but a scheduler/API that can survive the desktop closing without an external process manager remains outstanding.
-- Independent metadata-level message mismatch reporting and reconciliation is now wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. Fetched metadata is staged in a private SQLite database and reconciled in bounded batches; mismatch detail remains capped at 64 MiB and the live path fails closed at one million records. This removes the account-wide Rust message-map bottleneck, but body-content hashing, representative evidence, and live-provider/large-mailbox qualification remain outstanding.
+- Independent metadata-level message mismatch reporting and reconciliation is wired for encrypted imapsync runs, with mismatch rows committed atomically alongside terminal evidence and exposed in operator verification reports. An explicit forensic mode now fetches bounded RFC822 bodies, retains SHA-256 fingerprints for both sides, and emits `body_hash` evidence only when coverage and total-byte limits hold. The default path remains metadata-only; representative live body-hash evidence and live-provider/large-mailbox qualification remain outstanding.
 - Published migration evidence from representative datasets, including failures and recovery results.
 - Controller-level integration and chaos tests using disposable IMAP/Dovecot environments, including process kill, GUI restart, retry, and evidence recovery. Ledger-level storage failure (a storage limit hit mid-write, and a corrupted or truncated ledger/backup) is covered by `scripts/controller-chaos-smoke.sh`; engine-side storage failure (the transfer itself exhausting destination space) is covered by `scripts/engine-storage-fault-smoke.sh`.
 - **Dovecot 2.4.x probe stall safeguard (resolved in the controller):** the LIST/discovery reader now retries transient socket `TimedOut`/`WouldBlock` reads only within its 60-second total deadline, instead of checking the deadline only after a successful read. A regression test covers a timeout during LIST followed by a valid response. Dovecot 2.4.x remains a compatibility-matrix qualification target until a disposable live pilot is recorded; the controller will now fail with bounded discovery evidence rather than hang for the external 300-second watchdog.
@@ -335,7 +335,7 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 1. Add provider OAuth/Modern Auth and a secret-safe remote execution path.
 2. Expand the compatibility matrix with provider-specific dry/live pilots,
    interruption recovery, and evidence exports.
-3. Add body-content hashing, UIDVALIDITY-aware durable checkpoints, and per-message checkpoints.
+3. Add UIDVALIDITY-aware durable checkpoints and per-message checkpoints; qualify the opt-in body-hash path against representative providers and large mailboxes.
 4. Add controller crash/restart, storage-fault, and cross-platform supervision
    tests against disposable servers.
 5. Publish signed native installers, upgrade/rollback guidance, and results

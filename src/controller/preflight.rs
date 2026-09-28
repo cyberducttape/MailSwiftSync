@@ -85,6 +85,22 @@ pub(crate) fn assess_plan(
             "Passwords are excluded from saved profiles and the SQLite ledger".into(),
             true,
         ),
+        (
+            "Body-content verification bounds".into(),
+            if form.profile.body_hash_verification {
+                match crate::runner::validate_body_hash_limits(form) {
+                    Ok(()) => format!(
+                        "Enabled with {} bytes/message and {} total bytes",
+                        form.profile.body_hash_max_bytes, form.profile.body_hash_max_total_bytes
+                    ),
+                    Err(error) => error,
+                }
+            } else {
+                "Disabled; metadata reconciliation remains the verification method".into()
+            },
+            !form.profile.body_hash_verification
+                || crate::runner::validate_body_hash_limits(form).is_ok(),
+        ),
     ];
     append_capability_check(&mut checks, "Source", source_capabilities, false);
     append_capability_check(&mut checks, "Destination", destination_capabilities, true);
@@ -200,7 +216,7 @@ mod tests {
     fn assessment_keeps_local_checks_separate_from_network_readiness() {
         let form = Form::default();
         let checks = assess_plan(&form, None, None);
-        assert_eq!(checks.len(), 6);
+        assert_eq!(checks.len(), 7);
         assert_eq!(checks[0].0, "Source endpoint");
         assert_eq!(checks[1].0, "Destination endpoint");
         assert_eq!(checks[2].0, "Execution mode");

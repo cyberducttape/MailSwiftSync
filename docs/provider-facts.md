@@ -32,3 +32,4 @@ and the documentation validation test in the same change.
 
 - Metadata reconciliation does not compare message bodies.
 - Human-facing labels must say: “Metadata reconciled — message bodies not compared”.
+- The optional forensic `body_hash` mode is separately labeled, bounded by per-message and total-byte limits, and is not implied by metadata reconciliation.

@@ -283,7 +283,7 @@ pub(crate) fn build_verification_report(
         .message_mismatches_for_run(job_id, &evidence_run_id, 500)
         .map_err(|error| error.to_string())?;
     let mut report = format!(
-        "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\nThis report distinguishes engine-confirmed output from aggregate reconciliation. Neither is independent message-level proof; provider-specific warnings and deeper verification require additional review.",
+        "# MailSwiftSync verification report\n\n- Project: {}\n- Source endpoint: {}\n- Destination endpoint: {}\n- Source mailbox: {}\n- Destination mailbox: {}\n- Identity source: {}\n- Engine: {}\n- Run ID: `{}`\n- Run status: `{}`\n- Started: `{}`\n- Finished: `{}`\n- Mailbox state: `{}`\n- Evidence level: `{}`\n- Evidence source: `{}`\n- Evidence digest: `{}`\n\n## Execution plan snapshot\n\nThe snapshot excludes session passwords and raw extra-option values. It retains an SHA-256 digest for expert-option identity without copying those values into the ledger or report.\n\n```toml\n{}\n```\n\n| Metric | Source | Destination |\n|---|---:|---:|\n| Folders | {} | {} |\n| Messages | {} | {} |\n| Virtual size | {} | {} |\n| Unmatched messages | {} | — |\n| Failed messages | {} | — |\n\n{}",
         markdown_escape(&snapshot.project.name),
         markdown_escape(source_endpoint),
         markdown_escape(destination_endpoint),
@@ -300,6 +300,7 @@ pub(crate) fn build_verification_report(
         match evidence.evidence_scope() {
             core::EvidenceScope::EngineConfirmed => "engine-confirmed summary",
             core::EvidenceScope::AggregateReconciled => "aggregate mailbox totals",
+            core::EvidenceScope::BodyHashed => "bounded RFC822 body hashes",
         },
         markdown_escape(&evidence_reference),
         run.plan_snapshot.replace("```", "` ``"),
@@ -311,6 +312,14 @@ pub(crate) fn build_verification_report(
         evidence.destination_bytes,
         optional_count(evidence.unresolved_count()),
         evidence.failed_messages,
+        match evidence.evidence_scope() {
+            core::EvidenceScope::BodyHashed => {
+                "This report includes bounded RFC822 body fingerprints from both accounts; provider-specific warnings and deeper qualification still require review."
+            }
+            core::EvidenceScope::EngineConfirmed | core::EvidenceScope::AggregateReconciled => {
+                "This report distinguishes engine-confirmed output from aggregate reconciliation. The recorded result does not prove message-body equality; provider-specific warnings and deeper verification require additional review."
+            }
+        },
     );
     report.push_str("\n## Message-level mismatch details\n\n");
     if mismatches.is_empty() {

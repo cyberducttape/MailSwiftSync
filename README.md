@@ -69,9 +69,11 @@ counts, exception counts, and aggregate missing/extra/modified message totals.
 
 ## Project status
 
-MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, and bounded metadata-level reconciliation for encrypted imapsync runs are available today. Treat credential delivery, packaged installers, content-level proof, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured, but native installers are not currently shipped.
+MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, bounded metadata-level reconciliation, and explicitly opt-in bounded body-content proof for encrypted imapsync runs are available today. Treat credential delivery, provider qualification, packaged installers, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured, but native installers are not currently shipped.
 
 Stable today:
+
+The default live imapsync result is labeled `Metadata reconciled — message bodies not compared`; only an explicitly enabled forensic profile can produce `body_hash` evidence.
 
 - `imapsync` fallback for arbitrary IMAP endpoints.
 - CSV/XLSX batch queue with bounded operator-selected concurrency (1–16 workers), explicit worksheet selection for workbooks, preflight gates, live execution confirmation, cancellation, retries, and restart-visible child states. Legacy XLS imports are disabled because the parser cannot be bounded safely before worksheet materialization.
@@ -80,7 +82,7 @@ Stable today:
 - Bounded transient retry policy for batch validation with cancellation-aware backoff.
 - Actionable failure classification in worker output and durable run details: authentication, quota, transport, configuration, message, or unknown.
 - Durable project phases, mailbox states, redacted events, run IDs, and verification evidence.
-- Metadata-level message mismatch reports with durable missing, extra, and modified counts; these are not body-content proof.
+- Metadata-level message mismatch reports with durable missing, extra, and modified counts; optional encrypted-imapsync forensic mode can additionally hash every fetched RFC822 body within explicit per-message and total-byte bounds.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
 - Running jobs show elapsed time and can be stopped through an explicit confirmation; Advanced options include contextual guidance for per-process throttles.
@@ -97,7 +99,7 @@ Experimental or planned:
   authorization flow, so the operator obtains that refresh token through the
   provider's own tooling).
 - Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
-- A scheduler/API that can survive the desktop closing, and content-level verification for live batches. (`supervise` provides a foreground, maintenance-window-aware batch controller; encrypted imapsync runs now perform bounded Message-ID/size/date reconciliation; see below.)
+- A scheduler/API that can survive the desktop closing. (`supervise` provides a foreground, maintenance-window-aware batch controller; body hashing is currently an explicit per-mailbox opt-in rather than a default batch mode.)
 - UIDVALIDITY-aware delta checkpoints and per-message checkpoint persistence.
 - Published large-scale migration case studies and compatibility matrix.
 
@@ -210,9 +212,13 @@ Verification is a primary product feature, not a process-exit decoration. After 
 
 Current live verification reaches **Level 2 — Aggregate reconciliation — not message-body proof** for
 native Dovecot runs and **metadata-level message reconciliation** for encrypted
-imapsync runs when the independent IMAP fetch succeeds. The latter compares
-Message-ID, INTERNALDATE, and RFC822.SIZE across every selectable folder; it is
-not body-content proof and is surfaced as `Metadata reconciled — message bodies not compared`, never as full message verification. A successful process
+imapsync runs when the independent IMAP fetch succeeds. An explicit forensic
+profile can instead fetch and SHA-256 hash RFC822 bodies on both sides, within
+configured per-message and total-byte bounds; that evidence is labeled
+`body_hash` and fails closed on incomplete coverage or resource limits. The
+default metadata path compares Message-ID, INTERNALDATE, and RFC822.SIZE across
+every selectable folder and is surfaced as `Metadata reconciled — message bodies
+not compared`. A successful process
 without usable evidence is Level 0 — process completed, verification incomplete.
 The verifier fails closed for `--automap`, `--justfolders`, `--addheader`,
 disabled internal-date sync, or `--allowsizemismatch` plans until their
@@ -223,9 +229,9 @@ verification input. It also enforces a conservative estimated
 bounded UID-window enumeration; it no longer materializes a mailbox-wide
 `UID SEARCH ALL` response. Fetched metadata is staged in a private SQLite
 database and reconciled in bounded batches, so the live path does not retain
-both account-wide message maps in Rust. Mismatch detail remains bounded and
-the feature is still metadata-only: body-content proof and live
-large-provider qualification remain outstanding.
+both account-wide message maps in Rust. Mismatch detail remains bounded; the
+opt-in body path deliberately loads only bounded metadata maps after hashing,
+and live large-provider qualification remains outstanding.
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
 

@@ -12,8 +12,8 @@ the capability inventory.
 > **Adoption-critical clarification:** A passing unit or integration test for a
 > library module does not mean that module participates in a live migration.
 > The matrix below distinguishes executable-path integration from prototype
-> coverage. Live encrypted imapsync runs perform bounded metadata-level message
-> reconciliation after transfer; this is not body-content proof.
+> coverage. Live encrypted imapsync runs perform bounded metadata reconciliation
+> by default, with an explicit bounded body-hash mode available for forensic runs.
 
 ## Executive Summary
 
@@ -286,12 +286,12 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 
 1. **Use with test/disposable mailboxes initially** — Validate configuration and recovery procedures
 2. **Have provider test accounts available** — Setup and preflight validation require real credentials
-3. **Review verification evidence carefully** — Encrypted imapsync runs include metadata-level mismatch counters; body-content equality is not claimed
+3. **Review verification evidence carefully** — Metadata runs do not claim body equality; forensic body-hash runs are bounded and labeled separately
 4. **Follow provider-specific runbooks** — Each provider has unique requirements
 
 The system provides a durable, safety-gated migration controller suitable for
-technical-preview use. It does not yet provide body-content proof or
-provider-specific execution intelligence; provider runbooks are guidance only,
+technical-preview use. It provides bounded, opt-in body-content proof only for
+encrypted imapsync runs; it does not yet provide provider-specific execution intelligence; provider runbooks are guidance only,
 not provider-specific execution or qualification, and recovery time estimates
 are not yet surfaced in the GUI workflow.
 

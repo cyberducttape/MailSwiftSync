@@ -836,9 +836,9 @@ impl StateStore {
             "SELECT EXISTS(SELECT 1 FROM mailbox_jobs WHERE state NOT IN ('imported','queued','preflight','ready','running','completed','verified','verified_with_exceptions','failed','cancelled','attention','delta_required','verification_difference'))",
             "SELECT EXISTS(SELECT 1 FROM runs WHERE status NOT IN ('queued','running','completed','failed','cancelled','abandoned','verification_failed'))",
             "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_method NOT IN ('aggregate_engine','metadata_reconciliation','body_hash','native_dovecot'))",
-            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome NOT IN ('exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome NOT IN ('exact_body_match','exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_method NOT IN ('aggregate_engine','metadata_reconciliation','body_hash','native_dovecot'))",
-            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome NOT IN ('exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome NOT IN ('exact_body_match','exact_metadata_match','probable_match','ambiguous','missing','changed','unexpected','incomplete','failed'))",
             "SELECT EXISTS(SELECT 1 FROM evidence WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE authoritative NOT IN (0,1))",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches WHERE mismatch_type NOT IN ('message_id_only','message_present_wrong_folder','missing','extra','duplicated'))",
@@ -854,8 +854,8 @@ impl StateStore {
         // that may be edited without changing them. In particular, never let
         // a forged exact outcome survive read-only recovery validation.
         const SEMANTIC_CHECKS: &[&str] = &[
-            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome='exact_metadata_match' AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1)))",
-            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome='exact_metadata_match' AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1)))",
+            "SELECT EXISTS(SELECT 1 FROM evidence WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR modified_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
+            "SELECT EXISTS(SELECT 1 FROM evidence_history WHERE verification_outcome IN ('exact_body_match','exact_metadata_match') AND (source_messages<>destination_messages OR source_bytes<>destination_bytes OR source_folders<>destination_folders OR unmatched_messages IS NULL OR unmatched_messages<>0 OR failed_messages<>0 OR missing_messages<>0 OR extra_messages<>0 OR probable_messages<>0 OR (verification_method='aggregate_engine' AND authoritative<>1) OR (verification_outcome='exact_body_match' AND verification_method<>'body_hash') OR (verification_method='body_hash' AND verification_outcome='exact_metadata_match')))",
         ];
         for sql in SEMANTIC_CHECKS {
             let contradictory: bool = connection.query_row(sql, [], |row| row.get(0))?;

@@ -157,6 +157,9 @@ pub(crate) fn admit_batch_launch(
         mode,
         expected_credential_fingerprints,
     )?;
+    for selected in &selected_jobs {
+        crate::runner::validate_body_hash_limits(&selected.job.form())?;
+    }
     let concurrency = fallback_profile.batch_concurrency.clamp(1, 16);
     validate_batch_throttle(fallback_profile, concurrency)?;
     // Durable project identity belongs to the complete queue, not to the

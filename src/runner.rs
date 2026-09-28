@@ -74,6 +74,47 @@ pub(crate) fn message_verification_enabled(form: &crate::Form) -> bool {
         && !form.profile.allowsizemismatch
 }
 
+const MAX_BODY_HASH_BYTES_PER_MESSAGE: u64 = 64 * 1024 * 1024;
+const MAX_BODY_HASH_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_BODY_HASH_MESSAGES_IN_MEMORY: u64 = 100_000;
+
+pub(crate) fn validate_body_hash_limits(form: &crate::Form) -> Result<(), String> {
+    if !form.profile.body_hash_verification {
+        return Ok(());
+    }
+    if form.engine() != crate::core::Engine::ImapSync {
+        return Err(
+            "body-hash verification is currently available only for encrypted imapsync runs".into(),
+        );
+    }
+    let per_message = form.profile.body_hash_max_bytes;
+    let total = form.profile.body_hash_max_total_bytes;
+    if per_message == 0 || total == 0 {
+        return Err(
+            "body-hash verification requires non-zero per-message and total byte bounds".into(),
+        );
+    }
+    if per_message > MAX_BODY_HASH_BYTES_PER_MESSAGE {
+        return Err(format!(
+            "body-hash per-message bound exceeds the {}-byte safety limit",
+            MAX_BODY_HASH_BYTES_PER_MESSAGE
+        ));
+    }
+    if total > MAX_BODY_HASH_TOTAL_BYTES || total < per_message {
+        return Err(format!(
+            "body-hash total bound must be at least the per-message bound and no more than {} bytes",
+            MAX_BODY_HASH_TOTAL_BYTES
+        ));
+    }
+    if !message_verification_enabled(form) {
+        return Err(
+            "body-hash verification requires the same immutable metadata-preservation plan as independent verification"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn automap_blocks_live_certification(form: &crate::Form) -> bool {
     form.engine() == core::Engine::ImapSync && form.profile.automap
 }
@@ -126,11 +167,24 @@ pub(crate) fn run_imap_message_verification(
                 .into(),
         );
     }
+    validate_body_hash_limits(form)?;
     let budget = crate::imap_probe::MessageFetchBudget::new(
         Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
         cancel,
     );
     let state_budget = crate::imap_probe::MessageStateBudget::new();
+    let body_hash_budget = crate::imap_probe::BodyHashBudget::new(
+        usize::try_from(form.profile.body_hash_max_total_bytes)
+            .map_err(|_| "body-hash total bound does not fit the platform usize".to_owned())?,
+    );
+    let body_hash =
+        form.profile
+            .body_hash_verification
+            .then(|| crate::imap_probe::BodyHashOptions {
+                max_body_bytes: usize::try_from(form.profile.body_hash_max_bytes)
+                    .expect("body-hash per-message bound validated above"),
+                budget: &body_hash_budget,
+            });
     let source_host = crate::imap_probe::endpoint_for_probe(
         &form.profile.source_host,
         &form.profile.source_port,
@@ -140,7 +194,7 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_port,
     )?;
     let mut stage = core::MessageMetadataStage::open_ephemeral()?;
-    let source = crate::imap_probe::fetch_tls_account_messages_to_stage(
+    let source = crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes(
         &source_host,
         &form.profile.source_user,
         form.source_password.as_str(),
@@ -150,10 +204,11 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.source_certificate_pin_sha256,
         &budget,
         &state_budget,
+        body_hash.as_ref(),
         &mut stage,
         core::StagedMessageSide::Source,
     )?;
-    let destination = crate::imap_probe::fetch_tls_account_messages_to_stage(
+    let destination = crate::imap_probe::fetch_tls_account_messages_to_stage_with_body_hashes(
         &destination_host,
         &form.profile.destination_user,
         form.destination_password.as_str(),
@@ -163,6 +218,7 @@ pub(crate) fn run_imap_message_verification(
         &form.profile.destination_certificate_pin_sha256,
         &budget,
         &state_budget,
+        body_hash.as_ref(),
         &mut stage,
         core::StagedMessageSide::Destination,
     )?;
@@ -202,12 +258,53 @@ pub(crate) fn run_imap_message_verification(
         &destination.mailboxes,
         form.profile.delete2,
     )?;
-    let (mismatches, summary) = core::MessageVerification::detect_mismatches_from_stage(
-        job_id,
-        run_id,
-        &stage,
-        &folder_mapping,
-    )?;
+    let (mismatches, summary) = if form.profile.body_hash_verification {
+        for side in [
+            core::StagedMessageSide::Source,
+            core::StagedMessageSide::Destination,
+        ] {
+            let count = stage.count(side).map_err(|error| error.to_string())?;
+            if count > MAX_BODY_HASH_MESSAGES_IN_MEMORY {
+                return Err(format!(
+                    "body-hash verification refuses to load more than {MAX_BODY_HASH_MESSAGES_IN_MEMORY} messages per side into the forensic reconciler (requested {count})"
+                ));
+            }
+        }
+        let source_messages = stage
+            .all_messages(core::StagedMessageSide::Source)
+            .map_err(|error| {
+                format!("could not load source messages for body verification: {error}")
+            })?;
+        let destination_messages = stage
+            .all_messages(core::StagedMessageSide::Destination)
+            .map_err(|error| {
+                format!("could not load destination messages for body verification: {error}")
+            })?;
+        let source_fingerprints = stage.content_fingerprints(core::StagedMessageSide::Source);
+        let destination_fingerprints =
+            stage.content_fingerprints(core::StagedMessageSide::Destination);
+        if source_fingerprints.len() != source_messages.len()
+            || destination_fingerprints.len() != destination_messages.len()
+        {
+            return Err("body-hash verification refused incomplete content fingerprints".into());
+        }
+        core::MessageVerification::detect_mismatches_with_content_fingerprints(
+            job_id,
+            run_id,
+            &source_messages,
+            &destination_messages,
+            &source_fingerprints,
+            &destination_fingerprints,
+            &folder_mapping,
+        )?
+    } else {
+        core::MessageVerification::detect_mismatches_from_stage(
+            job_id,
+            run_id,
+            &stage,
+            &folder_mapping,
+        )?
+    };
     let source_bytes = stage
         .sum_bytes(core::StagedMessageSide::Source)
         .map_err(|e| e.to_string())?;
@@ -216,9 +313,22 @@ pub(crate) fn run_imap_message_verification(
         .map_err(|e| e.to_string())?;
     let source_folders = source.mailboxes.len() as u64;
     let destination_folders = destination.mailboxes.len() as u64;
+    let verification_method = if form.profile.body_hash_verification {
+        core::VerificationMethod::BodyHash
+    } else {
+        core::VerificationMethod::MetadataReconciliation
+    };
+    let verification_outcome = match summary.verification_outcome() {
+        core::VerificationOutcome::ExactMetadataMatch
+            if verification_method == core::VerificationMethod::BodyHash =>
+        {
+            core::VerificationOutcome::ExactBodyMatch
+        }
+        outcome => outcome,
+    };
     let evidence = core::MailboxEvidence {
-        verification_method: core::VerificationMethod::MetadataReconciliation,
-        verification_outcome: Some(summary.verification_outcome()),
+        verification_method,
+        verification_outcome: Some(verification_outcome),
         source_messages: summary.total_source,
         destination_messages: summary.total_destination,
         source_bytes,
@@ -1271,7 +1381,8 @@ mod tests {
         TerminalEvidenceSource, automap_blocks_live_certification, automap_folder_kind,
         infer_automap_folder_mapping, message_verification_enabled,
         persist_engine_identity_before_launch, process_tail_text, record_process_tail,
-        resolve_imapsync_identity, terminal_evidence_source, validate_destination_folder_policy,
+        resolve_imapsync_identity, terminal_evidence_source, validate_body_hash_limits,
+        validate_destination_folder_policy,
     };
     use crate::{
         BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES, StreamOutcome,
@@ -1286,6 +1397,34 @@ mod tests {
         };
         form.profile.engine = crate::core::Engine::ImapSync;
         form
+    }
+
+    #[test]
+    fn body_hash_verification_requires_bounded_stable_imap_plan() {
+        let mut form = unsuitable_live_form();
+        form.profile.body_hash_verification = true;
+        assert!(validate_body_hash_limits(&form).is_ok());
+
+        form.profile.body_hash_max_bytes = 0;
+        assert!(validate_body_hash_limits(&form).is_err());
+        form.profile.body_hash_max_bytes = 8 * 1024 * 1024;
+        form.profile.body_hash_max_total_bytes = 4 * 1024 * 1024;
+        assert!(validate_body_hash_limits(&form).is_err());
+
+        form.profile.body_hash_max_total_bytes = 512 * 1024 * 1024;
+        form.profile.engine = crate::core::Engine::Dovecot;
+        assert!(validate_body_hash_limits(&form).is_err());
+    }
+
+    #[test]
+    fn body_hash_setting_is_bound_to_plan_fingerprint() {
+        let mut form = unsuitable_live_form();
+        let original = form.plan_fingerprint();
+        form.profile.body_hash_verification = true;
+        assert_ne!(original, form.plan_fingerprint());
+        let original = form.plan_fingerprint();
+        form.profile.body_hash_max_total_bytes += 1;
+        assert_ne!(original, form.plan_fingerprint());
     }
 
     #[test]

@@ -406,6 +406,17 @@ impl UiLanguage {
             "Allow message-size mismatch  (--allowsizemismatch)" => {
                 "Abweichende Nachrichtengröße erlauben  (--allowsizemismatch)"
             }
+            "Enable bounded body-content verification (forensic)" => {
+                "Begrenzte Inhaltsprüfung der Nachrichtentexte aktivieren (forensisch)"
+            }
+            "Downloads and hashes message bodies from both accounts. It is opt-in, bounded, and requires a stable metadata-preserving plan." => {
+                "Lädt Nachrichtentexte aus beiden Konten herunter und hasht sie. Dies ist optional, begrenzt und erfordert einen stabilen, metadatenerhaltenden Plan."
+            }
+            "Body proof is resource-intensive. The run will stop rather than exceed either byte bound; successful evidence is labeled BodyHash." => {
+                "Der Inhaltsnachweis benötigt viele Ressourcen. Der Lauf stoppt, bevor eine Byte-Grenze überschritten wird; erfolgreiche Nachweise werden als BodyHash gekennzeichnet."
+            }
+            "Maximum body bytes per message" => "Maximale Body-Bytes pro Nachricht",
+            "Maximum body bytes per verification" => "Maximale Body-Bytes pro Verifizierung",
             "Performance" => "Leistung",
             "Fast I/O for source  (--fastio1)" => "Schnelle I/O für die Quelle  (--fastio1)",
             "Uses imapsync's faster source I/O path; test this with the provider before a production cutover." => {
@@ -1111,6 +1122,11 @@ mod tests {
             "These controls affect the imapsync fallback. Dovecot-native migrations use doveadm and server-side consistency rules.",
             "Delete destination messages missing from source  (--delete2)",
             "Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.",
+            "Enable bounded body-content verification (forensic)",
+            "Downloads and hashes message bodies from both accounts. It is opt-in, bounded, and requires a stable metadata-preserving plan.",
+            "Body proof is resource-intensive. The run will stop rather than exceed either byte bound; successful evidence is labeled BodyHash.",
+            "Maximum body bytes per message",
+            "Maximum body bytes per verification",
             "The Extra imapsync options field accepts only the documented safe tuning and diagnostic allowlist. Connection, credential, TLS, destructive, logging, and unknown flags are rejected.",
             "Selected mailbox scope remains explicit while this drawer is open.",
             "Choose migration engine",

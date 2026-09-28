@@ -758,10 +758,14 @@ impl StateStore {
         // state is verification_difference. Do not allow a caller to persist
         // that label with counters that describe a different result and rely
         // on the next database reopen to discover the contradiction.
-        if value.verification_outcome == Some(VerificationOutcome::ExactMetadataMatch)
-            && (!value.is_exact_match()
-                || (value.verification_method == VerificationMethod::AggregateEngine
-                    && !value.authoritative))
+        if matches!(
+            value.verification_outcome,
+            Some(VerificationOutcome::ExactBodyMatch | VerificationOutcome::ExactMetadataMatch)
+        ) && (!value.is_exact_match()
+            || (value.verification_method == VerificationMethod::AggregateEngine
+                && !value.authoritative)
+            || (value.verification_method == VerificationMethod::BodyHash
+                && value.verification_outcome != Some(VerificationOutcome::ExactBodyMatch)))
         {
             return Err(rusqlite::Error::InvalidQuery);
         }

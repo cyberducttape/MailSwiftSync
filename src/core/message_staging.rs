@@ -1,6 +1,7 @@
 //! Private SQLite staging for live metadata reconciliation.
 
 use std::{
+    collections::HashMap,
     fs::{self, OpenOptions},
     path::PathBuf,
 };
@@ -12,7 +13,7 @@ use super::{ExtractedMessage, ExtractedMessages, MailboxMessageKey, sqlite_i64};
 
 pub(crate) const STAGE_BATCH_SIZE: i64 = 512;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StagedMessageSide {
     Source = 0,
     Destination = 1,
@@ -35,6 +36,10 @@ pub(crate) struct StagedMessage {
 pub(crate) struct MessageMetadataStage {
     connection: Option<Connection>,
     path: Option<PathBuf>,
+    /// Body fingerprints are retained only for the explicitly enabled
+    /// forensic verification path. Metadata-only verification remains fully
+    /// staged in SQLite and does not retain content hashes in memory.
+    content_fingerprints: HashMap<(StagedMessageSide, MailboxMessageKey), String>,
 }
 
 impl MessageMetadataStage {
@@ -68,6 +73,7 @@ impl MessageMetadataStage {
         let mut stage = Self {
             connection: Some(connection),
             path: Some(path),
+            content_fingerprints: HashMap::new(),
         };
         if let Err(error) = stage.initialize() {
             let path = stage.path.take();
@@ -90,6 +96,7 @@ impl MessageMetadataStage {
         let mut stage = Self {
             connection: Some(Connection::open_in_memory()?),
             path: None,
+            content_fingerprints: HashMap::new(),
         };
         stage.initialize()?;
         Ok(stage)
@@ -132,6 +139,18 @@ impl MessageMetadataStage {
         side: StagedMessageSide,
         messages: &ExtractedMessages,
     ) -> Result<(), String> {
+        self.insert_messages_with_fingerprints(side, messages, &HashMap::new())
+    }
+
+    pub(crate) fn insert_messages_with_fingerprints(
+        &mut self,
+        side: StagedMessageSide,
+        messages: &ExtractedMessages,
+        fingerprints: &HashMap<MailboxMessageKey, String>,
+    ) -> Result<(), String> {
+        if fingerprints.keys().any(|key| !messages.contains_key(key)) {
+            return Err("body fingerprint did not have a matching staged message".to_owned());
+        }
         let tx = self
             .connection_ref()
             .unchecked_transaction()
@@ -169,7 +188,12 @@ impl MessageMetadataStage {
                     .map_err(|e| e.to_string())?;
             }
         }
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        for (key, fingerprint) in fingerprints {
+            self.content_fingerprints
+                .insert((side, key.clone()), fingerprint.clone());
+        }
+        Ok(())
     }
 
     pub(crate) fn delete_mailbox(
@@ -177,6 +201,10 @@ impl MessageMetadataStage {
         side: StagedMessageSide,
         mailbox: &str,
     ) -> Result<(), String> {
+        self.content_fingerprints
+            .retain(|(fingerprint_side, key), _| {
+                *fingerprint_side != side || key.mailbox.as_ref() != mailbox
+            });
         self.connection_ref()
             .execute(
                 "DELETE FROM staged_messages WHERE side=?1 AND mailbox=?2",
@@ -237,6 +265,60 @@ impl MessageMetadataStage {
 
     pub(crate) fn connection(&self) -> &Connection {
         self.connection_ref()
+    }
+
+    pub(crate) fn content_fingerprints(
+        &self,
+        side: StagedMessageSide,
+    ) -> HashMap<MailboxMessageKey, String> {
+        self.content_fingerprints
+            .iter()
+            .filter(|((fingerprint_side, _), _)| *fingerprint_side == side)
+            .map(|((_, key), fingerprint)| (key.clone(), fingerprint.clone()))
+            .collect()
+    }
+
+    pub(crate) fn all_messages(
+        &self,
+        side: StagedMessageSide,
+    ) -> rusqlite::Result<ExtractedMessages> {
+        let mut statement = self.connection_ref().prepare(
+            "SELECT mailbox,uidvalidity,uid,message_id,internal_date,size_bytes FROM staged_messages WHERE side=?1 ORDER BY rowid",
+        )?;
+        let rows = statement.query_map([side.as_i64()], |row| {
+            let uidvalidity: i64 = row.get(1)?;
+            let uidvalidity = if uidvalidity >= 0 {
+                Some(
+                    u64::try_from(uidvalidity)
+                        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, uidvalidity))?,
+                )
+            } else {
+                None
+            };
+            let uid: String = row.get(2)?;
+            let size_bytes = row
+                .get::<_, Option<i64>>(5)?
+                .map(|value| {
+                    u64::try_from(value)
+                        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(5, value))
+                })
+                .transpose()?;
+            let key = MailboxMessageKey::with_shared_mailbox(
+                std::sync::Arc::from(row.get::<_, String>(0)?),
+                uidvalidity,
+                uid.clone(),
+            );
+            Ok((
+                key,
+                ExtractedMessage {
+                    message_id: row.get(3)?,
+                    uid: Some(uid),
+                    size_bytes,
+                    internal_date: row.get(4)?,
+                },
+            ))
+        })?;
+        rows.collect()
     }
 }
 
@@ -316,9 +398,19 @@ mod tests {
                 internal_date: Some("01-Jan-2024 00:00:00 +0000".into()),
             },
         )]);
+        let key = messages.keys().next().unwrap().clone();
+        let fingerprints = HashMap::from([(key.clone(), "a".repeat(64))]);
         stage
-            .insert_messages(StagedMessageSide::Source, &messages)
+            .insert_messages_with_fingerprints(StagedMessageSide::Source, &messages, &fingerprints)
             .unwrap();
+        assert_eq!(
+            stage.content_fingerprints(StagedMessageSide::Source),
+            fingerprints
+        );
+        assert_eq!(
+            stage.all_messages(StagedMessageSide::Source).unwrap(),
+            messages
+        );
         stage.connection().execute_batch("CREATE TABLE staged_matched(side INTEGER,mailbox TEXT,uidvalidity INTEGER,uid TEXT,PRIMARY KEY(side,mailbox,uidvalidity,uid));").unwrap();
         let batch = stage
             .batch(StagedMessageSide::Source, 0, true, true)
@@ -329,5 +421,10 @@ mod tests {
             .delete_mailbox(StagedMessageSide::Source, "INBOX")
             .unwrap();
         assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 0);
+        assert!(
+            stage
+                .content_fingerprints(StagedMessageSide::Source)
+                .is_empty()
+        );
     }
 }

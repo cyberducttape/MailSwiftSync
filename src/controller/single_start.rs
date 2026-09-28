@@ -114,6 +114,13 @@ impl App {
             );
             return;
         }
+        if let Err(error) = crate::runner::validate_body_hash_limits(&self.form) {
+            self.set_status(
+                format!("Body-content verification settings are invalid: {error}"),
+                StatusSeverity::Error,
+            );
+            return;
+        }
         if self.requires_live_imaps_auth_probe() {
             let plan_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
             let credential_fingerprint = self.form.credential_fingerprint();
