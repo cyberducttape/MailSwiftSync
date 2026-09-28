@@ -281,15 +281,17 @@ impl ThemeColors {
     fn windows95() -> Self {
         let navy = Color32::from_rgb(0, 0, 128);
         Self {
-            background: Color32::from_rgb(0, 128, 128),
+            // Keep the classic teal while giving black status text a full
+            // normal-text contrast ratio on the app background.
+            background: Color32::from_rgb(0, 140, 140),
             panel: Color32::from_rgb(192, 192, 192),
             window: Color32::from_rgb(166, 202, 240),
             text_primary: Color32::BLACK,
             text_secondary: Color32::from_rgb(35, 35, 35),
             info: Color32::BLACK,
-            success: Color32::from_rgb(0, 75, 0),
-            warning: Color32::from_rgb(100, 50, 0),
-            danger: Color32::from_rgb(128, 0, 0),
+            success: Color32::BLACK,
+            warning: Color32::BLACK,
+            danger: Color32::BLACK,
             link: Color32::BLACK,
             selection: navy,
             border: Color32::WHITE,
@@ -298,16 +300,18 @@ impl ThemeColors {
 
     fn windows31() -> Self {
         Self {
-            background: Color32::from_rgb(0, 64, 64),
+            // The classic desktop teal is kept at a luminance where the
+            // black normal-text status palette remains WCAG AA readable.
+            background: Color32::from_rgb(0, 132, 132),
             panel: Color32::from_rgb(128, 128, 128),
             window: Color32::from_rgb(212, 208, 200),
             text_primary: Color32::BLACK,
             text_secondary: Color32::BLACK,
-            info: Color32::from_rgb(0, 0, 45),
-            success: Color32::from_rgb(0, 15, 0),
-            warning: Color32::from_rgb(35, 12, 0),
-            danger: Color32::from_rgb(50, 0, 0),
-            link: Color32::from_rgb(0, 0, 80),
+            info: Color32::BLACK,
+            success: Color32::BLACK,
+            warning: Color32::BLACK,
+            danger: Color32::BLACK,
+            link: Color32::BLACK,
             selection: Color32::from_rgb(0, 0, 128),
             border: Color32::WHITE,
         }
@@ -453,22 +457,27 @@ mod tests {
     #[test]
     fn semantic_colors_meet_wcag_aa_contrast_on_every_surface() {
         for theme in ThemeKind::all() {
-            let colors = ThemeColors::for_theme(*theme, true);
-            let theme_name = theme.label();
-            for (label, foreground) in [
-                ("info", colors.info),
-                ("success", colors.success),
-                ("warning", colors.warning),
-                ("danger", colors.danger),
-                ("link", colors.link),
-            ] {
-                for (surface_name, surface) in [("panel", colors.panel), ("window", colors.window)]
-                {
-                    assert!(
-                        contrast_ratio(foreground, surface) >= 4.5,
-                        "{theme_name}: {label} on {surface_name} is {:.2}:1",
-                        contrast_ratio(foreground, surface)
-                    );
+            for dark_mode in [true, false] {
+                let colors = ThemeColors::for_theme(*theme, dark_mode);
+                let theme_name = theme.label();
+                for (label, foreground) in [
+                    ("info", colors.info),
+                    ("success", colors.success),
+                    ("warning", colors.warning),
+                    ("danger", colors.danger),
+                    ("link", colors.link),
+                ] {
+                    for (surface_name, surface) in [
+                        ("background", colors.background),
+                        ("panel", colors.panel),
+                        ("window", colors.window),
+                    ] {
+                        assert!(
+                            contrast_ratio(foreground, surface) >= 4.5,
+                            "{theme_name} ({dark_mode}): {label} on {surface_name} is {:.2}:1",
+                            contrast_ratio(foreground, surface)
+                        );
+                    }
                 }
             }
         }
