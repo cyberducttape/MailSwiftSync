@@ -91,7 +91,7 @@ impl App {
                                 let (badge, color) = job_state_badge(&mailbox.job.state, colors);
                                 if ui.selectable_label(self.job_id.as_deref() == Some(mailbox.job.id.as_str()), &mailbox.job.destination_mailbox).clicked() { self.job_id = Some(mailbox.job.id.clone()); }
                                 ui.label(evidence_label);
-                                ui.label(RichText::new(badge).color(color));
+                                ui.label(RichText::new(self.language.text(badge)).color(color));
                                 ui.end_row();
                             }
                         });

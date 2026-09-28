@@ -130,7 +130,7 @@ impl App {
                     .strong()
                     .color(self.theme_colors().text_secondary),
             );
-            ui.heading(format_phase_name(phase));
+            ui.heading(self.language.text(format_phase_name(phase)));
             if attention_count > 0 {
                 ui.label(
                     RichText::new(format!(
@@ -225,7 +225,7 @@ impl App {
         ui.add_space(16.0);
         ui.group(|ui| {
             ui.heading(self.language.text("Recommended next step"));
-            ui.label(next_action);
+            ui.label(self.language.text(next_action));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if ui
@@ -576,7 +576,7 @@ impl App {
                             "{} {}",
                             if current_index != usize::MAX && index < current_index { "✓" }
                             else if index == current_index { "●" } else { "○" },
-                            format_phase_name(*phase)
+                            self.language.text(format_phase_name(*phase))
                         ))
                         .strong()
                         .color(color),

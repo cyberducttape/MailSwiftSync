@@ -27,6 +27,56 @@ impl UiLanguage {
         }
         match source {
             "Overview" => "Übersicht",
+            "Discovery" => "Entdeckung",
+            "Preflight" => "Vorabprüfung",
+            "Pilot" => "Pilot",
+            "Seed" => "Erstkopie",
+            "Catch-up" => "Nachlauf",
+            "Final delta" => "Finales Delta",
+            "Complete" => "Abgeschlossen",
+            "Attention" => "Prüfung erforderlich",
+            "A migration is running — monitor Activity or use Stop migration if you need to halt it." => {
+                "Eine Migration läuft — beobachten Sie die Aktivität oder verwenden Sie „Migration anhalten“, wenn Sie sie stoppen müssen."
+            }
+            "Review Attention items before starting another migration." => {
+                "Prüfen Sie die offenen Punkte, bevor Sie eine weitere Migration starten."
+            }
+            "Create the project, then run a dry preflight against a test mailbox." => {
+                "Erstellen Sie das Projekt und führen Sie anschließend eine Vorabprüfung mit einem Testpostfach aus."
+            }
+            "Run the dry preflight and review every blocker before going live." => {
+                "Führen Sie die Vorabprüfung aus und prüfen Sie jede Blockierung vor dem Live-Betrieb."
+            }
+            "Review the preflight, then choose a small pilot mailbox." => {
+                "Prüfen Sie die Vorabprüfung und wählen Sie anschließend ein kleines Pilotpostfach."
+            }
+            "Review the pilot result and prepare the seed operation." => {
+                "Prüfen Sie das Pilotergebnis und bereiten Sie die Erstkopie vor."
+            }
+            "Run the seed operation, then schedule a catch-up pass." => {
+                "Führen Sie die Erstkopie aus und planen Sie anschließend einen Nachlauf."
+            }
+            "Run catch-up during the migration window and review its result." => {
+                "Führen Sie den Nachlauf während des Migrationsfensters aus und prüfen Sie das Ergebnis."
+            }
+            "Run the final delta, then open Verification for reconciliation." => {
+                "Führen Sie das finale Delta aus und öffnen Sie anschließend die Verifizierung zum Abgleich."
+            }
+            "Review evidence for each mailbox and export the verification report." => {
+                "Prüfen Sie die Nachweise jedes Postfachs und exportieren Sie den Verifizierungsbericht."
+            }
+            "The project is complete; export the report and retain the audit record." => {
+                "Das Projekt ist abgeschlossen; exportieren Sie den Bericht und bewahren Sie den Prüfdatensatz auf."
+            }
+            "The batch is running — monitor Activity and review any Attention rows before continuing." => {
+                "Der Stapel läuft — beobachten Sie die Aktivität und prüfen Sie offene Zeilen, bevor Sie fortfahren."
+            }
+            "Review Attention items in the imported batch before starting another operation." => {
+                "Prüfen Sie offene Punkte im importierten Stapel, bevor Sie einen weiteren Vorgang starten."
+            }
+            "Review the imported mailbox rows, then run a dry preflight before any live migration." => {
+                "Prüfen Sie die importierten Postfachzeilen und führen Sie vor jeder Live-Migration eine Vorabprüfung aus."
+            }
             "Plan" => "Plan",
             "Mailboxes" => "Postfächer",
             "Activity" => "Aktivität",
@@ -286,9 +336,7 @@ impl UiLanguage {
             }
             "Connect" => "Verbinden",
             "Configure source and destination" => "Quelle und Ziel konfigurieren",
-            "Preflight" => "Vorabprüfung",
             "Authenticate and review blockers" => "Authentifizieren und Blockierungen prüfen",
-            "Pilot" => "Pilot",
             "Start with a small mailbox set" => "Mit wenigen Postfächern beginnen",
             "Import mailbox list" => "Postfachliste importieren",
             "For one mailbox, continue with the migration plan below." => {
@@ -415,7 +463,23 @@ impl UiLanguage {
             "Source keyring ID" => "Schlüsselbund-ID der Quelle",
             "Destination keyring ID" => "Schlüsselbund-ID des Ziels",
             "Imported" => "Importiert",
-            "Attention" => "Prüfung erforderlich",
+            "Queued" => "Wartend",
+            "Retrying" => "Wird wiederholt",
+            "○ Imported" => "○ Importiert",
+            "✓ Verified with exceptions" => "✓ Mit Ausnahmen verifiziert",
+            "✓ Verified" => "✓ Verifiziert",
+            "✓ Completed" => "✓ Abgeschlossen",
+            "● Running" => "● Läuft",
+            "○ Queued" => "○ Wartend",
+            "◌ Preflight" => "◌ Vorabprüfung",
+            "↻ Retrying" => "↻ Wird wiederholt",
+            "○ Ready" => "○ Bereit",
+            "↻ Delta required" => "↻ Delta erforderlich",
+            "≠ Verification difference" => "≠ Verifizierungsabweichung",
+            "! Attention" => "! Prüfung erforderlich",
+            "× Failed" => "× Fehlgeschlagen",
+            "× Cancelled" => "× Abgebrochen",
+            "? Unknown" => "? Unbekannt",
             "Failed" => "Fehlgeschlagen",
             "Delta required" => "Delta erforderlich",
             "Verified" => "Verifiziert",
@@ -708,6 +772,30 @@ mod tests {
             "Message-level evidence",
             "Verification authority",
             "The transfer finished, but no mailbox-level evidence has been captured yet.",
+            "Discovery",
+            "Seed",
+            "Catch-up",
+            "Final delta",
+            "Complete",
+            "A migration is running — monitor Activity or use Stop migration if you need to halt it.",
+            "Review Attention items before starting another migration.",
+            "Run the dry preflight and review every blocker before going live.",
+            "The batch is running — monitor Activity and review any Attention rows before continuing.",
+            "Review the imported mailbox rows, then run a dry preflight before any live migration.",
+            "✓ Verified with exceptions",
+            "✓ Verified",
+            "✓ Completed",
+            "● Running",
+            "○ Queued",
+            "◌ Preflight",
+            "↻ Retrying",
+            "○ Ready",
+            "↻ Delta required",
+            "≠ Verification difference",
+            "! Attention",
+            "× Failed",
+            "× Cancelled",
+            "? Unknown",
         ] {
             assert_ne!(
                 UiLanguage::German.text(key),

@@ -9,9 +9,9 @@ use crate::controller::{
     BatchActionPlan, BatchActionRow, BatchExecutionMode, BulkRetryScope, BulkStateSet,
     build_batch_action_plan,
 };
+use crate::ui::WorkspaceView;
 use crate::ui::batch_filter::selected_visibility_counts;
 use crate::ui::job_state_badge;
-use crate::ui::{WorkspaceView, display_state_key};
 use eframe::egui::{self, Color32, RichText};
 use egui_extras::{Column, TableBuilder};
 
@@ -388,7 +388,7 @@ impl App {
                         });
                         row.col(|ui| {
                             let (badge, color) = job_state_badge(&job.state, colors);
-                            ui.label(RichText::new(badge).color(color));
+                            ui.label(RichText::new(self.language.text(badge)).color(color));
                         });
                         row.col(|ui| {
                             if job.state == "attention" {
@@ -470,7 +470,10 @@ impl App {
                     ui.label(
                         self.language
                             .text("State: {} · {}")
-                            .replace("{}", &display_state_key(&job.state))
+                            .replace(
+                                "{}",
+                                self.language.text(crate::ui::display_job_state(&job.state)),
+                            )
                             .replacen("{}", destructive, 1),
                     );
                 });

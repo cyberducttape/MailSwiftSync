@@ -389,7 +389,7 @@ impl App {
                             ui.label(&job.source_mailbox);
                             ui.label(&job.destination_mailbox);
                             let (badge, color) = job_state_badge(&job.state, colors);
-                            ui.label(RichText::new(badge).color(color));
+                            ui.label(RichText::new(self.language.text(badge)).color(color));
                             ui.end_row();
                         }
                     });
@@ -476,7 +476,7 @@ impl App {
                             if ui.selectable_label(selected, &project.name).clicked() {
                                 selected_project = Some(project.id.clone());
                             }
-                            ui.label(format_phase_name(project.phase));
+                            ui.label(self.language.text(format_phase_name(project.phase)));
                             ui.label(&project.source_endpoint);
                             ui.label(&project.destination_endpoint);
                             ui.end_row();
