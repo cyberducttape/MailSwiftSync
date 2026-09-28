@@ -141,6 +141,7 @@ impl App {
 mod tests {
     use super::{filter_batch_indices, selected_visibility_counts};
     use std::collections::HashSet;
+    use std::path::PathBuf;
     use std::time::Instant;
 
     #[test]
@@ -259,5 +260,55 @@ mod tests {
         eprintln!(
             "scale-ui rows={rows} filter_ms={filter_ms} selection_all_ms={selection_all_ms} state_update_ms={state_update_ms} first_frame_ms={first_frame_ms}"
         );
+    }
+
+    #[test]
+    #[ignore = "opt-in release full-shell benchmark; run scripts/benchmark-ui-scale.sh"]
+    fn full_shell_ui_benchmark() {
+        use crate::bulk_import::BulkJob;
+        use crate::{App, Form};
+        use eframe::App as EframeApp;
+        use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
+        let rows = 100_000;
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-ui-scale-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = App::from_state_path(Some(&state_path));
+        let base = Form::default();
+        for index in 0..rows {
+            let mut form = base.clone();
+            form.profile.source_user = format!("user{index}@source.example");
+            form.profile.destination_user = format!("user{index}@destination.example");
+            app.bulk_jobs.push(BulkJob {
+                label: format!("Mailbox {index}"),
+                form,
+                state: "queued".into(),
+            });
+            app.bulk_job_ids.push(format!("job-{index}"));
+        }
+        app.bulk_jobs_generation = 1;
+        app.active_view = crate::ui::WorkspaceView::Mailboxes;
+
+        let context = Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let started = Instant::now();
+        let output = context.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| EframeApp::ui(&mut app, ui, &mut frame),
+        );
+        let first_frame_ms = started.elapsed().as_millis();
+        assert!(!output.shapes.is_empty());
+        eprintln!("scale-ui-full rows={rows} first_frame_ms={first_frame_ms}");
+        drop(app);
+        remove_benchmark_state_files(state_path);
+    }
+
+    fn remove_benchmark_state_files(state_path: PathBuf) {
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_file(state_path.with_extension("lock"));
     }
 }

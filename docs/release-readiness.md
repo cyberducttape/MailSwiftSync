@@ -279,12 +279,15 @@ and require the corresponding integration run.
   explicit selection-all, a 1,000-row state-update refresh, and a real
   virtualized egui first frame. The same local release baseline measured 4 ms
   for filtering, 12 ms for selecting all 100,000 IDs, 3 ms for refreshing a
-  1,000-row state update, and 2 ms for the virtualized first frame. These are
-  release-mode host baselines. The script enforces default budgets of 100 ms
-  for filtering, 250 ms for selection-all, 100 ms for state refresh, and 100
-  ms for the virtualized first frame; qualified host classes may override
-  these with the documented `MAILSWIFTSYNC_UI_*_BUDGET_MS` environment
-  variables. Full application startup/render measurement remains separate.
+  1,000-row state update, and 2 ms for the virtualized first frame. The same
+  script now renders the complete application shell with 100,000 rows; the
+  current baseline is 86 ms for that first frame. These are release-mode host
+  baselines. The script enforces default budgets of 100 ms for filtering, 250
+  ms for selection-all, 100 ms for state refresh, 100 ms for the virtualized
+  first frame, and 500 ms for the full shell; qualified host classes may
+  override these with the documented `MAILSWIFTSYNC_UI_*_BUDGET_MS`
+  environment variables. This is a first-frame render gate; native window
+  startup and GPU initialization remain separate platform-release measurements.
 
   Durable workspace restart/read behavior has a separate opt-in command,
   `scripts/benchmark-reload-scale.sh`. It seeds and closes a file-backed
