@@ -722,7 +722,9 @@ mod tests {
             stage.content_fingerprints(StagedMessageSide::Source).len(),
             1
         );
-        drop(stage);
+        let mut stage = stage;
+        stage.finish().unwrap();
+        assert!(!path.exists());
 
         let stage = MessageMetadataStage::open_durable(path.clone(), "plan-b").unwrap();
         assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 0);

@@ -238,6 +238,9 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                             send_reliable_event(&tx, Event::Evidence(evidence))?;
                         }
                         Err(error) => {
+                            eprintln!(
+                                "[verification] message-level IMAP verification failed: {error}"
+                            );
                             send_reliable_event(
                                 &tx,
                                 Event::VerificationFailed(format!(

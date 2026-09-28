@@ -491,6 +491,10 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                     .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
                                 }
                                 Err(error) => {
+                                    eprintln!(
+                                        "[{}] message-level IMAP verification failed: {error}",
+                                        index + 1
+                                    );
                                     let safe = crate::ui::redact_secrets(
                                         &error,
                                         [
