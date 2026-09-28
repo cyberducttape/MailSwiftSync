@@ -69,7 +69,21 @@ cleanup() {
   wait "${source_pid:-}" 2>/dev/null || true
   wait "${destination_pid:-}" 2>/dev/null || true
   if [[ "${MAILSWIFTSYNC_KEEP_LAB:-0}" != "1" ]]; then
-    rm -rf -- "$workspace"
+    # Dovecot may still be unlinking its runtime socket or pid files just
+    # after the master exits. Retry the private temporary-tree cleanup so
+    # that this shutdown race cannot turn a passing fault assertion into a
+    # spurious integration failure.
+    local removed=0
+    for _ in {1..20}; do
+      if rm -rf -- "$workspace" 2>/dev/null; then
+        removed=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$removed" != 1 ]]; then
+      echo "WARN: could not remove storage-fault workspace after retries: $workspace" >&2
+    fi
   else
     echo "Keeping storage-fault lab workspace: $workspace" >&2
   fi
