@@ -68,6 +68,10 @@ impl App {
             return;
         }
         if self.bulk_jobs.is_empty() {
+            ui.label(
+                RichText::new("0 selected · 0 visible · 0 hidden by current filter")
+                    .color(colors.text_secondary),
+            );
             ui.group(|ui| {
                 ui.heading(self.language.text("No bulk mailbox list loaded"));
                 ui.label(
