@@ -40,7 +40,7 @@ very large accounts.
 
 ## Feature Completeness Matrix
 
-### Core Verification ⚠️ METADATA-LEVEL MESSAGE RECONCILIATION; CONTENT PROOF PENDING
+### Core Verification ⚠️ METADATA-LEVEL BY DEFAULT; OPT-IN BODY PROOF UNQUALIFIED
 | Feature | Status | Evidence |
 |---------|--------|----------|
 | Message-level mismatch detection | ✅ Wired for TLS imapsync | Post-transfer account verifier calls `MessageVerification`; live provider qualification remains pending |
@@ -48,7 +48,8 @@ very large accounts.
 | Source/destination message extraction | ✅ Wired for TLS imapsync | Bounded authenticated IMAP LIST/SELECT/UID FETCH path; plain IMAP fails closed |
 | Missing/extra/changed detection | ✅ Wired | Durable mismatch rows commit with terminal evidence and render in the operator verification report; GUI pagination remains limited |
 | Durable aggregate evidence storage | ✅ Wired | SQLite schema v12; aggregate and supplied message counters survive reports |
-| Plan-aware verification modes | ⚠️ Fail-closed | `automap`, `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse independent exact message evidence until policy-aware reconciliation is implemented |
+| Plan-aware verification modes | ⚠️ Fail-closed | `automap`, `justfolders`, `addheader`, disabled internal-date sync, and allowed size mismatches refuse independent exact message evidence; bounded body proof is available only for stable metadata-preserving plans |
+| Bounded body-content proof | ⚠️ Wired, not provider-qualified | Explicit encrypted-imapsync mode hashes bounded RFC822 bodies on both sides, persists only the proof classification/mismatches, and fails closed on coverage or byte-budget violations |
 
 ### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
 | Provider | Status | Coverage |
@@ -75,7 +76,7 @@ very large accounts.
 | Connection exhaustion | ⚠️ Partial | Generic bounded concurrency and failure handling; no provider-specific connection-pool controller |
 | Provider unavailability | ⚠️ Partial | Generic failure classification wired in controller; provider-specific intelligence not yet integrated |
 
-### Recovery & Durability ✅ DURABLE CORE; GUIDANCE PARTIALLY WIRED
+### Recovery & Durability ✅ DURABLE CORE; QUALIFICATION OUTSTANDING
 | Feature | Status | Implementation |
 |---------|--------|-----------------|
 | Checkpoint persistence | ✅ | Durable run/checkpoint state is wired |
@@ -195,7 +196,7 @@ new metadata verifier against real accounts.
 ## Feature Roadmap
 
 ### Completed (This Release)
-- ✅ TLS imapsync metadata-level message reconciliation wired into live runs; body proof remains pending
+- ✅ TLS imapsync metadata-level message reconciliation wired into live runs; bounded opt-in body proof is wired but remains provider-unqualified
 - ⚠️ Observed provider-signal classification prototype (adaptive control not live-wired)
 - ✅ Durable controller recovery and maintenance-window supervision
 - ✅ Recovery dashboard/planner CLI command (`recovery-guidance`)

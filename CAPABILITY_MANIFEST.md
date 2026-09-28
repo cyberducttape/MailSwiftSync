@@ -37,7 +37,7 @@ that status layout against the machine-readable source.
 |------------|------|-------|--------|---------------|-------|
 | **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Exercised by imapsync against local Dovecot server fixtures; native-Dovecot coverage pending |
 | **Message-level mismatch detection** | yes | yes (TLS imapsync path) | unit+scenario | pending | Folder-aware verifier is called after successful imapsync transfers; failures remain operator-reviewable and are never downgraded to aggregate success |
-| **Named message evidence levels** | yes | partial | unit | pending | MetadataMatched/StrongMetadataMatch are now produced by the live verifier; content hashing remains unimplemented and is not claimed |
+| **Named message evidence levels** | yes | partial | unit+integration | pending | Metadata reconciliation is the default; explicit encrypted-imapsync body-hash runs emit a distinct Level 4-style bounded body-proof outcome after complete coverage |
 | **Checkpoint persistence** per message | no | no | none | no | NOT implemented; evidence persists per run, not per message |
 | **Crash recovery** | partial | partial | unit | no | Run-level recovery works; message-level recovery not wired |
 | **Exception acceptance workflow** | yes | yes | unit | no | UI accepts exceptions, stored durably |
@@ -78,8 +78,8 @@ that status layout against the machine-readable source.
 | **Pre-migration risk report** | yes | partial | unit | no | Scale report is available through the headless `risk` command; automatic GUI/live gating remains pending |
 | **Post-migration exception report** | yes | partial | unit | no | Report is available through the headless `post-report` command; automatic generation from durable live evidence remains pending |
 | **Provider-specific runbooks** | yes | partial | unit | no | Runbooks are exposed through the headless `runbook` command; GUI workflow surfacing remains pending |
-| **Recovery guidance** (7 scenarios) | yes | partial | unit | no | Fail-closed guidance is exposed through the headless `recovery-guidance` command; dashboard/UI integration remains pending |
-| **Resume/recovery dashboard** | yes | no | unit | no | Data structures defined, NOT implemented in UI |
+| **Recovery guidance** (7 scenarios) | yes | partial | unit+integration | no | Fail-closed guidance is exposed through the headless `recovery-guidance` command and rendered in the Activity workspace for interruption, transport, and throttling attention states |
+| **Resume/recovery dashboard** | yes | partial | unit+integration | no | Activity exposes durable run state and selected recovery guidance; a dedicated multi-run recovery dashboard remains future work |
 
 ---
 
@@ -124,12 +124,12 @@ particular target.
 
 ## What's Partially Working
 
-⚠️ **Code exists but not fully wired to pipeline:**
-- Content-level mismatch detection (the live path performs metadata reconciliation; body hashing is not enabled)
+⚠️ **Code exists but not fully qualified:**
+- Content-level mismatch detection (bounded body hashing is an explicit encrypted-imapsync forensic mode; provider qualification is outstanding)
 - Provider-context-specific error classification (generic provider-intelligence mapping is now applied; provider-specific context remains pending)
 - Provider-specific throttling (not implemented; generic profile throttles are enforced)
 - Pre/post-migration reports (available as explicit CLI exports, not automatically generated for every live run)
-- Recovery guidance (available as explicit CLI output, not yet a UI dashboard)
+- Dedicated recovery dashboard (supported recovery guidance is visible in Activity; a multi-run dashboard remains future work)
 
 ⚠️ **Unit-tested but not integration-tested:**
 - Native Dovecot engine execution (`doveadm sync`, native preflight, and native verification)
@@ -142,12 +142,12 @@ particular target.
 ## What Doesn't Exist
 
 ❌ **Not implemented:**
-- Message-level checkpoint persistence (per-message durability)
+- UIDVALIDITY-aware durable checkpoint context and per-message checkpoint/restart persistence
 - Provider throttling enforcement (adaptive rate limiting)
 - Automatic retry with provider-specific backoff
 - Pre-migration risk report generation during migration
 - Post-migration exception report generation
-- Resume/recovery dashboard UI
+- Dedicated multi-run resume/recovery dashboard UI
 - Provider-specific runbook exposure in UI
 - Real provider integration testing (requires live credentials)
 - Crash recovery for message-level checkpoints
@@ -156,12 +156,12 @@ particular target.
 
 ## Known Limitations
 
-1. **Message-level verification is metadata reconciliation, not content proof**
+1. **Message-level verification is metadata reconciliation by default; bounded content proof is opt-in**
    - Wired after successful TLS imapsync transfers for the full selectable-folder inventory
-   - Uses Message-ID, INTERNALDATE, and RFC822.SIZE; it does not hash message bodies
+   - The default path uses Message-ID, INTERNALDATE, and RFC822.SIZE; an explicit encrypted-imapsync forensic mode also hashes bounded RFC822 bodies with SHA-256
    - Bounded fetch pages, account/message limits, and any unstable folder fail closed; partial account evidence is not emitted
    - Live verification stages fetched metadata in SQLite and reconciles it in bounded batches; the estimated 256 MiB fetched-state budget is an admission guard, not a whole-process peak-memory guarantee
-   - Large-account qualification and load testing remain outstanding; mismatch details are still accumulated for evidence persistence, and durable per-message checkpoint/restart semantics remain future work
+   - Large-account/provider qualification remains outstanding; mismatch details are still accumulated for evidence persistence, and durable UIDVALIDITY/per-message checkpoint restart semantics remain future work
 
 2. **Provider throttling is not enforced**
    - Configurations defined for Gmail, O365, Fastmail
@@ -174,9 +174,9 @@ particular target.
    - Not tested end-to-end with actual IMAP session
    - Awaits real provider validation
 
-4. **Operator guidance is CLI-only**
+4. **Operator guidance is split between CLI and GUI**
    - Runbooks are exposed through `runbook`, but not embedded in the GUI workflow
-   - Recovery guidance is exposed through `recovery-guidance`, but not presented automatically during interruption
+   - Recovery guidance is exposed through `recovery-guidance` and is presented in Activity for the supported interruption, transport, and throttling attention states
    - Pre-migration risk assessment exists but not integrated into workflow
 
 ---
@@ -204,9 +204,9 @@ To reach GA 1.0, the following work is required:
 
 **Immediate (Before shipping v0.1):**
 - [x] Wire metadata-level message verification into the imapsync migration pipeline
-- [ ] Add content-fingerprint verification and durable per-message checkpoints
-- [ ] Implement message-level checkpoint persistence
-- [ ] Add recovery guidance to operator UI
+- [x] Add bounded opt-in content-fingerprint verification for encrypted imapsync
+- [ ] Implement UIDVALIDITY-aware and per-message checkpoint persistence
+- [x] Add supported recovery guidance to the operator Activity UI
 - [ ] Validate OAuth with real provider accounts
 - [ ] Test provider throttling with real connections
 
