@@ -489,6 +489,28 @@ mod tests {
     }
 
     #[test]
+    fn context_zoom_changes_real_widget_spacing() {
+        let context = egui::Context::default();
+        context.set_zoom_factor(1.0);
+        let _ = context.run_ui(Default::default(), |_| {});
+        let normal_button_height = measure_scale_probe_button(&context);
+        context.set_zoom_factor(1.5);
+        let _ = context.run_ui(Default::default(), |_| {});
+        let large_button_height = measure_scale_probe_button(&context);
+
+        assert_ne!(normal_button_height, large_button_height);
+        assert!(large_button_height > normal_button_height);
+    }
+
+    fn measure_scale_probe_button(context: &egui::Context) -> f32 {
+        let mut height = 0.0;
+        let _ = context.run_ui(Default::default(), |ui| {
+            height = ui.button("Scale probe").rect.height();
+        });
+        height * context.pixels_per_point()
+    }
+
+    #[test]
     fn appearance_preferences_default_legacy_files_to_english_and_read_german() {
         let legacy: AppearancePreferences =
             toml::from_str("dark_mode = true\nui_scale = 1.0\n").unwrap();
