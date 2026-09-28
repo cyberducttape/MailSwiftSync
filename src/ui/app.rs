@@ -50,11 +50,9 @@ impl eframe::App for App {
                     }
                     if self.ui_snapshot.is_stale() {
                         ui.label(
-                            egui::RichText::new(
-                                self.ui_snapshot
-                                    .stale_notice()
-                                    .unwrap_or_else(|| "Durable view is stale".to_owned()),
-                            )
+                            egui::RichText::new(self.ui_snapshot.stale_notice().unwrap_or_else(
+                                || self.language.text("Durable view is stale").to_owned(),
+                            ))
                             .color(self.theme_colors().warning),
                         );
                     }
