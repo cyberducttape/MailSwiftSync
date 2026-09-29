@@ -6,6 +6,11 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Durable verification stages are made owner-only through the opened
+  descriptor on every open, not only at creation, and existing SQLite
+  sidecars are repaired the same way. The stage must be a regular file owned
+  by the current user, and the path SQLite reopens must be the descriptor
+  that was secured.
 - Batch workers now route every controller-generated journal line, terminal
   failure detail persisted to the ledger, and error diagnostic on stderr
   through one per-mailbox redaction boundary. The message-verification failure

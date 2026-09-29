@@ -32,6 +32,65 @@ pub(crate) fn durable_stage_path(state_path: &std::path::Path, job_id: &str) -> 
         .join(format!("{safe_id}.sqlite"))
 }
 
+#[cfg(unix)]
+type FileIdentity = (u64, u64);
+#[cfg(not(unix))]
+type FileIdentity = ();
+
+fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (metadata.dev(), metadata.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+    }
+}
+
+/// Require an opened stage descriptor to be a regular file owned by this
+/// user, and make it owner-only through the descriptor rather than a path.
+fn secure_stage_file(file: &fs::File) -> std::io::Result<FileIdentity> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "verification stage is not a regular file",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "verification stage is owned by another user",
+            ));
+        }
+        crate::credentials::restrict_open_file_permissions(file)?;
+    }
+    Ok(file_identity(&metadata))
+}
+
+/// Apply the stage's owner-only contract to a sidecar left by an earlier
+/// process. SQLite creates new sidecars with the database file's mode.
+fn secure_existing_sidecar(path: &std::path::Path) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    match options.open(path) {
+        Ok(file) => secure_stage_file(&file).map(drop),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StagedMessageSide {
     Source = 0,
@@ -166,11 +225,32 @@ impl MessageMetadataStage {
         {
             return Err("verification stage path is a symbolic link".to_owned());
         }
-        options
+        let file = options
             .open(&path)
             .map_err(|error| format!("could not create durable verification stage: {error}"))?;
+        // The stage holds mail-derived metadata and optional body
+        // fingerprints. `mode(0o600)` only applies at creation, and the
+        // directory contract allows readable bits on an existing directory,
+        // so repair the file and any SQLite sidecars on every open.
+        let expected_identity = secure_stage_file(&file)
+            .map_err(|error| format!("could not secure durable verification stage: {error}"))?;
+        for suffix in ["-journal", "-wal", "-shm"] {
+            secure_existing_sidecar(&PathBuf::from(format!("{}{suffix}", path.display())))
+                .map_err(|error| {
+                    format!("could not secure durable verification stage sidecar: {error}")
+                })?;
+        }
         let connection = Connection::open(&path)
             .map_err(|error| format!("could not open durable verification stage: {error}"))?;
+        // SQLite reopens by pathname; require it to be the descriptor we
+        // secured.
+        let opened_identity = fs::symlink_metadata(&path)
+            .map_err(|error| format!("could not inspect durable verification stage: {error}"))
+            .map(|metadata| file_identity(&metadata))?;
+        if opened_identity != expected_identity {
+            return Err("durable verification stage path changed while opening".to_owned());
+        }
+        drop(file);
         let mut stage = Self {
             connection: Some(connection),
             path: Some(path),
@@ -928,6 +1008,30 @@ mod tests {
             Some(3)
         );
         assert_eq!(stage.count(side).unwrap(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reopening_a_stage_repairs_permissive_file_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        drop(MessageMetadataStage::open_durable(path.clone(), "plan").unwrap());
+        let journal = PathBuf::from(format!("{}-journal", path.display()));
+        std::fs::write(&journal, b"").unwrap();
+        for file in [&path, &journal] {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        drop(MessageMetadataStage::open_durable(path.clone(), "plan").unwrap());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        if let Ok(metadata) = std::fs::metadata(&journal) {
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
