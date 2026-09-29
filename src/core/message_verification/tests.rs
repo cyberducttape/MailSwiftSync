@@ -300,6 +300,128 @@ fn duplicate_message_ids_match_content_as_a_multiset() {
     assert_eq!(summary.changed_count, 0);
 }
 
+fn message(message_id: Option<&str>, uid: &str, size: u64, date: &str) -> ExtractedMessage {
+    ExtractedMessage {
+        message_id: message_id.map(str::to_owned),
+        uid: Some(uid.into()),
+        size_bytes: Some(size),
+        internal_date: Some(date.into()),
+    }
+}
+
+#[test]
+fn wrong_folder_message_with_different_body_is_classified_once() {
+    let source_key = MailboxMessageKey::new("INBOX", "1");
+    let dest_key = MailboxMessageKey::new("WrongFolder", "7");
+    let source = HashMap::from([(
+        source_key.clone(),
+        message(Some("<123@example.com>"), "1", 100, "2024-01-01"),
+    )]);
+    let destination = HashMap::from([(
+        dest_key.clone(),
+        message(Some("<123@example.com>"), "7", 100, "2024-01-01"),
+    )]);
+    let (mismatches, summary) = MessageVerification::detect_mismatches_with_content_fingerprints(
+        "job1",
+        "run1",
+        &source,
+        &destination,
+        &HashMap::from([(source_key, "AAA".into())]),
+        &HashMap::from([(dest_key, "BBB".into())]),
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(mismatches.len(), 1);
+    assert_eq!(
+        mismatches[0].mismatch_type,
+        MismatchType::PresentWrongFolder
+    );
+    assert_eq!(summary.changed_count, 1);
+    assert_eq!(summary.metadata_matches, 0);
+}
+
+#[test]
+fn fingerprint_resolution_does_not_consume_probable_matches() {
+    // Pair A has no Message-ID and differing metadata, so metadata
+    // reconciliation reports Missing + Extra; a unique body fingerprint in the
+    // expected folder resolves it. Pair B is an unrelated date/size probable
+    // match whose count must be unaffected.
+    let source_a = MailboxMessageKey::new("INBOX", "1");
+    let dest_a = MailboxMessageKey::new("INBOX", "11");
+    let source_b = MailboxMessageKey::new("INBOX", "2");
+    let dest_b = MailboxMessageKey::new("INBOX", "12");
+    let source = HashMap::from([
+        (source_a.clone(), message(None, "1", 100, "2024-01-01")),
+        (source_b.clone(), message(None, "2", 300, "2024-03-03")),
+    ]);
+    let destination = HashMap::from([
+        (dest_a.clone(), message(None, "11", 200, "2024-02-02")),
+        (dest_b.clone(), message(None, "12", 300, "2024-03-03")),
+    ]);
+    let (mismatches, summary) = MessageVerification::detect_mismatches_with_content_fingerprints(
+        "job1",
+        "run1",
+        &source,
+        &destination,
+        &HashMap::from([(source_a, "same".into()), (source_b, "b-src".into())]),
+        &HashMap::from([(dest_a, "same".into()), (dest_b, "b-dst".into())]),
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert!(mismatches.is_empty(), "{mismatches:?}");
+    assert_eq!(summary.metadata_matches, 1);
+    assert_eq!(summary.probable_matches, 1);
+    assert_eq!(summary.missing_count, 0);
+    assert_eq!(summary.extra_count, 0);
+}
+
+#[test]
+fn fingerprint_resolution_respects_the_expected_folder() {
+    let source_key = MailboxMessageKey::new("INBOX", "1");
+    let dest_key = MailboxMessageKey::new("Archive", "11");
+    let source = HashMap::from([(source_key.clone(), message(None, "1", 100, "2024-01-01"))]);
+    let destination = HashMap::from([(dest_key.clone(), message(None, "11", 200, "2024-02-02"))]);
+    let (_, summary) = MessageVerification::detect_mismatches_with_content_fingerprints(
+        "job1",
+        "run1",
+        &source,
+        &destination,
+        &HashMap::from([(source_key, "same".into())]),
+        &HashMap::from([(dest_key, "same".into())]),
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert_eq!(summary.metadata_matches, 0);
+    assert_eq!(summary.missing_count, 1);
+    assert_eq!(summary.extra_count, 1);
+}
+
+#[test]
+fn summary_counters_must_equal_their_classification() {
+    let source = HashMap::from([(key("1"), message(Some("<a@x>"), "1", 1, "2024-01-01"))]);
+    let destination = HashMap::from([(key("1"), message(Some("<a@x>"), "1", 1, "2024-01-01"))]);
+    let membership = VerificationMembership {
+        matched_source: source.keys().collect(),
+        matched_destination: destination.keys().collect(),
+        ..Default::default()
+    };
+    let mut summary = VerificationSummary {
+        total_source: 1,
+        total_destination: 1,
+        metadata_matches: 1,
+        probable_matches: 0,
+        missing_count: 0,
+        extra_count: 0,
+        duplicated_count: 0,
+        changed_count: 0,
+    };
+    validate_verification_summary(&source, &destination, &[], &summary, &membership).unwrap();
+    summary.changed_count = 1;
+    let error = validate_verification_summary(&source, &destination, &[], &summary, &membership)
+        .unwrap_err();
+    assert!(error.contains("changed_count"), "{error}");
+}
+
 #[test]
 fn detects_changed_messages() {
     let mut source = HashMap::new();

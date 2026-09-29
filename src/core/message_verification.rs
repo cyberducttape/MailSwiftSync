@@ -232,6 +232,27 @@ fn append_mismatch_with_budget(
 /// Core message verification engine.
 pub struct MessageVerification;
 
+type Pass1Result<'a> = Result<
+    (
+        Vec<MessageMismatch>,
+        HashSet<&'a MailboxMessageKey>,
+        HashSet<&'a MailboxMessageKey>,
+        Vec<(&'a MailboxMessageKey, &'a MailboxMessageKey)>,
+    ),
+    String,
+>;
+
+/// A validated metadata reconciliation, including the exact source and
+/// destination pairs it established. Content verification enriches these
+/// pairs; it never forms pairings of its own.
+struct MetadataReconciliation<'a> {
+    mismatches: Vec<MessageMismatch>,
+    summary: VerificationSummary,
+    membership: VerificationMembership<'a>,
+    /// Message-ID, expected folder, and exact metadata agree.
+    clean_pairs: Vec<(&'a MailboxMessageKey, &'a MailboxMessageKey)>,
+}
+
 type ReconciliationPassResult<'a> = Result<
     (
         Vec<MessageMismatch>,
@@ -264,10 +285,17 @@ impl MessageVerification {
         )
     }
 
-    /// Reconcile metadata first, then classify same-identity messages whose
-    /// independently fetched RFC822 bytes differ. Content hashes are only
-    /// authoritative when both sides supplied a bounded SHA-256 fingerprint;
-    /// missing fingerprints preserve the existing metadata-only result.
+    /// Reconcile metadata first, then enrich the reconciler's own pairs with
+    /// independently fetched RFC822 fingerprints:
+    ///
+    /// identity -> placement -> metadata -> content
+    ///
+    /// Content never forms a pairing the metadata reconciler rejected. It may
+    /// (a) resolve a Missing source and an Extra destination that share a
+    /// unique fingerprint in the expected folder, and (b) reclassify a clean
+    /// metadata pair whose bodies differ as changed. Every source and
+    /// destination message keeps exactly one classification, which is
+    /// re-validated before returning.
     pub fn detect_mismatches_with_content_fingerprints(
         job_id: &str,
         run_id: &str,
@@ -279,122 +307,71 @@ impl MessageVerification {
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
         let job_context: Arc<str> = Arc::from(job_id);
         let run_context: Arc<str> = Arc::from(run_id);
-        let (mut mismatches, mut summary) = Self::detect_mismatches_with_folder_mapping(
+        let MetadataReconciliation {
+            mut mismatches,
+            mut summary,
+            mut membership,
+            clean_pairs,
+        } = Self::reconcile_metadata(
             job_id,
             run_id,
             source_messages,
             dest_messages,
             folder_mapping,
         )?;
-        // A stable content fingerprint is a valid fallback identity when
-        // Message-ID is absent. Only unique hashes are eligible, and folder
-        // placement still has to agree with the migration mapping.
+
+        // (a) A unique content fingerprint is a fallback identity when the
+        // metadata pass could not pair a message. Only a Missing source and
+        // an Extra destination in the expected folder are eligible; a
+        // stronger classification (changed, duplicated, probable) is never
+        // overridden.
         let source_by_fingerprint = unique_fingerprint_index(source_fingerprints);
         let dest_by_fingerprint = unique_fingerprint_index(dest_fingerprints);
-        let source_index = build_uid_folder_index(source_messages);
-        let dest_index = build_uid_folder_index(dest_messages);
-        let mut mismatch_by_source = HashMap::<MailboxMessageKey, HashSet<usize>>::new();
-        let mut mismatch_by_destination = HashMap::<MailboxMessageKey, HashSet<usize>>::new();
-        for (index, mismatch) in mismatches.iter().enumerate() {
-            if let Some(key) = mismatch_source_key(mismatch, &source_index) {
-                mismatch_by_source
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(index);
-            }
-            if let Some(key) = mismatch_destination_key(mismatch, &dest_index) {
-                mismatch_by_destination
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(index);
-            }
-        }
-        let mut resolved_mismatches = HashSet::new();
-        for (fingerprint, source_key) in source_by_fingerprint {
-            let Some(dest_key) = dest_by_fingerprint.get(&fingerprint).copied() else {
-                continue;
-            };
-            if expected_destination_folder(source_key, folder_mapping) != dest_key.mailbox.as_ref()
-            {
-                continue;
-            }
-            let source_mismatches = mismatch_by_source
-                .get(source_key)
-                .cloned()
-                .unwrap_or_default();
-            let destination_mismatches = mismatch_by_destination
-                .get(dest_key)
-                .cloned()
-                .unwrap_or_default();
-            let source_present = !source_mismatches.is_empty();
-            let dest_present = !destination_mismatches.is_empty();
-            if !source_present || !dest_present {
-                continue;
-            }
-            // A content match cannot erase a stronger semantic mismatch such
-            // as a same-ID metadata change or a wrong-folder result. Only the
-            // Missing+Extra pair created by identity uncertainty is eligible
-            // for resolution by a unique content fingerprint.
-            let has_other_mismatch = source_mismatches.iter().any(|index| {
-                destination_mismatches.contains(index)
-                    && !matches!(
-                        mismatches[*index].mismatch_type,
-                        MismatchType::Missing | MismatchType::Extra
-                    )
+        let mut fingerprint_pairs = source_by_fingerprint
+            .iter()
+            .filter_map(|(fingerprint, source_key)| {
+                let source_key = source_messages.get_key_value(*source_key)?.0;
+                let dest_key = dest_messages
+                    .get_key_value(*dest_by_fingerprint.get(fingerprint)?)?
+                    .0;
+                (membership.missing_source.contains(source_key)
+                    && membership.extra_destination.contains(dest_key)
+                    && expected_destination_folder(source_key, folder_mapping)
+                        == dest_key.mailbox.as_ref())
+                .then_some((source_key, dest_key))
+            })
+            .collect::<Vec<_>>();
+        fingerprint_pairs.sort();
+        if !fingerprint_pairs.is_empty() {
+            let source_index = build_uid_folder_index(source_messages);
+            let dest_index = build_uid_folder_index(dest_messages);
+            let resolved_source = fingerprint_pairs
+                .iter()
+                .map(|(source_key, _)| *source_key)
+                .collect::<HashSet<_>>();
+            let resolved_destination = fingerprint_pairs
+                .iter()
+                .map(|(_, dest_key)| *dest_key)
+                .collect::<HashSet<_>>();
+            mismatches.retain(|mismatch| match mismatch.mismatch_type {
+                MismatchType::Missing => mismatch_source_key(mismatch, &source_index)
+                    .is_none_or(|key| !resolved_source.contains(key)),
+                MismatchType::Extra => mismatch_destination_key(mismatch, &dest_index)
+                    .is_none_or(|key| !resolved_destination.contains(key)),
+                _ => true,
             });
-            if has_other_mismatch {
-                continue;
+            for (source_key, dest_key) in fingerprint_pairs {
+                membership.missing_source.remove(source_key);
+                membership.extra_destination.remove(dest_key);
+                membership.matched_source.insert(source_key);
+                membership.matched_destination.insert(dest_key);
+                summary.missing_count -= 1;
+                summary.extra_count -= 1;
+                summary.metadata_matches += 1;
             }
-            for index in source_mismatches.into_iter().chain(destination_mismatches) {
-                if matches!(
-                    mismatches[index].mismatch_type,
-                    MismatchType::Missing | MismatchType::Extra
-                ) {
-                    resolved_mismatches.insert(index);
-                }
-            }
-            summary.metadata_matches += 1;
-            summary.probable_matches = summary.probable_matches.saturating_sub(1);
-            summary.missing_count = summary.missing_count.saturating_sub(1);
-            summary.extra_count = summary.extra_count.saturating_sub(1);
         }
-        if !resolved_mismatches.is_empty() {
-            mismatches = mismatches
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, mismatch)| {
-                    (!resolved_mismatches.contains(&index)).then_some(mismatch)
-                })
-                .collect();
-        }
-        let dest_by_message_id = index_by_message_id(dest_messages);
-        let mut destination_match_indexes = HashMap::new();
-        for (message_id, dest_keys) in &dest_by_message_id {
-            let mut destinations_by_metadata =
-                HashMap::<MetadataFingerprint<'_>, VecDeque<&MailboxMessageKey>>::new();
-            let mut destinations_by_content =
-                HashMap::<(MetadataFingerprint<'_>, &str), VecDeque<&MailboxMessageKey>>::new();
-            for dest_key in dest_keys {
-                let Some(destination_metadata) = metadata_fingerprint(&dest_messages[dest_key])
-                else {
-                    continue;
-                };
-                destinations_by_metadata
-                    .entry(destination_metadata)
-                    .or_default()
-                    .push_back(*dest_key);
-                if let Some(destination_fingerprint) = dest_fingerprints.get(*dest_key) {
-                    destinations_by_content
-                        .entry((destination_metadata, destination_fingerprint.as_str()))
-                        .or_default()
-                        .push_back(*dest_key);
-                }
-            }
-            destination_match_indexes.insert(
-                *message_id,
-                (destinations_by_metadata, destinations_by_content),
-            );
-        }
+
+        // (b) Content comparison of the reconciler's clean pairs only.
         let mut estimated_bytes = mismatches
             .iter()
             .map(estimated_mismatch_bytes)
@@ -405,40 +382,15 @@ impl MessageVerification {
                 MAX_ESTIMATED_MISMATCH_DETAIL_BYTES
             ));
         }
-        let mut used_dest = HashSet::new();
-        for source_key in sorted_keys(&source_messages.keys().collect()) {
-            let Some(source_message_id) = source_messages[source_key]
-                .message_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
+        let mut clean_pairs = clean_pairs;
+        clean_pairs.sort();
+        for (source_key, dest_key) in clean_pairs {
+            let (Some(source_fingerprint), Some(destination_fingerprint)) = (
+                source_fingerprints.get(source_key),
+                dest_fingerprints.get(dest_key),
+            ) else {
                 continue;
             };
-            let Some(source_fingerprint) = source_fingerprints.get(source_key) else {
-                continue;
-            };
-            let Some(source_metadata) = metadata_fingerprint(&source_messages[source_key]) else {
-                continue;
-            };
-            let Some((destinations_by_metadata, destinations_by_content)) =
-                destination_match_indexes.get_mut(source_message_id)
-            else {
-                continue;
-            };
-            let dest_key = pop_unused_destination(
-                destinations_by_content.get_mut(&(source_metadata, source_fingerprint.as_str())),
-                &used_dest,
-            )
-            .or_else(|| {
-                pop_unused_destination(
-                    destinations_by_metadata.get_mut(&source_metadata),
-                    &used_dest,
-                )
-            });
-            let Some(dest_key) = dest_key else { continue };
-            used_dest.insert(dest_key);
-            let destination_fingerprint = &dest_fingerprints[dest_key];
             if source_fingerprint == destination_fingerprint {
                 continue;
             }
@@ -454,9 +406,21 @@ impl MessageVerification {
             mismatch.source_fingerprint = Some(source_fingerprint.clone());
             mismatch.destination_fingerprint = Some(destination_fingerprint.clone());
             append_mismatch_with_budget(&mut mismatches, mismatch, &mut estimated_bytes)?;
-            summary.metadata_matches = summary.metadata_matches.saturating_sub(1);
-            summary.changed_count = summary.changed_count.saturating_add(1);
+            membership.matched_source.remove(source_key);
+            membership.matched_destination.remove(dest_key);
+            membership.changed_source.insert(source_key);
+            membership.changed_destination.insert(dest_key);
+            summary.metadata_matches -= 1;
+            summary.changed_count += 1;
         }
+
+        validate_verification_summary(
+            source_messages,
+            dest_messages,
+            &mismatches,
+            &summary,
+            &membership,
+        )?;
         Ok((mismatches, summary))
     }
 
@@ -474,11 +438,12 @@ impl MessageVerification {
         folder_mapping: &'a HashMap<String, String>,
         source_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
         dest_by_message_id: &HashMap<&'a str, Vec<&'a MailboxMessageKey>>,
-    ) -> ReconciliationPassResult<'a> {
+    ) -> Pass1Result<'a> {
         let mut mismatches = Vec::new();
         let mut estimated_bytes = 0usize;
         let mut matched_source = HashSet::new();
         let mut matched_dest = HashSet::new();
+        let mut clean_pairs = Vec::new();
 
         let mut message_ids: Vec<_> = source_by_message_id
             .keys()
@@ -514,6 +479,7 @@ impl MessageVerification {
                 {
                     matched_source.insert(*source_key);
                     matched_dest.insert(dest_key);
+                    clean_pairs.push((*source_key, dest_key));
                 }
             }
 
@@ -558,7 +524,7 @@ impl MessageVerification {
             }
         }
 
-        Ok((mismatches, matched_source, matched_dest))
+        Ok((mismatches, matched_source, matched_dest, clean_pairs))
     }
 
     /// Reconciliation Pass 2: Wrong-folder detection for Message-ID matches.
@@ -715,7 +681,7 @@ impl MessageVerification {
         (probable_matches, matched_source, matched_dest)
     }
 
-    #[allow(unused_assignments, clippy::collapsible_if, clippy::needless_borrow)]
+    #[cfg(test)]
     pub fn detect_mismatches_with_folder_mapping(
         job_id: &str,
         run_id: &str,
@@ -723,6 +689,24 @@ impl MessageVerification {
         dest_messages: &ExtractedMessages,
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
+        let reconciliation = Self::reconcile_metadata(
+            job_id,
+            run_id,
+            source_messages,
+            dest_messages,
+            folder_mapping,
+        )?;
+        Ok((reconciliation.mismatches, reconciliation.summary))
+    }
+
+    #[allow(unused_assignments, clippy::collapsible_if, clippy::needless_borrow)]
+    fn reconcile_metadata<'a>(
+        job_id: &str,
+        run_id: &str,
+        source_messages: &'a ExtractedMessages,
+        dest_messages: &'a ExtractedMessages,
+        folder_mapping: &'a HashMap<String, String>,
+    ) -> Result<MetadataReconciliation<'a>, String> {
         let estimated_state_bytes = estimated_verifier_state_bytes(source_messages, dest_messages);
         enforce_verifier_state_budget(estimated_state_bytes)?;
         let job_id: Arc<str> = Arc::from(job_id);
@@ -736,7 +720,7 @@ impl MessageVerification {
         let dest_by_message_id = index_by_message_id(dest_messages);
 
         // Pass 1: Message-ID + exact metadata matching
-        let (mut pass1_mismatches, pass1_matched_src, pass1_matched_dst) =
+        let (mut pass1_mismatches, pass1_matched_src, pass1_matched_dst, clean_pairs) =
             Self::pass_1_message_id_exact_metadata(
                 &job_id,
                 &run_id,
@@ -983,7 +967,12 @@ impl MessageVerification {
             &membership,
         )?;
 
-        Ok((all_mismatches, summary))
+        Ok(MetadataReconciliation {
+            mismatches: all_mismatches,
+            summary,
+            membership,
+            clean_pairs,
+        })
     }
 
     /// Reconcile metadata staged in SQLite. The live adapter uses this path
@@ -1495,7 +1484,73 @@ pub fn validate_verification_summary<'a>(
             }
         }
     }
-    let _ = summary;
+    // Counters must be derived from, and never exceed, the partition they
+    // summarize; a message can contribute to at most one of them.
+    let count = |keys: &HashSet<&MailboxMessageKey>| keys.len() as u64;
+    let expected = [
+        (
+            "total_source",
+            summary.total_source,
+            source_messages.len() as u64,
+        ),
+        (
+            "total_destination",
+            summary.total_destination,
+            dest_messages.len() as u64,
+        ),
+        (
+            "metadata_matches",
+            summary.metadata_matches,
+            count(&membership.matched_source),
+        ),
+        (
+            "matched destination",
+            summary.metadata_matches,
+            count(&membership.matched_destination),
+        ),
+        (
+            "probable_matches",
+            summary.probable_matches,
+            count(&membership.probable_source),
+        ),
+        (
+            "probable destination",
+            summary.probable_matches,
+            count(&membership.probable_destination),
+        ),
+        (
+            "missing_count",
+            summary.missing_count,
+            count(&membership.missing_source),
+        ),
+        (
+            "extra_count",
+            summary.extra_count,
+            count(&membership.extra_destination),
+        ),
+        (
+            "duplicated_count",
+            summary.duplicated_count,
+            count(&membership.duplicated_destination),
+        ),
+        (
+            "changed_count",
+            summary.changed_count,
+            count(&membership.changed_source),
+        ),
+        (
+            "changed destination",
+            summary.changed_count,
+            count(&membership.changed_destination),
+        ),
+    ];
+    for (name, reported, derived) in expected {
+        if reported != derived {
+            return Err(format!(
+                "verification summary {name} is {reported} but its classification holds {derived}"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1513,19 +1568,6 @@ fn index_by_message_id(messages: &ExtractedMessages) -> HashMap<&str, Vec<&Mailb
     }
     index.values_mut().for_each(|uids| uids.sort());
     index
-}
-
-fn pop_unused_destination<'a>(
-    candidates: Option<&mut VecDeque<&'a MailboxMessageKey>>,
-    used: &HashSet<&MailboxMessageKey>,
-) -> Option<&'a MailboxMessageKey> {
-    let candidates = candidates?;
-    while let Some(candidate) = candidates.pop_front() {
-        if !used.contains(candidate) {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 fn unique_fingerprint_index(
@@ -1595,17 +1637,6 @@ enum NormalizedInternalDate<'a> {
 struct MetadataFingerprint<'a> {
     internal_date: NormalizedInternalDate<'a>,
     size_bytes: u64,
-}
-
-fn sorted_keys<'a>(keys: &'a HashSet<&'a MailboxMessageKey>) -> Vec<&'a MailboxMessageKey> {
-    let mut sorted = keys.iter().copied().collect::<Vec<_>>();
-    sorted.sort_by(|left, right| {
-        left.mailbox
-            .cmp(&right.mailbox)
-            .then(left.uidvalidity.cmp(&right.uidvalidity))
-            .then(left.uid.cmp(&right.uid))
-    });
-    sorted
 }
 
 fn metadata_fingerprint(message: &ExtractedMessage) -> Option<MetadataFingerprint<'_>> {
