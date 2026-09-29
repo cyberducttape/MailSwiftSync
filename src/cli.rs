@@ -842,8 +842,8 @@ pub(crate) fn run() -> eframe::Result<()> {
     }
     if command == std::ffi::OsStr::new("oauth-authorize") {
         match oauth_authorize_command(arguments) {
-            Ok(message) => {
-                println!("{message}");
+            Ok(_message) => {
+                println!("OAuth authorization completed.");
                 return Ok(());
             }
             Err((code, message)) => {
