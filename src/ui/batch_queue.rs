@@ -42,13 +42,10 @@ impl App {
                 if self.selected_project_id == self.bulk_project_id {
                     self.selected_project_id = None;
                 }
-                self.bulk_project_id = None;
-                self.bulk_job_ids.clear();
-                self.bulk_job_index_by_id.clear();
                 self.bulk_retry_scope = BulkRetryScope::default();
-                self.bulk_selected_ids.clear();
                 self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
                 self.bulk_jobs = jobs;
+                self.detach_bulk_queue_identity();
                 self.mark_bulk_jobs_changed();
             }
             Ok(BulkImportResult::Workbook { path, sheets }) => {
@@ -143,6 +140,20 @@ impl App {
         self.bulk_search_match_indices.clear();
         self.bulk_search_matches_valid = false;
         self.bulk_filter_cache_generation = u64::MAX;
+    }
+
+    /// Drop the queue's durable project association and give every row a
+    /// provisional in-memory ID. Rows need IDs to be rendered and explicitly
+    /// selected before a preflight (re)creates the durable project; admission
+    /// maps them to durable job IDs by position, and `start_bulk` replaces
+    /// them together with the selection.
+    pub(crate) fn detach_bulk_queue_identity(&mut self) {
+        self.bulk_project_id = None;
+        self.bulk_selected_ids.clear();
+        self.bulk_job_ids = (0..self.bulk_jobs.len())
+            .map(|_| format!("unadmitted-{}", uuid::Uuid::new_v4()))
+            .collect();
+        self.rebuild_bulk_job_index();
     }
 
     pub(crate) fn rebuild_bulk_job_index(&mut self) {

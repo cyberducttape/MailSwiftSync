@@ -81,13 +81,22 @@ impl StateStore {
             params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
         )?;
         let mut ids = Vec::with_capacity(mailboxes.len());
-        for (source_mailbox, destination_mailbox) in mailboxes {
-            let id = Uuid::new_v4().to_string();
-            tx.execute(
+        {
+            // Compile once: batches can hold up to 100k rows.
+            let mut insert = tx.prepare(
                 "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state) VALUES(?1,?2,?3,?4,?5,'queued')",
-                params![id, project.id, source_mailbox, destination_mailbox, normalized_destination_identity(destination_mailbox, None)],
             )?;
-            ids.push(id);
+            for (source_mailbox, destination_mailbox) in mailboxes {
+                let id = Uuid::new_v4().to_string();
+                insert.execute(params![
+                    id,
+                    project.id,
+                    source_mailbox,
+                    destination_mailbox,
+                    normalized_destination_identity(destination_mailbox, None)
+                ])?;
+                ids.push(id);
+            }
         }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created',?2)",
@@ -137,20 +146,23 @@ impl StateStore {
             params![project.id, project.name, project.source_endpoint, project.destination_endpoint, project.phase.as_str()],
         )?;
         let mut ids = Vec::with_capacity(mailboxes.len());
-        for (source_mailbox, destination_mailbox, config) in mailboxes {
-            let id = Uuid::new_v4().to_string();
-            tx.execute(
+        {
+            // Compile once: batches can hold up to 100k rows.
+            let mut insert = tx.prepare(
                 "INSERT INTO mailbox_jobs(id,project_id,source_mailbox,destination_mailbox,destination_identity,state,config) VALUES(?1,?2,?3,?4,?5,'queued',?6)",
-                params![
+            )?;
+            for (source_mailbox, destination_mailbox, config) in mailboxes {
+                let id = Uuid::new_v4().to_string();
+                insert.execute(params![
                     id,
                     project.id,
                     source_mailbox,
                     destination_mailbox,
                     normalized_destination_identity(destination_mailbox, Some(config)),
                     config
-                ],
-            )?;
-            ids.push(id);
+                ])?;
+                ids.push(id);
+            }
         }
         tx.execute(
             "INSERT INTO events(project_id,kind,detail) VALUES(?1,'project_created',?2)",

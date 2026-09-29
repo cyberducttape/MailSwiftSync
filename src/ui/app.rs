@@ -3,8 +3,22 @@ use crate::ui::status_color;
 use crate::*;
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Runs before every frame and, unlike `ui`, also while the window is
+    /// minimized or hidden, so a running migration keeps draining events.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        // eframe only repaints on input. Background work reports through
+        // channels drained by `poll`, and workers wait (with timeouts) for
+        // durable acknowledgements, so keep frames coming while any is in
+        // flight — otherwise an idle window stalls or fails a migration.
+        if !self.deferred_events.is_empty() || !self.pending_db_events.is_empty() {
+            ctx.request_repaint();
+        } else if self.background_work_pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         ctx.set_zoom_factor(self.ui_scale);
         let colors = self.theme_colors();
@@ -111,6 +125,9 @@ impl eframe::App for App {
                     {
                         self.active_view = view;
                         self.refresh_ui_snapshot_now();
+                        // Re-check readiness staleness on the next frame so a
+                        // page never shows observations for an edited plan.
+                        self.capability_staleness_checked_at = None;
                     }
                 }
                 ui.add_space(12.0);
@@ -555,19 +572,28 @@ impl App {
                 self.destination_provider = selected;
             }
             self.apply_provider_preset(source, selected);
-            ui.label(egui::RichText::new(self.language.text(selected.defaults().note)).small());
+        }
+        // Keep the provider's authentication guidance visible while its
+        // preset is active, not only on the frame it was chosen.
+        if selected != ProviderPreset::GenericImap {
+            ui.label(
+                egui::RichText::new(self.language.text(selected.defaults().note))
+                    .small()
+                    .color(self.theme_colors().text_secondary),
+            );
         }
         ui.add_space(6.0);
     }
 
     fn provider_runbook_panel(&self, ui: &mut egui::Ui) {
-        let runbook = crate::core::provider_runbooks::RunbookGenerator::generate(
-            self.source_provider.runbook_name(),
-            self.destination_provider.runbook_name(),
-        );
         ui.collapsing(
             self.language.text("Provider readiness runbook"),
             |ui| {
+                // Built only while expanded; the runbook allocates every step.
+                let runbook = crate::core::provider_runbooks::RunbookGenerator::generate(
+                    self.source_provider.runbook_name(),
+                    self.destination_provider.runbook_name(),
+                );
                 ui.label(
                     self.language
                         .text("Read-only operational guidance. Preflight and live admission remain authoritative."),

@@ -450,7 +450,7 @@ mod tests {
                 3,
                 &ids,
                 &states,
-                &SelectionScope::Explicit(selected.clone()),
+                &SelectionScope::Explicit(selected),
                 BulkRetryScope::Unresolved,
             ),
             vec![0]

@@ -132,12 +132,7 @@ impl App {
         }
         let mut initial_output_lines = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with Preflight against a test destination mailbox.".into()],
-            |warning| {
-                vec![
-                    warning.clone(),
-                    "WARNING: this session is not durable.".into(),
-                ]
-            },
+            |warning| vec![warning, "WARNING: this session is not durable.".into()],
         );
         if orphaned > 0 {
             initial_output_lines.push(format!(
@@ -416,6 +411,7 @@ impl App {
             capability_probe_request_id: None,
             capability_probe_fingerprint: None,
             capability_observation_fingerprint: None,
+            capability_staleness_checked_at: None,
             live_auth_receiver: None,
             start_credentials_receiver: None,
             start_credentials_plan: None,

@@ -21,42 +21,55 @@ impl App {
         execution_mode: BatchExecutionMode,
         retry_scope: BulkRetryScope,
     ) -> BatchActionPlan {
-        let mut known_ids = std::collections::HashSet::new();
-        let mut rows = self
-            .bulk_jobs
-            .iter()
-            .enumerate()
-            .filter_map(|(index, job)| {
-                let id = self.bulk_job_ids.get(index)?;
-                known_ids.insert(id.clone());
-                Some(BatchActionRow {
-                    id,
-                    selected: self.bulk_selected_ids.contains(id),
-                    visible: self.mailbox_matches_filter(job),
-                    durable_state: Some(job.state.as_str()),
-                    destructive: job.defaults.profile.delete2,
-                })
-            })
-            .collect::<Vec<_>>();
-        for id in self
+        // The plan only describes selected rows, so project the selection
+        // instead of the whole queue. Selected IDs missing from the queue
+        // stay in the plan with no durable state so they cannot disappear
+        // from a safety confirmation.
+        let rows = self
             .bulk_selected_ids
             .iter()
-            .filter(|id| !known_ids.contains(*id))
-        {
-            rows.push(BatchActionRow {
-                id,
-                selected: true,
-                visible: false,
-                durable_state: None,
-                destructive: false,
-            });
-        }
+            .map(|id| match self.bulk_job_index(id) {
+                Some(index) => BatchActionRow {
+                    id,
+                    selected: true,
+                    visible: self.bulk_visible_indices.binary_search(&index).is_ok(),
+                    durable_state: Some(self.bulk_jobs[index].state.as_str()),
+                    destructive: self.bulk_jobs[index].defaults.profile.delete2,
+                },
+                None => BatchActionRow {
+                    id,
+                    selected: true,
+                    visible: false,
+                    durable_state: None,
+                    destructive: false,
+                },
+            })
+            .collect::<Vec<_>>();
         build_batch_action_plan(
             &rows,
             retry_scope,
             self.form.profile.batch_concurrency,
             execution_mode,
         )
+    }
+
+    /// Queue position of a job ID, if it belongs to the current queue.
+    pub(crate) fn bulk_job_index(&self, id: &str) -> Option<usize> {
+        self.bulk_job_index_by_id
+            .get(id)
+            .copied()
+            .filter(|&index| index < self.bulk_jobs.len())
+    }
+
+    /// Selected rows a live action with this scope would run. Matches
+    /// `build_batch_action_plan`'s eligible count without hashing the
+    /// selection on every frame.
+    fn selected_live_eligible_count(&self, retry_scope: BulkRetryScope) -> usize {
+        self.bulk_selected_ids
+            .iter()
+            .filter_map(|id| self.bulk_job_index(id))
+            .filter(|&index| retry_scope.includes(&self.bulk_jobs[index].state))
+            .count()
     }
 
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
@@ -275,14 +288,14 @@ impl App {
                         }
                     });
                 if ui.button(self.language.text("Select visible")).clicked() {
-                    self.bulk_selected_ids.clear();
-                    for (index, job) in self.bulk_jobs.iter().enumerate() {
-                        if self.mailbox_matches_filter(job)
-                            && let Some(id) = self.bulk_job_ids.get(index)
-                        {
-                            self.bulk_selected_ids.insert(id.clone());
-                        }
-                    }
+                    // Use the same cached filter the table renders, so the
+                    // selection is exactly the rows on screen.
+                    self.refresh_bulk_filter_cache();
+                    self.bulk_selected_ids = self
+                        .bulk_visible_indices
+                        .iter()
+                        .filter_map(|&index| self.bulk_job_ids.get(index).cloned())
+                        .collect();
                 }
                 if ui.button(self.language.text("Select unresolved")).clicked() {
                     self.select_bulk_state_set(BulkStateSet::Unresolved);
@@ -305,6 +318,7 @@ impl App {
                 &self.bulk_selected_ids,
                 &visible_indices,
                 &self.bulk_job_ids,
+                &self.bulk_job_index_by_id,
             );
 
             let status_text = self
@@ -326,10 +340,9 @@ impl App {
                 );
             }
             let has_selection = !self.bulk_selected_ids.is_empty();
-            let live_plan =
-                self.current_batch_action_plan(BatchExecutionMode::Live, BulkRetryScope::All);
-            let delta_plan = self
-                .current_batch_action_plan(BatchExecutionMode::Live, BulkRetryScope::DeltaRequired);
+            let selected_count = self.bulk_selected_ids.len();
+            let live_count = self.selected_live_eligible_count(BulkRetryScope::All);
+            let delta_count = self.selected_live_eligible_count(BulkRetryScope::DeltaRequired);
             let mut run_preflight = false;
             let mut run_live = false;
             let mut run_delta = false;
@@ -342,7 +355,7 @@ impl App {
                         egui::Button::new(
                             self.language
                                 .text("Run preflight ({})")
-                                .replace("{}", &live_plan.explicit_selection_count.to_string()),
+                                .replace("{}", &selected_count.to_string()),
                         ),
                     )
                     .clicked()
@@ -353,7 +366,7 @@ impl App {
                 let live_label = RichText::new(
                     self.language
                         .text("Run live migration ({})")
-                        .replace("{}", &live_plan.eligible_count.to_string()),
+                        .replace("{}", &live_count.to_string()),
                 );
                 if ui
                     .add_enabled(
@@ -375,7 +388,7 @@ impl App {
                         egui::Button::new(
                             self.language
                                 .text("Run final delta ({})")
-                                .replace("{}", &delta_plan.eligible_count.to_string()),
+                                .replace("{}", &delta_count.to_string()),
                         ),
                     )
                     .clicked()
@@ -384,7 +397,9 @@ impl App {
                 }
                 if ui
                     .add_enabled(
-                        self.bulk_selected_ids.len() == 1,
+                        // Rows only have durable verification records once a
+                        // preflight has admitted the queue into a project.
+                        self.bulk_selected_ids.len() == 1 && self.bulk_project_id.is_some(),
                         egui::Button::new(self.language.text("Review verification")),
                     )
                     .clicked()

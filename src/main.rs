@@ -421,7 +421,7 @@ mod tests {
         assert_eq!(first, evidence_digest("run-one", "snapshot-one", &evidence));
         assert_ne!(first, evidence_digest("run-two", "snapshot-one", &evidence));
         assert_ne!(first, evidence_digest("run-one", "snapshot-two", &evidence));
-        let mut changed = evidence.clone();
+        let mut changed = evidence;
         changed.destination_messages = 9;
         assert_ne!(first, evidence_digest("run-one", "snapshot-one", &changed));
     }
@@ -2460,7 +2460,7 @@ mod tests {
     fn trust_settings_change_the_preflight_fingerprint() {
         let form = Form::default();
         let original = form.plan_fingerprint();
-        let mut changed = form.clone();
+        let mut changed = form;
         changed.profile.source_ca_bundle = "/etc/company-ca.pem".into();
         assert_ne!(original, changed.plan_fingerprint());
         changed.profile.source_ca_bundle.clear();

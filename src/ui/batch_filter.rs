@@ -1,9 +1,8 @@
 //! Search and state filtering for the batch mailbox cockpit.
 
 use crate::App;
-use crate::bulk_import::BulkJob;
 use crate::ui::{contains_ascii_case_insensitive, display_state_key};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Filter the cached row projection without touching the owned queue forms.
 /// Keeping this pure makes the large-batch cost measurable independently from
@@ -36,19 +35,31 @@ pub(crate) fn filter_batch_indices<'a, I>(
     }
 }
 
+/// `(selected, selected and visible, selected but hidden)`. `visible_indices`
+/// is ascending, as the filter cache produces it. Walks whichever side is
+/// smaller, because this runs every frame on queues of up to 100k rows.
 pub(crate) fn selected_visibility_counts(
     selected_ids: &HashSet<String>,
     visible_indices: &[usize],
     job_ids: &[String],
+    index_by_id: &HashMap<String, usize>,
 ) -> (usize, usize, usize) {
-    let visible_selected = visible_indices
-        .iter()
-        .filter(|index| {
-            job_ids
-                .get(**index)
-                .is_some_and(|job_id| selected_ids.contains(job_id))
-        })
-        .count();
+    let visible_selected = if selected_ids.len() < visible_indices.len() {
+        selected_ids
+            .iter()
+            .filter_map(|id| index_by_id.get(id))
+            .filter(|index| visible_indices.binary_search(index).is_ok())
+            .count()
+    } else {
+        visible_indices
+            .iter()
+            .filter(|index| {
+                job_ids
+                    .get(**index)
+                    .is_some_and(|job_id| selected_ids.contains(job_id))
+            })
+            .count()
+    };
     (
         selected_ids.len(),
         visible_selected,
@@ -57,30 +68,6 @@ pub(crate) fn selected_visibility_counts(
 }
 
 impl App {
-    pub(crate) fn mailbox_matches_filter(&self, job: &BulkJob) -> bool {
-        let state = job.state.to_ascii_lowercase().replace(' ', "_");
-        if !self.bulk_state_filter.is_empty()
-            && self.bulk_state_filter != "all"
-            && state != self.bulk_state_filter
-            && !(self.bulk_state_filter == "delta_required" && state.contains("delta"))
-            && !(self.bulk_state_filter == "verification_difference"
-                && state.contains("verification"))
-        {
-            return false;
-        }
-        let search = self.bulk_search.trim();
-        search.is_empty()
-            || [
-                job.label.as_str(),
-                job.source_host.as_str(),
-                job.source_user.as_str(),
-                job.destination_host.as_str(),
-                job.destination_user.as_str(),
-            ]
-            .iter()
-            .any(|value| contains_ascii_case_insensitive(value, search))
-    }
-
     pub(crate) fn rebuild_bulk_search_values(&mut self) {
         self.bulk_state_indices.clear();
         self.bulk_search_values = self
@@ -187,7 +174,7 @@ fn filter_batch_search_indices(
 #[cfg(test)]
 mod tests {
     use super::{filter_batch_indices, selected_visibility_counts};
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
     use std::time::Instant;
 
@@ -227,9 +214,19 @@ mod tests {
             .collect::<HashSet<_>>();
         let visible = (0..12).chain(50..88).collect::<Vec<_>>();
 
+        let index_by_id = job_ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (id.clone(), index))
+            .collect::<HashMap<_, _>>();
+        // Exercise both walks: more visible than selected, and the reverse.
         assert_eq!(
-            selected_visibility_counts(&selected, &visible, &job_ids),
+            selected_visibility_counts(&selected, &visible, &job_ids, &index_by_id),
             (37, 12, 25)
+        );
+        assert_eq!(
+            selected_visibility_counts(&selected, &visible[..10], &job_ids, &index_by_id),
+            (37, 10, 27)
         );
     }
 
@@ -387,6 +384,93 @@ mod tests {
             );
             assert!(!output.shapes.is_empty());
         }
+        drop(app);
+        remove_benchmark_state_files(state_path);
+    }
+
+    /// A fresh import has no durable project yet, but its rows must still be
+    /// renderable and explicitly selectable, or no batch can ever start.
+    #[test]
+    fn imported_rows_are_selectable_before_first_admission() {
+        use crate::bulk_import::{BulkImportResult, BulkJob};
+        use crate::{App, Form};
+
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-ids-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = App::from_state_path(Some(&state_path));
+        let jobs = (0..3)
+            .map(|index| {
+                let mut form = Form::default();
+                form.profile.source_user = format!("user{index}@source.example");
+                BulkJob::from_form(format!("Mailbox {index}"), form, "imported".into())
+            })
+            .collect::<Vec<_>>();
+        app.apply_bulk_import_result(Ok(BulkImportResult::Jobs(jobs)));
+
+        assert!(app.bulk_project_id.is_none());
+        assert_eq!(app.bulk_job_ids.len(), 3);
+        assert_eq!(app.bulk_job_index_by_id.len(), 3);
+        app.refresh_bulk_filter_cache();
+        assert_eq!(app.bulk_visible_indices, vec![0, 1, 2]);
+        let plan = app.current_batch_action_plan(
+            crate::controller::BatchExecutionMode::Preflight,
+            crate::controller::BulkRetryScope::All,
+        );
+        assert_eq!(plan.explicit_selection_count, 0);
+        app.bulk_selected_ids = app.bulk_job_ids.iter().cloned().collect();
+        let plan = app.current_batch_action_plan(
+            crate::controller::BatchExecutionMode::Preflight,
+            crate::controller::BulkRetryScope::All,
+        );
+        assert_eq!(plan.explicit_selection_count, 3);
+        assert_eq!(plan.eligible_count, 3);
+        assert_eq!(plan.hidden_selection_count, 0);
+
+        drop(app);
+        remove_benchmark_state_files(state_path);
+    }
+
+    /// eframe repaints only on input. While background work is pending the
+    /// shell must schedule its own frames, or worker acknowledgements time
+    /// out when nobody touches the window.
+    #[test]
+    fn pending_background_work_schedules_repaints() {
+        use crate::App;
+        use eframe::App as EframeApp;
+        use eframe::egui::{Context, Pos2, RawInput, Rect, ViewportId, vec2};
+
+        let state_path =
+            std::env::temp_dir().join(format!("mailswiftsync-repaint-{}.db", uuid::Uuid::new_v4()));
+        let mut app = App::from_state_path(Some(&state_path));
+        let context = Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut repaint_delay = |app: &mut App| {
+            let output = context.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    // eframe calls `logic` before `ui` on every frame.
+                    EframeApp::logic(app, ui.ctx(), &mut frame);
+                    EframeApp::ui(app, ui, &mut frame);
+                },
+            );
+            output.viewport_output[&ViewportId::ROOT].repaint_delay
+        };
+        // Let startup layout settle, then an idle shell must not spin.
+        for _ in 0..3 {
+            repaint_delay(&mut app);
+        }
+        assert!(!app.background_work_pending());
+
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        app.bulk_import_receiver = Some(receiver);
+        assert!(app.background_work_pending());
+        assert!(repaint_delay(&mut app) <= std::time::Duration::from_millis(100));
+
         drop(app);
         remove_benchmark_state_files(state_path);
     }

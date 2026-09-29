@@ -105,7 +105,7 @@ where
 
 fn dns_resolver_pool() -> Result<&'static DnsResolverPool, String> {
     DNS_RESOLVER_POOL
-        .get_or_init(|| DnsResolverPool::new().map_err(|error| error.to_string()))
+        .get_or_init(DnsResolverPool::new)
         .as_ref()
         .map_err(Clone::clone)
 }
@@ -1265,7 +1265,7 @@ fn connect_tls_stream_inner(
     let config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
-    let name = ServerName::try_from(server_name.to_owned())
+    let name = ServerName::try_from(server_name)
         .map_err(|e| format!("{host}: invalid TLS server name: {e}"))?;
 
     if transport == "starttls" {

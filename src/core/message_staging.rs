@@ -477,23 +477,36 @@ impl MessageMetadataStage {
                     ])
                     .map_err(|e| e.to_string())?;
             }
+            // Fingerprints share the page's transaction: a page is staged
+            // with all of its body hashes or not at all, and a durable stage
+            // syncs once per page rather than once per message.
+            let mut insert_fingerprint = tx
+                .prepare_cached(
+                    "INSERT OR REPLACE INTO stage_fingerprints(side,mailbox,uidvalidity,uid,fingerprint) VALUES(?1,?2,?3,?4,?5)",
+                )
+                .map_err(|e| e.to_string())?;
+            for (key, fingerprint) in fingerprints {
+                let uidvalidity = key
+                    .uidvalidity
+                    .map(sqlite_i64)
+                    .transpose()
+                    .map_err(|e| e.to_string())?
+                    .unwrap_or(-1);
+                insert_fingerprint
+                    .execute(params![
+                        side.as_i64(),
+                        key.mailbox.as_ref(),
+                        uidvalidity,
+                        key.uid,
+                        fingerprint
+                    ])
+                    .map_err(|e| e.to_string())?;
+            }
         }
         tx.commit().map_err(|e| e.to_string())?;
         for (key, fingerprint) in fingerprints {
             self.content_fingerprints
                 .insert((side, key.clone()), fingerprint.clone());
-            let uidvalidity = key
-                .uidvalidity
-                .map(sqlite_i64)
-                .transpose()
-                .map_err(|e| e.to_string())?
-                .unwrap_or(-1);
-            self.connection_ref()
-                .execute(
-                    "INSERT OR REPLACE INTO stage_fingerprints(side,mailbox,uidvalidity,uid,fingerprint) VALUES(?1,?2,?3,?4,?5)",
-                    params![side.as_i64(), key.mailbox.as_ref(), uidvalidity, key.uid, fingerprint],
-                )
-                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -863,7 +876,7 @@ mod tests {
             },
         )]);
         let key = messages.keys().next().unwrap().clone();
-        let fingerprints = HashMap::from([(key.clone(), "a".repeat(64))]);
+        let fingerprints = HashMap::from([(key, "a".repeat(64))]);
         stage
             .insert_messages_with_fingerprints(StagedMessageSide::Source, &messages, &fingerprints)
             .unwrap();
@@ -946,7 +959,7 @@ mod tests {
         stage.finish().unwrap();
         assert!(!path.exists());
 
-        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan-b").unwrap();
+        let mut stage = MessageMetadataStage::open_durable(path, "plan-b").unwrap();
         assert_eq!(stage.count(side).unwrap(), 0);
         assert_eq!(stage.resume_mailbox(side, "INBOX", folder).unwrap(), None);
         drop(stage);
