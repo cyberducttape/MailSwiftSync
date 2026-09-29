@@ -7,42 +7,54 @@ use eframe::egui::{self, Color32, RichText};
 
 impl App {
     pub(crate) fn bulk_clear_confirmation(&mut self, ctx: &egui::Context) {
+        let modal_id = egui::Id::new("clear_mailbox_queue_confirmation");
         if !self.bulk_clear_confirm_open || self.running() {
+            crate::ui::reset_initial_focus(ctx, modal_id);
             return;
         }
-        let mut open = self.bulk_clear_confirm_open;
         let mut clear = false;
         let mut close_requested = false;
-        egui::Window::new(self.language.text("Clear mailbox queue?"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.heading(self.language.text("Discard the current queue?"));
-                ui.label(
-                    self.language
-                        .text("This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.")
-                        .replace("{}", &self.bulk_jobs.len().to_string()),
-                );
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button(self.language.text("Keep queue")).clicked() {
-                        close_requested = true;
-                    }
-                    if ui.button(self.language.text("Clear queue")).clicked() {
-                        clear = true;
-                        close_requested = true;
-                    }
-                });
+        // A true modal: it blocks the page behind it, starts on the safe
+        // choice, and Escape or a click outside keeps the queue.
+        let response = egui::Modal::new(modal_id).show(ctx, |ui| {
+            ui.heading(self.language.text("Clear mailbox queue?"));
+            ui.label(
+                self.language
+                    .text("This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.")
+                    .replace("{}", &self.bulk_jobs.len().to_string()),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let keep = ui.button(self.language.text("Keep queue"));
+                crate::ui::focus_on_open(ui, &keep, modal_id);
+                if keep.clicked() {
+                    close_requested = true;
+                }
+                if ui
+                    .button(
+                        RichText::new(self.language.text("Clear queue"))
+                            .color(self.theme_colors().danger),
+                    )
+                    .clicked()
+                {
+                    clear = true;
+                    close_requested = true;
+                }
             });
-        self.bulk_clear_confirm_open = open && !close_requested;
+        });
+        if close_requested || response.should_close() {
+            self.bulk_clear_confirm_open = false;
+            crate::ui::reset_initial_focus(ctx, modal_id);
+        }
         if clear {
             self.clear_bulk_queue();
         }
     }
 
     pub(crate) fn bulk_import_confirmation(&mut self, ctx: &egui::Context) {
+        let modal_id = egui::Id::new("replace_mailbox_queue_confirmation");
         if self.pending_bulk_import.is_none() || self.running() {
+            crate::ui::reset_initial_focus(ctx, modal_id);
             return;
         }
         let path_label = self
@@ -52,33 +64,37 @@ impl App {
             .and_then(|name| name.to_str())
             .unwrap_or("the selected file")
             .to_owned();
-        let mut open = true;
         let mut close_requested = false;
         let mut replace = false;
-        egui::Window::new(self.language.text("Replace mailbox queue?"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.heading(self.language.text("Replace the current queue?"));
-                ui.label(
-                    self.language
-                        .text("Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.")
-                        .replace("{}", &path_label)
-                        .replacen("{}", &self.bulk_jobs.len().to_string(), 1),
-                );
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if ui.button(self.language.text("Keep current queue")).clicked() {
-                        close_requested = true;
-                    }
-                    if ui.button(self.language.text("Replace queue")).clicked() {
-                        replace = true;
-                        close_requested = true;
-                    }
-                });
+        let response = egui::Modal::new(modal_id).show(ctx, |ui| {
+            ui.heading(self.language.text("Replace mailbox queue?"));
+            ui.label(
+                self.language
+                    .text("Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.")
+                    .replace("{}", &path_label)
+                    .replacen("{}", &self.bulk_jobs.len().to_string(), 1),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let keep = ui.button(self.language.text("Keep current queue"));
+                crate::ui::focus_on_open(ui, &keep, modal_id);
+                if keep.clicked() {
+                    close_requested = true;
+                }
+                if ui
+                    .button(
+                        RichText::new(self.language.text("Replace queue"))
+                            .color(self.theme_colors().danger),
+                    )
+                    .clicked()
+                {
+                    replace = true;
+                    close_requested = true;
+                }
             });
-        if close_requested || !open {
+        });
+        if close_requested || response.should_close() {
+            crate::ui::reset_initial_focus(ctx, modal_id);
             let path = self.pending_bulk_import.take();
             if replace && let Some(path) = path {
                 self.import_bulk(&path);

@@ -22,10 +22,17 @@ impl UiLanguage {
     }
 
     pub(crate) fn text(self, source: &'static str) -> &'static str {
+        self.lookup(source).unwrap_or(source)
+    }
+
+    /// Translate text that is only known at runtime, such as a status
+    /// message stored as a `String`. Returns `None` for English and for text
+    /// without a catalog entry (for example, messages with values filled in).
+    pub(crate) fn lookup(self, source: &str) -> Option<&'static str> {
         if self == Self::English {
-            return source;
+            return None;
         }
-        match source {
+        Some(match source {
             "Overview" => "Übersicht",
             "Manage" => "Verwalten",
             "Tools" => "Werkzeuge",
@@ -579,14 +586,12 @@ impl UiLanguage {
             "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace." => {
                 "Dies entfernt {} Postfachzeile(n), die Auswahl, Passwörter im Speicher und die dauerhafte Stapelzuordnung aus diesem Arbeitsbereich."
             }
-            "Discard the current queue?" => "Aktuelle Warteschlange verwerfen?",
             "Keep queue" => "Warteschlange behalten",
             "Clear queue" => "Warteschlange leeren",
             "Replace mailbox queue?" => "Postfachwarteschlange ersetzen?",
             "Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association." => {
                 "Der Import von {} ersetzt {} aktuelle(n) Postfachzeile(n), die Auswahl, Passwörter im Speicher und die dauerhafte Stapelzuordnung."
             }
-            "Replace the current queue?" => "Aktuelle Warteschlange ersetzen?",
             "Keep current queue" => "Aktuelle Warteschlange behalten",
             "Replace queue" => "Warteschlange ersetzen",
             "Source preset" => "Quellvorgabe",
@@ -902,6 +907,69 @@ impl UiLanguage {
             "Maximum concurrent workers" => "Maximale gleichzeitige Arbeitsprozesse",
             "Transient retries" => "Wiederholungen bei vorübergehenden Fehlern",
             "Passwordless queue credentials" => "Passwortlose Zugangsdaten für die Warteschlange",
+            // Fixed status-bar messages (translated via `lookup`).
+            "Idle" => "Bereit",
+            "A migration is running; finish or stop it before starting a new workspace." => {
+                "Eine Migration läuft; schließen Sie sie ab oder stoppen Sie sie, bevor Sie einen neuen Arbeitsbereich beginnen."
+            }
+            "Authenticated capability discovery requires encrypted IMAP; plain transport remains blocked by the explicit cleartext acknowledgement gate." => {
+                "Die authentifizierte Fähigkeitsprüfung erfordert verschlüsseltes IMAP; unverschlüsselter Transport bleibt durch die ausdrückliche Klartext-Bestätigung gesperrt."
+            }
+            "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight." => {
+                "Die authentifizierte IMAPS-Prüfung beider Endpunkte gilt für den imapsync-Modus; die Bereitschaft eines Dovecot-Ziels prüft die native Vorabprüfung."
+            }
+            "Authenticating and inspecting IMAPS readiness…" => {
+                "IMAPS-Bereitschaft wird authentifiziert und geprüft…"
+            }
+            "Capability discovery complete" => "Fähigkeitsprüfung abgeschlossen",
+            "Could not start without a durable mailbox project." => {
+                "Start ohne dauerhaftes Postfachprojekt nicht möglich."
+            }
+            "Durable state view is stale; execution is disabled until SQLite refresh succeeds." => {
+                "Die dauerhafte Statusansicht ist veraltet; die Ausführung bleibt gesperrt, bis die SQLite-Aktualisierung gelingt."
+            }
+            "Enter source and destination hosts before creating a project." => {
+                "Geben Sie Quell- und Zielserver ein, bevor Sie ein Projekt erstellen."
+            }
+            "Fresh IMAPS authentication passed; continuing live admission…" => {
+                "Neue IMAPS-Authentifizierung erfolgreich; Live-Freigabe wird fortgesetzt…"
+            }
+            "Live migration blocked: acknowledge the cleartext source-transport risk before continuing." => {
+                "Live-Migration gesperrt: Bestätigen Sie das Risiko des unverschlüsselten Quelltransports, bevor Sie fortfahren."
+            }
+            "Live migration blocked: imapsync automapping has no immutable mapping snapshot for independent verification. Disable automap and run a new preflight before migrating." => {
+                "Live-Migration gesperrt: Die automatische imapsync-Ordnerzuordnung hat keinen unveränderlichen Zuordnungsstand für die unabhängige Verifizierung. Deaktivieren Sie automap und führen Sie vor der Migration eine neue Vorabprüfung aus."
+            }
+            "Live migration is disabled because durable SQLite storage is unavailable." => {
+                "Die Live-Migration ist deaktiviert, weil der dauerhafte SQLite-Speicher nicht verfügbar ist."
+            }
+            "Loading migration credentials from the OS keyring…" => {
+                "Zugangsdaten für die Migration werden aus dem Betriebssystem-Schlüsselbund geladen…"
+            }
+            "New migration workspace ready; configure the endpoints before preflight." => {
+                "Neuer Migrationsarbeitsbereich bereit; konfigurieren Sie die Endpunkte vor der Vorabprüfung."
+            }
+            "Project created; ready for preflight review" => {
+                "Projekt erstellt; bereit für die Vorabprüfung"
+            }
+            "Project switching is disabled while a migration is running." => {
+                "Während eine Migration läuft, kann das Projekt nicht gewechselt werden."
+            }
+            "Re-authenticating encrypted IMAP endpoints before live execution…" => {
+                "Verschlüsselte IMAP-Endpunkte werden vor der Live-Ausführung erneut authentifiziert…"
+            }
+            "The current mailbox identity differs from the durable project. Run a new dry preflight for this plan before starting live migration." => {
+                "Die aktuelle Postfachidentität weicht vom dauerhaften Projekt ab. Führen Sie für diesen Plan eine neue Vorabprüfung aus, bevor Sie die Live-Migration starten."
+            }
+            "The migration plan changed while credentials were loading; review it and start again." => {
+                "Der Migrationsplan hat sich beim Laden der Zugangsdaten geändert; prüfen Sie ihn und starten Sie erneut."
+            }
+            "The saved Dovecot checkpoint has no UIDVALIDITY context; run a fresh full Dovecot pass before resuming." => {
+                "Der gespeicherte Dovecot-Prüfpunkt hat keinen UIDVALIDITY-Kontext; führen Sie vor dem Fortsetzen einen neuen vollständigen Dovecot-Durchlauf aus."
+            }
+            "Viewing a historical project read-only. Start a new migration to edit or execute a plan." => {
+                "Historisches Projekt schreibgeschützt geöffnet. Starten Sie eine neue Migration, um einen Plan zu bearbeiten oder auszuführen."
+            }
             "Dismiss" => "Ausblenden",
             "Queue settings" => "Warteschlangeneinstellungen",
             "Concurrent workers" => "Parallele Prozesse",
@@ -1202,8 +1270,8 @@ impl UiLanguage {
             "Connection, credentials, advanced options, and readiness are available from the Migration plan." => {
                 "Verbindung, Zugangsdaten, erweiterte Optionen und Bereitschaft finden Sie im Migrationsplan."
             }
-            _ => source,
-        }
+            _ => return None,
+        })
     }
 }
 
@@ -1419,6 +1487,15 @@ mod tests {
                 "missing German translation: {key}"
             );
         }
+    }
+
+    #[test]
+    fn lookup_translates_fixed_runtime_text_only() {
+        assert_eq!(UiLanguage::German.lookup("Idle"), Some("Bereit"));
+        assert_eq!(UiLanguage::English.lookup("Idle"), None);
+        // Formatted messages carry values and stay untranslated.
+        assert_eq!(UiLanguage::German.lookup("Durability error: save"), None);
+        assert_eq!(UiLanguage::German.text("Idle"), "Bereit");
     }
 
     #[test]

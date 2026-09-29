@@ -25,6 +25,8 @@ pub(crate) struct App {
     /// Reused filtered-row index storage. Large batch views must not allocate
     /// a fresh index vector on every repaint.
     pub(crate) bulk_visible_indices: Vec<usize>,
+    /// Per-frame selection projection shared by the drawer and page counts.
+    pub(crate) bulk_selection_view: crate::ui::batch::SelectionView,
     /// Lowercase searchable mailbox fields, rebuilt only when queue rows are
     /// imported or otherwise structurally changed.
     pub(crate) bulk_search_values: Vec<String>,

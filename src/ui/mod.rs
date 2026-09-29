@@ -329,6 +329,24 @@ pub(crate) fn form_row<R>(
     .inner
 }
 
+/// Give `response` keyboard focus the first frame a dialog is shown, so a
+/// confirmation opens on its safe choice. Pair with `reset_initial_focus`
+/// when the dialog closes.
+pub(crate) fn focus_on_open(ui: &egui::Ui, response: &egui::Response, dialog: egui::Id) {
+    let key = dialog.with("initial_focus_done");
+    if !ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(key).unwrap_or(false))
+    {
+        response.request_focus();
+        ui.ctx().data_mut(|data| data.insert_temp(key, true));
+    }
+}
+
+pub(crate) fn reset_initial_focus(ctx: &egui::Context, dialog: egui::Id) {
+    ctx.data_mut(|data| data.remove::<bool>(dialog.with("initial_focus_done")));
+}
+
 /// Two-line table cell: host on top, account muted below; both truncate
 /// with an ellipsis and show the full value on hover.
 pub(crate) fn endpoint_cell(ui: &mut egui::Ui, host: &str, user: &str) {

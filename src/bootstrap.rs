@@ -358,6 +358,7 @@ impl App {
             bulk_source_keyring_apply: String::new(),
             bulk_destination_keyring_apply: String::new(),
             bulk_visible_indices: Vec::new(),
+            bulk_selection_view: Default::default(),
             bulk_search_values: Vec::new(),
             bulk_state_indices: HashMap::new(),
             bulk_search_match_indices: Vec::new(),

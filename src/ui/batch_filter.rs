@@ -2,7 +2,6 @@
 
 use crate::App;
 use crate::ui::{contains_ascii_case_insensitive, display_state_key};
-use std::collections::{HashMap, HashSet};
 
 /// Filter the cached row projection without touching the owned queue forms.
 /// Keeping this pure makes the large-batch cost measurable independently from
@@ -35,38 +34,6 @@ pub(crate) fn filter_batch_indices<'a, I>(
     }
 }
 
-/// `(selected, selected and visible, selected but hidden)`. `visible_indices`
-/// is ascending, as the filter cache produces it. Walks whichever side is
-/// smaller, because this runs every frame on queues of up to 100k rows.
-pub(crate) fn selected_visibility_counts(
-    selected_ids: &HashSet<String>,
-    visible_indices: &[usize],
-    job_ids: &[String],
-    index_by_id: &HashMap<String, usize>,
-) -> (usize, usize, usize) {
-    let visible_selected = if selected_ids.len() < visible_indices.len() {
-        selected_ids
-            .iter()
-            .filter_map(|id| index_by_id.get(id))
-            .filter(|index| visible_indices.binary_search(index).is_ok())
-            .count()
-    } else {
-        visible_indices
-            .iter()
-            .filter(|index| {
-                job_ids
-                    .get(**index)
-                    .is_some_and(|job_id| selected_ids.contains(job_id))
-            })
-            .count()
-    };
-    (
-        selected_ids.len(),
-        visible_selected,
-        selected_ids.len().saturating_sub(visible_selected),
-    )
-}
-
 impl App {
     pub(crate) fn rebuild_bulk_search_values(&mut self) {
         self.bulk_state_indices.clear();
@@ -92,14 +59,15 @@ impl App {
             .collect();
     }
 
-    pub(crate) fn refresh_bulk_filter_cache(&mut self) {
+    /// Bring the filtered row list up to date. Returns whether it changed.
+    pub(crate) fn refresh_bulk_filter_cache(&mut self) -> bool {
         let raw_search = self.bulk_search.trim().to_owned();
         let cache_is_current = self.bulk_filter_cache_search == raw_search
             && self.bulk_filter_cache_state == self.bulk_state_filter
             && self.bulk_filter_cache_generation == self.bulk_jobs_generation
             && self.bulk_search_values.len() == self.bulk_jobs.len();
         if cache_is_current {
-            return;
+            return false;
         }
         if self.bulk_search_values.len() != self.bulk_jobs.len() {
             self.rebuild_bulk_search_values();
@@ -150,6 +118,7 @@ impl App {
         self.bulk_filter_cache_search = raw_search;
         self.bulk_filter_cache_state = self.bulk_state_filter.clone();
         self.bulk_filter_cache_generation = self.bulk_jobs_generation;
+        true
     }
 }
 
@@ -173,8 +142,8 @@ fn filter_batch_search_indices(
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_batch_indices, selected_visibility_counts};
-    use std::collections::{HashMap, HashSet};
+    use super::filter_batch_indices;
+    use std::collections::HashSet;
     use std::path::PathBuf;
     use std::time::Instant;
 
@@ -205,29 +174,49 @@ mod tests {
     }
 
     #[test]
-    fn selection_status_counts_selected_rows_not_all_visible_rows() {
-        let job_ids = (0..100)
-            .map(|index| format!("job-{index}"))
-            .collect::<Vec<_>>();
-        let selected = (0..37)
-            .map(|index| format!("job-{index}"))
-            .collect::<HashSet<_>>();
-        let visible = (0..12).chain(50..88).collect::<Vec<_>>();
+    fn selection_view_counts_selected_rows_not_all_visible_rows() {
+        use crate::bulk_import::BulkJob;
+        use crate::{App, Form};
 
-        let index_by_id = job_ids
-            .iter()
-            .enumerate()
-            .map(|(index, id)| (id.clone(), index))
-            .collect::<HashMap<_, _>>();
-        // Exercise both walks: more visible than selected, and the reverse.
-        assert_eq!(
-            selected_visibility_counts(&selected, &visible, &job_ids, &index_by_id),
-            (37, 12, 25)
-        );
-        assert_eq!(
-            selected_visibility_counts(&selected, &visible[..10], &job_ids, &index_by_id),
-            (37, 10, 27)
-        );
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-selection-view-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = App::from_state_path(Some(&state_path));
+        for index in 0..100 {
+            let mut form = Form::default();
+            form.profile.source_user = format!("user{index:03}@source.example");
+            let state = if index % 10 == 0 {
+                "delta_required"
+            } else {
+                "ready"
+            };
+            app.bulk_jobs.push(BulkJob::from_form(
+                format!("Mailbox {index}"),
+                form,
+                state.into(),
+            ));
+            app.bulk_job_ids.push(format!("job-{index}"));
+        }
+        app.rebuild_bulk_job_index();
+        app.bulk_jobs_generation = 1;
+        // Rows 0..37 plus one ID no longer in the queue.
+        app.bulk_selected_ids = (0..37)
+            .map(|index| format!("job-{index}"))
+            .chain(["job-gone".to_owned()])
+            .collect::<HashSet<_>>();
+        // Show rows 0..=9 only.
+        app.bulk_search = "user00".into();
+
+        app.refresh_bulk_selection_view();
+        let view = &app.bulk_selection_view;
+        assert_eq!(view.rows, (0..37).collect::<Vec<_>>());
+        assert_eq!(view.visible, 10);
+        assert_eq!(view.delta_eligible, 4); // rows 0, 10, 20, 30
+        assert_eq!(view.live_eligible, 37);
+
+        drop(app);
+        remove_benchmark_state_files(state_path);
     }
 
     #[test]
@@ -333,22 +322,39 @@ mod tests {
             ));
             app.bulk_job_ids.push(format!("job-{index}"));
         }
+        app.rebuild_bulk_job_index();
         app.bulk_jobs_generation = 1;
         app.active_view = crate::ui::WorkspaceView::Mailboxes;
 
         let context = Context::default();
         let mut frame = eframe::Frame::_new_kittest();
-        let started = Instant::now();
-        let output = context.run_ui(
-            RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
-                ..Default::default()
-            },
-            |ui| EframeApp::ui(&mut app, ui, &mut frame),
+        let mut timed_frame = |app: &mut App| {
+            let started = Instant::now();
+            let output = context.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    EframeApp::logic(app, ui.ctx(), &mut frame);
+                    EframeApp::ui(app, ui, &mut frame);
+                },
+            );
+            assert!(!output.shapes.is_empty());
+            started.elapsed().as_millis()
+        };
+        let first_frame_ms = timed_frame(&mut app);
+        // Steady-state repaint with every row selected: selection counts and
+        // the review drawer must not scale with a per-frame queue walk.
+        app.bulk_selected_ids = app.bulk_job_ids.iter().cloned().collect();
+        timed_frame(&mut app);
+        let selected_frame_ms = timed_frame(&mut app);
+        // One search keystroke: rebuilds the filter cache inside the frame.
+        app.bulk_search = "user99999".into();
+        let search_frame_ms = timed_frame(&mut app);
+        eprintln!(
+            "scale-ui-full rows={rows} first_frame_ms={first_frame_ms} selected_frame_ms={selected_frame_ms} search_frame_ms={search_frame_ms}"
         );
-        let first_frame_ms = started.elapsed().as_millis();
-        assert!(!output.shapes.is_empty());
-        eprintln!("scale-ui-full rows={rows} first_frame_ms={first_frame_ms}");
         drop(app);
         remove_benchmark_state_files(state_path);
     }
