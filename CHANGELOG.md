@@ -6,6 +6,12 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- `notify-webhook` transport failures no longer echo the request URL, so a
+  secret-bearing path supplied through `MAILSWIFTSYNC_WEBHOOK_URL_FILE` stays
+  out of stderr and service logs; authentication headers are marked sensitive.
+- Headless path options (`--source-secret-file`, `--destination-secret-file`,
+  `--diagnostic-log`) are refused when repeated instead of silently using the
+  last value, and a missing value names the offending option.
 - Fixed a startup stack overflow caused by the overview summary redispatching
   the Overview page recursively; the application shell now remains the sole
   owner of workspace-page dispatch.

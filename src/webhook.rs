@@ -32,6 +32,7 @@ use crate::credentials::{SecretString, read_secret_file};
 use reqwest::blocking::Response;
 use reqwest::header::{HeaderName, HeaderValue};
 use std::{io::Read, time::Duration};
+use zeroize::Zeroizing;
 
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const WEBHOOK_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -93,21 +94,26 @@ pub(crate) fn post_json(url: &str, body: &str) -> Result<u16, String> {
         .header(reqwest::header::USER_AGENT, "mailswiftsync-notify-webhook")
         .body(body.to_owned());
     if let Some(token) = bearer_token {
-        let value = HeaderValue::from_str(&format!("Bearer {}", token.as_str()))
+        let authorization = Zeroizing::new(format!("Bearer {}", token.as_str()));
+        let mut value = HeaderValue::from_str(&authorization)
             .map_err(|error| format!("invalid webhook bearer token: {error}"))?;
+        value.set_sensitive(true);
         request = request.header(reqwest::header::AUTHORIZATION, value);
     }
     if let Some((name, value)) = custom_header {
         let name = HeaderName::from_bytes(name.as_bytes())
             .map_err(|error| format!("invalid webhook header name: {error}"))?;
-        let value = HeaderValue::from_str(value.as_str())
+        let mut value = HeaderValue::from_str(value.as_str())
             .map_err(|error| format!("invalid webhook header value: {error}"))?;
+        value.set_sensitive(true);
         request = request.header(name, value);
     }
 
+    // reqwest errors render the request URL, which may carry a secret path
+    // supplied through MAILSWIFTSYNC_WEBHOOK_URL_FILE.
     let mut response = request
         .send()
-        .map_err(|error| format!("webhook request failed: {error}"))?;
+        .map_err(|error| format!("webhook request failed: {}", error.without_url()))?;
     read_bounded_response(&mut response)?;
     Ok(response.status().as_u16())
 }
@@ -426,5 +432,15 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn transport_failure_does_not_echo_secret_url_path() {
+        // Port 1 on loopback refuses immediately; the error must not reveal
+        // the secret-bearing path an operator kept out of process listings.
+        let error = post_json("https://127.0.0.1:1/hooks/secret-token-path", "{}")
+            .expect_err("closed loopback port must fail");
+        assert!(error.starts_with("webhook request failed"), "{error}");
+        assert!(!error.contains("secret-token-path"), "{error}");
     }
 }
