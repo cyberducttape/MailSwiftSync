@@ -94,8 +94,8 @@ builds remain release work.
 7. Run the extracted `mailswiftsync` binary. On Windows, run
    `mailswiftsync-x86_64-pc-windows-msvc.exe`.
 
-8. If the engine is not on `PATH`, enter its absolute path in the migration
-   plan. Keep **Preflight** selected, test with a representative destination
+8. If the engine is not on `PATH`, enter its absolute path in **imapsync executable**
+   on the **Plan** page. Keep **Dry run / preflight** checked, test with a representative destination
    mailbox, and only then approve a live pilot.
 
 ## Operational suitability

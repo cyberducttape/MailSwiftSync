@@ -64,10 +64,23 @@ impl App {
         crate::ui::page_header(
             ui,
             self.language.text("Mailboxes"),
-            self.language.text("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window."),
+            self.language
+                .text("Review, filter, select, and operate on customer mailboxes."),
         );
         if self.historical_mailbox_view(ui) {
             return;
+        }
+        // Import results, start blocks, and queue-tool outcomes.
+        if !self.bulk_message.is_empty() {
+            crate::ui::card(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(&self.bulk_message).color(colors.text_primary));
+                    if ui.small_button(self.language.text("Dismiss")).clicked() {
+                        self.bulk_message.clear();
+                    }
+                });
+            });
+            ui.add_space(8.0);
         }
         if self.bulk_jobs.is_empty() {
             ui.label(
@@ -111,7 +124,7 @@ impl App {
                 );
             });
         } else {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(
                         self.language
@@ -121,10 +134,40 @@ impl App {
                     .strong(),
                 );
                 if ui
-                    .button(self.language.text("Import CSV / XLSX…"))
+                    .add_enabled(
+                        !self.running(),
+                        egui::Button::new(self.language.text("Import CSV / XLSX…")),
+                    )
                     .clicked()
                 {
                     self.choose_bulk_import();
+                }
+                if ui
+                    .add_enabled(
+                        !self.bulk_selected_ids.is_empty(),
+                        egui::Button::new(self.language.text("Export selected set…")),
+                    )
+                    .on_hover_text(self.language.text(
+                        "Writes the selected rows as JSON without credentials or engine options.",
+                    ))
+                    .clicked()
+                {
+                    self.bulk_message = match self.export_bulk_selection() {
+                        Ok(()) => self
+                            .language
+                            .text("Selected batch rows exported without credentials or engine options.")
+                            .to_owned(),
+                        Err(error) => error,
+                    };
+                }
+                if ui
+                    .add_enabled(
+                        !self.running(),
+                        egui::Button::new(self.language.text("Clear queue")),
+                    )
+                    .clicked()
+                {
+                    self.bulk_clear_confirm_open = true;
                 }
             });
             let summary = self.bulk_queue_summary();
@@ -194,6 +237,8 @@ impl App {
                 ui.label(RichText::new(self.language.text("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.")).small().color(colors.text_secondary));
             });
             ui.add_space(12.0);
+            self.queue_settings_card(ui);
+            ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(self.language.text("Search"));
                 ui.add(
@@ -262,12 +307,12 @@ impl App {
                 &self.bulk_job_ids,
             );
 
-            let status_text = format!(
-                "{} selected · {} visible · {} hidden by current filter",
-                self.bulk_selected_ids.len(),
-                visible_and_selected,
-                hidden_selected
-            );
+            let status_text = self
+                .language
+                .text("{} selected · {} visible · {} hidden by current filter")
+                .replacen("{}", &self.bulk_selected_ids.len().to_string(), 1)
+                .replacen("{}", &visible_and_selected.to_string(), 1)
+                .replacen("{}", &hidden_selected.to_string(), 1);
 
             ui.label(RichText::new(status_text).color(self.theme_colors().text_secondary));
             if hidden_selected > 0 {
@@ -482,6 +527,90 @@ impl App {
         }
     }
 
+    /// Worker pool, transient retries, and OS-keyring references for rows
+    /// without credentials. Collapsed by default to keep the table in view.
+    fn queue_settings_card(&mut self, ui: &mut egui::Ui) {
+        let colors = self.theme_colors();
+        let editable = !self.running();
+        let mut apply_source = false;
+        let mut apply_destination = false;
+        crate::ui::card(ui, |ui| {
+            egui::CollapsingHeader::new(
+                RichText::new(self.language.text("Queue settings")).strong(),
+            )
+            .id_salt("queue_settings")
+            .show(ui, |ui| {
+                crate::ui::form_row(ui, self.language.text("Concurrent workers"), |ui| {
+                    ui.add_enabled(
+                        editable,
+                        egui::DragValue::new(&mut self.form.profile.batch_concurrency).range(1..=16),
+                    );
+                    ui.label(
+                        RichText::new(
+                            self.language
+                                .text("Applies to preflight and live migration."),
+                        )
+                        .small()
+                        .color(colors.text_secondary),
+                    );
+                });
+                crate::ui::form_row(ui, self.language.text("Transient retries"), |ui| {
+                    ui.add_enabled(
+                        editable,
+                        egui::DragValue::new(&mut self.form.profile.batch_retry_count).range(0..=3),
+                    );
+                    ui.label(
+                        RichText::new(self.language.text(
+                            "Authentication and configuration failures are never retried.",
+                        ))
+                        .small()
+                        .color(colors.text_secondary),
+                    );
+                });
+                ui.add_space(8.0);
+                crate::ui::section_label(ui, self.language.text("Passwordless queue credentials"));
+                ui.label(
+                    RichText::new(self.language.text("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue."))
+                        .small()
+                        .color(colors.text_secondary),
+                );
+                for (label, value, button, flag) in [
+                    (
+                        "Source keyring ID",
+                        &mut self.bulk_source_keyring_apply,
+                        "Apply to empty source rows",
+                        &mut apply_source,
+                    ),
+                    (
+                        "Destination keyring ID",
+                        &mut self.bulk_destination_keyring_apply,
+                        "Apply to empty destination rows",
+                        &mut apply_destination,
+                    ),
+                ] {
+                    crate::ui::form_row(ui, self.language.text(label), |ui| {
+                        ui.add_enabled(
+                            editable,
+                            egui::TextEdit::singleline(value).desired_width(180.0),
+                        );
+                        if ui
+                            .add_enabled(editable, egui::Button::new(self.language.text(button)))
+                            .clicked()
+                        {
+                            *flag = true;
+                        }
+                    });
+                }
+            });
+        });
+        if apply_source {
+            self.apply_bulk_keyring_id(true);
+        }
+        if apply_destination {
+            self.apply_bulk_keyring_id(false);
+        }
+    }
+
     pub(crate) fn selection_review_drawer(&self, ui: &mut egui::Ui) {
         ui.heading(
             self.language
@@ -523,17 +652,47 @@ impl App {
                     ui.label(RichText::new(&job.label).strong());
                     ui.label(format!("{} → {}", job.source_user, job.destination_user));
                     ui.label(format!("{} → {}", job.source_host, job.destination_host));
-                    ui.label(
-                        self.language
-                            .text("State: {} · {}")
-                            .replace(
-                                "{}",
-                                self.language.text(crate::ui::display_job_state(&job.state)),
-                            )
-                            .replacen("{}", destructive, 1),
+                    let summary = review_state_summary(
+                        self.language.text("State: {} · {}"),
+                        self.language.text(crate::ui::display_job_state(&job.state)),
+                        destructive,
                     );
+                    ui.label(if profile.delete2 {
+                        RichText::new(summary)
+                            .strong()
+                            .color(self.theme_colors().danger)
+                    } else {
+                        RichText::new(summary)
+                    });
                 });
             }
         });
+    }
+}
+
+/// Fill the review drawer's "State: {} · {}" template. Each placeholder is
+/// replaced once, in order, so the destination-deletion status is never
+/// overwritten by the state.
+fn review_state_summary(template: &str, state: &str, deletion: &str) -> String {
+    template
+        .replacen("{}", state, 1)
+        .replacen("{}", deletion, 1)
+}
+
+#[cfg(test)]
+mod review_drawer_tests {
+    use super::review_state_summary;
+
+    #[test]
+    fn review_summary_shows_state_and_destination_deletion_status() {
+        let summary = review_state_summary(
+            "State: {} · {}",
+            "Ready",
+            "DESTRUCTIVE: destination deletion enabled",
+        );
+        assert_eq!(
+            summary,
+            "State: Ready · DESTRUCTIVE: destination deletion enabled"
+        );
     }
 }

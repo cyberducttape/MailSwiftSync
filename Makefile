@@ -16,6 +16,7 @@ capability-check:
 documentation-check:
 	python3 tests/verify_capability_claims_test.py
 	python3 scripts/verify-markdown-links.py .
+	python3 scripts/verify-ui-localization.py
 
 shell-check:
 	bash -n scripts/*.sh
