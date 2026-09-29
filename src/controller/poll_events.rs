@@ -141,8 +141,19 @@ impl App {
                             // Engine output is presentation-only. It may
                             // contain subjects, folder metadata, or other
                             // message-derived text, so retain it only in the
-                            // bounded process-local journal.
-                            push_visible_output(&mut self.output, text);
+                            // bounded process-local journal. Producers redact
+                            // their own per-mailbox secrets; redact again
+                            // against the active plan so a producer that
+                            // interpolates an unsanitized error cannot reach
+                            // the journal.
+                            let safe = ui::redact_secrets(
+                                &text,
+                                [
+                                    self.form.source_password.as_str(),
+                                    self.form.destination_password.as_str(),
+                                ],
+                            );
+                            push_visible_output(&mut self.output, safe);
                         }
                     }
                     Event::EngineVersion {

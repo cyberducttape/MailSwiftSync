@@ -34,6 +34,36 @@ use std::{
 
 const JOB_FINISHED_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Redact one mailbox's secrets from controller-generated text. Errors can
+/// carry upstream content (provider responses, OAuth `error_description`),
+/// so nothing leaves a batch worker for the journal, the ledger, or stderr
+/// without passing through this boundary.
+pub(crate) fn redact_child_text(form: &crate::Form, text: &str) -> String {
+    crate::ui::redact_secrets(
+        text,
+        [
+            form.source_password.as_str(),
+            form.destination_password.as_str(),
+        ],
+    )
+}
+
+/// Deliver a presentation line for one batch child through the redaction
+/// boundary.
+fn send_run_line(
+    tx: &mpsc::SyncSender<Event>,
+    form: &crate::Form,
+    run_id: &str,
+    job_id: &str,
+    text: String,
+) {
+    let _ = tx.send(Event::RunLine {
+        run_id: run_id.to_owned(),
+        job_id: job_id.to_owned(),
+        text: redact_child_text(form, &text),
+    });
+}
+
 pub(crate) fn send_job_finished(
     tx: &mpsc::SyncSender<Event>,
     job_id: String,
@@ -162,11 +192,13 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             }
             continue;
         }
-        let _ = tx.send(Event::RunLine {
-            run_id: child_run_id.clone(),
-            job_id: job_id.clone(),
-            text: format!("══ Job {}: {} ══", index + 1, job.label),
-        });
+        send_run_line(
+            &tx,
+            &form,
+            &child_run_id,
+            &job_id,
+            format!("══ Job {}: {} ══", index + 1, job.label),
+        );
         let imapsync_output_profile = if form.engine() == core::Engine::ImapSync {
             let identity = resolved_imapsync.get(&form.profile.imapsync_path);
             let version = identity
@@ -178,28 +210,32 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             let identity_persisted = if let Err(error) =
                 persist_engine_identity_before_launch(&tx, &child_run_id, &job_id, &version)
             {
-                let _ = tx.send(Event::RunLine {
-                    run_id: child_run_id.clone(),
-                    job_id: job_id.clone(),
-                    text: format!(
+                send_run_line(
+                    &tx,
+                    &form,
+                    &child_run_id,
+                    &job_id,
+                    format!(
                         "[{}] [verification] engine identity is not durable; output evidence disabled: {error}",
                         index + 1
                     ),
-                });
+                );
                 false
             } else {
                 true
             };
             if identity_persisted && profile == ImapsyncOutputProfile::Unknown {
-                let _ = tx.send(Event::RunLine {
-                    run_id: child_run_id.clone(),
-                    job_id: job_id.clone(),
-                    text: format!(
+                send_run_line(
+                    &tx,
+                    &form,
+                    &child_run_id,
+                    &job_id,
+                    format!(
                         "[{}] {}",
                         index + 1,
                         crate::verification::unqualified_imapsync_message(&version)
                     ),
-                });
+                );
             }
             if identity_persisted {
                 profile
@@ -228,14 +264,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 // a large queue cannot consume an expired bearer token.
                 if let Err(error) = refresh_live_credentials(&mut form, &oauth_refresh_locks) {
                     failed.store(true, Ordering::Relaxed);
-                    let _ = tx.send(Event::RunLine {
-                        run_id: child_run_id.clone(),
-                        job_id: job_id.clone(),
-                        text: format!(
+                    send_run_line(
+                        &tx,
+                        &form,
+                        &child_run_id,
+                        &job_id,
+                        format!(
                             "[{}] OAuth credential refresh failed before launch: {error}",
                             index + 1
                         ),
-                    });
+                    );
                     let _ = send_reliable_event(
                         &tx,
                         Event::JobState {
@@ -249,7 +287,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         job_id.clone(),
                         child_run_id.clone(),
                         "failed".into(),
-                        classified_failure_detail(&error),
+                        classified_failure_detail(&redact_child_text(&form, &error)),
                         None,
                     ) {
                         eprintln!("durable batch terminal event delivery failed: {delivery_error}");
@@ -262,15 +300,17 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             if live && let Err(error) = fresh_dual_imaps_authentication(&form) {
                 if should_retry_batch_error(&error, attempt, retry_count) {
                     provider_limiter.observe_failure(&provider_key, &error);
-                    let _ = tx.send(Event::RunLine {
-                        run_id: child_run_id.clone(),
-                        job_id: job_id.clone(),
-                        text: format!(
+                    send_run_line(
+                        &tx,
+                        &form,
+                        &child_run_id,
+                        &job_id,
+                        format!(
                             "[{}] [{}] transient fresh authentication probe failure; retrying: {error}",
                             index + 1,
                             classify_failure(&error).label()
                         ),
-                    });
+                    );
                     let _ = send_reliable_event(
                         &tx,
                         Event::JobState {
@@ -293,14 +333,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     continue;
                 }
                 failed.store(true, Ordering::Relaxed);
-                let _ = tx.send(Event::RunLine {
-                    run_id: child_run_id.clone(),
-                    job_id: job_id.clone(),
-                    text: format!(
+                send_run_line(
+                    &tx,
+                    &form,
+                    &child_run_id,
+                    &job_id,
+                    format!(
                         "[{}] fresh live authentication failed before launch: {error}",
                         index + 1
                     ),
-                });
+                );
                 let _ = send_reliable_event(
                     &tx,
                     Event::JobState {
@@ -317,7 +359,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     job_id.clone(),
                     child_run_id.clone(),
                     "failed".into(),
-                    classified_failure_detail(&error),
+                    classified_failure_detail(&redact_child_text(&form, &error)),
                     None,
                 ) {
                     eprintln!("durable batch terminal event delivery failed: {delivery_error}");
@@ -358,11 +400,13 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     if !cancelled {
                         failed.store(true, Ordering::Relaxed);
                     }
-                    let _ = tx.send(Event::RunLine {
-                        run_id: child_run_id.clone(),
-                        job_id: job_id.clone(),
-                        text: format!("[{}] {}", index + 1, error),
-                    });
+                    send_run_line(
+                        &tx,
+                        &form,
+                        &child_run_id,
+                        &job_id,
+                        format!("[{}] {}", index + 1, error),
+                    );
                     let _ = send_reliable_event(
                         &tx,
                         Event::JobState {
@@ -376,7 +420,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         job_id.clone(),
                         child_run_id.clone(),
                         if cancelled { "cancelled" } else { "failed" }.into(),
-                        classified_failure_detail(&error),
+                        classified_failure_detail(&redact_child_text(&form, &error)),
                         None,
                     ) {
                         eprintln!("durable batch terminal event delivery failed: {delivery_error}");
@@ -396,11 +440,13 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 },
             );
             if attempt > 0 {
-                let _ = tx.send(Event::RunLine {
-                    run_id: child_run_id.clone(),
-                    job_id: job_id.clone(),
-                    text: format!("[{}] retry attempt {attempt}/{retry_count}", index + 1),
-                });
+                send_run_line(
+                    &tx,
+                    &form,
+                    &child_run_id,
+                    &job_id,
+                    format!("[{}] retry attempt {attempt}/{retry_count}", index + 1),
+                );
                 let _ = send_reliable_event(
                     &tx,
                     Event::JobState {
@@ -491,28 +537,18 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                                     .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
                                 }
                                 Err(error) => {
+                                    let safe = redact_child_text(&form, &error);
                                     eprintln!(
-                                        "[{}] message-level IMAP verification failed: {error}",
+                                        "[{}] message-level IMAP verification failed: {safe}",
                                         index + 1
-                                    );
-                                    let safe = crate::ui::redact_secrets(
-                                        &error,
-                                        [
-                                            form.source_password.as_str(),
-                                            form.destination_password.as_str(),
-                                        ],
                                     );
                                     verification_failure = Some(
                                         safe.chars().take(2048).collect::<String>(),
                                     );
-                                    let _ = tx.send(Event::RunLine {
-                                        run_id: child_run_id.clone(),
-                                        job_id: job_id.clone(),
-                                        text: format!(
-                                            "[{}] message-level verification unavailable; transfer succeeded and requires review: {error}",
+                                    send_run_line(&tx, &form, &child_run_id, &job_id, format!(
+                                            "[{}] message-level verification unavailable; transfer succeeded and requires review: {safe}",
                                             index + 1
-                                        ),
-                                    });
+                                        ));
                                 }
                             }
                         } else if !form.dry_run
@@ -601,14 +637,16 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             match result {
                 Ok(outcome) => {
                     if outcome == StreamOutcome::DeltaRequired {
-                        let _ = tx.send(Event::RunLine {
-                                            run_id: child_run_id.clone(),
-                                            job_id: job_id.clone(),
-                                            text: format!(
-                                                "[{}] Dovecot reports an incomplete synchronization; another delta pass is required",
-                                                index + 1
-                                            ),
-                                        });
+                        send_run_line(
+                            &tx,
+                            &form,
+                            &child_run_id,
+                            &job_id,
+                            format!(
+                                "[{}] Dovecot reports an incomplete synchronization; another delta pass is required",
+                                index + 1
+                            ),
+                        );
                         delta_required = true;
                     }
                     completed = true;
@@ -616,15 +654,17 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 }
                 Err(error) if should_retry_batch_error(&error, attempt, retry_count) => {
                     provider_limiter.observe_failure(&provider_key, &error);
-                    let _ = tx.send(Event::RunLine {
-                        run_id: child_run_id.clone(),
-                        job_id: job_id.clone(),
-                        text: format!(
+                    send_run_line(
+                        &tx,
+                        &form,
+                        &child_run_id,
+                        &job_id,
+                        format!(
                             "[{}] [{}] transient failure; retrying: {error}",
                             index + 1,
                             classify_failure(&error).label()
                         ),
-                    });
+                    );
                     let _ = send_reliable_event(
                         &tx,
                         Event::JobState {
@@ -650,15 +690,17 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     if !cancelled {
                         failed.store(true, Ordering::Relaxed);
                     }
-                    let _ = tx.send(Event::RunLine {
-                        run_id: child_run_id.clone(),
-                        job_id: job_id.clone(),
-                        text: format!(
+                    send_run_line(
+                        &tx,
+                        &form,
+                        &child_run_id,
+                        &job_id,
+                        format!(
                             "[{}] [{}] failed: {error}",
                             index + 1,
                             classify_failure(&error).label()
                         ),
-                    });
+                    );
                     let _ = send_reliable_event(
                         &tx,
                         Event::JobState {
@@ -672,7 +714,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         job_id.clone(),
                         child_run_id.clone(),
                         if cancelled { "cancelled" } else { "failed" }.into(),
-                        classified_failure_detail(&error),
+                        classified_failure_detail(&redact_child_text(&form, &error)),
                         None,
                     ) {
                         eprintln!("durable batch terminal event delivery failed: {delivery_error}");
@@ -753,5 +795,33 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 terminal.insert(index);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn controller_generated_output_is_redacted_before_it_leaves_the_worker() {
+        let mut form = crate::Form::default();
+        form.source_password = String::from("source-secret-value").into();
+        form.destination_password = String::from("destination-secret-value").into();
+        let (tx, rx) = mpsc::sync_channel(1);
+        // An upstream error (for example an OAuth error_description) that
+        // echoes a credential must not reach the journal verbatim.
+        let error = "invalid_grant: token source-secret-value rejected";
+        send_run_line(&tx, &form, "run", "job", format!("[1] failed: {error}"));
+        let Ok(Event::RunLine { text, .. }) = rx.recv() else {
+            panic!("expected a RunLine event");
+        };
+        assert!(!text.contains("source-secret-value"), "{text}");
+        assert!(text.contains("[REDACTED]"), "{text}");
+
+        let detail = classified_failure_detail(&redact_child_text(
+            &form,
+            "destination-secret-value was refused",
+        ));
+        assert!(!detail.contains("destination-secret-value"), "{detail}");
     }
 }

@@ -6,6 +6,12 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Batch workers now route every controller-generated journal line, terminal
+  failure detail persisted to the ledger, and error diagnostic on stderr
+  through one per-mailbox redaction boundary. The message-verification failure
+  line previously computed a redacted string but displayed the raw error, and
+  upstream error text such as OAuth `error_description` was trusted verbatim.
+  The GUI also redacts journal lines against the active plan's secrets.
 - Restartable message verification no longer combines two mailbox snapshots.
   Stage cursors now persist the folder's SELECT snapshot (UIDVALIDITY,
   UIDNEXT, EXISTS). A resumed scan reuses staged pages only when the server
