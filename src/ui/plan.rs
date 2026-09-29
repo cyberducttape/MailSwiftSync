@@ -422,7 +422,7 @@ impl App {
                 ui.add_space(8.0);
                 let editable = !self.running();
                 ui.add_enabled_ui(editable, |ui| {
-                    ui.group(|ui| {
+                    crate::ui::card(ui, |ui| {
                         ui.heading(self.language.text("Reliability and metadata"));
                         ui.checkbox(&mut self.form.profile.sync_internaldates, self.language.text("Sync internal dates  (--syncinternaldates)"));
                         ui.checkbox(&mut self.form.profile.useuid, self.language.text("Use message UIDs when available  (--useuid)"));
@@ -467,7 +467,7 @@ impl App {
                         }
                     });
                     ui.add_space(8.0);
-                    ui.group(|ui| {
+                    crate::ui::card(ui, |ui| {
                         ui.heading(self.language.text("Performance"));
                         ui.checkbox(&mut self.form.profile.fastio1, self.language.text("Fast I/O for source  (--fastio1)"))
                             .on_hover_text(self.language.text("Uses imapsync's faster source I/O path; test this with the provider before a production cutover."));
@@ -492,7 +492,7 @@ impl App {
                     });
                     ui.add_space(8.0);
                     if self.form.engine() == crate::core::Engine::Dovecot {
-                        ui.group(|ui| {
+                        crate::ui::card(ui, |ui| {
                             ui.heading(self.language.text("Dovecot migration strategy"));
                             egui::ComboBox::from_id_salt("dovecot_strategy")
                 .selected_text(self.language.text(self.form.profile.dovecot_strategy.label()))
@@ -525,7 +525,7 @@ impl App {
                             );
                         });
                     } else {
-                        ui.group(|ui| {
+                        crate::ui::card(ui, |ui| {
                             ui.heading(RichText::new(self.language.text("Destructive destination option")).color(self.theme_colors().danger));
                             ui.checkbox(&mut self.form.profile.delete2, self.language.text("Delete destination messages missing from source  (--delete2)"));
                             ui.label(RichText::new(self.language.text("Use only for an intentionally exact backup after a tested preflight. This can remove destination mail.")).size(11.0).color(self.theme_colors().danger));

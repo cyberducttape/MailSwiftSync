@@ -46,9 +46,11 @@ impl App {
     }
 
     pub(crate) fn activity_view(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.language.text("Activity"));
-        ui.label(RichText::new(self.language.text("Live output is retained here for operator review. Durable run history remains available after restart.")).color(self.theme_colors().text_secondary));
-        ui.add_space(12.0);
+        crate::ui::page_header(
+            ui,
+            self.language.text("Activity"),
+            self.language.text("Live output is retained here for operator review. Durable run history remains available after restart."),
+        );
         let selected_recovery_guidance = self
             .job_id
             .as_deref()
@@ -69,7 +71,7 @@ impl App {
                 })
             });
         if let Some((reason_label, guidance)) = selected_recovery_guidance {
-            ui.group(|ui| {
+            crate::ui::card(ui, |ui| {
                 ui.heading(self.language.text("Recovery guidance"));
                 ui.label(
                     RichText::new(self.language.text(reason_label))
@@ -115,7 +117,7 @@ impl App {
                 Some(_) | None => {}
             }
         }
-        ui.group(|ui| {
+        crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
                 let running = self.running();
                 ui.heading(if running {
@@ -159,19 +161,28 @@ impl App {
                     self.stop_confirm_focus_requested = false;
                 }
             });
-            egui::ScrollArea::vertical()
-                .hscroll(true)
-                .stick_to_bottom(true)
-                .max_height(420.0)
-                .show_rows(ui, 20.0, self.output.len(), |ui, rows| {
-                    for index in rows {
-                        if let Some(line) = self.output.get(index) {
-                            ui.add(
-                                egui::Label::new(RichText::new(line).monospace().size(14.0))
-                                    .wrap_mode(egui::TextWrapMode::Extend),
-                            );
-                        }
-                    }
+            ui.add_space(8.0);
+            let console = ui.visuals().extreme_bg_color;
+            egui::Frame::new()
+                .fill(console)
+                .corner_radius(6)
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    egui::ScrollArea::vertical()
+                        .hscroll(true)
+                        .stick_to_bottom(true)
+                        .max_height(420.0)
+                        .show_rows(ui, 18.0, self.output.len(), |ui, rows| {
+                            for index in rows {
+                                if let Some(line) = self.output.get(index) {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(line).monospace())
+                                            .wrap_mode(egui::TextWrapMode::Extend),
+                                    );
+                                }
+                            }
+                        });
                 });
         });
         ui.add_space(14.0);

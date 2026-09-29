@@ -45,7 +45,7 @@ pub(crate) fn show(
             ui.heading(language.text("Operator settings"));
             ui.label(RichText::new(language.text("Appearance and workspace tools live here. Migration connection and engine choices belong on the Migration plan so the active plan stays visible while you configure it.")).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
             ui.add_space(8.0);
-            ui.group(|ui| {
+            crate::ui::card(ui, |ui| {
                 ui.heading(language.text("Appearance"));
                 ui.horizontal(|ui| {
                     ui.label(language.text("Color pack"));
@@ -133,7 +133,7 @@ pub(crate) fn show(
                 }
             });
             ui.add_space(8.0);
-            ui.group(|ui| {
+            crate::ui::card(ui, |ui| {
                 ui.heading(language.text("Report branding"));
                 ui.label(RichText::new(language.text("Optional. Applied to customer-proof exports as an \"issued by\" line; independent of the migration plan and never affects preflight/live execution. Leave blank to omit it entirely.")).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                 ui.horizontal(|ui| {
@@ -151,7 +151,7 @@ pub(crate) fn show(
                 }
             });
             ui.add_space(8.0);
-            ui.group(|ui| {
+            crate::ui::card(ui, |ui| {
                 ui.heading(language.text("Workspace tools"));
                 if ui.button(language.text("Open Migration plan")).clicked() {
                     action = Some(SettingsAction::OpenMigrationPlan);

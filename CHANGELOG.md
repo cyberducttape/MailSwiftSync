@@ -6,6 +6,22 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Redesigned the desktop GUI for a professional finish: a structured header,
+  an icon sidebar with a clear selection state, raised rounded cards with
+  consistent padding, a filled primary action per section, page headers,
+  aligned form rows, side-by-side source and destination cards on the Plan,
+  status pills for queue health, a console-style activity log, and a progress
+  stepper that replaces the wrapping workflow and lifecycle chips. Overview
+  stat cards no longer run off the right edge, and the duplicate current-phase
+  card is gone. Retro and high-contrast colour packs keep square corners and
+  full-strength borders.
+- Arrows, check marks, and CJK mailbox folder names no longer render as empty
+  boxes: platform symbol and CJK fonts are loaded as fallbacks behind the
+  bundled fonts, each validated with egui's own parser first.
+- Fixed unreadable text on saturated selection and stripe fills in retro
+  packs (black on Windows 95 navy), and account-card colours that ignored the
+  active colour pack. Tests now assert selected-text and stripe contrast for
+  every pack.
 - Added `mailswiftsync oauth-authorize google|microsoft|custom <keyring-id>`:
   a browser consent flow (authorization code with PKCE S256, random state,
   one-shot loopback redirect) for the operator's registered OAuth
