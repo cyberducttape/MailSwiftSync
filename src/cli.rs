@@ -891,19 +891,22 @@ pub(crate) fn run() -> eframe::Result<()> {
                     }
                     continue;
                 }
-                "--source-secret-file" => Some(&mut source_secret_file),
-                "--destination-secret-file" => Some(&mut destination_secret_file),
-                "--diagnostic-log" => Some(&mut diagnostic_log),
+                "--source-secret-file" => &mut source_secret_file,
+                "--destination-secret-file" => &mut destination_secret_file,
+                "--diagnostic-log" => &mut diagnostic_log,
                 _ => {
                     eprintln!("Unknown headless option: {option}");
                     std::process::exit(2);
                 }
             };
             let Some(path) = arguments.next() else {
-                eprintln!("Headless secret-file option requires a path");
+                eprintln!("Headless {option} option requires a path");
                 std::process::exit(2);
             };
-            *target.unwrap() = Some(std::path::PathBuf::from(path));
+            if target.replace(std::path::PathBuf::from(path)).is_some() {
+                eprintln!("Headless {option} may appear only once");
+                std::process::exit(2);
+            }
         }
         if mode.is_batch()
             && (source_secret_file.is_some()
