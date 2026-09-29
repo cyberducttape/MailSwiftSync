@@ -804,9 +804,11 @@ mod tests {
 
     #[test]
     fn controller_generated_output_is_redacted_before_it_leaves_the_worker() {
-        let mut form = crate::Form::default();
-        form.source_password = String::from("source-secret-value").into();
-        form.destination_password = String::from("destination-secret-value").into();
+        let form = crate::Form {
+            source_password: String::from("source-secret-value").into(),
+            destination_password: String::from("destination-secret-value").into(),
+            ..Default::default()
+        };
         let (tx, rx) = mpsc::sync_channel(1);
         // An upstream error (for example an OAuth error_description) that
         // echoes a credential must not reach the journal verbatim.
