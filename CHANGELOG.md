@@ -6,6 +6,13 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a restart state-machine suite for durable verification staging that
+  drives the real fetch path against a scripted IMAP server: unchanged resume,
+  append, expunge, expunge plus append with unchanged EXISTS, changed
+  UIDVALIDITY, a crash after page insertion but before the cursor commit,
+  completed-folder restart, and body-fingerprint partial staging. Removed a
+  scenario test whose name claimed interruption recovery but only checked
+  arithmetic.
 - Durable verification stages are made owner-only through the opened
   descriptor on every open, not only at creation, and existing SQLite
   sidecars are repaired the same way. The stage must be a regular file owned

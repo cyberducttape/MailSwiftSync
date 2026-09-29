@@ -1,6 +1,9 @@
 //! Message verification scenario tests.
 //! These exercise reconciliation models directly; they are not product-level
 //! integration tests because they do not invoke the binary, SQLite, or reports.
+//! Interrupted-verification recovery is covered by the restart state-machine
+//! suite in `src/imap_probe.rs` (`resume_tests`), which drives the real fetch
+//! path against a scripted IMAP server and a durable SQLite stage.
 #[test]
 fn verify_exact_match_detection() {
     // Scenario: Source and destination have identical messages
@@ -234,25 +237,6 @@ fn verify_mixed_scenario() {
     assert_eq!(changed, 1);
     assert_eq!(missing.len(), 1);
     assert_eq!(extra.len(), 1);
-}
-
-#[test]
-fn verify_error_recovery_after_interruption() {
-    // Scenario: Migration interrupted mid-stream
-    // Expected: Can resume from checkpoint without losing verified messages
-
-    let total_messages = 1000;
-    let processed_before_interrupt = 700;
-
-    // Simulate checkpoint: 700 messages verified before interruption
-    let verified_messages = processed_before_interrupt;
-
-    // Simulate resume: process remaining 300
-    let remaining_messages = total_messages - processed_before_interrupt;
-
-    // After resume, all should be verified
-    let total_verified = verified_messages + remaining_messages;
-    assert_eq!(total_verified, total_messages);
 }
 
 #[test]
