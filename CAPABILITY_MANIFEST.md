@@ -52,6 +52,7 @@ that status layout against the machine-readable source.
 | **Gmail authentication (OAuth)** | yes | partial | unit | no | Token refresh implemented, scope documentation corrected to https://mail.google.com/ |
 | **Gmail-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |
 | **Microsoft 365 authentication (OAuth)** | yes | partial | unit | no | Token refresh implemented, scope documentation corrected to IMAP.AccessAsUser.All |
+| **OAuth consent (authorization code + PKCE)** | yes | CLI only | unit + loopback | no | `oauth-authorize` for Google, Microsoft, and custom providers; stores the refresh configuration in the OS keyring; not yet run against live tenants |
 | **Microsoft 365-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |
 | **Fastmail authentication (app password)** | yes | yes | unit | no | Standard IMAP auth |
 | **Fastmail-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |

@@ -6,6 +6,13 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added `mailswiftsync oauth-authorize google|microsoft|custom <keyring-id>`:
+  a browser consent flow (authorization code with PKCE S256, random state,
+  one-shot loopback redirect) for the operator's registered OAuth
+  application. It refuses a mismatched state or a response without a refresh
+  token and stores the refresh configuration in the OS-keyring entry that
+  automatic refresh already reads. It has not yet been qualified against live
+  Google or Microsoft tenants.
 - Corrected operator documentation that lagged the implementation: batch
   children run independent message-level verification for encrypted imapsync
   plans, verification staging is durably restartable and snapshot-bound, and

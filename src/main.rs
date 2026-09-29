@@ -18,6 +18,7 @@ mod maintenance_window;
 mod migrate_audit;
 mod migration_plan;
 mod oauth;
+mod oauth_authorize;
 mod oauth_refresh;
 mod output;
 mod plan_identity;

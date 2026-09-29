@@ -67,14 +67,14 @@ impl ProviderPreset {
                 port: "993",
                 tls: "imaps",
                 auth: "oauth2",
-                note: "OAuth is preferred; Workspace administrators may use delegated gmail.imap_admin access. MailSwiftSync does not perform consent, so configure the tenant/client flow separately.",
+                note: "OAuth is preferred; Workspace administrators may use delegated gmail.imap_admin access. Register your own OAuth client, then run `mailswiftsync oauth-authorize google` to store a refresh token.",
             },
             Self::Microsoft365 => ProviderDefaults {
                 host: "outlook.office365.com",
                 port: "993",
                 tls: "imaps",
                 auth: "oauth2",
-                note: "MailSwiftSync does not perform provider consent. Automatic refresh is available when an operator supplies a registered client and refresh token. Exchange Online IMAP and tenant OAuth policy must permit the account.",
+                note: "Register your own OAuth application, then run `mailswiftsync oauth-authorize microsoft` to store a refresh token; live launches refresh access tokens automatically. Exchange Online IMAP and tenant OAuth policy must permit the account.",
             },
             Self::Fastmail => ProviderDefaults {
                 host: "imap.fastmail.com",

@@ -832,6 +832,18 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("oauth-authorize") {
+        match oauth_authorize_command(arguments) {
+            Ok(message) => {
+                println!("{message}");
+                return Ok(());
+            }
+            Err((code, message)) => {
+                eprintln!("{message}");
+                std::process::exit(code);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
@@ -996,7 +1008,7 @@ fn print_cli_help() {
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
     println!(
-        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate credential-free operational status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST minimal credential-free operational status to HTTPS; opt into customer metadata explicitly\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live"
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate credential-free operational status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST minimal credential-free operational status to HTTPS; opt into customer metadata explicitly\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n  oauth-authorize <provider> <keyring-id> --client-id <id>  Authorize IMAP access in a browser and store the refresh configuration"
     );
     println!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
@@ -1007,6 +1019,115 @@ fn print_cli_help() {
     println!(
         "\nDoctor:\n  doctor [state.db]              Report the local qualification envelope as JSON"
     );
+}
+
+const OAUTH_AUTHORIZE_USAGE: &str = "Usage: mailswiftsync oauth-authorize google|microsoft|custom <keyring-id> --client-id <id> [--client-secret-file <path>] [--tenant <tenant>] [--authorize-url <url> --token-url <url> --scope <scope>] [--redirect-host 127.0.0.1|localhost] [--login-hint <address>]";
+
+/// Run the interactive authorization-code flow and store the refresh
+/// configuration under `<keyring-id>`. Errors carry the process exit code:
+/// 2 for usage errors, 1 for authorization or storage failures.
+fn oauth_authorize_command(
+    mut arguments: impl Iterator<Item = OsString>,
+) -> Result<String, (i32, String)> {
+    use crate::oauth_authorize::{
+        AUTHORIZATION_TIMEOUT, AuthorizationRequest, CodeExchange, ProviderOverrides, RedirectHost,
+        RedirectListener,
+    };
+    let usage = |detail: &str| (2, format!("{detail}\n{OAUTH_AUTHORIZE_USAGE}"));
+    let text = |value: OsString, name: &str| {
+        value
+            .into_string()
+            .map_err(|_| usage(&format!("{name} must be valid UTF-8")))
+    };
+    let (Some(provider), Some(keyring_id)) = (arguments.next(), arguments.next()) else {
+        return Err(usage(
+            "oauth-authorize requires a provider and a keyring ID",
+        ));
+    };
+    let provider = text(provider, "provider")?;
+    let keyring_id = text(keyring_id, "keyring ID")?;
+    crate::oauth_authorize::validate_keyring_id(&keyring_id).map_err(|error| usage(&error))?;
+    let mut client_id = None;
+    let mut client_secret_file = None;
+    let mut login_hint = None;
+    let mut overrides = ProviderOverrides::default();
+    let mut redirect_host = None;
+    while let Some(option) = arguments.next() {
+        let option = text(option, "option")?;
+        let Some(value) = arguments.next() else {
+            return Err(usage(&format!("{option} requires a value")));
+        };
+        let value = text(value, &option)?;
+        let slot = match option.as_str() {
+            "--client-id" => &mut client_id,
+            "--client-secret-file" => &mut client_secret_file,
+            "--login-hint" => &mut login_hint,
+            "--tenant" => &mut overrides.tenant,
+            "--authorize-url" => &mut overrides.authorize_endpoint,
+            "--token-url" => &mut overrides.token_endpoint,
+            "--scope" => &mut overrides.scope,
+            "--redirect-host" => &mut redirect_host,
+            _ => return Err(usage(&format!("unknown oauth-authorize option {option}"))),
+        };
+        if value.trim().is_empty() || value.chars().any(char::is_control) {
+            return Err(usage(&format!("{option} requires a non-empty value")));
+        }
+        if slot.replace(value).is_some() {
+            return Err(usage(&format!("{option} may appear only once")));
+        }
+    }
+    let client_id = client_id.ok_or_else(|| usage("--client-id is required"))?;
+    overrides.redirect_host = redirect_host
+        .as_deref()
+        .map(RedirectHost::parse)
+        .transpose()
+        .map_err(|error| usage(&error))?;
+    let profile = crate::oauth_authorize::provider_profile(&provider, overrides)
+        .map_err(|error| usage(&error))?;
+    let client_secret = client_secret_file
+        .map(|path| read_secret_file(std::path::Path::new(&path)))
+        .transpose()
+        .map_err(|error| {
+            (
+                1,
+                format!("OAuth authorization refused: client secret file: {error}"),
+            )
+        })?;
+
+    let failure = |error: String| (1, format!("OAuth authorization failed: {error}"));
+    let pkce = crate::oauth_authorize::new_pkce().map_err(failure)?;
+    let state = crate::oauth_authorize::new_state().map_err(failure)?;
+    let listener = RedirectListener::bind(profile.redirect_host).map_err(failure)?;
+    let redirect_uri = crate::oauth_authorize::redirect_uri(profile.redirect_host, listener.port());
+    let url = crate::oauth_authorize::authorization_url(&AuthorizationRequest {
+        profile: &profile,
+        client_id: &client_id,
+        redirect_uri: &redirect_uri,
+        state: &state,
+        code_challenge: &pkce.challenge,
+        login_hint: login_hint.as_deref(),
+    })
+    .map_err(failure)?;
+    eprintln!(
+        "Open this URL in a browser on this computer and sign in to the mailbox account:\n\n{url}\n\nThe provider will redirect to {redirect_uri}; the OAuth application must allow this loopback redirect. Waiting up to {} minutes...",
+        AUTHORIZATION_TIMEOUT.as_secs() / 60
+    );
+    let code = listener
+        .wait_for_code(&state, AUTHORIZATION_TIMEOUT)
+        .map_err(failure)?;
+    let config = crate::oauth_authorize::exchange_code(&CodeExchange {
+        token_endpoint: &profile.token_endpoint,
+        client_id: &client_id,
+        client_secret: client_secret.as_ref().map(|secret| secret.as_str()),
+        code: &code,
+        redirect_uri: &redirect_uri,
+        code_verifier: &pkce.verifier,
+    })
+    .map_err(failure)?;
+    crate::oauth_authorize::store_refresh_config(&keyring_id, &config).map_err(failure)?;
+    Ok(format!(
+        "Stored the OAuth refresh configuration under keyring ID `{keyring_id}`. Enter this ID as the source or destination OAuth refresh keyring ID in the migration profile; live launches will refresh the access token automatically."
+    ))
 }
 
 #[cfg(test)]

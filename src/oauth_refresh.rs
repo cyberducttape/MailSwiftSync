@@ -1,10 +1,9 @@
 //! Automatic OAuth 2.0 access-token refresh for the imapsync XOAUTH2 path.
 //!
-//! MailSwiftSync does not perform provider consent; the operator must
-//! register their own OAuth application (client ID, and a client secret for
-//! providers that require one) and obtain an initial refresh token through
-//! whatever flow that provider documents. What this module adds is the
-//! unattended part: given a token endpoint, client credentials, and a
+//! The operator registers their own OAuth application (client ID, and a
+//! client secret for providers that require one). The initial refresh token
+//! comes from `mailswiftsync oauth-authorize` (see `oauth_authorize`) or from
+//! the provider's own tooling. What this module adds is the unattended part: given a token endpoint, client credentials, and a
 //! long-lived refresh token, it exchanges them for a fresh short-lived access
 //! token before each live launch so a multi-hour batch queue does not stall
 //! on an expired token that only the operator could previously replace by
@@ -207,7 +206,22 @@ impl ExpiresIn {
 /// client. Redirects are disabled so a token cannot be forwarded to another
 /// origin, and Rustls provides certificate and hostname validation.
 pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<RefreshedToken, String> {
-    let endpoint = reqwest::Url::parse(request.token_endpoint)
+    post_token_request(
+        request.token_endpoint,
+        &refresh_form(request),
+        "mailswiftsync-oauth-refresh",
+    )
+}
+
+/// POST one form-encoded grant to an HTTPS token endpoint and parse the
+/// bounded JSON response. Shared by refresh and authorization-code exchange so
+/// both use the same redirect-free Rustls client and size limits.
+pub(crate) fn post_token_request(
+    token_endpoint: &str,
+    form: &[(&str, &str)],
+    user_agent: &str,
+) -> Result<RefreshedToken, String> {
+    let endpoint = reqwest::Url::parse(token_endpoint)
         .map_err(|error| format!("invalid OAuth token endpoint: {error}"))?;
     if endpoint.scheme() != "https" {
         return Err("the OAuth token endpoint must use https://".to_owned());
@@ -223,8 +237,8 @@ pub(crate) fn refresh_access_token(request: &RefreshRequest<'_>) -> Result<Refre
     let mut response = client
         .post(endpoint)
         .header(reqwest::header::ACCEPT, "application/json")
-        .header(reqwest::header::USER_AGENT, "mailswiftsync-oauth-refresh")
-        .form(&refresh_form(request))
+        .header(reqwest::header::USER_AGENT, user_agent)
+        .form(form)
         .send()
         .map_err(|error| format!("{host}: token endpoint request failed: {error}"))?;
     let status = response.status().as_u16();
@@ -283,7 +297,7 @@ fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken,
         let error_code = response.error.as_deref().unwrap_or("");
         let description = response.error_description.as_deref().unwrap_or("");
         return Err(format!(
-            "token endpoint rejected the refresh request (HTTP {status_code}{}{})",
+            "token endpoint rejected the token request (HTTP {status_code}{}{})",
             if error_code.is_empty() { "" } else { ": " },
             if description.is_empty() {
                 error_code

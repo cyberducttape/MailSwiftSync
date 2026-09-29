@@ -72,3 +72,59 @@ fn read_only_commands_refuse_missing_ledgers_without_creating_them() {
 fn unknown_command_exits_with_usage_error() {
     assert_eq!(run(&["definitely-not-a-command"]).status.code(), Some(2));
 }
+
+#[test]
+fn oauth_authorize_refuses_incomplete_requests_before_any_network_use() {
+    for (arguments, expected) in [
+        (&["oauth-authorize"][..], "requires a provider"),
+        (
+            &["oauth-authorize", "google", "id"][..],
+            "--client-id is required",
+        ),
+        (
+            &["oauth-authorize", "microsoft", "id", "--client-id", "c"][..],
+            "--tenant is required",
+        ),
+        (
+            &["oauth-authorize", "custom", "id", "--client-id", "c"][..],
+            "--authorize-url is required",
+        ),
+        (
+            &["oauth-authorize", "yahoo", "id", "--client-id", "c"][..],
+            "google, microsoft, or custom",
+        ),
+        (
+            &[
+                "oauth-authorize",
+                "google",
+                "id",
+                "--client-id",
+                "c",
+                "--redirect-host",
+                "example.com",
+            ][..],
+            "--redirect-host must be",
+        ),
+        (
+            &[
+                "oauth-authorize",
+                "google",
+                "id",
+                "--client-id",
+                "a",
+                "--client-id",
+                "b",
+            ][..],
+            "may appear only once",
+        ),
+        (
+            &["oauth-authorize", "google", "id", "--client-id"][..],
+            "requires a value",
+        ),
+    ] {
+        let output = run(arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{arguments:?}: {stderr}");
+    }
+}
