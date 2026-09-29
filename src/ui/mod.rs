@@ -341,3 +341,37 @@ pub(crate) fn endpoint_cell(ui: &mut egui::Ui, host: &str, user: &str) {
             .on_hover_text(user);
     });
 }
+
+#[cfg(test)]
+mod dialog_reachability_tests {
+    /// Every dialog flag must be set somewhere in production UI code. A
+    /// refactor once removed the only buttons that opened the credential
+    /// and engine dialogs, leaving OAuth refresh configuration unreachable.
+    #[test]
+    fn every_dialog_has_a_production_opener() {
+        let production = [
+            include_str!("app.rs"),
+            include_str!("overview.rs"),
+            include_str!("plan.rs"),
+            include_str!("batch.rs"),
+            include_str!("activity.rs"),
+            include_str!("verification.rs"),
+            include_str!("settings.rs"),
+            include_str!("workspace.rs"),
+            include_str!("account.rs"),
+            include_str!("engine.rs"),
+        ]
+        .concat();
+        for flag in [
+            "keyring_open = true",
+            "engine_open = true",
+            "settings_open = true",
+            "projects_open = true",
+            "advanced_open = true",
+            "preview = true",
+            "bulk_clear_confirm_open = true",
+        ] {
+            assert!(production.contains(flag), "no production UI sets `{flag}`");
+        }
+    }
+}

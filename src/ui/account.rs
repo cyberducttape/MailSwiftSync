@@ -50,7 +50,7 @@ pub(crate) fn render_account(
     crate::ui::card(ui, |ui| {
         ui.label(RichText::new(title).size(16.0).strong().color(color));
         ui.label(
-            RichText::new(if title.contains("DOVECOT") {
+            RichText::new(if title.to_lowercase().contains("dovecot") {
                 language.text("Local Dovecot account")
             } else {
                 language.text("IMAP connection")

@@ -4,8 +4,8 @@
 workflow; this page adds the specific endpoint, auth, and folder-mapping details
 for pairings MSPs run most often. Provider IMAP requirements and endpoints
 change over time — verify current values against the provider's own
-documentation before a production migration, and always validate with
-**Preflight** against a real account before trusting anything below.
+documentation before a production migration, and always validate with a
+preflight against a real account before trusting anything below.
 
 Every runbook below assumes: engine = **imapsync fallback** (neither Gmail nor
 Microsoft 365 exposes Dovecot-native administration), a test destination
@@ -83,8 +83,9 @@ directly against a real Dovecot server (see
   entered, not a broken server.
 - **Certificate trust.** Many budget hosts still run older or non-public-CA
   certificates. If Preflight reports a certificate validation failure and you
-  have independently confirmed the host and cert are legitimate, use
-  **Enterprise certificate trust** to supply the specific CA bundle — never
+  have independently confirmed the host and cert are legitimate, enter
+  the specific CA bundle in **CA bundle** under **Connection details** on the
+  **Plan** page — never
   disable verification to work around it.
 - **This is a real Dovecot server**, so if you administer the destination
   too, Dovecot-native execution may apply instead of imapsync; see

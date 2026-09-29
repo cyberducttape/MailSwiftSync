@@ -3,7 +3,8 @@
 //! `MAILSWIFTSYNC_DEBUG_VIEW` selects the initial workspace page,
 //! `MAILSWIFTSYNC_DEBUG_DIALOG` opens one dialog, and
 //! `MAILSWIFTSYNC_DEBUG_DEMO=1` fills the plan and batch queue with
-//! placeholder `.example` data. Release builds do not compile this module.
+//! placeholder `.example` data, and `MAILSWIFTSYNC_DEBUG_WINDOW=WIDTHxHEIGHT`
+//! sets the initial window size. Release builds do not compile this module.
 use crate::App;
 use crate::bulk_import::BulkJob;
 use crate::ui::WorkspaceView;
@@ -68,4 +69,18 @@ fn demo_data(app: &mut App) {
         app.bulk_job_ids.push(format!("demo-job-{index}"));
     }
     app.bulk_jobs_generation = app.bulk_jobs_generation.wrapping_add(1);
+    // Masked session placeholders so screenshots show a configured plan
+    // rather than "password is required" validation.
+    app.form.source_password = String::from("placeholder-secret").into();
+    app.form.destination_password = String::from("placeholder-secret").into();
+    for id in ["demo-job-1", "demo-job-8"] {
+        app.bulk_selected_ids.insert(id.to_owned());
+    }
+}
+
+/// Initial window size from `MAILSWIFTSYNC_DEBUG_WINDOW`, e.g. `1280x1040`.
+pub(crate) fn window_size() -> Option<[f32; 2]> {
+    let value = std::env::var("MAILSWIFTSYNC_DEBUG_WINDOW").ok()?;
+    let (width, height) = value.split_once('x')?;
+    Some([width.parse().ok()?, height.parse().ok()?])
 }

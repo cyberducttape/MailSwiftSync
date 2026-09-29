@@ -41,6 +41,9 @@ pub(crate) struct App {
     pub(crate) bulk_filter_cache_generation: u64,
     pub(crate) bulk_jobs_generation: u64,
     pub(crate) bulk_message: String,
+    /// OS-keyring IDs typed on the Mailboxes page for rows without credentials.
+    pub(crate) bulk_source_keyring_apply: String,
+    pub(crate) bulk_destination_keyring_apply: String,
     pub(crate) advanced_open: bool,
     pub(crate) engine_open: bool,
     pub(crate) store: core::StateStore,

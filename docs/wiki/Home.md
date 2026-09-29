@@ -2,19 +2,21 @@
 
 MailSwiftSync is a local mailbox migration control plane. It uses Dovecot's native `doveadm`/dsync workflow when the destination is Dovecot, and `imapsync` for arbitrary IMAP-to-IMAP work. It helps you plan a migration, test it safely, keep a durable project record, and verify the result.
 
-![Migration plan workflow preview](assets/migration-plan.png)
+![MailSwiftSync Overview with a loaded batch queue](assets/overview.png)
 
-> **Workflow preview:** this image illustrates the current operator flow; field values are examples only and the exact egui layout may change between releases.
+*Overview page of the current release with placeholder `.example` data: queue status, the recommended next step, and progress through the migration workflow and project lifecycle.*
 
 ## Start here
 
 1. Install local `doveadm` on the Dovecot destination controller, or install `imapsync` for the fallback path. Remote Dovecot execution is unavailable until a secret-safe broker exists.
-2. Open MailSwiftSync and create or select a migration project.
-3. On **Migration plan**, choose the engine and leave **Preflight** selected.
+2. Open MailSwiftSync and select a migration project under **Projects**, or start a new plan.
+3. On **Plan**, choose the engine and leave **Dry run / preflight** checked.
 4. Enter the source and destination account details.
-5. Preview the redacted command and check the servers and usernames.
-6. Run validation with a test destination mailbox.
-7. Confirm the mailbox is **Ready** and the preflight plan still matches the current fields. Only then should you select Live migration; changing endpoints, users, engine, TLS, ports, or controlled options requires another preflight.
+5. Click **Preview command** and check the servers and usernames in the redacted command.
+6. Click **Run preflight** against a test destination mailbox. The engine runs without changing the destination.
+7. Confirm the mailbox is **Ready** and the preflight plan still matches the current fields. Only then clear **Dry run / preflight** and click **Start live migration**, which asks for confirmation. Changing endpoints, users, engine, TLS, ports, or controlled options requires another preflight.
+
+![Migration plan page](assets/migration-plan.png)
 
 ## Choose the right engine
 

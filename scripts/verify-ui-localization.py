@@ -16,6 +16,7 @@ RAW_LITERAL_ALLOWLIST = {
     "doveadm",
     "→",
     "✓",
+    "⏺",
     "!",
     "in progress",
 }

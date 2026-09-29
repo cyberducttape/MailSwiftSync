@@ -1,6 +1,8 @@
 //! Confirmation dialogs for destructive or replacing batch actions.
 
 use crate::App;
+use crate::atomic_artifact::write_private_atomic;
+use crate::controller::batch_admission::{apply_keyring_id, selection_value};
 use eframe::egui::{self, Color32, RichText};
 
 impl App {
@@ -271,5 +273,52 @@ impl App {
             self.bulk_confirmation_summary = None;
             self.bulk_confirmation_identity = None;
         }
+    }
+
+    /// Write the explicit selection as secret-free JSON for review outside
+    /// the application. An empty selection exports nothing, never "all".
+    pub(crate) fn export_bulk_selection(&self) -> Result<(), String> {
+        if self.bulk_selected_ids.is_empty() {
+            return Err(self
+                .language
+                .text("Select one or more rows to export.")
+                .into());
+        }
+        let scope = crate::controller::SelectionScope::Explicit(self.bulk_selected_ids.clone());
+        let value = selection_value(&self.bulk_jobs, &scope, &self.bulk_job_ids);
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-batch-selection.json")
+            .save_file()
+            .ok_or_else(|| {
+                self.language
+                    .text("Batch selection export cancelled.")
+                    .to_owned()
+            })?;
+        let report = serde_json::to_string_pretty(&value).map_err(|error| error.to_string())?;
+        write_private_atomic(&path, &report).map_err(|error| error.to_string())
+    }
+
+    /// Reference an existing OS-keyring entry from every row that has
+    /// neither a session password nor a credential ID on that side. The
+    /// secret itself is never copied into the queue.
+    pub(crate) fn apply_bulk_keyring_id(&mut self, source: bool) {
+        let value = if source {
+            self.bulk_source_keyring_apply.trim().to_owned()
+        } else {
+            self.bulk_destination_keyring_apply.trim().to_owned()
+        };
+        if value.is_empty() {
+            self.bulk_message = self
+                .language
+                .text("Enter a keyring ID before applying it.")
+                .to_owned();
+            return;
+        }
+        let applied = apply_keyring_id(&mut self.bulk_jobs, &value, source);
+        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
+        self.bulk_message = self
+            .language
+            .text("Applied the keyring ID to {} row(s) without a credential reference.")
+            .replace("{}", &applied.to_string());
     }
 }

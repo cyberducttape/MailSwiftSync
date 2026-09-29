@@ -175,7 +175,9 @@ mod tests {
         let context = egui::Context::default();
         context.set_fonts(font_definitions());
         let _ = context.run_ui(egui::RawInput::default(), |ui| {
-            ui.label("→ ✓ ● ◌ ⊘ 郵件 受信箱");
+            // Glyphs missing from the bundled fonts, plus CJK folder names.
+            let sample = "→ ✓ ● ◌ ⊘ 郵件 受信箱";
+            ui.label(sample);
         });
     }
 }

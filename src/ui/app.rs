@@ -207,7 +207,9 @@ impl App {
                     (core::Engine::ImapSync, "imapsync"),
                     (core::Engine::Dovecot, "Dovecot"),
                 ] {
-                    let selected = self.form.profile.engine == engine;
+                    // Highlight the effective engine, including the
+                    // conservative default that resolves to imapsync.
+                    let selected = self.form.engine() == engine;
                     if ui
                         .add(egui::Button::selectable(selected, label).frame_when_inactive(true))
                         .clicked()
@@ -221,8 +223,26 @@ impl App {
                     self.language.text("Dry run / preflight"),
                 );
             });
+            crate::ui::form_row(ui, self.language.text("Tools"), |ui| {
+                if ui
+                    .button(format!("{}…", self.language.text("OS keyring credentials")))
+                    .clicked()
+                {
+                    self.keyring_open = true;
+                }
+                if ui
+                    .button(format!(
+                        "{}…",
+                        self.language.text("Choose migration engine")
+                    ))
+                    .clicked()
+                {
+                    self.engine_open = true;
+                }
+            });
         });
         ui.add_space(16.0);
+        let dovecot = self.form.engine() == core::Engine::Dovecot;
         ui.columns(2, |columns| {
             {
                 let ui = &mut columns[0];
@@ -258,11 +278,13 @@ impl App {
                         self.language.text("CA bundle"),
                         &mut self.form.profile.source_ca_bundle,
                     );
-                    Self::text_field(
-                        ui,
-                        self.language.text("Certificate pin (SHA-256)"),
-                        &mut self.form.profile.source_certificate_pin_sha256,
-                    );
+                    if !dovecot {
+                        Self::text_field(
+                            ui,
+                            self.language.text("Certificate pin (SHA-256)"),
+                            &mut self.form.profile.source_certificate_pin_sha256,
+                        );
+                    }
                     Self::tls_field(
                         ui,
                         self.language.text("TLS"),
@@ -279,11 +301,18 @@ impl App {
             {
                 let ui = &mut columns[1];
                 self.provider_field(ui, false);
-                let password_required = !auth_method_is_oauth(&self.form.profile.destination_auth);
+                // Dovecot writes to local storage: no destination password,
+                // port, TLS, or certificate pin applies.
+                let password_required =
+                    !dovecot && !auth_method_is_oauth(&self.form.profile.destination_auth);
                 super::account::render_account(
                     ui,
                     self.language,
-                    self.language.text("Destination account"),
+                    self.language.text(if dovecot {
+                        "Local Dovecot destination"
+                    } else {
+                        "Destination account"
+                    }),
                     &mut self.form.profile.destination_host,
                     &mut self.form.profile.destination_user,
                     &mut self.form.profile.destination_auth,
@@ -300,35 +329,100 @@ impl App {
                 ui.add_space(10.0);
                 crate::ui::card(ui, |ui| {
                     crate::ui::section_label(ui, self.language.text("Connection details"));
-                    Self::text_field(
-                        ui,
-                        self.language.text("Port"),
-                        &mut self.form.profile.destination_port,
-                    );
-                    Self::text_field(
-                        ui,
-                        self.language.text("Credential ID"),
-                        &mut self.form.profile.destination_credential_id,
-                    );
-                    Self::text_field(
-                        ui,
-                        self.language.text("CA bundle"),
-                        &mut self.form.profile.destination_ca_bundle,
-                    );
-                    Self::text_field(
-                        ui,
-                        self.language.text("Certificate pin (SHA-256)"),
-                        &mut self.form.profile.destination_certificate_pin_sha256,
-                    );
-                    Self::tls_field(
-                        ui,
-                        self.language.text("TLS"),
-                        &mut self.form.profile.destination_tls,
-                        "destination_tls",
-                    );
+                    if dovecot {
+                        ui.label(
+                            egui::RichText::new(
+                                self.language.text("Destination: local Dovecot storage"),
+                            )
+                            .color(colors.text_secondary),
+                        );
+                        Self::text_field(
+                            ui,
+                            self.language.text("Credential ID"),
+                            &mut self.form.profile.destination_credential_id,
+                        );
+                    } else {
+                        Self::text_field(
+                            ui,
+                            self.language.text("Port"),
+                            &mut self.form.profile.destination_port,
+                        );
+                        Self::text_field(
+                            ui,
+                            self.language.text("Credential ID"),
+                            &mut self.form.profile.destination_credential_id,
+                        );
+                        Self::text_field(
+                            ui,
+                            self.language.text("CA bundle"),
+                            &mut self.form.profile.destination_ca_bundle,
+                        );
+                        Self::text_field(
+                            ui,
+                            self.language.text("Certificate pin (SHA-256)"),
+                            &mut self.form.profile.destination_certificate_pin_sha256,
+                        );
+                        Self::tls_field(
+                            ui,
+                            self.language.text("TLS"),
+                            &mut self.form.profile.destination_tls,
+                            "destination_tls",
+                        );
+                    }
                 });
             }
         });
+        if !dovecot {
+            ui.add_space(16.0);
+            crate::ui::card(ui, |ui| {
+                crate::ui::section_label(ui, self.language.text("imapsync options"));
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(
+                        &mut self.form.profile.automap,
+                        self.language.text("Map standard folders automatically"),
+                    );
+                    ui.checkbox(
+                        &mut self.form.profile.justfolders,
+                        self.language.text("Folders only"),
+                    );
+                    ui.checkbox(
+                        &mut self.form.profile.addheader,
+                        self.language.text("Add Message-ID header when needed"),
+                    );
+                });
+                Self::text_field(
+                    ui,
+                    self.language.text("Extra imapsync options"),
+                    &mut self.form.profile.extra_options,
+                );
+                crate::ui::form_row(ui, self.language.text("imapsync executable"), |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.form.profile.imapsync_path)
+                            .hint_text(self.language.text("Leave empty to use imapsync from PATH."))
+                            .desired_width(f32::INFINITY),
+                    )
+                });
+            });
+            if self.form.profile.delete2 {
+                ui.add_space(12.0);
+                crate::ui::card(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "⚠ {}",
+                            self.language.text("DESTINATION DELETION ENABLED")
+                        ))
+                        .strong()
+                        .color(colors.danger),
+                    );
+                    ui.label(
+                        egui::RichText::new(self.language.text(
+                            "Messages that exist only on the destination may be removed during live migration.",
+                        ))
+                        .color(colors.danger),
+                    );
+                });
+            }
+        }
         ui.add_space(16.0);
         crate::ui::card(ui, |ui| self.provider_runbook_panel(ui));
         ui.add_space(16.0);
@@ -362,34 +456,46 @@ impl App {
                 if ui.button(self.language.text("Advanced")).clicked() {
                     self.advanced_open = true;
                 }
-                ui.separator();
-                if crate::ui::primary_button(ui, self.language.text("Run preflight")).clicked() {
+                if ui
+                    .add_enabled(
+                        !dovecot && !self.running(),
+                        egui::Button::new(self.language.text("Run authenticated readiness probe")),
+                    )
+                    .clicked()
+                {
                     self.start_capability_probe();
                 }
-                let live_enabled = !self.form.dry_run;
-                let live = egui::Button::new(
-                    egui::RichText::new(self.language.text("Start live migration")).color(
-                        if live_enabled {
-                            egui::Color32::WHITE
-                        } else {
-                            colors.text_secondary
-                        },
-                    ),
-                )
-                .fill(if live_enabled {
-                    colors.danger.gamma_multiply(0.85)
+                ui.separator();
+                if self.running() {
+                    if ui.button(self.language.text("Stop migration")).clicked() {
+                        self.stop_confirm_open = true;
+                        self.stop_confirm_focus_requested = false;
+                    }
+                } else if self.form.dry_run {
+                    // Engine dry run: validates access and folder mapping
+                    // without changing the destination.
+                    if crate::ui::primary_button(ui, self.language.text("Run preflight")).clicked()
+                    {
+                        self.start();
+                    }
                 } else {
-                    colors.panel
-                });
-                if ui.add_enabled(live_enabled, live).clicked() {
-                    self.start();
+                    let live = egui::Button::new(
+                        egui::RichText::new(self.language.text("Start live migration"))
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    )
+                    .fill(colors.danger.gamma_multiply(0.85));
+                    // `start` opens the live confirmation before anything runs.
+                    if ui.add(live).clicked() {
+                        self.start();
+                    }
                 }
             });
             if self.form.dry_run {
                 ui.label(
                     egui::RichText::new(
                         self.language
-                            .text("Clear Dry run / preflight to enable live migration."),
+                            .text("Preflight runs the engine without changing the destination. Clear Dry run / preflight to start a live migration."),
                     )
                     .small()
                     .color(colors.text_secondary),

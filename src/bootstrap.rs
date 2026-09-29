@@ -360,6 +360,8 @@ impl App {
             bulk_search: String::new(),
             bulk_state_filter: "all".into(),
             bulk_selected_ids: HashSet::new(),
+            bulk_source_keyring_apply: String::new(),
+            bulk_destination_keyring_apply: String::new(),
             bulk_visible_indices: Vec::new(),
             bulk_search_values: Vec::new(),
             bulk_state_indices: HashMap::new(),
@@ -373,7 +375,8 @@ impl App {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
             } else {
-                "Import a CSV or XLSX file to build a reviewable queue. Legacy XLS import is disabled because its parser cannot be memory-bounded safely.".into()
+                // The empty Mailboxes page already explains CSV/XLSX import.
+                String::new()
             },
             advanced_open: false,
             // Do not interrupt first launch with a configuration dialog. The

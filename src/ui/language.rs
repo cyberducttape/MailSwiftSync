@@ -28,9 +28,25 @@ impl UiLanguage {
         match source {
             "Overview" => "Übersicht",
             "Manage" => "Verwalten",
+            "Tools" => "Werkzeuge",
             "Connection details" => "Verbindungsdetails",
-            "Clear Dry run / preflight to enable live migration." => {
-                "Deaktivieren Sie Probelauf / Vorabprüfung, um die Live-Migration zu aktivieren."
+            "Preflight runs the engine without changing the destination. Clear Dry run / preflight to start a live migration." => {
+                "Die Vorabprüfung führt die Engine aus, ohne das Ziel zu verändern. Deaktivieren Sie Probelauf / Vorabprüfung, um eine Live-Migration zu starten."
+            }
+            "Local Dovecot destination" => "Lokales Dovecot-Ziel",
+            "Destination: local Dovecot storage" => "Ziel: lokaler Dovecot-Speicher",
+            "imapsync options" => "imapsync-Optionen",
+            "Map standard folders automatically" => "Standardordner automatisch zuordnen",
+            "Folders only" => "Nur Ordner",
+            "Add Message-ID header when needed" => "Message-ID-Header bei Bedarf hinzufügen",
+            "Extra imapsync options" => "Zusätzliche imapsync-Optionen",
+            "imapsync executable" => "imapsync-Programmdatei",
+            "Leave empty to use imapsync from PATH." => {
+                "Leer lassen, um imapsync aus PATH zu verwenden."
+            }
+            "DESTINATION DELETION ENABLED" => "ZIELLÖSCHUNG AKTIVIERT",
+            "Messages that exist only on the destination may be removed during live migration." => {
+                "Nachrichten, die nur im Ziel vorhanden sind, können während der Live-Migration entfernt werden."
             }
             "ATTENTION CENTER" => "ZENTRALE FÜR AUFMERKSAMKEIT",
             "Batch queue loaded" => "Stapelwarteschlange geladen",
@@ -815,8 +831,8 @@ impl UiLanguage {
             "project name, source, or destination" => "Projektname, Quelle oder Ziel",
             "Project" => "Projekt",
             "Phase" => "Phase",
-            "Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window." => {
-                "Prüfen, filtern und bearbeiten Sie Kundenpostfächer, ohne das bisherige Warteschlangenfenster erneut zu öffnen."
+            "Review, filter, select, and operate on customer mailboxes." => {
+                "Prüfen, filtern, auswählen und bearbeiten Sie Kundenpostfächer."
             }
             "No bulk mailbox list loaded" => "Keine Postfachliste geladen",
             "A single mailbox can be configured from the migration plan." => {
@@ -886,6 +902,40 @@ impl UiLanguage {
             "Maximum concurrent workers" => "Maximale gleichzeitige Arbeitsprozesse",
             "Transient retries" => "Wiederholungen bei vorübergehenden Fehlern",
             "Passwordless queue credentials" => "Passwortlose Zugangsdaten für die Warteschlange",
+            "Dismiss" => "Ausblenden",
+            "Queue settings" => "Warteschlangeneinstellungen",
+            "Concurrent workers" => "Parallele Prozesse",
+            "Applies to preflight and live migration." => {
+                "Gilt für Vorabprüfung und Live-Migration."
+            }
+            "Authentication and configuration failures are never retried." => {
+                "Authentifizierungs- und Konfigurationsfehler werden nie wiederholt."
+            }
+            "{} selected · {} visible · {} hidden by current filter" => {
+                "{} ausgewählt · {} sichtbar · {} durch aktuellen Filter verborgen"
+            }
+            "Export selected set…" => "Ausgewählte Zeilen exportieren…",
+            "Writes the selected rows as JSON without credentials or engine options." => {
+                "Schreibt die ausgewählten Zeilen als JSON ohne Zugangsdaten oder Engine-Optionen."
+            }
+            "Selected batch rows exported without credentials or engine options." => {
+                "Ausgewählte Stapelzeilen ohne Zugangsdaten oder Engine-Optionen exportiert."
+            }
+            "Select one or more rows to export." => {
+                "Wählen Sie eine oder mehrere Zeilen zum Exportieren aus."
+            }
+            "Batch selection export cancelled." => "Export der Stapelauswahl abgebrochen.",
+            "Enter a keyring ID before applying it." => {
+                "Geben Sie eine Schlüsselbund-ID ein, bevor Sie sie anwenden."
+            }
+            "Applied the keyring ID to {} row(s) without a credential reference." => {
+                "Schlüsselbund-ID auf {} Zeile(n) ohne Zugangsdatenverweis angewendet."
+            }
+            "Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue." => {
+                "Wendet einen vorhandenen Betriebssystem-Schlüsselbund-Verweis auf Zeilen ohne Passwort oder Zugangsdaten-ID an. Das Geheimnis selbst wird nie in die Warteschlange kopiert."
+            }
+            "Apply to empty source rows" => "Auf Quellzeilen ohne Zugangsdaten anwenden",
+            "Apply to empty destination rows" => "Auf Zielzeilen ohne Zugangsdaten anwenden",
             "Source keyring ID" => "Schlüsselbund-ID der Quelle",
             "Destination keyring ID" => "Schlüsselbund-ID des Ziels",
             "Imported" => "Importiert",
