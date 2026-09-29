@@ -52,7 +52,9 @@ pub use evidence::{
     VerificationOutcome,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
-pub(crate) use message_staging::{MessageMetadataStage, StagedMessageSide, durable_stage_path};
+pub(crate) use message_staging::{
+    FolderSnapshot, MessageMetadataStage, StagedMessageSide, durable_stage_path,
+};
 pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
 pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,

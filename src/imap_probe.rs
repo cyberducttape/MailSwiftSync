@@ -573,17 +573,21 @@ trait MessageSink {
     }
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
+    /// Rows currently staged for one folder generation. Compared against the
+    /// server's EXISTS after a scan so rows kept from an interrupted run can
+    /// never stand in for messages that were expunged in the meantime.
+    fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String>;
     fn resume_after_uid(
         &mut self,
         _mailbox: &str,
-        _uidvalidity: u64,
+        _snapshot: crate::core::FolderSnapshot,
     ) -> Result<Option<u64>, String> {
         Ok(None)
     }
     fn checkpoint_page(
         &mut self,
         _mailbox: &str,
-        _uidvalidity: u64,
+        _snapshot: crate::core::FolderSnapshot,
         _last_uid: u64,
     ) -> Result<(), String> {
         Ok(())
@@ -591,7 +595,7 @@ trait MessageSink {
     fn complete_mailbox(
         &mut self,
         _mailbox: &str,
-        _uidvalidity: u64,
+        _snapshot: crate::core::FolderSnapshot,
         _last_uid: u64,
     ) -> Result<(), String> {
         Ok(())
@@ -635,28 +639,38 @@ impl MessageSink for StageMessageSink<'_> {
         self.count
     }
 
-    fn resume_after_uid(&mut self, mailbox: &str, uidvalidity: u64) -> Result<Option<u64>, String> {
-        self.stage.resume_mailbox(self.side, mailbox, uidvalidity)
+    fn mailbox_len(&self, mailbox: &str, uidvalidity: u64) -> Result<u64, String> {
+        self.stage
+            .count_mailbox(self.side, mailbox, uidvalidity)
+            .map_err(|error| error.to_string())
+    }
+
+    fn resume_after_uid(
+        &mut self,
+        mailbox: &str,
+        snapshot: crate::core::FolderSnapshot,
+    ) -> Result<Option<u64>, String> {
+        self.stage.resume_mailbox(self.side, mailbox, snapshot)
     }
 
     fn checkpoint_page(
         &mut self,
         mailbox: &str,
-        uidvalidity: u64,
+        snapshot: crate::core::FolderSnapshot,
         last_uid: u64,
     ) -> Result<(), String> {
         self.stage
-            .checkpoint_page(self.side, mailbox, uidvalidity, last_uid)
+            .checkpoint_page(self.side, mailbox, snapshot, last_uid)
     }
 
     fn complete_mailbox(
         &mut self,
         mailbox: &str,
-        uidvalidity: u64,
+        snapshot: crate::core::FolderSnapshot,
         last_uid: u64,
     ) -> Result<(), String> {
         self.stage
-            .complete_mailbox(self.side, mailbox, uidvalidity, last_uid)
+            .complete_mailbox(self.side, mailbox, snapshot, last_uid)
     }
 }
 
@@ -1762,7 +1776,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
     let mut state_reservation = StateReservation::new(state_budget);
     let mut page_number = 0usize;
     let mailbox_context: std::sync::Arc<str> = std::sync::Arc::from(mailbox);
-    let resume_after_uid = sink.resume_after_uid(mailbox, start_uidvalidity)?;
+    let snapshot = crate::core::FolderSnapshot {
+        uidvalidity: start_uidvalidity,
+        uidnext,
+        exists: start_exists,
+    };
+    let resume_after_uid = sink.resume_after_uid(mailbox, snapshot)?;
     let searched_uid_count = enumerate_uid_pages(
         stream,
         host,
@@ -1873,7 +1892,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 ));
             }
             if let Some(last_uid) = uid_page.last().copied() {
-                sink.checkpoint_page(mailbox, start_uidvalidity, last_uid)?;
+                sink.checkpoint_page(mailbox, snapshot, last_uid)?;
             }
             Ok(())
         },
@@ -1883,6 +1902,16 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             "{host}: folder {mailbox}: SEARCH coverage mismatch (EXISTS {start_exists}, validated UIDs {searched_uid_count})",
         )
         .into());
+    }
+    // Pages staged before an interruption are not refetched on resume. Any
+    // message expunged since then leaves a stale row behind, so the staged
+    // folder must hold exactly the server's current message count. A
+    // mismatch discards the folder's stage and rescans it from the start.
+    let staged = sink.mailbox_len(mailbox, start_uidvalidity)?;
+    if staged != start_exists {
+        return Err(MailboxFetchError::Changed(format!(
+            "{host}: folder {mailbox}: staged rows ({staged}) differ from EXISTS {start_exists}; rescan required"
+        )));
     }
 
     // Re-SELECT after the bounded scan. If the folder changed while it was
@@ -1926,7 +1955,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         )));
     }
     let last_uid = uidnext.saturating_sub(1);
-    sink.complete_mailbox(mailbox, start_uidvalidity, last_uid)?;
+    sink.complete_mailbox(mailbox, snapshot, last_uid)?;
     state_reservation.commit();
     // This path is metadata-only by design. BODY[] hashing belongs to the
     // separate content-verification adapter and is not populated here.
@@ -2987,5 +3016,176 @@ mod tests {
         let cancelled = AtomicBool::new(true);
         let budget = MessageFetchBudget::new(Duration::from_secs(60), &cancelled);
         assert!(budget.check().unwrap_err().contains("cancelled"));
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::core::{MessageMetadataStage, StagedMessageSide};
+    use std::io::{self, Read, Write};
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    /// Minimal scripted IMAP server for one folder: answers SELECT, UID
+    /// SEARCH, and metadata UID FETCH from an in-memory UID set.
+    struct FolderServer {
+        uids: Vec<u64>,
+        uidvalidity: u64,
+        uidnext: u64,
+        input: Vec<u8>,
+        output: Vec<u8>,
+    }
+
+    impl FolderServer {
+        fn new(uids: &[u64], uidvalidity: u64, uidnext: u64) -> Self {
+            Self {
+                uids: uids.to_vec(),
+                uidvalidity,
+                uidnext,
+                input: Vec::new(),
+                output: Vec::new(),
+            }
+        }
+
+        fn respond(&mut self, line: &str) {
+            let (tag, command) = line.split_once(' ').unwrap();
+            let reply = if command.starts_with("SELECT ") {
+                format!(
+                    "* {} EXISTS\r\n* OK [UIDVALIDITY {}] ok\r\n* OK [UIDNEXT {}] ok\r\n{tag} OK SELECT completed\r\n",
+                    self.uids.len(),
+                    self.uidvalidity,
+                    self.uidnext
+                )
+            } else if let Some(range) = command.strip_prefix("UID SEARCH UID ") {
+                let (low, high) = range.split_once(':').unwrap();
+                let (low, high) = (low.parse::<u64>().unwrap(), high.parse::<u64>().unwrap());
+                let found = self
+                    .uids
+                    .iter()
+                    .filter(|uid| (low..=high).contains(*uid))
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>();
+                format!(
+                    "* SEARCH {}\r\n{tag} OK SEARCH completed\r\n",
+                    found.join(" ")
+                )
+            } else if let Some(rest) = command.strip_prefix("UID FETCH ") {
+                let set = rest.split_whitespace().next().unwrap();
+                let mut reply = String::new();
+                for uid in set.split(',').map(|uid| uid.parse::<u64>().unwrap()) {
+                    let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
+                    let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
+                    reply.push_str(&format!(
+                        "* {sequence} FETCH (UID {uid} RFC822.SIZE 10 INTERNALDATE \"01-Jan-2024 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}}}\r\n{header})\r\n",
+                        header.len()
+                    ));
+                }
+                reply.push_str(&format!("{tag} OK FETCH completed\r\n"));
+                reply
+            } else {
+                panic!("unexpected command {line}");
+            };
+            self.output.extend_from_slice(reply.as_bytes());
+        }
+    }
+
+    impl Write for FolderServer {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.input.extend_from_slice(bytes);
+            while let Some(end) = self.input.windows(2).position(|pair| pair == b"\r\n") {
+                let line = String::from_utf8(self.input.drain(..end + 2).collect()).unwrap();
+                self.respond(line.trim_end());
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Read for FolderServer {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let count = buffer.len().min(self.output.len());
+            buffer[..count].copy_from_slice(&self.output[..count]);
+            self.output.drain(..count);
+            Ok(count)
+        }
+    }
+
+    fn scan(stage: &mut MessageMetadataStage, server: &mut FolderServer) -> u64 {
+        let cancelled = AtomicBool::new(false);
+        let budget = MessageFetchBudget::new(Duration::from_secs(10), &cancelled);
+        let state_budget = MessageStateBudget::new();
+        let side = StagedMessageSide::Destination;
+        let count = stage.count(side).unwrap() as usize;
+        let mut sink = StageMessageSink { stage, side, count };
+        fetch_mailbox_with_stability_retry(
+            server,
+            "imap.example.test",
+            "INBOX",
+            &budget,
+            &state_budget,
+            None,
+            &mut sink,
+        )
+        .unwrap_or_else(|error| panic!("scan failed: {error:?}"))
+    }
+
+    fn staged_uids(stage: &MessageMetadataStage) -> Vec<u64> {
+        let mut uids = stage
+            .all_messages(StagedMessageSide::Destination)
+            .unwrap()
+            .keys()
+            .map(|key| key.uid.parse::<u64>().unwrap())
+            .collect::<Vec<_>>();
+        uids.sort_unstable();
+        uids
+    }
+
+    #[test]
+    fn resumed_scan_drops_messages_expunged_since_the_interruption() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        assert_eq!(
+            scan(&mut stage, &mut FolderServer::new(&[1, 2, 3], 9, 4)),
+            3
+        );
+        // UID 2 is deleted before the controller resumes the verification.
+        assert_eq!(scan(&mut stage, &mut FolderServer::new(&[1, 3], 9, 4)), 2);
+        assert_eq!(staged_uids(&stage), vec![1, 3]);
+    }
+
+    #[test]
+    fn resumed_scan_of_a_completed_folder_fetches_new_arrivals() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        assert_eq!(
+            scan(&mut stage, &mut FolderServer::new(&[1, 2, 3], 9, 4)),
+            3
+        );
+        // One message replaced by another keeps EXISTS unchanged.
+        assert_eq!(
+            scan(&mut stage, &mut FolderServer::new(&[1, 3, 4], 9, 5)),
+            3
+        );
+        assert_eq!(staged_uids(&stage), vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn resume_after_expunge_and_delivery_with_equal_exists_rescans_the_folder() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        let original = (1..=32).collect::<Vec<_>>();
+        assert_eq!(
+            scan(&mut stage, &mut FolderServer::new(&original, 42, 33)),
+            32
+        );
+        // Between runs UID 10 is expunged and UID 33 delivered: EXISTS is
+        // still 32, so only the persisted snapshot distinguishes the folders.
+        let current = (1..=33).filter(|uid| *uid != 10).collect::<Vec<_>>();
+        assert_eq!(
+            scan(&mut stage, &mut FolderServer::new(&current, 42, 34)),
+            32
+        );
+        assert_eq!(staged_uids(&stage), current);
     }
 }

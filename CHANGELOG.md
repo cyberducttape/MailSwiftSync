@@ -6,10 +6,15 @@ operator distribution archives.
 
 ## [Unreleased]
 
-- Resuming an interrupted message verification now discards rows, body
-  fingerprints, and cursors staged for a folder under a previous UIDVALIDITY.
-  Previously a folder recreated between runs kept stale staged rows, which
-  could pair a source message with a destination copy that no longer exists.
+- Restartable message verification no longer combines two mailbox snapshots.
+  Stage cursors now persist the folder's SELECT snapshot (UIDVALIDITY,
+  UIDNEXT, EXISTS). A resumed scan reuses staged pages only when the server
+  still reports that exact snapshot; any difference, such as an expunge plus a
+  delivery that leaves EXISTS unchanged, discards the folder's staged rows,
+  fingerprints, and cursor and rescans it from zero. Completed folders are no
+  longer trusted unconditionally, a folder completes only when its staged rows
+  equal the snapshot's EXISTS, and stages written by earlier builds are
+  discarded on open.
 - `notify-webhook` transport failures no longer echo the request URL, so a
   secret-bearing path supplied through `MAILSWIFTSYNC_WEBHOOK_URL_FILE` stays
   out of stderr and service logs; authentication headers are marked sensitive.
