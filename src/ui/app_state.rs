@@ -107,6 +107,8 @@ pub(crate) struct App {
     pub(crate) capability_probe_request_id: Option<String>,
     pub(crate) capability_probe_fingerprint: Option<String>,
     pub(crate) capability_observation_fingerprint: Option<String>,
+    /// Last per-frame readiness staleness check; see `poll`.
+    pub(crate) capability_staleness_checked_at: Option<std::time::Instant>,
     /// Fresh authentication completed immediately before an IMAPS live run.
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
@@ -342,6 +344,15 @@ impl App {
 
     pub(crate) fn running(&self) -> bool {
         self.receiver.is_some()
+    }
+
+    /// Any background channel that `poll` must keep draining.
+    pub(crate) fn background_work_pending(&self) -> bool {
+        self.running()
+            || self.capability_receiver.is_some()
+            || self.live_auth_receiver.is_some()
+            || self.start_credentials_receiver.is_some()
+            || self.bulk_import_receiver.is_some()
     }
     pub(crate) fn report_store_error<E: Display>(
         &mut self,

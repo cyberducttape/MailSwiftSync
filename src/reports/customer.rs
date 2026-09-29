@@ -205,7 +205,7 @@ pub(crate) fn export_from_store_with_options_and_identity(
             "messages": message_counts,
         },
         "project": {
-            "project_id": project.id.clone(),
+            "project_id": project.id,
             "name": project.name,
             "phase": format!("{:?}", project.phase),
         },

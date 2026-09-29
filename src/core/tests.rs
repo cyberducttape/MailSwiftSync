@@ -1121,7 +1121,7 @@ fn active_process_identity_is_durable_and_cleared_on_recovery() {
         db.active_processes().unwrap(),
         vec![ActiveProcess {
             run_id: "run-process".into(),
-            job_id: job.clone(),
+            job_id: job,
             pid: 4242,
             start_ticks: Some(7),
             process_group: Some(4242),
@@ -1229,7 +1229,7 @@ fn active_process_requires_a_mailbox_specific_child_run() {
         .unwrap();
     db.register_process(&ActiveProcess {
         run_id: child_runs[0].clone(),
-        job_id: job.clone(),
+        job_id: job,
         pid: 4243,
         start_ticks: Some(8),
         process_group: Some(4243),
@@ -1281,7 +1281,7 @@ fn terminal_batch_run_clears_process_identity_atomically() {
         .unwrap();
     db.register_process(&ActiveProcess {
         run_id: "run-process-finish".into(),
-        job_id: job.clone(),
+        job_id: job,
         pid: 4242,
         start_ticks: Some(7),
         process_group: Some(4242),

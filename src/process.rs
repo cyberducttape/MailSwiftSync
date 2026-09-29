@@ -168,12 +168,8 @@ pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
     let mut lines = Vec::new();
     let mut retained_bytes: usize = 0;
     let mut truncated = false;
-    for_each_lossy_line(reader, |mut line| {
-        for secret in secrets {
-            if !secret.is_empty() {
-                line = line.replace(secret.as_str(), "[REDACTED]");
-            }
-        }
+    for_each_lossy_line(reader, |line| {
+        let line = redact_known_secrets(line, secrets.iter().map(SecretString::as_str));
         callback(&line);
         let within_limits = lines.len() < MAX_CAPTURED_OUTPUT_LINES
             && retained_bytes.saturating_add(line.len()) <= MAX_CAPTURED_OUTPUT_BYTES;
@@ -188,6 +184,27 @@ pub(crate) fn collect_redacted_lines_with_callback<R: Read, F: FnMut(&str)>(
         }
     })?;
     Ok(CapturedOutput { lines, truncated })
+}
+
+/// Replace every occurrence of the given secrets with `[REDACTED]`.
+/// Longer secrets are replaced first: if a password is a substring of an
+/// OAuth token, redacting the password first would leave the rest of the
+/// token readable. Lines without a secret are returned without copying.
+pub(crate) fn redact_known_secrets<'a>(
+    mut line: String,
+    secrets: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let mut ordered = secrets
+        .into_iter()
+        .filter(|secret| !secret.is_empty())
+        .collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|secret| std::cmp::Reverse(secret.len()));
+    for secret in ordered {
+        if line.contains(secret) {
+            line = line.replace(secret, "[REDACTED]");
+        }
+    }
+    line
 }
 
 #[cfg(test)]
@@ -291,6 +308,16 @@ mod tests {
             io::ErrorKind::Other,
             "reader errors must not be mistaken for clean EOF"
         );
+    }
+
+    #[test]
+    fn redaction_replaces_longer_overlapping_secrets_first() {
+        let line = "token=abcdef password=abc".to_owned();
+        assert_eq!(
+            redact_known_secrets(line, ["abc", "abcdef"]),
+            "token=[REDACTED] password=[REDACTED]"
+        );
+        assert_eq!(redact_known_secrets("clean".into(), ["", "x"]), "clean");
     }
 
     #[test]

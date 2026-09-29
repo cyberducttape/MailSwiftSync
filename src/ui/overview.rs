@@ -541,12 +541,8 @@ impl App {
     }
 
     pub(crate) fn overview_readiness_controls(&mut self, ui: &mut egui::Ui) {
-        if self.invalidate_stale_capability_observation() {
-            self.set_status(
-                self.language.text("Readiness observations expired because the migration plan changed; run discovery again."),
-                StatusSeverity::Warning,
-            );
-        }
+        // Stale readiness observations are expired by `poll`, which runs
+        // before every frame and immediately after navigation.
         crate::ui::card(ui, |ui| {
             ui.heading(self.language.text("Preflight & readiness"));
             ui.label(RichText::new(self.language.text("Plan completeness is separate from live network checks. Run the authenticated probe before live migration.")).color(self.theme_colors().text_secondary));

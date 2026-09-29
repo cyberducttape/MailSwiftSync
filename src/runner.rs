@@ -555,12 +555,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let out_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
-            let mut safe = line;
-            for secret in &out_secrets {
-                if !secret.is_empty() {
-                    safe = safe.replace(secret.as_str(), "[REDACTED]");
-                }
-            }
+            let safe = crate::process::redact_known_secrets(
+                line,
+                out_secrets.iter().map(SecretString::as_str),
+            );
             record_process_tail(&out_tail, &safe);
             if let Some(logger) = &out_logger
                 && logger
@@ -603,12 +601,10 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let err_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let err_thread = thread::spawn(move || {
         for_each_lossy_line(stderr, |line| {
-            let mut safe = line;
-            for secret in &err_secrets {
-                if !secret.is_empty() {
-                    safe = safe.replace(secret.as_str(), "[REDACTED]");
-                }
-            }
+            let safe = crate::process::redact_known_secrets(
+                line,
+                err_secrets.iter().map(SecretString::as_str),
+            );
             record_process_tail(&err_tail, &safe);
             if let Some(logger) = &err_logger
                 && logger

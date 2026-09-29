@@ -23,13 +23,7 @@ pub(crate) fn push_visible_output(output: &mut BoundedLineBuffer, line: String) 
 /// journal. Keeping this beside bounded output handling makes it harder for a
 /// future event path to skip sanitization accidentally.
 pub(crate) fn redact_secrets<'a>(line: &str, secrets: impl IntoIterator<Item = &'a str>) -> String {
-    let mut safe = line.to_owned();
-    for secret in secrets {
-        if !secret.is_empty() {
-            safe = safe.replace(secret, "[REDACTED]");
-        }
-    }
-    safe
+    crate::process::redact_known_secrets(line.to_owned(), secrets)
 }
 
 pub(crate) fn truncate_utf8(value: &str, limit: usize) -> String {

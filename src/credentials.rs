@@ -306,7 +306,9 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
             return Err("secret file must not be hard-linked".into());
         }
     }
-    let mut contents = Vec::with_capacity(metadata.len().min(MAX_SECRET_FILE_BYTES) as usize);
+    // Reserve the whole bound up front so `read_to_end` never reallocates
+    // and leaves an unwiped copy; every exit path wipes this buffer.
+    let mut contents = Zeroizing::new(Vec::with_capacity(MAX_SECRET_FILE_BYTES as usize + 1));
     std::io::Read::by_ref(&mut file)
         .take(MAX_SECRET_FILE_BYTES + 1)
         .read_to_end(&mut contents)
@@ -316,13 +318,21 @@ pub fn read_secret_file(path: &Path) -> Result<SecretString, String> {
             "secret file exceeds the {MAX_SECRET_FILE_BYTES}-byte limit"
         ));
     }
-    if contents.ends_with(b"\r\n") {
-        contents.truncate(contents.len() - 2);
+    let line_ending = if contents.ends_with(b"\r\n") {
+        2
     } else if contents.ends_with(b"\n") || contents.ends_with(b"\r") {
-        contents.truncate(contents.len() - 1);
+        1
+    } else {
+        0
+    };
+    let length = contents.len() - line_ending;
+    contents.truncate(length);
+    if std::str::from_utf8(&contents).is_err() {
+        return Err("secret file must contain valid UTF-8 text".to_owned());
     }
-    let contents = String::from_utf8(contents)
-        .map_err(|_| "secret file must contain valid UTF-8 text".to_owned())?;
+    // Validated above, so this moves the buffer without copying it.
+    let contents = String::from_utf8(std::mem::take(&mut *contents))
+        .expect("secret file contents were validated as UTF-8");
     Ok(SecretString::new(contents))
 }
 
