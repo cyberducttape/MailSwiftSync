@@ -11,7 +11,7 @@
 > Documentation images are current workflow previews, not pixel-accurate screenshots of the egui interface. They illustrate the intended operator flow and emphasize explicit safety state, lifecycle visibility, redacted command review, and diagnostics.
 
 > [!IMPORTANT]
-> **Your source mailbox is never deleted from or modified.** MailSwiftSync only ever writes to the destination; there is no option anywhere in the interface, CLI, or Extra imapsync options field to delete or alter source messages, and destructive-deletion flags are explicitly rejected from that field. The only destructive control it exposes at all is `--delete2` under **Advanced options** (see below), which removes messages on the **destination** that no longer exist on the source. It is off by default and clearly marked destructive in red in the interface. Any future source-deletion capability would be off by default and called out in red the same way.
+> **Your source mailbox is never deleted from or modified.** MailSwiftSync only ever writes to the destination; there is no option anywhere in the interface, CLI, or Extra imapsync options field to delete or alter source messages, and destructive-deletion flags are explicitly rejected from that field. The only destructive control it exposes at all is `--delete2` in the **Advanced** dialog (see below), which removes messages on the **destination** that no longer exist on the source. It is off by default and clearly marked destructive in red in the interface. Any future source-deletion capability would be off by default and called out in red the same way.
 
 MailSwiftSync is for hosting administrators, consultants, and MSPs moving multiple mailboxes between IMAP systems who need more than a command wrapper: a preflightable plan, controlled execution, restart-aware state, and evidence they can hand to a customer.
 
@@ -147,7 +147,7 @@ imapsync --version
 ```
 
 Confirm that the command reports **2.314** before starting a migration. If the
-execution journal says that the engine is not qualified, treat the run as
+**Activity** log says that the engine is not qualified, treat the run as
 transfer-only and review it manually; it is not a verified migration.
 
 Consult the [official imapsync installation documentation](https://imapsync.lamiral.info/#install) for current packages and prerequisites.
@@ -171,18 +171,18 @@ behavior. The alpha release provides a signed Debian package for the Linux
 host architecture, portable archives, and the pinned container image; RPM and
 APT repository metadata remain future release work.
 
-If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable**. Begin with **Preflight** selected and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
+If `imapsync` is not on your PATH, enter its absolute path in **imapsync executable** in the **imapsync options** card on the **Plan** page. Begin with **Dry run / preflight** checked and a test destination mailbox. Tagged releases build Linux, Windows, and macOS artifacts in GitHub Actions; if no release artifact is available for your platform, Rust/Cargo remains the developer installation path. Release artifacts include SHA-256 checksums.
 
 ### 3. First migration
 
 1. Choose **Dovecot native** when the destination is managed by Dovecot and administrative access is available; otherwise choose **imapsync fallback**.
-2. Enter source details on the left and destination details on the right.
+2. On **Plan**, enter source details in the left card and destination details in the right card.
    For imapsync, destination transport is typed separately: implicit TLS defaults to port 993 and STARTTLS defaults to port 143; enter an explicit destination port when the provider uses a nonstandard endpoint.
-3. Leave **Preflight** selected and click **Preview redacted command**.
-4. Run validation and inspect the execution journal for successful access and folder mapping.
-5. Only then select **Live migration** and launch it.
+3. Leave **Dry run / preflight** checked and click **Preview command** to review the redacted command.
+4. Click **Run preflight** and inspect the **Activity** log for successful access and folder mapping.
+5. Only then clear **Dry run / preflight**, click **Start live migration**, and complete the confirmation.
 
-In imapsync mode, use the readiness action in the project workspace before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The visible capability-discovery dialog presents the comprehensive IMAPS inventory probe; live admission performs a lighter certificate-verified authentication/NOOP probe for encrypted plans and does not repeat full folder discovery. Plain plans use the selected engine's preflight only after explicit cleartext acknowledgement. In Dovecot mode, preflight lists the remote `imapc` source and checks the local destination userdb with `doveadm user`; it deliberately avoids enumerating the target mailbox store before the first sync because early access can cause GUID/UIDVALIDITY conflicts or make Dovecot synchronization fail. Quota capacity still requires administrative review where it is not exposed by the configured Dovecot setup.
+In imapsync mode, click **Run authenticated readiness probe** on the **Plan** page before a pilot to verify certificates and credentials, refresh post-auth capabilities such as QRESYNC, CONDSTORE, UIDPLUS, and SPECIAL-USE, and inspect namespace/folder listing. The visible capability-discovery dialog presents the comprehensive IMAPS inventory probe; live admission performs a lighter certificate-verified authentication/NOOP probe for encrypted plans and does not repeat full folder discovery. Plain plans use the selected engine's preflight only after explicit cleartext acknowledgement. In Dovecot mode, preflight lists the remote `imapc` source and checks the local destination userdb with `doveadm user`; it deliberately avoids enumerating the target mailbox store before the first sync because early access can cause GUID/UIDVALIDITY conflicts or make Dovecot synchronization fail. Quota capacity still requires administrative review where it is not exposed by the configured Dovecot setup.
 
 ## Why MailSwiftSync exists
 
@@ -439,7 +439,7 @@ storage.
 
 ![Mailboxes workspace](docs/wiki/assets/batch-queue.png)
 
-The on-screen execution journal is intentionally capped at 10,000 lines for desktop stability; the structured durable event ledger remains the longer-lived audit record. Raw engine transcripts stay process-local and are not written to SQLite.
+The on-screen **Activity** log is intentionally capped at 10,000 lines for desktop stability; the structured durable event ledger remains the longer-lived audit record. Raw engine transcripts stay process-local and are not written to SQLite.
 
 ```bash
 cargo fmt --check
@@ -462,9 +462,9 @@ See the [release-readiness criteria](docs/release-readiness.md) for the boundary
 
 ## Advanced options
 
-Click **Advanced options** to add common imapsync flags with understandable descriptions: internal-date sync, UID matching, cache usage, fast I/O, and size-mismatch tolerance. The `--delete2` control is visually marked destructive because it can remove destination messages that do not exist on the source.
+Click **Advanced** on the **Plan** page to add common imapsync flags with understandable descriptions: internal-date sync, UID matching, cache usage, fast I/O, and size-mismatch tolerance. The `--delete2` control is visually marked destructive because it can remove destination messages that do not exist on the source.
 
-The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, subscription, and the general `debug` flag). Protocol-level `debugimap1` and `debugimap2` flags are rejected because transformed or protocol-authentication output cannot be covered by literal secret redaction. Numeric options are parsed and bounded before launch; endpoint, credential, TLS, preflight, destructive deletion, logging, execution, and unknown options are rejected. Test every change using Preflight first. The command preview shows the final arguments with passwords and OAuth tokens redacted. Bulk spreadsheets cannot provide this field.
+The **Extra imapsync options** field accepts only a small allowlist of non-connection tuning options (`nofoldersizes`, `skipcrossduplicates`, `maxlinelength`, timeout/retry controls, sleep controls, subscription, and the general `debug` flag). Protocol-level `debugimap1` and `debugimap2` flags are rejected because transformed or protocol-authentication output cannot be covered by literal secret redaction. Numeric options are parsed and bounded before launch; endpoint, credential, TLS, preflight, destructive deletion, logging, execution, and unknown options are rejected. Test every change with a preflight first. The command preview shows the final arguments with passwords and OAuth tokens redacted. Bulk spreadsheets cannot provide this field.
 
 ## Packaging
 

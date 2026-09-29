@@ -16,6 +16,7 @@ RAW_LITERAL_ALLOWLIST = {
     "doveadm",
     "→",
     "✓",
+    "⏺",
     "!",
     "in progress",
 }
@@ -42,6 +43,16 @@ def translation_keys() -> set[str]:
     return keys
 
 
+def status_message_keys() -> set[str]:
+    """Fixed messages passed to `set_status`; the header translates them
+    with `UiLanguage::lookup`, so each needs a catalog entry."""
+    keys: set[str] = set()
+    for path in (ROOT / "src").rglob("*.rs"):
+        source = path.read_text(encoding="utf-8")
+        keys.update(re.findall(r'set_status\(\s*"((?:\\.|[^"\\])*)"', source))
+    return keys
+
+
 def raw_ui_literals() -> list[str]:
     violations: list[str] = []
     patterns = (
@@ -65,7 +76,9 @@ def raw_ui_literals() -> list[str]:
 
 def main() -> int:
     missing = sorted(
-        key for key in translation_keys() if f'"{key}" =>' not in LANGUAGE
+        key
+        for key in translation_keys() | status_message_keys()
+        if f'"{key}" =>' not in LANGUAGE
     )
     raw = raw_ui_literals()
     if missing or raw:

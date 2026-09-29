@@ -216,7 +216,7 @@ impl App {
             ) {
                 Ok((project, job)) => {
                     self.project_id = Some(project.id.clone());
-                    self.selected_project_id = Some(project.id.clone());
+                    self.selected_project_id = Some(project.id);
                     self.job_id = Some(job);
                 }
                 Err(error) => {

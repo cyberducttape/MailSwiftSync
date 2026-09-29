@@ -10,7 +10,16 @@ impl App {
                 StatusSeverity::Error,
             );
         }
-        if self.invalidate_stale_capability_observation() {
+        // Exact callers (probe results, assessment, admission) recompute the
+        // fingerprint themselves; this per-frame check only expires stale
+        // observations promptly, so it need not hash files on every repaint.
+        let staleness_check_due = self
+            .capability_staleness_checked_at
+            .is_none_or(|checked| checked.elapsed() >= std::time::Duration::from_secs(1));
+        if staleness_check_due {
+            self.capability_staleness_checked_at = Some(std::time::Instant::now());
+        }
+        if staleness_check_due && self.invalidate_stale_capability_observation() {
             self.set_status(
                 "Readiness observations expired because the migration plan changed; run discovery again.",
                 StatusSeverity::Warning,

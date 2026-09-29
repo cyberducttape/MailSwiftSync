@@ -92,11 +92,17 @@ pub(crate) fn run() -> eframe::Result<()> {
     let mut arguments = std::env::args_os();
     let _program = arguments.next();
     let Some(command) = arguments.next() else {
+        #[allow(unused_mut)]
+        let mut inner_size = [1200.0, 820.0];
+        #[cfg(debug_assertions)]
+        if let Some(size) = crate::ui::debug_scene::window_size() {
+            inner_size = size;
+        }
         return eframe::run_native(
             "MailSwiftSync",
             eframe::NativeOptions {
                 viewport: egui::ViewportBuilder::default()
-                    .with_inner_size([1200.0, 820.0])
+                    .with_inner_size(inner_size)
                     .with_min_inner_size([900.0, 640.0]),
                 ..Default::default()
             },

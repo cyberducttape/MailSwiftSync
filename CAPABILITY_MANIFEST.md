@@ -1,7 +1,7 @@
 # MailSwiftSync Capability Manifest
 
 **Status source:** [`capabilities.toml`](capabilities.toml)
-**Last verified:** 2026-09-27
+**Last verified:** 2026-09-29
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
 The `[documentation]` policy in `capabilities.toml` also marks terms that must
@@ -39,7 +39,7 @@ that status layout against the machine-readable source.
 | **Message-level mismatch detection** | yes | yes (TLS imapsync path) | unit+scenario | pending | Folder-aware verifier is called after successful imapsync transfers; failures remain operator-reviewable and are never downgraded to aggregate success |
 | **Named message evidence levels** | yes | partial | unit+integration | pending | Metadata reconciliation is the default; explicit encrypted-imapsync body-hash runs emit a distinct Level 4-style bounded body-proof outcome after complete coverage |
 | **Checkpoint persistence** per message | no | no | none | no | Not implemented; Dovecot run-level checkpoints are now bound to a complete source/destination UIDVALIDITY digest, while evidence persists per run |
-| **Crash recovery** | partial | partial | unit | no | Run-level recovery works; message-level recovery not wired |
+| **Crash recovery** | partial | partial | unit | no | Run-level recovery works and verification staging resumes from snapshot-bound cursors; per-message transfer recovery is not implemented |
 | **Exception acceptance workflow** | yes | yes | unit | no | UI accepts exceptions, stored durably |
 
 ---
@@ -78,7 +78,7 @@ that status layout against the machine-readable source.
 |------------|------|-------|--------|---------------|-------|
 | **Pre-migration risk report** | yes | partial | unit | no | Scale report is available through the headless `risk` command; automatic GUI/live gating remains pending |
 | **Post-migration exception report** | yes | partial | unit | no | Report is available through the headless `post-report` command; automatic generation from durable live evidence remains pending |
-| **Provider-specific runbooks** | yes | partial | unit | no | Runbooks are exposed through the headless `runbook` command; GUI workflow surfacing remains pending |
+| **Provider-specific runbooks** | yes | partial | unit | no | Exposed through the headless `runbook` command and as read-only guidance for the selected source/destination presets on the GUI Plan page; the runbook does not sequence or gate the workflow |
 | **Recovery guidance** (7 scenarios) | yes | partial | unit+integration | no | Fail-closed guidance is exposed through the headless `recovery-guidance` command and rendered in the Activity workspace for interruption, transport, and throttling attention states |
 | **Resume/recovery dashboard** | yes | partial | unit+integration | no | Activity exposes durable run state and selected recovery guidance; a dedicated multi-run recovery dashboard remains future work |
 
@@ -149,7 +149,7 @@ particular target.
 - Pre-migration risk report generation during migration
 - Post-migration exception report generation
 - Dedicated multi-run resume/recovery dashboard UI
-- Provider-specific runbook exposure in UI
+- Runbook steps that sequence or gate the GUI workflow (the Plan page shows them as read-only guidance)
 - Real provider integration testing (requires live credentials)
 - Crash recovery for message-level checkpoints
 
@@ -176,9 +176,9 @@ particular target.
    - Awaits real provider validation
 
 4. **Operator guidance is split between CLI and GUI**
-   - Runbooks are exposed through `runbook`, but not embedded in the GUI workflow
+   - Runbooks are exposed through `runbook` and shown read-only on the Plan page for the selected presets; they do not drive the workflow
    - Recovery guidance is exposed through `recovery-guidance` and is presented in Activity for the supported interruption, transport, and throttling attention states
-   - Pre-migration risk assessment exists but not integrated into workflow
+   - The scale risk report is CLI-only (`risk`); the GUI's **Assess plan** checks plan readiness, not scale risk
 
 ---
 
@@ -214,7 +214,8 @@ To reach GA 1.0, the following work is required:
 **Short-term (v0.2):**
 - [ ] Live provider validation (Gmail, O365, Fastmail)
 - [ ] Integrate pre/post-migration reports into UI
-- [ ] Expose provider runbooks in UI workflow
+- [x] Show provider runbooks in the GUI (read-only on the Plan page)
+- [ ] Let provider runbook steps sequence the GUI workflow
 - [ ] Implement resume/recovery dashboard
 - [ ] Provider-specific error classification in retry logic
 

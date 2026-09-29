@@ -107,6 +107,17 @@ impl BulkJob {
     }
 
     pub(crate) fn form(&self) -> Form {
+        Form {
+            profile: self.profile(),
+            source_password: self.source_password.clone(),
+            destination_password: self.destination_password.clone(),
+            dry_run: self.defaults.dry_run,
+        }
+    }
+
+    /// The row's effective profile. Unlike `form`, this never copies the
+    /// session passwords.
+    pub(crate) fn profile(&self) -> crate::Profile {
         let mut profile = (*self.defaults.profile).clone();
         profile.source_host = self.source_host.clone();
         profile.source_user = self.source_user.clone();
@@ -117,16 +128,7 @@ impl BulkJob {
         if let Some(name) = &self.profile_name {
             profile.name = name.clone();
         }
-        Form {
-            profile,
-            source_password: self.source_password.clone(),
-            destination_password: self.destination_password.clone(),
-            dry_run: self.defaults.dry_run,
-        }
-    }
-
-    pub(crate) fn profile(&self) -> crate::Profile {
-        self.form().profile
+        profile
     }
 }
 
@@ -179,9 +181,7 @@ pub(crate) fn spawn_sheet_import(
 ) -> Receiver<Result<BulkImportResult, String>> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let result = read_sheet(&path, &base, sheet_index)
-            .map(BulkImportResult::Jobs)
-            .map_err(|error| error.to_string());
+        let result = read_sheet(&path, &base, sheet_index).map(BulkImportResult::Jobs);
         let _ = sender.send(result);
     });
     receiver
@@ -258,6 +258,9 @@ pub(crate) fn read_sheet(
         .worksheet_range_at(sheet_index)
         .ok_or_else(|| format!("The workbook has no worksheet at index {sheet_index}."))?
         .map_err(|error| error.to_string())?;
+    // Calamine ranges start at the first used cell, so report worksheet row
+    // numbers relative to that row rather than assuming headers are on row 1.
+    let header_row_number = range.start().map_or(1, |(row, _)| row as usize + 1);
     let mut rows = range.rows();
     let headers = rows
         .next()
@@ -285,7 +288,7 @@ pub(crate) fn read_sheet(
         if row.iter().all(|cell| cell.to_string().trim().is_empty()) {
             continue;
         }
-        let row_number = index + 2;
+        let row_number = header_row_number + index + 1;
         let values = record_values(
             &headers,
             row.iter().map(|value| value.to_string()),
@@ -1053,6 +1056,67 @@ mod tests {
             br#"<sst uniqueCount="0"><si><t>first</t></si><si><t>second</t></si></sst>"#,
         ))
         .expect("actual shared strings are counted even if uniqueCount lies low");
+    }
+
+    /// Peak resident memory of this process, in KiB (Linux only).
+    fn peak_rss_kib() -> Option<u64> {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()?
+            .lines()
+            .find_map(|line| line.strip_prefix("VmHWM:"))?
+            .trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    #[test]
+    #[ignore = "opt-in release import benchmark; run scripts/benchmark-ui-scale.sh"]
+    fn import_scale_benchmark() {
+        let rows = crate::MAX_BULK_IMPORT_ROWS;
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-scale-{}.csv",
+            uuid::Uuid::new_v4()
+        ));
+        let mut csv = String::from(
+            "project_name,name,source_host,source_user,source_credential_id,destination_host,destination_user,destination_credential_id\n",
+        );
+        for index in 0..rows {
+            csv.push_str(&format!(
+                "Scale,mailbox {index},imap.source.example,user{index}@source.example,src-{index},imap.destination.example,user{index}@destination.example,dst-{index}\n"
+            ));
+        }
+        std::fs::write(&path, csv).unwrap();
+        let rss_before = peak_rss_kib();
+        let started = std::time::Instant::now();
+        let jobs = super::read_csv(&path, &crate::Form::default());
+        let import_ms = started.elapsed().as_millis();
+        std::fs::remove_file(&path).unwrap();
+        let jobs = jobs.expect("scale CSV must import");
+        assert_eq!(jobs.len(), rows);
+        // Peak RSS growth while importing; 0 when /proc is unavailable.
+        let import_rss_mib = rss_before
+            .zip(peak_rss_kib())
+            .map_or(0, |(before, after)| after.saturating_sub(before) / 1024);
+        eprintln!("scale-import rows={rows} import_ms={import_ms} import_rss_mib={import_rss_mib}");
+    }
+
+    /// Excel's "CSV UTF-8" export starts with a byte-order mark; the first
+    /// header must still be recognised.
+    #[test]
+    fn csv_with_utf8_bom_imports() {
+        let path =
+            std::env::temp_dir().join(format!("mailswiftsync-bom-{}.csv", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &path,
+            "\u{feff}source_host,source_user,destination_host,destination_user\nimap.source.example,a@source.example,imap.destination.example,a@destination.example\n",
+        )
+        .unwrap();
+        let jobs = super::read_csv(&path, &crate::Form::default());
+        std::fs::remove_file(&path).unwrap();
+        let jobs = jobs.expect("a BOM must not hide the first header");
+        assert_eq!(jobs[0].source_host, "imap.source.example");
     }
 
     #[test]

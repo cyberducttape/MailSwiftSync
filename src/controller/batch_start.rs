@@ -99,7 +99,7 @@ impl App {
         let prepared = admission.prepared;
         let active_run = admission.active_run;
         let selected_job_ids = prepared.selected_job_ids.clone();
-        let queue_checkpoints = prepared.queue_checkpoints.clone();
+        let queue_checkpoints = prepared.queue_checkpoints;
         let job_count = jobs.len();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
         self.bulk_project_id = Some(project_id.clone());
@@ -131,8 +131,8 @@ impl App {
                 .map(|run| run.batch_child_run_ids.clone())
                 .unwrap_or_default(),
             queue_checkpoints,
-            batch_project_id: project_id.clone(),
-            batch_run_id: run_id.clone(),
+            batch_project_id: project_id,
+            batch_run_id: run_id,
             jobs,
             verification_state_path: self.state_path.clone(),
         });

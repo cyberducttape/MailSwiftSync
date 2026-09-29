@@ -132,12 +132,7 @@ impl App {
         }
         let mut initial_output_lines = persistence_warning.clone().map_or_else(
             || vec!["Ready. Start with Preflight against a test destination mailbox.".into()],
-            |warning| {
-                vec![
-                    warning.clone(),
-                    "WARNING: this session is not durable.".into(),
-                ]
-            },
+            |warning| vec![warning, "WARNING: this session is not durable.".into()],
         );
         if orphaned > 0 {
             initial_output_lines.push(format!(
@@ -360,7 +355,10 @@ impl App {
             bulk_search: String::new(),
             bulk_state_filter: "all".into(),
             bulk_selected_ids: HashSet::new(),
+            bulk_source_keyring_apply: String::new(),
+            bulk_destination_keyring_apply: String::new(),
             bulk_visible_indices: Vec::new(),
+            bulk_selection_view: Default::default(),
             bulk_search_values: Vec::new(),
             bulk_state_indices: HashMap::new(),
             bulk_search_match_indices: Vec::new(),
@@ -373,7 +371,8 @@ impl App {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
             } else {
-                "Import a CSV or XLSX file to build a reviewable queue. Legacy XLS import is disabled because its parser cannot be memory-bounded safely.".into()
+                // The empty Mailboxes page already explains CSV/XLSX import.
+                String::new()
             },
             advanced_open: false,
             // Do not interrupt first launch with a configuration dialog. The
@@ -413,6 +412,7 @@ impl App {
             capability_probe_request_id: None,
             capability_probe_fingerprint: None,
             capability_observation_fingerprint: None,
+            capability_staleness_checked_at: None,
             live_auth_receiver: None,
             start_credentials_receiver: None,
             start_credentials_plan: None,

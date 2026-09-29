@@ -305,9 +305,7 @@ impl App {
                 if self.selected_project_id == self.bulk_project_id {
                     self.selected_project_id = None;
                 }
-                self.bulk_project_id = None;
-                self.bulk_job_ids.clear();
-                self.bulk_job_index_by_id.clear();
+                self.detach_bulk_queue_identity();
             }
             self.bulk_live_run = false;
             self.live_confirmed = false;

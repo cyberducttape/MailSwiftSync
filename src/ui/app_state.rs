@@ -25,6 +25,8 @@ pub(crate) struct App {
     /// Reused filtered-row index storage. Large batch views must not allocate
     /// a fresh index vector on every repaint.
     pub(crate) bulk_visible_indices: Vec<usize>,
+    /// Per-frame selection projection shared by the drawer and page counts.
+    pub(crate) bulk_selection_view: crate::ui::batch::SelectionView,
     /// Lowercase searchable mailbox fields, rebuilt only when queue rows are
     /// imported or otherwise structurally changed.
     pub(crate) bulk_search_values: Vec<String>,
@@ -41,6 +43,9 @@ pub(crate) struct App {
     pub(crate) bulk_filter_cache_generation: u64,
     pub(crate) bulk_jobs_generation: u64,
     pub(crate) bulk_message: String,
+    /// OS-keyring IDs typed on the Mailboxes page for rows without credentials.
+    pub(crate) bulk_source_keyring_apply: String,
+    pub(crate) bulk_destination_keyring_apply: String,
     pub(crate) advanced_open: bool,
     pub(crate) engine_open: bool,
     pub(crate) store: core::StateStore,
@@ -104,6 +109,8 @@ pub(crate) struct App {
     pub(crate) capability_probe_request_id: Option<String>,
     pub(crate) capability_probe_fingerprint: Option<String>,
     pub(crate) capability_observation_fingerprint: Option<String>,
+    /// Last per-frame readiness staleness check; see `poll`.
+    pub(crate) capability_staleness_checked_at: Option<std::time::Instant>,
     /// Fresh authentication completed immediately before an IMAPS live run.
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
@@ -339,6 +346,15 @@ impl App {
 
     pub(crate) fn running(&self) -> bool {
         self.receiver.is_some()
+    }
+
+    /// Any background channel that `poll` must keep draining.
+    pub(crate) fn background_work_pending(&self) -> bool {
+        self.running()
+            || self.capability_receiver.is_some()
+            || self.live_auth_receiver.is_some()
+            || self.start_credentials_receiver.is_some()
+            || self.bulk_import_receiver.is_some()
     }
     pub(crate) fn report_store_error<E: Display>(
         &mut self,

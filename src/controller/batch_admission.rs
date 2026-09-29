@@ -173,7 +173,7 @@ pub(crate) fn admit_batch_launch(
             let config = durable_batch_profile_config(&profile)?;
             Ok((
                 profile.source_user.clone(),
-                profile.destination_user.clone(),
+                profile.destination_user,
                 config,
             ))
         })
@@ -272,7 +272,6 @@ pub(crate) fn durable_batch_profile_config(profile: &Profile) -> Result<String, 
         .map_err(|error| format!("Could not serialize batch plan: {error}"))
 }
 
-#[cfg(test)]
 pub(crate) fn selection_value(
     jobs: &[BulkJob],
     selection_scope: &SelectionScope,
@@ -695,7 +694,6 @@ pub(crate) fn prepare_batch_run(
     })
 }
 
-#[cfg(test)]
 pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> usize {
     let mut applied = 0;
     for job in jobs {
@@ -950,6 +948,59 @@ mod tests {
         assert_eq!(admission.job_ids.len(), jobs.len());
         assert_eq!(admission.prepared.selected_job_ids, admission.job_ids);
         assert_eq!(admission.selected_jobs.len(), jobs.len());
+        assert_eq!(
+            store.mailboxes(&admission.project_id).unwrap().len(),
+            jobs.len()
+        );
+    }
+
+    /// The GUI always sends an explicit selection. A freshly imported queue
+    /// carries provisional IDs, which must resolve by position into the
+    /// durable project that the first admission creates.
+    #[test]
+    fn first_explicit_admission_maps_provisional_ids_to_durable_ids() {
+        let store = crate::core::StateStore::in_memory().unwrap();
+        let jobs = (0..3)
+            .map(|index| {
+                let mut form = Form::default();
+                form.profile.source_host = "source.example".into();
+                form.profile.destination_host = "destination.example".into();
+                form.profile.source_user = format!("source-{index}@example.com");
+                form.profile.destination_user = format!("destination-{index}@example.com");
+                form.source_password = "source-secret".into();
+                form.destination_password = "destination-secret".into();
+                BulkJob::from_form(format!("mailbox-{index}"), form, "imported".into())
+            })
+            .collect::<Vec<_>>();
+        let provisional = (0..3)
+            .map(|index| format!("unadmitted-{index}"))
+            .collect::<Vec<_>>();
+        let selection = SelectionScope::Explicit(
+            [provisional[0].clone(), provisional[2].clone()]
+                .into_iter()
+                .collect(),
+        );
+        let admission = admit_batch_launch(BatchLaunchRequest {
+            store: &store,
+            requested_project_id: None,
+            source_jobs: &jobs,
+            queue_job_ids: &provisional,
+            selection_scope: &selection,
+            retry_scope: super::BulkRetryScope::All,
+            mode: BatchExecutionMode::Preflight,
+            fallback_profile: &jobs[0].profile(),
+            expected_credential_fingerprints: &[None, None, None],
+            expected_action_plan_hash: None,
+            run_id: "first-explicit-admission-test",
+        })
+        .unwrap();
+
+        assert_eq!(admission.job_ids.len(), jobs.len());
+        assert!(admission.job_ids.iter().all(|id| !provisional.contains(id)));
+        assert_eq!(
+            admission.prepared.selected_job_ids,
+            vec![admission.job_ids[0].clone(), admission.job_ids[2].clone()]
+        );
         assert_eq!(
             store.mailboxes(&admission.project_id).unwrap().len(),
             jobs.len()

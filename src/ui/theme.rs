@@ -102,13 +102,18 @@ impl ThemeColors {
         visuals.widgets.noninteractive =
             widget(self.panel, self.panel, quiet_border, self.text_primary);
         visuals.widgets.inactive = widget(resting, resting, quiet_border, self.text_primary);
-        visuals.widgets.hovered =
-            widget(self.selection, self.selection, self.info, self.text_primary);
+        // Widget labels always draw in `override_text_color`, so hover,
+        // press/focus, and open fills must keep primary text legible. Retro
+        // packs use saturated accents (Windows 95 navy) that black text
+        // cannot sit on; the accent stays on the border so focus is visible.
+        let hovered_fill = self.legible_fill(resting, self.selection);
+        let active_fill = self.legible_fill(resting, self.info);
+        visuals.widgets.hovered = widget(hovered_fill, hovered_fill, self.info, self.text_primary);
         // egui draws `strong()` text with the active foreground, so it must
         // stay the primary text colour; filled accent buttons pick their own
         // label colour (see `primary_button`).
-        visuals.widgets.active = widget(self.info, self.info, self.info, self.text_primary);
-        visuals.widgets.open = widget(self.selection, self.selection, self.info, self.text_primary);
+        visuals.widgets.active = widget(active_fill, active_fill, self.info, self.text_primary);
+        visuals.widgets.open = widget(hovered_fill, hovered_fill, self.info, self.text_primary);
         visuals.window_fill = self.window;
         visuals.window_stroke = stroke(self.border);
         visuals.window_corner_radius = egui::CornerRadius::same(window_radius);
@@ -128,6 +133,16 @@ impl ThemeColors {
         visuals.collapsing_header_frame = true;
         visuals.striped = true;
         visuals
+    }
+
+    /// The strongest blend of `accent` over `base` that keeps primary text
+    /// at WCAG AA (4.5:1). Falls back to `base`, which every pack keeps
+    /// legible.
+    fn legible_fill(self, base: Color32, accent: Color32) -> Color32 {
+        (0..=10)
+            .map(|step| lerp_color(base, accent, 1.0 - step as f32 / 10.0))
+            .find(|fill| contrast_ratio(self.text_primary, *fill) >= 4.5)
+            .unwrap_or(base)
     }
 
     /// Text on the selection background: the most legible of the primary
@@ -598,10 +613,36 @@ mod tests {
             let visuals = colors.visuals(false);
             assert_eq!(visuals.window_fill, colors.window);
             assert_eq!(visuals.panel_fill, colors.panel);
-            assert_eq!(visuals.widgets.hovered.bg_fill, visuals.selection.bg_fill);
-            assert_eq!(visuals.widgets.active.bg_fill, colors.info);
+            assert_eq!(visuals.widgets.hovered.bg_stroke.color, colors.info);
+            assert_eq!(visuals.widgets.active.bg_stroke.color, colors.info);
             assert_eq!(visuals.window_stroke.color, colors.border);
             assert!(visuals.button_frame && visuals.collapsing_header_frame);
+        }
+    }
+
+    /// Keyboard focus draws a button with the active fill, and dialogs now
+    /// focus their safe choice on open, so every interactive fill must keep
+    /// the (overriding) primary text colour legible.
+    #[test]
+    fn primary_text_is_legible_on_interactive_widget_fills() {
+        for theme in ThemeKind::all() {
+            for dark_mode in [true, false] {
+                let colors = ThemeColors::for_theme(*theme, dark_mode);
+                let visuals = colors.visuals(dark_mode);
+                for (state, fill) in [
+                    ("inactive", visuals.widgets.inactive.bg_fill),
+                    ("hovered", visuals.widgets.hovered.bg_fill),
+                    ("active", visuals.widgets.active.bg_fill),
+                    ("open", visuals.widgets.open.bg_fill),
+                ] {
+                    let ratio = contrast_ratio(colors.text_primary, fill);
+                    assert!(
+                        ratio >= 4.5,
+                        "{} ({dark_mode}): {state} widget text is {ratio:.2}:1",
+                        theme.label()
+                    );
+                }
+            }
         }
     }
 

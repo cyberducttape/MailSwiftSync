@@ -329,6 +329,24 @@ pub(crate) fn form_row<R>(
     .inner
 }
 
+/// Give `response` keyboard focus the first frame a dialog is shown, so a
+/// confirmation opens on its safe choice. Pair with `reset_initial_focus`
+/// when the dialog closes.
+pub(crate) fn focus_on_open(ui: &egui::Ui, response: &egui::Response, dialog: egui::Id) {
+    let key = dialog.with("initial_focus_done");
+    if !ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(key).unwrap_or(false))
+    {
+        response.request_focus();
+        ui.ctx().data_mut(|data| data.insert_temp(key, true));
+    }
+}
+
+pub(crate) fn reset_initial_focus(ctx: &egui::Context, dialog: egui::Id) {
+    ctx.data_mut(|data| data.remove::<bool>(dialog.with("initial_focus_done")));
+}
+
 /// Two-line table cell: host on top, account muted below; both truncate
 /// with an ellipsis and show the full value on hover.
 pub(crate) fn endpoint_cell(ui: &mut egui::Ui, host: &str, user: &str) {
@@ -340,4 +358,38 @@ pub(crate) fn endpoint_cell(ui: &mut egui::Ui, host: &str, user: &str) {
         ui.add(egui::Label::new(egui::RichText::new(user).small().color(muted)).truncate())
             .on_hover_text(user);
     });
+}
+
+#[cfg(test)]
+mod dialog_reachability_tests {
+    /// Every dialog flag must be set somewhere in production UI code. A
+    /// refactor once removed the only buttons that opened the credential
+    /// and engine dialogs, leaving OAuth refresh configuration unreachable.
+    #[test]
+    fn every_dialog_has_a_production_opener() {
+        let production = [
+            include_str!("app.rs"),
+            include_str!("overview.rs"),
+            include_str!("plan.rs"),
+            include_str!("batch.rs"),
+            include_str!("activity.rs"),
+            include_str!("verification.rs"),
+            include_str!("settings.rs"),
+            include_str!("workspace.rs"),
+            include_str!("account.rs"),
+            include_str!("engine.rs"),
+        ]
+        .concat();
+        for flag in [
+            "keyring_open = true",
+            "engine_open = true",
+            "settings_open = true",
+            "projects_open = true",
+            "advanced_open = true",
+            "preview = true",
+            "bulk_clear_confirm_open = true",
+        ] {
+            assert!(production.contains(flag), "no production UI sets `{flag}`");
+        }
+    }
 }

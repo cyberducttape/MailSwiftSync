@@ -22,15 +22,38 @@ impl UiLanguage {
     }
 
     pub(crate) fn text(self, source: &'static str) -> &'static str {
+        self.lookup(source).unwrap_or(source)
+    }
+
+    /// Translate text that is only known at runtime, such as a status
+    /// message stored as a `String`. Returns `None` for English and for text
+    /// without a catalog entry (for example, messages with values filled in).
+    pub(crate) fn lookup(self, source: &str) -> Option<&'static str> {
         if self == Self::English {
-            return source;
+            return None;
         }
-        match source {
+        Some(match source {
             "Overview" => "Übersicht",
             "Manage" => "Verwalten",
+            "Tools" => "Werkzeuge",
             "Connection details" => "Verbindungsdetails",
-            "Clear Dry run / preflight to enable live migration." => {
-                "Deaktivieren Sie Probelauf / Vorabprüfung, um die Live-Migration zu aktivieren."
+            "Preflight runs the engine without changing the destination. Clear Dry run / preflight to start a live migration." => {
+                "Die Vorabprüfung führt die Engine aus, ohne das Ziel zu verändern. Deaktivieren Sie Probelauf / Vorabprüfung, um eine Live-Migration zu starten."
+            }
+            "Local Dovecot destination" => "Lokales Dovecot-Ziel",
+            "Destination: local Dovecot storage" => "Ziel: lokaler Dovecot-Speicher",
+            "imapsync options" => "imapsync-Optionen",
+            "Map standard folders automatically" => "Standardordner automatisch zuordnen",
+            "Folders only" => "Nur Ordner",
+            "Add Message-ID header when needed" => "Message-ID-Header bei Bedarf hinzufügen",
+            "Extra imapsync options" => "Zusätzliche imapsync-Optionen",
+            "imapsync executable" => "imapsync-Programmdatei",
+            "Leave empty to use imapsync from PATH." => {
+                "Leer lassen, um imapsync aus PATH zu verwenden."
+            }
+            "DESTINATION DELETION ENABLED" => "ZIELLÖSCHUNG AKTIVIERT",
+            "Messages that exist only on the destination may be removed during live migration." => {
+                "Nachrichten, die nur im Ziel vorhanden sind, können während der Live-Migration entfernt werden."
             }
             "ATTENTION CENTER" => "ZENTRALE FÜR AUFMERKSAMKEIT",
             "Batch queue loaded" => "Stapelwarteschlange geladen",
@@ -563,14 +586,12 @@ impl UiLanguage {
             "This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace." => {
                 "Dies entfernt {} Postfachzeile(n), die Auswahl, Passwörter im Speicher und die dauerhafte Stapelzuordnung aus diesem Arbeitsbereich."
             }
-            "Discard the current queue?" => "Aktuelle Warteschlange verwerfen?",
             "Keep queue" => "Warteschlange behalten",
             "Clear queue" => "Warteschlange leeren",
             "Replace mailbox queue?" => "Postfachwarteschlange ersetzen?",
             "Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association." => {
                 "Der Import von {} ersetzt {} aktuelle(n) Postfachzeile(n), die Auswahl, Passwörter im Speicher und die dauerhafte Stapelzuordnung."
             }
-            "Replace the current queue?" => "Aktuelle Warteschlange ersetzen?",
             "Keep current queue" => "Aktuelle Warteschlange behalten",
             "Replace queue" => "Warteschlange ersetzen",
             "Source preset" => "Quellvorgabe",
@@ -815,8 +836,8 @@ impl UiLanguage {
             "project name, source, or destination" => "Projektname, Quelle oder Ziel",
             "Project" => "Projekt",
             "Phase" => "Phase",
-            "Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window." => {
-                "Prüfen, filtern und bearbeiten Sie Kundenpostfächer, ohne das bisherige Warteschlangenfenster erneut zu öffnen."
+            "Review, filter, select, and operate on customer mailboxes." => {
+                "Prüfen, filtern, auswählen und bearbeiten Sie Kundenpostfächer."
             }
             "No bulk mailbox list loaded" => "Keine Postfachliste geladen",
             "A single mailbox can be configured from the migration plan." => {
@@ -886,6 +907,103 @@ impl UiLanguage {
             "Maximum concurrent workers" => "Maximale gleichzeitige Arbeitsprozesse",
             "Transient retries" => "Wiederholungen bei vorübergehenden Fehlern",
             "Passwordless queue credentials" => "Passwortlose Zugangsdaten für die Warteschlange",
+            // Fixed status-bar messages (translated via `lookup`).
+            "Idle" => "Bereit",
+            "A migration is running; finish or stop it before starting a new workspace." => {
+                "Eine Migration läuft; schließen Sie sie ab oder stoppen Sie sie, bevor Sie einen neuen Arbeitsbereich beginnen."
+            }
+            "Authenticated capability discovery requires encrypted IMAP; plain transport remains blocked by the explicit cleartext acknowledgement gate." => {
+                "Die authentifizierte Fähigkeitsprüfung erfordert verschlüsseltes IMAP; unverschlüsselter Transport bleibt durch die ausdrückliche Klartext-Bestätigung gesperrt."
+            }
+            "Authenticated dual-endpoint IMAPS probing is for imapsync mode; Dovecot destination readiness is checked by the native dry preflight." => {
+                "Die authentifizierte IMAPS-Prüfung beider Endpunkte gilt für den imapsync-Modus; die Bereitschaft eines Dovecot-Ziels prüft die native Vorabprüfung."
+            }
+            "Authenticating and inspecting IMAPS readiness…" => {
+                "IMAPS-Bereitschaft wird authentifiziert und geprüft…"
+            }
+            "Capability discovery complete" => "Fähigkeitsprüfung abgeschlossen",
+            "Could not start without a durable mailbox project." => {
+                "Start ohne dauerhaftes Postfachprojekt nicht möglich."
+            }
+            "Durable state view is stale; execution is disabled until SQLite refresh succeeds." => {
+                "Die dauerhafte Statusansicht ist veraltet; die Ausführung bleibt gesperrt, bis die SQLite-Aktualisierung gelingt."
+            }
+            "Enter source and destination hosts before creating a project." => {
+                "Geben Sie Quell- und Zielserver ein, bevor Sie ein Projekt erstellen."
+            }
+            "Fresh IMAPS authentication passed; continuing live admission…" => {
+                "Neue IMAPS-Authentifizierung erfolgreich; Live-Freigabe wird fortgesetzt…"
+            }
+            "Live migration blocked: acknowledge the cleartext source-transport risk before continuing." => {
+                "Live-Migration gesperrt: Bestätigen Sie das Risiko des unverschlüsselten Quelltransports, bevor Sie fortfahren."
+            }
+            "Live migration blocked: imapsync automapping has no immutable mapping snapshot for independent verification. Disable automap and run a new preflight before migrating." => {
+                "Live-Migration gesperrt: Die automatische imapsync-Ordnerzuordnung hat keinen unveränderlichen Zuordnungsstand für die unabhängige Verifizierung. Deaktivieren Sie automap und führen Sie vor der Migration eine neue Vorabprüfung aus."
+            }
+            "Live migration is disabled because durable SQLite storage is unavailable." => {
+                "Die Live-Migration ist deaktiviert, weil der dauerhafte SQLite-Speicher nicht verfügbar ist."
+            }
+            "Loading migration credentials from the OS keyring…" => {
+                "Zugangsdaten für die Migration werden aus dem Betriebssystem-Schlüsselbund geladen…"
+            }
+            "New migration workspace ready; configure the endpoints before preflight." => {
+                "Neuer Migrationsarbeitsbereich bereit; konfigurieren Sie die Endpunkte vor der Vorabprüfung."
+            }
+            "Project created; ready for preflight review" => {
+                "Projekt erstellt; bereit für die Vorabprüfung"
+            }
+            "Project switching is disabled while a migration is running." => {
+                "Während eine Migration läuft, kann das Projekt nicht gewechselt werden."
+            }
+            "Re-authenticating encrypted IMAP endpoints before live execution…" => {
+                "Verschlüsselte IMAP-Endpunkte werden vor der Live-Ausführung erneut authentifiziert…"
+            }
+            "The current mailbox identity differs from the durable project. Run a new dry preflight for this plan before starting live migration." => {
+                "Die aktuelle Postfachidentität weicht vom dauerhaften Projekt ab. Führen Sie für diesen Plan eine neue Vorabprüfung aus, bevor Sie die Live-Migration starten."
+            }
+            "The migration plan changed while credentials were loading; review it and start again." => {
+                "Der Migrationsplan hat sich beim Laden der Zugangsdaten geändert; prüfen Sie ihn und starten Sie erneut."
+            }
+            "The saved Dovecot checkpoint has no UIDVALIDITY context; run a fresh full Dovecot pass before resuming." => {
+                "Der gespeicherte Dovecot-Prüfpunkt hat keinen UIDVALIDITY-Kontext; führen Sie vor dem Fortsetzen einen neuen vollständigen Dovecot-Durchlauf aus."
+            }
+            "Viewing a historical project read-only. Start a new migration to edit or execute a plan." => {
+                "Historisches Projekt schreibgeschützt geöffnet. Starten Sie eine neue Migration, um einen Plan zu bearbeiten oder auszuführen."
+            }
+            "Dismiss" => "Ausblenden",
+            "Queue settings" => "Warteschlangeneinstellungen",
+            "Concurrent workers" => "Parallele Prozesse",
+            "Applies to preflight and live migration." => {
+                "Gilt für Vorabprüfung und Live-Migration."
+            }
+            "Authentication and configuration failures are never retried." => {
+                "Authentifizierungs- und Konfigurationsfehler werden nie wiederholt."
+            }
+            "{} selected · {} visible · {} hidden by current filter" => {
+                "{} ausgewählt · {} sichtbar · {} durch aktuellen Filter verborgen"
+            }
+            "Export selected set…" => "Ausgewählte Zeilen exportieren…",
+            "Writes the selected rows as JSON without credentials or engine options." => {
+                "Schreibt die ausgewählten Zeilen als JSON ohne Zugangsdaten oder Engine-Optionen."
+            }
+            "Selected batch rows exported without credentials or engine options." => {
+                "Ausgewählte Stapelzeilen ohne Zugangsdaten oder Engine-Optionen exportiert."
+            }
+            "Select one or more rows to export." => {
+                "Wählen Sie eine oder mehrere Zeilen zum Exportieren aus."
+            }
+            "Batch selection export cancelled." => "Export der Stapelauswahl abgebrochen.",
+            "Enter a keyring ID before applying it." => {
+                "Geben Sie eine Schlüsselbund-ID ein, bevor Sie sie anwenden."
+            }
+            "Applied the keyring ID to {} row(s) without a credential reference." => {
+                "Schlüsselbund-ID auf {} Zeile(n) ohne Zugangsdatenverweis angewendet."
+            }
+            "Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue." => {
+                "Wendet einen vorhandenen Betriebssystem-Schlüsselbund-Verweis auf Zeilen ohne Passwort oder Zugangsdaten-ID an. Das Geheimnis selbst wird nie in die Warteschlange kopiert."
+            }
+            "Apply to empty source rows" => "Auf Quellzeilen ohne Zugangsdaten anwenden",
+            "Apply to empty destination rows" => "Auf Zielzeilen ohne Zugangsdaten anwenden",
             "Source keyring ID" => "Schlüsselbund-ID der Quelle",
             "Destination keyring ID" => "Schlüsselbund-ID des Ziels",
             "Imported" => "Importiert",
@@ -1152,8 +1270,8 @@ impl UiLanguage {
             "Connection, credentials, advanced options, and readiness are available from the Migration plan." => {
                 "Verbindung, Zugangsdaten, erweiterte Optionen und Bereitschaft finden Sie im Migrationsplan."
             }
-            _ => source,
-        }
+            _ => return None,
+        })
     }
 }
 
@@ -1369,6 +1487,15 @@ mod tests {
                 "missing German translation: {key}"
             );
         }
+    }
+
+    #[test]
+    fn lookup_translates_fixed_runtime_text_only() {
+        assert_eq!(UiLanguage::German.lookup("Idle"), Some("Bereit"));
+        assert_eq!(UiLanguage::English.lookup("Idle"), None);
+        // Formatted messages carry values and stay untranslated.
+        assert_eq!(UiLanguage::German.lookup("Durability error: save"), None);
+        assert_eq!(UiLanguage::German.text("Idle"), "Bereit");
     }
 
     #[test]

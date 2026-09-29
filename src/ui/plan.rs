@@ -117,6 +117,13 @@ impl App {
     }
 
     pub(crate) fn invalidate_stale_capability_observation(&mut self) -> bool {
+        // The fingerprint hashes the engine executable and trust files;
+        // skip it when there is no probe or observation to compare.
+        if self.capability_probe_fingerprint.is_none()
+            && self.capability_observation_fingerprint.is_none()
+        {
+            return false;
+        }
         let current = plan_fingerprint_digest(&self.form.plan_fingerprint());
         let in_flight_stale = self
             .capability_probe_fingerprint
