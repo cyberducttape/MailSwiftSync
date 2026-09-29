@@ -5,8 +5,11 @@ MailSwiftSync supports OAuth2 token refresh for unattended migrations. This enab
 ## Authentication model
 
 MailSwiftSync consumes a provider-issued access token and can refresh it when
-the operator supplies a refresh-token configuration. It does not perform
-provider consent or choose an OAuth flow on the operator's behalf.
+the operator supplies a refresh-token configuration. The `oauth-authorize`
+command runs the delegated authorization-code flow with PKCE against the
+operator's own registered application and stores that configuration; see
+[Authorize with MailSwiftSync](#authorize-with-mailswiftsync). MailSwiftSync
+ships no OAuth client of its own.
 
 There are two distinct OAuth models:
 
@@ -25,14 +28,51 @@ App passwords are provider- and account-specific password authentication. They
 are not a general OAuth substitute and do not work as an Exchange Online IMAP
 workaround after Basic Authentication removal.
 
-## OAuth Limitations in MailSwiftSync
+## Authorize with MailSwiftSync
 
-**MailSwiftSync does NOT perform OAuth consent.** Instead, you must:
+After registering an OAuth application (steps below), run the consent flow
+once per mailbox account on a computer with a browser:
 
-1. Register an OAuth application with the provider (once)
-2. Obtain an initial refresh token using the provider's tools
-3. Store the refresh token and client credentials in MailSwiftSync
-4. MailSwiftSync will automatically refresh the token before each migration run
+```text
+# Google: a "Desktop app" OAuth client; its client secret goes in an owner-only file.
+mailswiftsync oauth-authorize google gmail-source \
+  --client-id 1234.apps.googleusercontent.com \
+  --client-secret-file ~/.config/mailswiftsync/google-client-secret \
+  --login-hint user@example.com
+
+# Microsoft 365: redirect http://localhost registered under "Mobile and desktop applications".
+mailswiftsync oauth-authorize microsoft m365-destination \
+  --client-id 00000000-0000-0000-0000-000000000000 \
+  --tenant contoso.onmicrosoft.com
+```
+
+The command prints the provider's consent URL and waits up to five minutes on
+a one-shot loopback listener (`http://127.0.0.1:<port>/` for Google,
+`http://localhost:<port>/` for Microsoft; override with `--redirect-host`).
+It sends a PKCE S256 challenge and a random `state`, refuses a redirect whose
+`state` does not match, exchanges the code over certificate-validated HTTPS
+with redirects disabled, and refuses a response without a refresh token. The
+result is stored under the given keyring ID in the same OS-keyring entry the
+GUI's **Automatic OAuth refresh** section writes, and is read back to confirm
+the keyring kept it. Enter that ID as the source or destination OAuth refresh
+keyring ID in the migration profile.
+
+- `--client-secret-file` is needed only for clients the provider treats as
+  confidential (Google desktop clients, or a Microsoft registration on the
+  "Web" platform). It uses the same owner-only secret-file checks as headless
+  credentials, so the secret never appears on the command line.
+- `custom` works with any provider that supports the authorization-code grant
+  with PKCE: pass `--authorize-url`, `--token-url`, and `--scope` (HTTPS
+  endpoints only).
+- On a remote server, run the command where a browser can reach the loopback
+  port (for example, over an SSH local port forward), or run it on a
+  workstation and copy the keyring entry through your own secret process.
+- The flow follows each provider's published desktop-client guidance but has
+  not yet been qualified against live Google or Microsoft tenants; record the
+  first successful run in the compatibility matrix.
+
+You can still obtain a refresh token with the provider's own tooling (the
+alternatives below) and enter it in the GUI's Automatic OAuth refresh section.
 
 ## Gmail / Google Workspace OAuth
 

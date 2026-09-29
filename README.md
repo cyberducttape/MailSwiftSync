@@ -92,12 +92,12 @@ Experimental or planned:
 - Native Dovecot execution is implemented and wired, but remains experimental
   until its integration fixture and recovery scenarios pass in CI. The
   capability manifest tracks this separately from code and wiring status.
-- Interactive provider consent/authorization and unattended secret brokering
-  (the imapsync path accepts operator-supplied OAuth 2.0 access tokens
-  through the OS keyring or session form, and can automatically refresh them
-  from an operator-supplied refresh token; it still does not implement an
-  authorization flow, so the operator obtains that refresh token through the
-  provider's own tooling).
+- Unattended secret brokering beyond the OS keyring, and an in-GUI provider
+  sign-in. Consent itself is available from the CLI:
+  `mailswiftsync oauth-authorize` runs the authorization-code flow with PKCE
+  against the operator's registered application and stores the refresh
+  configuration that live launches use. It has not yet been qualified against
+  live Google or Microsoft tenants.
 - Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
 - A scheduler/API that can survive the desktop closing. (`supervise` provides a foreground, maintenance-window-aware batch controller; body hashing is currently an explicit per-mailbox opt-in rather than a default batch mode.)
 - UIDVALIDITY-aware delta checkpoint binding is implemented for native Dovecot; encrypted-imapsync verification persists bounded metadata pages, body fingerprints, and UID cursors across controller interruption, while provider qualification and large-mailbox recovery evidence remain outstanding.
@@ -201,7 +201,7 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 
 ### Current security boundary
 
-The desktop runner does not persist passwords or OAuth access tokens. For imapsync, choose **OAuth 2.0 / XOAUTH2** per endpoint and enter a currently valid access token, or load it through an OS-keyring ID; live runs write it to a short-lived owner-only token file that imapsync reads without exposing it in argv. The readiness probe performs the same XOAUTH2 authentication before live admission. MailSwiftSync does not perform provider consent (there is no in-app "sign in with Google/Microsoft" flow), so the operator must still register their own OAuth application with the provider and obtain an initial refresh token through that provider's documented flow. Once that refresh token, the token endpoint, and the client ID/secret are stored under an OS-keyring ID (in the OAuth keyring dialog's "Automatic OAuth refresh" section, separate from the plain credential entry), MailSwiftSync exchanges it for a fresh access token before every live launch, including each mailbox in a batch queue, so a long unattended run does not stall on a token that expired while it waited. Refresh-token rotation is followed automatically. Without a configured refresh entry, behavior is unchanged: operators obtain and rotate tokens by hand. Dovecot native execution currently supports password authentication only. Remote Dovecot execution is unavailable until a secret broker can deliver credentials without destination-host process exposure. Never put real passwords, tokens, refresh tokens, or client secrets in a committed CSV.
+The desktop runner does not persist passwords or OAuth access tokens. For imapsync, choose **OAuth 2.0 / XOAUTH2** per endpoint and enter a currently valid access token, or load it through an OS-keyring ID; live runs write it to a short-lived owner-only token file that imapsync reads without exposing it in argv. The readiness probe performs the same XOAUTH2 authentication before live admission. The operator registers their own OAuth application with the provider; there is no in-app "sign in with Google/Microsoft" button, but `mailswiftsync oauth-authorize` completes consent in a browser with PKCE and stores the initial refresh configuration (see [OAUTH_SETUP.md](OAUTH_SETUP.md#authorize-with-mailswiftsync)). A refresh token obtained through the provider's own tooling can be entered instead. Once that refresh token, the token endpoint, and the client ID/secret are stored under an OS-keyring ID (in the OAuth keyring dialog's "Automatic OAuth refresh" section, separate from the plain credential entry), MailSwiftSync exchanges it for a fresh access token before every live launch, including each mailbox in a batch queue, so a long unattended run does not stall on a token that expired while it waited. Refresh-token rotation is followed automatically. Without a configured refresh entry, behavior is unchanged: operators obtain and rotate tokens by hand. Dovecot native execution currently supports password authentication only. Remote Dovecot execution is unavailable until a secret broker can deliver credentials without destination-host process exposure. Never put real passwords, tokens, refresh tokens, or client secrets in a committed CSV.
 
 ### Dovecot mode
 
@@ -288,6 +288,7 @@ mailswiftsync headless /path/to/state.db live
 mailswiftsync headless /path/to/state.db live --reopen-reason "scheduled incremental sync"
 mailswiftsync headless /path/to/state.db batch-preflight
 mailswiftsync headless /path/to/state.db batch-live
+mailswiftsync oauth-authorize google|microsoft|custom <keyring-id> --client-id <id>
 ```
 
 For opt-in headless incident troubleshooting, single-mailbox preflight/live

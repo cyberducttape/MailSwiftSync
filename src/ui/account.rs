@@ -92,7 +92,7 @@ pub(crate) fn render_account(
         if auth_method_is_oauth(auth_method) {
             ui.label(
                 RichText::new(
-                    language.text("Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. MailSwiftSync does not request provider consent, but can refresh an expired token automatically if you configure a refresh token in the OS keyring dialog's Automatic OAuth refresh section."),
+                    language.text("Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. To avoid manual tokens, run `mailswiftsync oauth-authorize` once and enter its keyring ID in the OS keyring dialog's Automatic OAuth refresh section."),
                 )
                 .size(11.0)
                 .color(if ui.visuals().dark_mode {
@@ -265,7 +265,7 @@ impl App {
         ui.label(RichText::new(self.language.text("Automatic OAuth refresh (optional)")).strong());
         ui.label(
             RichText::new(
-                self.language.text("Requires an OAuth application you have already registered with the provider and a refresh token obtained through its consent flow. MailSwiftSync does not perform consent; it only exchanges an existing refresh token for a fresh access token before each live launch."),
+                self.language.text("Requires an OAuth application you have registered with the provider. Run `mailswiftsync oauth-authorize` to complete consent in a browser and store the refresh configuration under a keyring ID, or enter a refresh token obtained through the provider's own tooling below. Before each live launch MailSwiftSync exchanges it for a fresh access token."),
             )
             .size(11.0)
             .color(self.theme_colors().text_secondary),

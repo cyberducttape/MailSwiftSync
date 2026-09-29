@@ -218,9 +218,10 @@ and require the corresponding integration run.
   (single mailbox or each mailbox in a batch queue), follows refresh-token
   rotation, and only performs `https://` token-endpoint requests over a
   certificate-validated TLS connection built the same way as the IMAP
-  readiness probe. This remains provider-consent-free: MailSwiftSync still
-  does not implement an OAuth authorization flow, so the operator must
-  obtain the initial refresh token through the provider's own tooling. A
+  readiness probe. The initial refresh token comes from
+  `mailswiftsync oauth-authorize` (authorization-code flow with PKCE, loopback
+  redirect, state check, refresh-token required) or from the provider's own
+  tooling. A
   rotated refresh token is persisted with bounded retries; if the keyring
   remains unavailable, live execution fails closed and retains the rotated
   configuration only in protected process memory for persistence recovery,
@@ -302,11 +303,11 @@ and require the corresponding integration run.
   1,000 ms for bounded reads. Qualified hosts may override these with
   `MAILSWIFTSYNC_RELOAD_*_BUDGET_MS`; missing or malformed metrics fail the
   script.
-- Provider consent flows and equivalent unattended secret-broker delivery
-  remain outstanding: MailSwiftSync still does not implement an OAuth
-  authorization flow, so an operator must register their own application and
-  obtain the initial refresh token through the provider's own tooling. The
-  imapsync path now supports operator-supplied OAuth 2.0 access tokens with
+- Provider consent is implemented as a CLI authorization-code flow with PKCE
+  (`oauth-authorize`) for the operator's registered application; it still
+  needs a recorded live pilot against Google and Microsoft tenants, and
+  unattended secret-broker delivery beyond the OS keyring remains
+  outstanding. The imapsync path now supports operator-supplied OAuth 2.0 access tokens with
   XOAUTH2, including keyring references, private token-file delivery,
   redacted previews, fresh pre-live authentication, and (once a refresh
   token is stored) automatic access-token refresh before each live launch.

@@ -578,11 +578,11 @@ impl UiLanguage {
             "Enter the provider's documented IMAP endpoint and authentication policy." => {
                 "Geben Sie den dokumentierten IMAP-Endpunkt und die Authentifizierungsrichtlinien des Anbieters ein."
             }
-            "OAuth is preferred; Workspace administrators may use delegated gmail.imap_admin access. MailSwiftSync does not perform consent, so configure the tenant/client flow separately." => {
-                "OAuth wird bevorzugt. Workspace-Administratoren können delegierten gmail.imap_admin-Zugriff verwenden. MailSwiftSync führt keine Zustimmung durch; richten Sie den Tenant-/Client-Ablauf separat ein."
+            "OAuth is preferred; Workspace administrators may use delegated gmail.imap_admin access. Register your own OAuth client, then run `mailswiftsync oauth-authorize google` to store a refresh token." => {
+                "OAuth wird bevorzugt. Workspace-Administratoren können delegierten gmail.imap_admin-Zugriff verwenden. Registrieren Sie einen eigenen OAuth-Client und führen Sie dann `mailswiftsync oauth-authorize google` aus, um ein Refresh-Token zu speichern."
             }
-            "MailSwiftSync does not perform provider consent. Automatic refresh is available when an operator supplies a registered client and refresh token. Exchange Online IMAP and tenant OAuth policy must permit the account." => {
-                "MailSwiftSync fordert keine Zustimmung beim Anbieter an. Eine automatische Erneuerung ist mit registriertem Client und Refresh-Token möglich. Exchange-Online-IMAP- und Tenant-OAuth-Richtlinien müssen das Konto zulassen."
+            "Register your own OAuth application, then run `mailswiftsync oauth-authorize microsoft` to store a refresh token; live launches refresh access tokens automatically. Exchange Online IMAP and tenant OAuth policy must permit the account." => {
+                "Registrieren Sie eine eigene OAuth-Anwendung und führen Sie dann `mailswiftsync oauth-authorize microsoft` aus, um ein Refresh-Token zu speichern; Live-Starts erneuern Zugriffstoken automatisch. Exchange-Online-IMAP- und Tenant-OAuth-Richtlinien müssen das Konto zulassen."
             }
             "Use a Fastmail app password, not the primary account password; create it in Fastmail security settings before preflight." => {
                 "Verwenden Sie ein Fastmail-App-Passwort statt des primären Kontopassworts. Erstellen Sie es vor der Vorabprüfung in den Fastmail-Sicherheitseinstellungen."
@@ -640,8 +640,8 @@ impl UiLanguage {
             "Authentication" => "Authentifizierung",
             "Local Dovecot account" => "Lokales Dovecot-Konto",
             "IMAP connection" => "IMAP-Verbindung",
-            "Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. MailSwiftSync does not request provider consent, but can refresh an expired token automatically if you configure a refresh token in the OS keyring dialog's Automatic OAuth refresh section." => {
-                "Verwenden Sie ein gültiges, vom Anbieter ausgestelltes Zugriffstoken mit IMAP-Berechtigung. Token gelten nur für die Sitzung, sofern sie nicht im Betriebssystem-Schlüsselbund gespeichert werden. MailSwiftSync fordert keine Anbieterfreigabe an, kann ein abgelaufenes Token jedoch automatisch erneuern, wenn im Schlüsselbunddialog die automatische OAuth-Erneuerung eingerichtet ist."
+            "Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. To avoid manual tokens, run `mailswiftsync oauth-authorize` once and enter its keyring ID in the OS keyring dialog's Automatic OAuth refresh section." => {
+                "Verwenden Sie ein gültiges, vom Anbieter ausgestelltes Zugriffstoken mit IMAP-Berechtigung. Token gelten nur für die Sitzung, sofern sie nicht im Betriebssystem-Schlüsselbund gespeichert werden. Um manuelle Token zu vermeiden, führen Sie einmal `mailswiftsync oauth-authorize` aus und tragen Sie dessen Schlüsselbund-ID im Abschnitt zur automatischen OAuth-Erneuerung des Schlüsselbunddialogs ein."
             }
             "Password" => "Passwort",
             "Access token" => "Zugriffstoken",
@@ -919,8 +919,8 @@ impl UiLanguage {
             "Store source password" => "Quellpasswort speichern",
             "Store destination token" => "Zieltoken speichern",
             "Store destination password" => "Zielpasswort speichern",
-            "Requires an OAuth application you have already registered with the provider and a refresh token obtained through its consent flow. MailSwiftSync does not perform consent; it only exchanges an existing refresh token for a fresh access token before each live launch." => {
-                "Erfordert eine beim Anbieter registrierte OAuth-Anwendung und ein über dessen Zustimmungsablauf erhaltenes Refresh-Token. MailSwiftSync führt keine Zustimmung durch, sondern tauscht vor jedem Live-Start ein vorhandenes Refresh-Token gegen ein neues Zugriffstoken."
+            "Requires an OAuth application you have registered with the provider. Run `mailswiftsync oauth-authorize` to complete consent in a browser and store the refresh configuration under a keyring ID, or enter a refresh token obtained through the provider's own tooling below. Before each live launch MailSwiftSync exchanges it for a fresh access token." => {
+                "Erfordert eine beim Anbieter registrierte OAuth-Anwendung. Führen Sie `mailswiftsync oauth-authorize` aus, um die Zustimmung im Browser zu erteilen und die Erneuerungskonfiguration unter einer Schlüsselbund-ID zu speichern, oder geben Sie unten ein mit den Werkzeugen des Anbieters erhaltenes Refresh-Token ein. Vor jedem Live-Start tauscht MailSwiftSync es gegen ein neues Zugriffstoken."
             }
             "The fields above are entered once per store; they are cleared from memory immediately afterward and are never written to the profile or durable ledger." => {
                 "Die obigen Werte werden einmalig pro Speicherung eingegeben, danach sofort aus dem Arbeitsspeicher entfernt und niemals im Profil oder dauerhaften Datenspeicher abgelegt."

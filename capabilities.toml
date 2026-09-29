@@ -44,6 +44,15 @@ gmail_live = false
 m365_live = false
 production_supported = false
 
+[capabilities.provider_oauth_authorization]
+code = "implemented"
+controller = "cli"
+ui = "not_wired"
+generic_lab = "passed"
+gmail_live = false
+m365_live = false
+production_supported = false
+
 [capabilities.provider_live_validation]
 code = "available"
 controller = "wired"

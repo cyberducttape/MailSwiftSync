@@ -352,7 +352,8 @@ impl Form {
     /// though an operator may reuse the same ID string for both entries: a
     /// refresh configuration carries a client secret and refresh token, not
     /// an access token, and must never be returned by a plain password load.
-    const OAUTH_REFRESH_KEYRING_SERVICE: &'static str = "com.mailswiftsync.oauth-refresh";
+    pub(crate) const OAUTH_REFRESH_KEYRING_SERVICE: &'static str =
+        "com.mailswiftsync.oauth-refresh";
 
     /// Clone the non-secret migration defaults for a bulk row.
     ///
