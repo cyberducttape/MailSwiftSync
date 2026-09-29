@@ -427,23 +427,23 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
             .read_event_into(&mut buffer)
             .map_err(|error| format!("The XLSX shared-string table is malformed: {error}"))?
         {
-            XmlEvent::Start(element) if element.local_name().as_ref() == b"sst" => {
+            XmlEvent::Start(element) if element.local_name().as_ref() == "sst" => {
                 let mut declared_count = None;
                 for attribute in element.attributes() {
                     let attribute = attribute.map_err(|error| {
                         format!("The XLSX shared-string table has a malformed attribute: {error}")
                     })?;
-                    if attribute.key.local_name().as_ref() == b"uniqueCount" {
+                    if attribute.key.local_name().as_ref() == "uniqueCount" {
                         if declared_count.is_some() {
                             return Err(
                                 "The XLSX shared-string table has duplicate uniqueCount attributes."
                                     .into(),
                             );
                         }
-                        let count = std::str::from_utf8(attribute.value.as_ref())
-                            .ok()
-                            .and_then(|value| value.parse::<usize>().ok())
-                            .ok_or_else(|| "The XLSX shared-string count is invalid.".to_owned())?;
+                        let count = attribute
+                            .value
+                            .parse::<usize>()
+                            .map_err(|_| "The XLSX shared-string count is invalid.".to_owned())?;
                         declared_count = Some(count);
                     }
                 }
@@ -455,7 +455,7 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
                     ));
                 }
             }
-            XmlEvent::Start(element) if element.local_name().as_ref() == b"si" => {
+            XmlEvent::Start(element) if element.local_name().as_ref() == "si" => {
                 if in_string {
                     return Err("The XLSX shared-string table has nested entries.".into());
                 }
@@ -469,7 +469,7 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
                 in_string = true;
                 string_bytes = 0;
             }
-            XmlEvent::Empty(element) if element.local_name().as_ref() == b"si" => {
+            XmlEvent::Empty(element) if element.local_name().as_ref() == "si" => {
                 string_count = string_count.saturating_add(1);
                 if string_count > crate::MAX_BULK_IMPORT_SHARED_STRINGS {
                     return Err(format!(
@@ -479,7 +479,7 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
                 }
             }
             XmlEvent::Text(text) if in_string => {
-                let raw_text: &[u8] = text.as_ref();
+                let raw_text: &str = text.as_ref();
                 let byte_count = raw_text.len();
                 string_bytes = string_bytes.saturating_add(byte_count);
                 total_string_bytes = total_string_bytes.saturating_add(byte_count as u64);
@@ -497,7 +497,7 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
                 }
             }
             XmlEvent::CData(text) if in_string => {
-                let raw_text: &[u8] = text.as_ref();
+                let raw_text: &str = text.as_ref();
                 let byte_count = raw_text.len();
                 string_bytes = string_bytes.saturating_add(byte_count);
                 total_string_bytes = total_string_bytes.saturating_add(byte_count as u64);
@@ -514,7 +514,7 @@ fn validate_xlsx_shared_strings<R: Read>(entry: &mut R) -> Result<(), String> {
                     ));
                 }
             }
-            XmlEvent::End(element) if element.local_name().as_ref() == b"si" => {
+            XmlEvent::End(element) if element.local_name().as_ref() == "si" => {
                 if !in_string {
                     return Err("The XLSX shared-string table has an unmatched entry end.".into());
                 }
@@ -552,7 +552,7 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
             return Err("The worksheet contains no early sheetData element; refusing to materialize an unbounded sheet.".into());
         };
         let local_name = element.local_name();
-        if local_name.as_ref() == b"dimension" {
+        if local_name.as_ref() == "dimension" {
             if consumed_dimension.is_some() {
                 return Err("The worksheet contains duplicate dimension elements.".into());
             }
@@ -561,24 +561,18 @@ fn validate_xlsx_sheet_entry_dimensions<R: Read>(entry: &mut R) -> Result<(), St
                 let attribute = attribute.map_err(|error| {
                     format!("The worksheet dimension has a malformed attribute: {error}")
                 })?;
-                if attribute.key.local_name().as_ref() == b"ref" {
+                if attribute.key.local_name().as_ref() == "ref" {
                     if reference.is_some() {
                         return Err("The worksheet dimension has duplicate ref attributes.".into());
                     }
-                    reference = Some(
-                        std::str::from_utf8(attribute.value.as_ref())
-                            .map_err(|_| {
-                                "The worksheet dimension reference is not UTF-8.".to_owned()
-                            })?
-                            .to_owned(),
-                    );
+                    reference = Some(attribute.value.into_owned());
                 }
             }
             consumed_dimension = Some(
                 reference
                     .ok_or_else(|| "The worksheet dimension has no ref attribute.".to_owned())?,
             );
-        } else if local_name.as_ref() == b"sheetData" {
+        } else if local_name.as_ref() == "sheetData" {
             if empty {
                 if let Some(reference) = consumed_dimension.as_deref() {
                     validate_xlsx_dimension_reference(reference)?;
