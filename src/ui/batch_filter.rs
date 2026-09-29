@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn overview_renders_without_recursive_page_dispatch() {
+    fn every_workspace_view_renders_without_recursive_page_dispatch() {
         use crate::App;
         use crate::ui::WorkspaceView;
         use eframe::App as EframeApp;
@@ -368,19 +368,25 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let mut app = App::from_state_path(Some(&state_path));
-        app.active_view = WorkspaceView::Overview;
-
         let context = Context::default();
         let mut frame = eframe::Frame::_new_kittest();
-        let output = context.run_ui(
-            RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
-                ..Default::default()
-            },
-            |ui| EframeApp::ui(&mut app, ui, &mut frame),
-        );
-
-        assert!(!output.shapes.is_empty());
+        for view in [
+            WorkspaceView::Overview,
+            WorkspaceView::Plan,
+            WorkspaceView::Mailboxes,
+            WorkspaceView::Activity,
+            WorkspaceView::Verification,
+        ] {
+            app.active_view = view;
+            let output = context.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| EframeApp::ui(&mut app, ui, &mut frame),
+            );
+            assert!(!output.shapes.is_empty());
+        }
         drop(app);
         remove_benchmark_state_files(state_path);
     }
