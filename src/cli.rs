@@ -100,7 +100,15 @@ pub(crate) fn run() -> eframe::Result<()> {
                     .with_min_inner_size([900.0, 640.0]),
                 ..Default::default()
             },
-            Box::new(|_| Ok(Box::<App>::default())),
+            Box::new(|creation| {
+                crate::ui::fonts::install(&creation.egui_ctx);
+                crate::ui::install_style(&creation.egui_ctx);
+                #[allow(unused_mut)]
+                let mut app = App::default();
+                #[cfg(debug_assertions)]
+                crate::ui::debug_scene::apply(&mut app);
+                Ok(Box::new(app))
+            }),
         );
     };
     if command == std::ffi::OsStr::new("--internal-launcher") {

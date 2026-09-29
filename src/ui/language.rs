@@ -27,6 +27,11 @@ impl UiLanguage {
         }
         match source {
             "Overview" => "Übersicht",
+            "Manage" => "Verwalten",
+            "Connection details" => "Verbindungsdetails",
+            "Clear Dry run / preflight to enable live migration." => {
+                "Deaktivieren Sie Probelauf / Vorabprüfung, um die Live-Migration zu aktivieren."
+            }
             "ATTENTION CENTER" => "ZENTRALE FÜR AUFMERKSAMKEIT",
             "Batch queue loaded" => "Stapelwarteschlange geladen",
             "Check" => "Prüfung",

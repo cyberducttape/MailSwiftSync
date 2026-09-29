@@ -67,6 +67,9 @@ pub(crate) struct ThemeColors {
     pub(crate) selection: Color32,
     #[allow(dead_code)]
     pub(crate) border: Color32,
+    /// Rounded, softly bordered surfaces for the flagship palettes. Retro and
+    /// high-contrast packs keep square corners and full-strength borders.
+    pub(crate) modern: bool,
 }
 
 impl ThemeColors {
@@ -80,26 +83,38 @@ impl ThemeColors {
             egui::Visuals::light()
         };
         let stroke = |color| Stroke::new(1.0, color);
-        let widget = |bg_fill, weak_bg_fill, fg| egui::style::WidgetVisuals {
+        let (widget_radius, window_radius) = if self.modern { (4, 10) } else { (3, 3) };
+        let quiet_border = self.quiet_border();
+        let widget = |bg_fill, weak_bg_fill, border, fg| egui::style::WidgetVisuals {
             bg_fill,
             weak_bg_fill,
-            bg_stroke: stroke(self.border),
-            corner_radius: egui::CornerRadius::same(3),
+            bg_stroke: stroke(border),
+            corner_radius: egui::CornerRadius::same(widget_radius),
             fg_stroke: stroke(fg),
             expansion: 0.0,
         };
+        // Resting buttons sit on a raised surface so they read as controls
+        // without heavy outlines; hover and press use the accent.
+        let resting = if self.modern { self.window } else { self.panel };
         visuals.dark_mode = dark_mode;
         visuals.override_text_color = Some(self.text_primary);
         visuals.weak_text_color = Some(self.text_secondary);
-        visuals.widgets.noninteractive = widget(self.panel, self.panel, self.text_primary);
-        visuals.widgets.inactive = widget(self.panel, self.panel, self.text_primary);
-        visuals.widgets.hovered = widget(self.selection, self.selection, self.text_primary);
-        visuals.widgets.active = widget(self.info, self.info, Color32::WHITE);
-        visuals.widgets.open = widget(self.selection, self.selection, self.text_primary);
+        visuals.widgets.noninteractive =
+            widget(self.panel, self.panel, quiet_border, self.text_primary);
+        visuals.widgets.inactive = widget(resting, resting, quiet_border, self.text_primary);
+        visuals.widgets.hovered =
+            widget(self.selection, self.selection, self.info, self.text_primary);
+        // egui draws `strong()` text with the active foreground, so it must
+        // stay the primary text colour; filled accent buttons pick their own
+        // label colour (see `primary_button`).
+        visuals.widgets.active = widget(self.info, self.info, self.info, self.text_primary);
+        visuals.widgets.open = widget(self.selection, self.selection, self.info, self.text_primary);
         visuals.window_fill = self.window;
         visuals.window_stroke = stroke(self.border);
+        visuals.window_corner_radius = egui::CornerRadius::same(window_radius);
+        visuals.menu_corner_radius = egui::CornerRadius::same(widget_radius);
         visuals.panel_fill = self.panel;
-        visuals.faint_bg_color = self.selection;
+        visuals.faint_bg_color = self.stripe();
         visuals.extreme_bg_color = self.background;
         visuals.text_edit_bg_color = Some(self.background);
         visuals.code_bg_color = self.background;
@@ -107,12 +122,55 @@ impl ThemeColors {
         visuals.error_fg_color = self.danger;
         visuals.hyperlink_color = self.link;
         visuals.selection.bg_fill = self.selection;
-        visuals.selection.stroke = stroke(self.text_primary);
+        visuals.selection.stroke = stroke(self.on_selection());
         visuals.popup_shadow.color = Color32::from_black_alpha(if dark_mode { 160 } else { 70 });
         visuals.button_frame = true;
         visuals.collapsing_header_frame = true;
         visuals.striped = true;
         visuals
+    }
+
+    /// Text on the selection background: the most legible of the primary
+    /// text colour, white, or black. Retro packs select with saturated fills
+    /// (Windows 95 navy) that primary text cannot sit on.
+    pub(crate) fn on_selection(self) -> Color32 {
+        [self.text_primary, Color32::WHITE, Color32::BLACK]
+            .into_iter()
+            .max_by(|left, right| {
+                contrast_ratio(*left, self.selection)
+                    .total_cmp(&contrast_ratio(*right, self.selection))
+            })
+            .unwrap_or(self.text_primary)
+    }
+
+    /// Table striping: a quiet tint that primary text stays legible on.
+    /// Saturated selection fills (Windows 95 navy) must never be used here.
+    pub(crate) fn stripe(self) -> Color32 {
+        if self.modern {
+            lerp_color(self.panel, self.selection, 0.45)
+        } else {
+            // Tint away from the text colour so the stripe can only raise
+            // contrast: lighter under dark text, darker under light text.
+            let away = if contrast_ratio(Color32::WHITE, self.text_primary)
+                >= contrast_ratio(Color32::BLACK, self.text_primary)
+            {
+                Color32::WHITE
+            } else {
+                Color32::BLACK
+            };
+            lerp_color(self.background, away, 0.14)
+        }
+    }
+
+    /// Border for cards, resting controls, and separators. Modern palettes
+    /// soften it toward the panel colour; retro and high-contrast packs keep
+    /// their full-strength border, which is part of their accessibility.
+    pub(crate) fn quiet_border(self) -> Color32 {
+        if self.modern {
+            lerp_color(self.border, self.panel, 0.55)
+        } else {
+            self.border
+        }
     }
 
     pub(crate) fn for_theme(theme: ThemeKind, dark_mode: bool) -> Self {
@@ -150,6 +208,7 @@ impl ThemeColors {
             link: Color32::from_rgb(140, 200, 255),
             selection: Color32::from_rgb(43, 62, 88),
             border: Color32::from_rgb(116, 139, 169),
+            modern: true,
         }
     }
     pub(crate) fn light() -> Self {
@@ -166,6 +225,7 @@ impl ThemeColors {
             link: Color32::from_rgb(7, 94, 175),
             selection: Color32::from_rgb(215, 230, 248),
             border: Color32::from_rgb(111, 132, 157),
+            modern: true,
         }
     }
 
@@ -207,6 +267,7 @@ impl ThemeColors {
             link: accent,
             selection: Color32::from_rgb(35, 35, 35),
             border,
+            modern: false,
         }
     }
 
@@ -224,6 +285,7 @@ impl ThemeColors {
             link: Color32::from_rgb(255, 100, 255),
             selection: Color32::from_rgb(68, 20, 90),
             border: Color32::from_rgb(68, 68, 255),
+            modern: false,
         }
     }
 
@@ -241,6 +303,7 @@ impl ThemeColors {
             link: Color32::from_rgb(130, 210, 255),
             selection: Color32::from_rgb(65, 65, 65),
             border: Color32::WHITE,
+            modern: false,
         }
     }
 
@@ -258,6 +321,7 @@ impl ThemeColors {
             link: Color32::from_rgb(100, 190, 255),
             selection: Color32::from_rgb(0, 70, 125),
             border: Color32::from_rgb(0, 128, 255),
+            modern: false,
         }
     }
 
@@ -275,6 +339,7 @@ impl ThemeColors {
             link: Color32::from_rgb(255, 221, 0),
             selection: Color32::from_rgb(0, 0, 220),
             border: Color32::from_rgb(255, 187, 0),
+            modern: false,
         }
     }
 
@@ -295,6 +360,7 @@ impl ThemeColors {
             link: Color32::BLACK,
             selection: navy,
             border: Color32::WHITE,
+            modern: false,
         }
     }
 
@@ -314,11 +380,53 @@ impl ThemeColors {
             link: Color32::BLACK,
             selection: Color32::from_rgb(0, 0, 128),
             border: Color32::WHITE,
+            modern: false,
         }
     }
 }
 
-#[cfg(test)]
+fn lerp_color(from: Color32, to: Color32, amount: f32) -> Color32 {
+    let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * amount).round() as u8;
+    Color32::from_rgb(
+        mix(from.r(), to.r()),
+        mix(from.g(), to.g()),
+        mix(from.b(), to.b()),
+    )
+}
+
+/// Spacing and type scale shared by every page and dialog.
+pub(crate) fn install_style(ctx: &egui::Context) {
+    use egui::{FontFamily, FontId, TextStyle};
+    ctx.all_styles_mut(|style| {
+        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        style.spacing.button_padding = egui::vec2(10.0, 4.0);
+        style.spacing.interact_size.y = 24.0;
+        style.spacing.window_margin = egui::Margin::same(14);
+        style.spacing.menu_margin = egui::Margin::same(8);
+        style.spacing.indent = 16.0;
+        style.text_styles = [
+            (
+                TextStyle::Heading,
+                FontId::new(20.0, FontFamily::Proportional),
+            ),
+            (TextStyle::Body, FontId::new(13.5, FontFamily::Proportional)),
+            (
+                TextStyle::Button,
+                FontId::new(13.5, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Small,
+                FontId::new(11.5, FontFamily::Proportional),
+            ),
+            (
+                TextStyle::Monospace,
+                FontId::new(12.5, FontFamily::Monospace),
+            ),
+        ]
+        .into();
+    });
+}
+
 pub(crate) fn contrast_ratio(foreground: Color32, background: Color32) -> f32 {
     fn luminance(color: Color32) -> f32 {
         let channel = |value: u8| {
@@ -494,6 +602,36 @@ mod tests {
             assert_eq!(visuals.widgets.active.bg_fill, colors.info);
             assert_eq!(visuals.window_stroke.color, colors.border);
             assert!(visuals.button_frame && visuals.collapsing_header_frame);
+        }
+    }
+
+    #[test]
+    fn primary_text_is_legible_on_table_stripes() {
+        for theme in ThemeKind::all() {
+            for dark_mode in [true, false] {
+                let colors = ThemeColors::for_theme(*theme, dark_mode);
+                let ratio = contrast_ratio(colors.text_primary, colors.stripe());
+                assert!(
+                    ratio >= 4.5,
+                    "{} ({dark_mode}): stripe text is {ratio:.2}:1",
+                    theme.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_text_is_legible_on_every_selection_fill() {
+        for theme in ThemeKind::all() {
+            for dark_mode in [true, false] {
+                let colors = ThemeColors::for_theme(*theme, dark_mode);
+                let ratio = contrast_ratio(colors.on_selection(), colors.selection);
+                assert!(
+                    ratio >= 4.5,
+                    "{} ({dark_mode}): selected text is {ratio:.2}:1",
+                    theme.label()
+                );
+            }
         }
     }
 

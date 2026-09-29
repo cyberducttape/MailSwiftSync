@@ -61,9 +61,11 @@ impl App {
 
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
-        ui.heading(self.language.text("Mailboxes"));
-        ui.label(RichText::new(self.language.text("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window.")).color(self.theme_colors().text_secondary));
-        ui.add_space(12.0);
+        crate::ui::page_header(
+            ui,
+            self.language.text("Mailboxes"),
+            self.language.text("Review, filter, select, and operate on customer mailboxes without reopening the legacy queue window."),
+        );
         if self.historical_mailbox_view(ui) {
             return;
         }
@@ -75,24 +77,30 @@ impl App {
                 )
                 .color(colors.text_secondary),
             );
-            ui.group(|ui| {
-                ui.heading(self.language.text("No bulk mailbox list loaded"));
+            crate::ui::card(ui, |ui| {
+                ui.label(
+                    RichText::new(self.language.text("No bulk mailbox list loaded"))
+                        .size(17.0)
+                        .strong(),
+                );
                 ui.label(
                     self.language
                         .text("A single mailbox can be configured from the migration plan."),
                 );
-                if ui
-                    .button(self.language.text("Open migration plan"))
-                    .clicked()
-                {
-                    self.active_view = WorkspaceView::Plan;
-                }
-                if ui
-                    .button(self.language.text("Import CSV / XLSX…"))
-                    .clicked()
-                {
-                    self.choose_bulk_import();
-                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if crate::ui::primary_button(ui, self.language.text("Import CSV / XLSX…"))
+                        .clicked()
+                    {
+                        self.choose_bulk_import();
+                    }
+                    if ui
+                        .button(self.language.text("Open migration plan"))
+                        .clicked()
+                    {
+                        self.active_view = WorkspaceView::Plan;
+                    }
+                });
                 ui.label(
                     RichText::new(
                         self.language
@@ -120,66 +128,72 @@ impl App {
                 }
             });
             let summary = self.bulk_queue_summary();
-            ui.group(|ui| {
-                ui.label(RichText::new(self.language.text("QUEUE HEALTH")).strong().size(11.0));
+            crate::ui::card(ui, |ui| {
+                crate::ui::section_label(ui, self.language.text("QUEUE HEALTH"));
+                ui.add_space(2.0);
                 ui.horizontal_wrapped(|ui| {
-                    for (count, label) in [
-                        (summary.imported, "{} imported"),
-                        (summary.queued, "{} queued"),
-                        (summary.preflight, "{} preflight"),
-                        (summary.ready, "{} ready"),
-                        (summary.running, "{} running"),
-                        (summary.verified, "{} verified"),
+                    for (count, label, color) in [
+                        (summary.imported, "{} imported", colors.text_secondary),
+                        (summary.queued, "{} queued", colors.text_secondary),
+                        (summary.preflight, "{} preflight", colors.info),
+                        (summary.ready, "{} ready", colors.info),
+                        (summary.running, "{} running", colors.info),
+                        (summary.verified, "{} verified", colors.success),
                     ] {
-                        ui.label(
-                            self.language
-                                .text(label)
-                                .replace("{}", &count.to_string()),
+                        crate::ui::pill(
+                            ui,
+                            &self.language.text(label).replace("{}", &count.to_string()),
+                            color,
                         );
                     }
                     if summary.attention > 0 {
-                        ui.label(
-                            RichText::new(
-                                self.language
-                                    .text("{} attention")
-                                    .replace("{}", &summary.attention.to_string()),
-                            )
-                            .color(colors.warning),
+                        crate::ui::pill(
+                            ui,
+                            &self
+                                .language
+                                .text("{} attention")
+                                .replace("{}", &summary.attention.to_string()),
+                            colors.warning,
                         );
                     }
                     if summary.failed > 0 {
-                        ui.label(
-                            RichText::new(
-                                self.language
-                                    .text("{} failed")
-                                    .replace("{}", &summary.failed.to_string()),
-                            )
-                            .color(colors.danger),
+                        crate::ui::pill(
+                            ui,
+                            &self
+                                .language
+                                .text("{} failed")
+                                .replace("{}", &summary.failed.to_string()),
+                            colors.danger,
                         );
                     }
                     if summary.delta_required > 0 {
-                        ui.label(
-                            self.language
+                        crate::ui::pill(
+                            ui,
+                            &self
+                                .language
                                 .text("{} delta required")
                                 .replace("{}", &summary.delta_required.to_string()),
+                            colors.warning,
                         );
                     }
                     let unresolved = summary.unresolved();
-                    ui.label(
-                        RichText::new(
-                            self.language
-                                .text("{} unresolved")
-                                .replace("{}", &unresolved.to_string()),
-                        )
-                        .color(if unresolved == 0 {
+                    crate::ui::pill(
+                        ui,
+                        &self
+                            .language
+                            .text("{} unresolved")
+                            .replace("{}", &unresolved.to_string()),
+                        if unresolved == 0 {
                             colors.success
                         } else {
                             colors.danger
-                        }),
+                        },
                     );
                 });
-                ui.label(RichText::new(self.language.text("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.")).size(11.0).color(colors.text_secondary));
+                ui.add_space(2.0);
+                ui.label(RichText::new(self.language.text("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.")).small().color(colors.text_secondary));
             });
+            ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(self.language.text("Search"));
                 ui.add(
@@ -290,18 +304,21 @@ impl App {
                 {
                     run_preflight = true;
                 }
+                let live_enabled = has_selection && !self.running();
+                let live_label = RichText::new(
+                    self.language
+                        .text("Run live migration ({})")
+                        .replace("{}", &live_plan.eligible_count.to_string()),
+                );
                 if ui
                     .add_enabled(
-                        has_selection && !self.running(),
-                        egui::Button::new(
-                            RichText::new(
-                                self.language
-                                    .text("Run live migration ({})")
-                                    .replace("{}", &live_plan.eligible_count.to_string()),
-                            )
-                            .color(Color32::WHITE),
-                        )
-                        .fill(self.theme_colors().danger),
+                        live_enabled,
+                        if live_enabled {
+                            egui::Button::new(live_label.color(Color32::WHITE))
+                                .fill(self.theme_colors().danger.gamma_multiply(0.85))
+                        } else {
+                            egui::Button::new(live_label)
+                        },
                     )
                     .clicked()
                 {
@@ -366,11 +383,11 @@ impl App {
                 .resizable(true)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .column(Column::auto())
-                .column(Column::remainder())
-                .column(Column::remainder())
-                .column(Column::remainder())
-                .column(Column::auto())
-                .column(Column::remainder())
+                .column(Column::remainder().at_least(80.0).clip(true))
+                .column(Column::remainder().at_least(110.0).clip(true))
+                .column(Column::remainder().at_least(110.0).clip(true))
+                .column(Column::auto().at_least(96.0).clip(true))
+                .column(Column::remainder().at_least(90.0).clip(true))
                 .header(32.0, |mut header| {
                     for label in [
                         "",
@@ -420,13 +437,14 @@ impl App {
                             ui.label(&job.label);
                         });
                         row.col(|ui| {
-                            ui.label(format!("{}\n{}", job.source_host, job.source_user));
+                            crate::ui::endpoint_cell(ui, &job.source_host, &job.source_user);
                         });
                         row.col(|ui| {
-                            ui.label(format!(
-                                "{}\n{}",
-                                job.destination_host, job.destination_user
-                            ));
+                            crate::ui::endpoint_cell(
+                                ui,
+                                &job.destination_host,
+                                &job.destination_user,
+                            );
                         });
                         row.col(|ui| {
                             let (badge, color) = job_state_badge(&job.state, colors);
@@ -501,7 +519,7 @@ impl App {
                 } else {
                     self.language.text("destination deletion disabled")
                 };
-                ui.group(|ui| {
+                crate::ui::card(ui, |ui| {
                     ui.label(RichText::new(&job.label).strong());
                     ui.label(format!("{} → {}", job.source_user, job.destination_user));
                     ui.label(format!("{} → {}", job.source_host, job.destination_host));

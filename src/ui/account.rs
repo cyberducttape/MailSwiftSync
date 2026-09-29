@@ -30,11 +30,7 @@ pub(crate) fn render_account(
         data.get_temp::<bool>(egui::Id::new("plan_controls_enabled"))
             .unwrap_or(true)
     });
-    let danger = if ui.visuals().dark_mode {
-        ThemeColors::dark().danger
-    } else {
-        ThemeColors::light().danger
-    };
+    let danger = ui.visuals().error_fg_color;
     let inline_error = |ui: &mut egui::Ui, label: &str, value: &str, required: bool| {
         let message = if required && value.trim().is_empty() {
             Some(language.text("{} is required.").replace("{}", label))
@@ -51,8 +47,8 @@ pub(crate) fn render_account(
             ui.label(RichText::new(message).color(danger).size(11.0));
         }
     };
-    ui.group(|ui| {
-        ui.heading(RichText::new(title).color(color));
+    crate::ui::card(ui, |ui| {
+        ui.label(RichText::new(title).size(16.0).strong().color(color));
         ui.label(
             RichText::new(if title.contains("DOVECOT") {
                 language.text("Local Dovecot account")
@@ -60,24 +56,23 @@ pub(crate) fn render_account(
                 language.text("IMAP connection")
             })
             .size(11.0)
-            .color(if ui.visuals().dark_mode {
-                ThemeColors::dark().text_secondary
-            } else {
-                ThemeColors::light().text_secondary
-            }),
+            .color(ui.visuals().weak_text_color()),
         );
-        ui.horizontal(|ui| {
-            ui.label(language.text("Server"));
-            ui.add_enabled(editable, egui::TextEdit::singleline(host));
+        crate::ui::form_row(ui, language.text("Server"), |ui| {
+            ui.add_enabled(
+                editable,
+                egui::TextEdit::singleline(host).desired_width(f32::INFINITY),
+            )
         });
         inline_error(ui, language.text("Server"), host, true);
-        ui.horizontal(|ui| {
-            ui.label(language.text("User"));
-            ui.add_enabled(editable, egui::TextEdit::singleline(user));
+        crate::ui::form_row(ui, language.text("User"), |ui| {
+            ui.add_enabled(
+                editable,
+                egui::TextEdit::singleline(user).desired_width(f32::INFINITY),
+            )
         });
         inline_error(ui, language.text("User"), user, true);
-        ui.horizontal(|ui| {
-            ui.label(language.text("Authentication"));
+        crate::ui::form_row(ui, language.text("Authentication"), |ui| {
             egui::ComboBox::from_id_salt(("auth_method", title))
                 .selected_text(if auth_method_is_oauth(auth_method) {
                     "OAuth 2.0 / XOAUTH2"
@@ -95,19 +90,15 @@ pub(crate) fn render_account(
                     language.text("Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. To avoid manual tokens, run `mailswiftsync oauth-authorize` once and enter its keyring ID in the OS keyring dialog's Automatic OAuth refresh section."),
                 )
                 .size(11.0)
-                .color(if ui.visuals().dark_mode {
-                    ThemeColors::dark().text_secondary
-                } else {
-                    ThemeColors::light().text_secondary
-                }),
+                .color(ui.visuals().weak_text_color()),
             );
         }
-        ui.horizontal(|ui| {
-            ui.label(if auth_method_is_oauth(auth_method) {
-                language.text("Access token")
-            } else {
-                language.text("Password")
-            });
+        let secret_label = if auth_method_is_oauth(auth_method) {
+            language.text("Access token")
+        } else {
+            language.text("Password")
+        };
+        crate::ui::form_row(ui, secret_label, |ui| {
             let visibility_id = password_visibility_id(title);
             let visible = ui.ctx().data_mut(|data| {
                 let requested = data.get_temp::<bool>(visibility_id).unwrap_or(false);
@@ -118,7 +109,9 @@ pub(crate) fn render_account(
             });
             ui.add_enabled(
                 editable,
-                egui::TextEdit::singleline(password.as_mut_string()).password(!visible),
+                egui::TextEdit::singleline(password.as_mut_string())
+                    .password(!visible)
+                    .desired_width((ui.available_width() - 64.0).max(80.0)),
             );
             if ui
                 .add_enabled(
