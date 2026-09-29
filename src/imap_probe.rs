@@ -573,7 +573,11 @@ trait MessageSink {
     }
     fn rollback_mailbox(&mut self, mailbox: &str) -> Result<(), String>;
     fn len(&self) -> usize;
-    fn resume_after_uid(&self, _mailbox: &str, _uidvalidity: u64) -> Result<Option<u64>, String> {
+    fn resume_after_uid(
+        &mut self,
+        _mailbox: &str,
+        _uidvalidity: u64,
+    ) -> Result<Option<u64>, String> {
         Ok(None)
     }
     fn checkpoint_page(
@@ -631,10 +635,8 @@ impl MessageSink for StageMessageSink<'_> {
         self.count
     }
 
-    fn resume_after_uid(&self, mailbox: &str, uidvalidity: u64) -> Result<Option<u64>, String> {
-        self.stage
-            .resume_cursor(self.side, mailbox, uidvalidity)
-            .map_err(|error| error.to_string())
+    fn resume_after_uid(&mut self, mailbox: &str, uidvalidity: u64) -> Result<Option<u64>, String> {
+        self.stage.resume_mailbox(self.side, mailbox, uidvalidity)
     }
 
     fn checkpoint_page(

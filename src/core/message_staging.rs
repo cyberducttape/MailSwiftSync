@@ -414,6 +414,40 @@ impl MessageMetadataStage {
         Ok(())
     }
 
+    /// Prepare one folder for a (possibly resumed) scan and return its cursor.
+    /// Rows staged under a different UIDVALIDITY belong to a folder that the
+    /// server has since recreated or renumbered; they must not survive into
+    /// reconciliation, where a stale destination row could match a source
+    /// message that is no longer present.
+    pub(crate) fn resume_mailbox(
+        &mut self,
+        side: StagedMessageSide,
+        mailbox: &str,
+        uidvalidity: u64,
+    ) -> Result<Option<u64>, String> {
+        let current = sqlite_i64(uidvalidity).map_err(|e| e.to_string())?;
+        let tx = self
+            .connection_ref()
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        for table in ["staged_messages", "stage_fingerprints", "stage_cursors"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE side=?1 AND mailbox=?2 AND uidvalidity<>?3"),
+                params![side.as_i64(), mailbox, current],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.content_fingerprints
+            .retain(|(fingerprint_side, key), _| {
+                *fingerprint_side != side
+                    || key.mailbox.as_ref() != mailbox
+                    || key.uidvalidity == Some(uidvalidity)
+            });
+        self.resume_cursor(side, mailbox, uidvalidity)
+            .map_err(|e| e.to_string())
+    }
+
     pub(crate) fn resume_cursor(
         &self,
         side: StagedMessageSide,
@@ -746,5 +780,100 @@ mod tests {
         );
         drop(stage);
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn resume_discards_rows_staged_under_a_previous_uidvalidity() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let message = |uid: &str| ExtractedMessage {
+            message_id: Some(format!("<{uid}@example.test>")),
+            uid: Some(uid.into()),
+            size_bytes: Some(64),
+            internal_date: None,
+        };
+        let stale = MailboxMessageKey::with_uidvalidity("INBOX", 42, "7");
+        let other = MailboxMessageKey::with_uidvalidity("Archive", 5, "1");
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+        stage
+            .insert_messages_with_fingerprints(
+                StagedMessageSide::Destination,
+                &ExtractedMessages::from([
+                    (stale.clone(), message("7")),
+                    (other.clone(), message("1")),
+                ]),
+                &HashMap::from([(stale, "old".into()), (other, "keep".into())]),
+            )
+            .unwrap();
+        stage
+            .checkpoint_page(StagedMessageSide::Destination, "INBOX", 42, 7)
+            .unwrap();
+        drop(stage);
+
+        // The interrupted scan resumes after the server recreated INBOX.
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+        assert_eq!(
+            stage
+                .resume_mailbox(StagedMessageSide::Destination, "INBOX", 43)
+                .unwrap(),
+            None
+        );
+        let remaining = stage.all_messages(StagedMessageSide::Destination).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(
+            remaining
+                .keys()
+                .all(|key| key.mailbox.as_ref() == "Archive")
+        );
+        let fingerprints = stage.content_fingerprints(StagedMessageSide::Destination);
+        assert_eq!(fingerprints.values().collect::<Vec<_>>(), vec!["keep"]);
+        assert_eq!(
+            stage
+                .resume_cursor(StagedMessageSide::Destination, "INBOX", 42)
+                .unwrap(),
+            None
+        );
+        drop(stage);
+
+        // A reopen must not resurrect the discarded fingerprint from disk.
+        let stage = MessageMetadataStage::open_durable(path, "plan").unwrap();
+        assert_eq!(
+            stage
+                .content_fingerprints(StagedMessageSide::Destination)
+                .len(),
+            1
+        );
+        drop(stage);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn resume_keeps_rows_for_an_unchanged_uidvalidity() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        let key = MailboxMessageKey::with_uidvalidity("INBOX", 42, "7");
+        stage
+            .insert_messages(
+                StagedMessageSide::Source,
+                &ExtractedMessages::from([(
+                    key,
+                    ExtractedMessage {
+                        message_id: None,
+                        uid: Some("7".into()),
+                        size_bytes: Some(1),
+                        internal_date: None,
+                    },
+                )]),
+            )
+            .unwrap();
+        stage
+            .checkpoint_page(StagedMessageSide::Source, "INBOX", 42, 7)
+            .unwrap();
+        assert_eq!(
+            stage
+                .resume_mailbox(StagedMessageSide::Source, "INBOX", 42)
+                .unwrap(),
+            Some(7)
+        );
+        assert_eq!(stage.count(StagedMessageSide::Source).unwrap(), 1);
     }
 }
