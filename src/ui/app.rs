@@ -85,9 +85,15 @@ impl eframe::App for App {
                                 .color(colors.warning),
                             );
                         }
+                        // Status text is stored as a String; translate it
+                        // when it is a fixed catalog message.
+                        let status_text = self
+                            .language
+                            .lookup(&self.status.text)
+                            .unwrap_or(&self.status.text);
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(&self.status.text)
+                                egui::RichText::new(status_text)
                                     .color(status_color(self.status.severity, colors)),
                             )
                             .truncate(),
@@ -164,6 +170,8 @@ impl eframe::App for App {
             });
 
         if self.active_view == WorkspaceView::Mailboxes && !self.bulk_jobs.is_empty() {
+            // Once per frame, before the drawer that renders it.
+            self.refresh_bulk_selection_view();
             egui::Panel::right("selection_review_drawer")
                 .resizable(true)
                 .default_size(320.0)

@@ -10,7 +10,6 @@ use crate::controller::{
     build_batch_action_plan,
 };
 use crate::ui::WorkspaceView;
-use crate::ui::batch_filter::selected_visibility_counts;
 use crate::ui::job_state_badge;
 use eframe::egui::{self, Color32, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -61,15 +60,29 @@ impl App {
             .filter(|&index| index < self.bulk_jobs.len())
     }
 
-    /// Selected rows a live action with this scope would run. Matches
-    /// `build_batch_action_plan`'s eligible count without hashing the
-    /// selection on every frame.
-    fn selected_live_eligible_count(&self, retry_scope: BulkRetryScope) -> usize {
-        self.bulk_selected_ids
-            .iter()
-            .filter_map(|id| self.bulk_job_index(id))
-            .filter(|&index| retry_scope.includes(&self.bulk_jobs[index].state))
-            .count()
+    /// Recompute the per-frame selection projection in one pass over the
+    /// selection. Selections can cover all 100k rows, so the drawer and the
+    /// page's counts share this instead of each walking the selection.
+    pub(crate) fn refresh_bulk_selection_view(&mut self) {
+        self.refresh_bulk_filter_cache();
+        let mut view = std::mem::take(&mut self.bulk_selection_view);
+        view.rows.clear();
+        view.visible = 0;
+        view.live_eligible = 0;
+        view.delta_eligible = 0;
+        for id in &self.bulk_selected_ids {
+            let Some(index) = self.bulk_job_index(id) else {
+                continue;
+            };
+            view.rows.push(index);
+            let state = self.bulk_jobs[index].state.as_str();
+            // Same eligibility rule as `build_batch_action_plan`.
+            view.live_eligible += usize::from(BulkRetryScope::All.includes(state));
+            view.delta_eligible += usize::from(BulkRetryScope::DeltaRequired.includes(state));
+            view.visible += usize::from(self.bulk_visible_indices.binary_search(&index).is_ok());
+        }
+        view.rows.sort_unstable();
+        self.bulk_selection_view = view;
     }
 
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
@@ -252,6 +265,7 @@ impl App {
             ui.add_space(12.0);
             self.queue_settings_card(ui);
             ui.add_space(12.0);
+            let mut selection_changed = false;
             ui.horizontal_wrapped(|ui| {
                 ui.label(self.language.text("Search"));
                 ui.add(
@@ -296,30 +310,39 @@ impl App {
                         .iter()
                         .filter_map(|&index| self.bulk_job_ids.get(index).cloned())
                         .collect();
+                    selection_changed = true;
                 }
                 if ui.button(self.language.text("Select unresolved")).clicked() {
                     self.select_bulk_state_set(BulkStateSet::Unresolved);
+                    selection_changed = true;
                 }
                 if ui.button(self.language.text("Select attention")).clicked() {
                     self.select_bulk_state_set(BulkStateSet::Attention);
+                    selection_changed = true;
                 }
                 if ui.button(self.language.text("Clear selection")).clicked() {
                     self.bulk_selected_ids.clear();
+                    selection_changed = true;
                 }
             });
             // Rebuild normalized search values and filtered indices only when
             // the queue, query, or state filter changes. The table still
             // virtualizes row widgets without doing a full filter pass on
             // every repaint.
-            self.refresh_bulk_filter_cache();
+            // The shell computed the selection view before drawing the review
+            // drawer; recompute only if this frame changed the selection or
+            // the filter, and repaint so the drawer catches up.
+            if self.refresh_bulk_filter_cache() || selection_changed {
+                self.refresh_bulk_selection_view();
+                ui.ctx().request_repaint();
+            }
             let visible_indices = std::mem::take(&mut self.bulk_visible_indices);
-
-            let (_, visible_and_selected, hidden_selected) = selected_visibility_counts(
-                &self.bulk_selected_ids,
-                &visible_indices,
-                &self.bulk_job_ids,
-                &self.bulk_job_index_by_id,
-            );
+            let visible_and_selected = self.bulk_selection_view.visible;
+            // Selected IDs no longer in the queue count as hidden too.
+            let hidden_selected = self
+                .bulk_selected_ids
+                .len()
+                .saturating_sub(visible_and_selected);
 
             let status_text = self
                 .language
@@ -341,8 +364,8 @@ impl App {
             }
             let has_selection = !self.bulk_selected_ids.is_empty();
             let selected_count = self.bulk_selected_ids.len();
-            let live_count = self.selected_live_eligible_count(BulkRetryScope::All);
-            let delta_count = self.selected_live_eligible_count(BulkRetryScope::DeltaRequired);
+            let live_count = self.bulk_selection_view.live_eligible;
+            let delta_count = self.bulk_selection_view.delta_eligible;
             let mut run_preflight = false;
             let mut run_live = false;
             let mut run_delta = false;
@@ -491,6 +514,8 @@ impl App {
                                 } else {
                                     self.bulk_selected_ids.remove(job_id);
                                 }
+                                // Counts and the drawer refresh next frame.
+                                ui.ctx().request_repaint();
                             }
                         });
                         row.col(|ui| {
@@ -648,41 +673,74 @@ impl App {
             );
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (index, job) in self.bulk_jobs.iter().enumerate() {
-                let Some(job_id) = self.bulk_job_ids.get(index) else {
-                    continue;
-                };
-                if !self.bulk_selected_ids.contains(job_id) {
-                    continue;
+        // Selections can cover the whole 100k-row queue, so lay out only the
+        // cards in view. Every card has the same six single-line rows, which
+        // gives `show_rows` a uniform height; long values truncate and show
+        // the full text on hover.
+        let selected = &self.bulk_selection_view.rows;
+        let line = ui.text_style_height(&egui::TextStyle::Body);
+        let spacing = ui.spacing().item_spacing.y;
+        // Six lines, five gaps between them, the card's 12 px vertical
+        // margins, and its 1 px border.
+        let card_height = 6.0 * line + 5.0 * spacing + 2.0 * 12.0 + 2.0;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show_rows(ui, card_height, selected.len(), |ui, rows| {
+                for &index in &selected[rows] {
+                    self.review_card(ui, &self.bulk_jobs[index]);
                 }
-                let profile = &job.defaults.profile;
-                let destructive = if profile.delete2 {
-                    self.language
-                        .text("DESTRUCTIVE: destination deletion enabled")
+            });
+    }
+
+    fn review_card(&self, ui: &mut egui::Ui, job: &crate::bulk_import::BulkJob) {
+        let delete2 = job.defaults.profile.delete2;
+        let destructive = if delete2 {
+            self.language
+                .text("DESTRUCTIVE: destination deletion enabled")
+        } else {
+            self.language.text("destination deletion disabled")
+        };
+        let summary = review_state_summary(
+            self.language.text("State: {} · {}"),
+            self.language.text(crate::ui::display_job_state(&job.state)),
+            destructive,
+        );
+        let line = |ui: &mut egui::Ui, text: RichText| {
+            let full = text.text().to_owned();
+            ui.add(egui::Label::new(text).truncate())
+                .on_hover_text(full);
+        };
+        crate::ui::card(ui, |ui| {
+            line(ui, RichText::new(&job.label).strong());
+            line(ui, RichText::new(format!("{} →", job.source_user)));
+            line(ui, RichText::new(&job.destination_user));
+            line(ui, RichText::new(format!("{} →", job.source_host)));
+            line(ui, RichText::new(&job.destination_host));
+            line(
+                ui,
+                if delete2 {
+                    RichText::new(summary)
+                        .strong()
+                        .color(self.theme_colors().danger)
                 } else {
-                    self.language.text("destination deletion disabled")
-                };
-                crate::ui::card(ui, |ui| {
-                    ui.label(RichText::new(&job.label).strong());
-                    ui.label(format!("{} → {}", job.source_user, job.destination_user));
-                    ui.label(format!("{} → {}", job.source_host, job.destination_host));
-                    let summary = review_state_summary(
-                        self.language.text("State: {} · {}"),
-                        self.language.text(crate::ui::display_job_state(&job.state)),
-                        destructive,
-                    );
-                    ui.label(if profile.delete2 {
-                        RichText::new(summary)
-                            .strong()
-                            .color(self.theme_colors().danger)
-                    } else {
-                        RichText::new(summary)
-                    });
-                });
-            }
+                    RichText::new(summary)
+                },
+            );
         });
     }
+}
+
+/// One frame's projection of the explicit selection onto the queue.
+#[derive(Default)]
+pub(crate) struct SelectionView {
+    /// Queue indices of selected rows, ascending.
+    pub(crate) rows: Vec<usize>,
+    /// Selected rows that the current filter shows.
+    pub(crate) visible: usize,
+    /// Selected rows a live run (all scope) would include.
+    pub(crate) live_eligible: usize,
+    /// Selected rows a final-delta run would include.
+    pub(crate) delta_eligible: usize,
 }
 
 /// Fill the review drawer's "State: {} · {}" template. Each placeholder is

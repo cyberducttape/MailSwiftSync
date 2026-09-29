@@ -125,7 +125,7 @@ For very large migrations (100k+ messages), consider:
 
 ## Microsoft 365 / Outlook
 
-**IMPORTANT: Microsoft removed Basic Authentication from Exchange Online IMAP in September 2023. App passwords no longer work for IMAP access. OAuth (Modern Authentication) is required.**
+**IMPORTANT: Microsoft began permanently disabling Basic Authentication for Exchange Online IMAP on October 1, 2022, and no tenant can re-enable it. App passwords no longer work for IMAP access. OAuth (Modern Authentication) is required.**
 
 ### Prerequisites
 - Microsoft 365 account

@@ -1,7 +1,7 @@
 //! Debug-build-only startup scenes for visual review.
 //!
 //! `MAILSWIFTSYNC_DEBUG_VIEW` selects the initial workspace page,
-//! `MAILSWIFTSYNC_DEBUG_DIALOG` opens one dialog, and
+//! `MAILSWIFTSYNC_DEBUG_DIALOG` opens one dialog (including `clear-queue`), and
 //! `MAILSWIFTSYNC_DEBUG_DEMO=1` fills the plan and batch queue with
 //! placeholder `.example` data, and `MAILSWIFTSYNC_DEBUG_WINDOW=WIDTHxHEIGHT`
 //! sets the initial window size. Release builds do not compile this module.
@@ -30,6 +30,7 @@ pub(crate) fn apply(app: &mut App) {
             "engine" => app.engine_open = true,
             "advanced" => app.advanced_open = true,
             "preview" => app.preview = true,
+            "clear-queue" => app.bulk_clear_confirm_open = true,
             _ => {}
         }
     }
@@ -68,6 +69,7 @@ fn demo_data(app: &mut App) {
         ));
         app.bulk_job_ids.push(format!("demo-job-{index}"));
     }
+    app.rebuild_bulk_job_index();
     app.bulk_jobs_generation = app.bulk_jobs_generation.wrapping_add(1);
     // Masked session placeholders so screenshots show a configured plan
     // rather than "password is required" validation.

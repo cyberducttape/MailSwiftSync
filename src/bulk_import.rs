@@ -1058,6 +1058,50 @@ mod tests {
         .expect("actual shared strings are counted even if uniqueCount lies low");
     }
 
+    /// Peak resident memory of this process, in KiB (Linux only).
+    fn peak_rss_kib() -> Option<u64> {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()?
+            .lines()
+            .find_map(|line| line.strip_prefix("VmHWM:"))?
+            .trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse()
+            .ok()
+    }
+
+    #[test]
+    #[ignore = "opt-in release import benchmark; run scripts/benchmark-ui-scale.sh"]
+    fn import_scale_benchmark() {
+        let rows = crate::MAX_BULK_IMPORT_ROWS;
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-import-scale-{}.csv",
+            uuid::Uuid::new_v4()
+        ));
+        let mut csv = String::from(
+            "project_name,name,source_host,source_user,source_credential_id,destination_host,destination_user,destination_credential_id\n",
+        );
+        for index in 0..rows {
+            csv.push_str(&format!(
+                "Scale,mailbox {index},imap.source.example,user{index}@source.example,src-{index},imap.destination.example,user{index}@destination.example,dst-{index}\n"
+            ));
+        }
+        std::fs::write(&path, csv).unwrap();
+        let rss_before = peak_rss_kib();
+        let started = std::time::Instant::now();
+        let jobs = super::read_csv(&path, &crate::Form::default());
+        let import_ms = started.elapsed().as_millis();
+        std::fs::remove_file(&path).unwrap();
+        let jobs = jobs.expect("scale CSV must import");
+        assert_eq!(jobs.len(), rows);
+        // Peak RSS growth while importing; 0 when /proc is unavailable.
+        let import_rss_mib = rss_before
+            .zip(peak_rss_kib())
+            .map_or(0, |(before, after)| after.saturating_sub(before) / 1024);
+        eprintln!("scale-import rows={rows} import_ms={import_ms} import_rss_mib={import_rss_mib}");
+    }
+
     /// Excel's "CSV UTF-8" export starts with a byte-order mark; the first
     /// header must still be recognised.
     #[test]
