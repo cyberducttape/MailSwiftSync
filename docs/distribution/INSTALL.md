@@ -103,9 +103,10 @@ builds remain release work.
 The current release is intended for attended technical-operator pilots on
 known endpoints. Keep the dry preflight, live confirmation, and evidence
 review gates in place; a service-manager deployment is not equivalent to
-unattended production approval. Provider OAuth consent, secret-safe remote
-Dovecot execution, and independent message-level reconciliation are not
-included yet. Portable release archives are signed when the release signing
+unattended production approval. Encrypted imapsync runs include independent
+message-level reconciliation (metadata by default, optional bounded body
+hashing); it has not yet been qualified against live providers. Provider OAuth
+consent and secret-safe remote Dovecot execution are not included yet. Portable release archives are signed when the release signing
 environment is configured; Linux releases include a signed Debian package,
 while RPM and native Windows/macOS installer packages are not currently
 published.

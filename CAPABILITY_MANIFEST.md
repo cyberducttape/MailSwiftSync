@@ -220,7 +220,7 @@ To reach GA 1.0, the following work is required:
 **Medium-term (v1.0 GA):**
 - [x] Implement SQLite-backed streaming reconciliation in the live metadata-verification path
 - [ ] Qualify large-account performance and memory behavior with 100k+ message load tests
-- [ ] Implement durable per-message checkpoints and restart semantics (run-level Dovecot restart binding is implemented)
+- [ ] Implement durable per-message transfer checkpoints (run-level Dovecot restart binding and snapshot-bound restartable verification staging are implemented)
 - [ ] Performance benchmarks with 100k+ message mailboxes
 - [ ] Provider edge case testing
 - [ ] Production support runbooks

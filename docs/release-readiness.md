@@ -233,7 +233,7 @@ and require the corresponding integration run.
 - Durable projects, mailbox states, lifecycle events, run IDs, and redacted output.
 - CSV/XLSX validation queue with bounded 1–16 worker concurrency. Legacy XLS is rejected because Calamine materializes it before application resource checks.
 - Bounded transient retries for validation; authentication and configuration failures stop without retry loops.
-- Live batch waves with mailbox-specific child runs, claim-before-launch, selective retry scopes, transactional plan checks, and per-mailbox aggregate/engine-dependent evidence.
+- Live batch waves with mailbox-specific child runs, claim-before-launch, selective retry scopes, transactional plan checks, and per-mailbox evidence: independent message-level verification for encrypted imapsync children whose plan the verifier can reproduce, aggregate or engine evidence otherwise.
 - Aggregate source/destination folder, message, and virtual-size evidence.
 - Timeout, cancellation, child-process-only imapsync passfile credentials, fresh dual-IMAPS authentication before live imapsync launches, and documented Dovecot process-visibility limits.
 

@@ -6,6 +6,12 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Corrected operator documentation that lagged the implementation: batch
+  children run independent message-level verification for encrypted imapsync
+  plans, verification staging is durably restartable and snapshot-bound, and
+  engines are held behind the internal launcher until process ownership is
+  durable. The docs now state that the transfer itself still has no
+  per-message checkpoint.
 - Added a restart state-machine suite for durable verification staging that
   drives the real fetch path against a scripted IMAP server: unchanged resume,
   append, expunge, expunge plus append with unchanged EXISTS, changed
