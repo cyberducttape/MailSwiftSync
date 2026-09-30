@@ -1,73 +1,209 @@
 //! Bounded DNS resolution and IPv4/IPv6 connection racing for IMAP probes.
 
+#[cfg(not(test))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
+    io::{Read, Write},
     net::{SocketAddr, TcpStream, ToSocketAddrs},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        mpsc,
-    },
+    process::{Command, Stdio},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
-/// Lookups may outlive their caller because the system resolver is not
-/// cancellable. Bound outstanding work so broken DNS cannot grow threads
-/// without limit.
-pub(super) const MAX_OUTSTANDING_DNS_LOOKUPS: usize = 16;
+/// Bound resolver subprocesses even if many UI or verification requests start
+/// at once. Unlike an in-process `getaddrinfo` call, each child can be killed
+/// when its caller's deadline expires, so a broken resolver cannot consume
+/// this capacity permanently.
+#[cfg(not(test))]
+const MAX_OUTSTANDING_DNS_LOOKUPS: usize = 16;
 pub(super) const MAX_DNS_ADDRESSES: usize = 64;
 /// RFC 8305 connection attempt delay between address attempts.
 const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 /// Addresses raced per connection; enough for both families on real hosts.
 const MAX_CONNECTION_ATTEMPTS: usize = 8;
 
+#[cfg(not(test))]
 static OUTSTANDING_DNS_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
 
 pub(super) type DnsResult = std::io::Result<Vec<SocketAddr>>;
 
-/// Releases one outstanding-lookup slot when its resolver thread ends.
+/// Releases one outstanding-lookup slot when its resolver child exits.
+#[cfg(not(test))]
 struct OutstandingLookup(&'static AtomicUsize);
 
+#[cfg(not(test))]
 impl Drop for OutstandingLookup {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
-pub(super) fn start_dns_lookup(address: String) -> Result<mpsc::Receiver<DnsResult>, String> {
-    start_lookup_with(
-        &OUTSTANDING_DNS_LOOKUPS,
-        MAX_OUTSTANDING_DNS_LOOKUPS,
-        move || address.to_socket_addrs().and_then(collect_dns_addresses),
-    )
+/// Do not leave a resolver child behind if waiting or reading its bounded
+/// response fails unexpectedly.
+#[cfg(not(test))]
+struct ResolverChild(std::process::Child);
+
+#[cfg(not(test))]
+impl Drop for ResolverChild {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
 }
 
-pub(super) fn start_lookup_with<F>(
-    outstanding: &'static AtomicUsize,
-    limit: usize,
-    resolve: F,
-) -> Result<mpsc::Receiver<DnsResult>, String>
-where
-    F: FnOnce() -> DnsResult + Send + 'static,
-{
-    outstanding
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-            (current < limit).then_some(current + 1)
-        })
-        .map_err(|_| {
-            format!(
-                "the system DNS resolver is not responding: {limit} lookups are still pending; retry once they finish"
-            )
-        })?;
-    let slot = OutstandingLookup(outstanding);
-    let (sender, receiver) = mpsc::channel();
-    // On spawn failure the closure, and with it the slot, is dropped.
-    std::thread::Builder::new()
-        .name("mailswiftsync-dns".into())
-        .spawn(move || {
-            let _slot = slot;
-            let _ = sender.send(resolve());
-        })
-        .map_err(|error| format!("could not start DNS lookup: {error}"))?;
-    Ok(receiver)
+pub(super) fn resolve_dns_with_deadline(
+    address: &str,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> DnsResult {
+    // Unit-test binaries do not dispatch through the application CLI. Keep
+    // protocol tests independent of a recursively spawned test harness; the
+    // production resolver subprocess is exercised through its CLI contract.
+    #[cfg(test)]
+    {
+        let _ = (deadline, cancelled);
+        resolve_address(address)
+    }
+
+    #[cfg(not(test))]
+    {
+        OUTSTANDING_DNS_LOOKUPS
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < MAX_OUTSTANDING_DNS_LOOKUPS).then_some(current + 1)
+            })
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "too many system DNS lookups are in progress",
+                )
+            })?;
+        let _slot = OutstandingLookup(&OUTSTANDING_DNS_LOOKUPS);
+        if cancelled() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "DNS resolution cancelled",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "DNS resolution timed out",
+            ));
+        }
+
+        let executable = std::env::current_exe()?;
+        let mut command = Command::new(executable);
+        crate::process::apply_dns_environment(&mut command);
+        command
+            .arg("--internal-dns-resolve")
+            .arg(address)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // On Unix, a Linux parent-death signal also prevents an abandoned helper
+        // if the controller itself crashes. Windows needs no breakaway Job Object
+        // for this single child: Child::kill directly terminates the resolver.
+        #[cfg(unix)]
+        crate::process::configure_process_group(&mut command);
+        let mut child = ResolverChild(command.spawn()?);
+        let output = wait_for_child_output(&mut child.0, deadline, cancelled)?;
+        parse_dns_output(&output)
+    }
+}
+
+fn wait_for_child_output(
+    child: &mut std::process::Child,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<Vec<u8>> {
+    loop {
+        if cancelled() || Instant::now() >= deadline {
+            // The helper performs only one system resolver call and emits at
+            // most MAX_DNS_ADDRESSES lines. Killing it bounds both the stuck
+            // resolver and the output pipe without blocking this caller.
+            let _ = child.kill();
+            let _ = child.wait();
+            if cancelled() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "DNS resolution cancelled",
+                ));
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "DNS resolution timed out",
+            ));
+        }
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                return Err(std::io::Error::other("system DNS lookup failed"));
+            }
+            let mut output = Vec::new();
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| std::io::Error::other("DNS resolver output was unavailable"))?
+                .take((MAX_DNS_ADDRESSES * 64 + 1) as u64)
+                .read_to_end(&mut output)?;
+            return Ok(output);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn parse_dns_output(output: &[u8]) -> DnsResult {
+    if output.len() > MAX_DNS_ADDRESSES * 64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "DNS resolver output exceeded its safety limit",
+        ));
+    }
+    let text = std::str::from_utf8(output)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let mut addresses = Vec::new();
+    for line in text.lines() {
+        if addresses.len() == MAX_DNS_ADDRESSES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "DNS response exceeded the address limit",
+            ));
+        }
+        addresses.push(
+            line.parse::<SocketAddr>()
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+        );
+    }
+    Ok(addresses)
+}
+
+fn resolve_address(address: &str) -> DnsResult {
+    address.to_socket_addrs().and_then(collect_dns_addresses)
+}
+
+/// Hidden subcommand used only by the bounded parent resolver process. It
+/// deliberately emits a small, line-oriented address list, not resolver or
+/// environment diagnostics that could leak into normal application output.
+pub(super) fn internal_dns_resolver_main(arguments: &[std::ffi::OsString]) -> i32 {
+    if arguments.len() != 1 {
+        return 2;
+    }
+    let Some(address) = arguments[0].to_str() else {
+        return 2;
+    };
+    let result = resolve_address(address);
+    let Ok(addresses) = result else {
+        return 1;
+    };
+    let stdout = std::io::stdout();
+    let mut output = stdout.lock();
+    for address in addresses {
+        if writeln!(output, "{address}").is_err() {
+            return 1;
+        }
+    }
+    0
 }
 
 pub(super) fn collect_dns_addresses<I>(mut addresses: I) -> std::io::Result<Vec<SocketAddr>>
@@ -179,49 +315,47 @@ mod tests {
 
     #[test]
     fn dns_lookup_resolves_literals() {
-        let receiver = start_dns_lookup("127.0.0.1:993".to_owned()).unwrap();
-        let addresses = receiver
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap()
-            .unwrap();
+        let addresses = resolve_address("127.0.0.1:993").unwrap();
         assert!(addresses.iter().any(|address| address.ip().is_loopback()));
     }
 
-    /// Hung resolver calls cannot be cancelled. They must not wedge later
-    /// lookups forever: the cap fails fast with a clear error, and capacity
-    /// returns when a stuck call finishes.
+    #[cfg(unix)]
     #[test]
-    fn hung_dns_lookups_are_bounded_and_release_capacity() {
-        static OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
-        let (release_first, first_gate) = mpsc::channel::<()>();
-        let (release_second, second_gate) = mpsc::channel::<()>();
-        let hung = |gate: mpsc::Receiver<()>| {
-            move || {
-                let _ = gate.recv();
-                Ok(Vec::new())
-            }
-        };
-        let first = start_lookup_with(&OUTSTANDING, 2, hung(first_gate)).unwrap();
-        let _second = start_lookup_with(&OUTSTANDING, 2, hung(second_gate)).unwrap();
-        // The callers time out, but the threads are still stuck.
-        assert!(first.recv_timeout(Duration::from_millis(20)).is_err());
-        let error = start_lookup_with(&OUTSTANDING, 2, || Ok(Vec::new())).unwrap_err();
-        assert!(error.contains("not responding"), "{error}");
-        release_first.send(()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while OUTSTANDING.load(Ordering::Acquire) >= 2 {
-            assert!(Instant::now() < deadline, "capacity was never released");
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        let receiver = start_lookup_with(&OUTSTANDING, 2, || Ok(Vec::new())).unwrap();
-        assert!(
-            receiver
-                .recv_timeout(Duration::from_secs(1))
-                .unwrap()
-                .unwrap()
-                .is_empty()
-        );
-        release_second.send(()).unwrap();
+    fn dns_deadline_terminates_and_reaps_the_resolver_child() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("10")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let result =
+            wait_for_child_output(&mut child, started + Duration::from_millis(50), &|| false);
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dns_cancellation_terminates_and_reaps_the_resolver_child() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("10")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let cancel_at = Instant::now() + Duration::from_millis(50);
+        let result =
+            wait_for_child_output(&mut child, Instant::now() + Duration::from_secs(2), &|| {
+                Instant::now() >= cancel_at
+            });
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn dns_output_parser_rejects_malformed_and_unbounded_output() {
+        assert!(parse_dns_output(b"not-an-address\n").is_err());
+        assert!(parse_dns_output(&vec![b'x'; MAX_DNS_ADDRESSES * 64 + 1]).is_err());
     }
 
     #[test]

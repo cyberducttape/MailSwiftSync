@@ -166,6 +166,11 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("--internal-launcher") {
         std::process::exit(crate::runner::run_internal_launcher(arguments.collect()));
     }
+    if command == std::ffi::OsStr::new("--internal-dns-resolve") {
+        std::process::exit(crate::imap_probe::internal_dns_resolver_main(
+            &arguments.collect::<Vec<_>>(),
+        ));
+    }
     if matches!(command.to_str(), Some("help" | "--help" | "-h")) {
         print_cli_help();
         return Ok(());

@@ -31,7 +31,11 @@ use fetch_parser::{parse_message_fetch_metadata_response_bytes, parse_message_id
 use list_parser::tokens as parse_list_tokens;
 use list_parser::{delimiter as parse_list_delimiter, mailbox_name as parse_list_mailbox_name};
 use literal_framing::TaggedResponseScanner;
-use resolver::{connect_racing, start_dns_lookup};
+use resolver::{connect_racing, resolve_dns_with_deadline};
+
+pub(crate) fn internal_dns_resolver_main(arguments: &[std::ffi::OsString]) -> i32 {
+    resolver::internal_dns_resolver_main(arguments)
+}
 
 const BUDGETED_IMAP_IO_SLICE: Duration = Duration::from_millis(250);
 pub(crate) fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
@@ -955,34 +959,19 @@ fn connect_tls_stream_inner(
     } else {
         format!("{server_name}:{port}")
     };
-    let resolver = start_dns_lookup(address).map_err(|error| format!("{host}: {error}"))?;
     let dns_deadline = budget
         .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
-    let sockets = loop {
-        if budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
-            return Err(format!("{host}: DNS resolution cancelled"));
-        }
-        let remaining = dns_deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(format!("{host}: DNS resolution timed out"));
-        }
-        match resolver.recv_timeout(remaining.min(Duration::from_millis(100))) {
-            Ok(result) => break result.map_err(|error| format!("{host}: {error}"))?,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(format!("{host}: DNS resolver stopped unexpectedly"));
-            }
-        }
-    };
+    let cancelled =
+        || budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed));
+    let sockets = resolve_dns_with_deadline(&address, dns_deadline, &cancelled)
+        .map_err(|error| format!("{host}: {error}"))?;
     if sockets.is_empty() {
         return Err(format!("{host}: no address found"));
     }
     let connect_deadline = budget
         .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
-    let cancelled =
-        || budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed));
     let mut tcp = connect_racing(sockets, connect_deadline, &cancelled)
         .map_err(|error| format!("{host}: {error}"))?;
     let io_timeout = budget

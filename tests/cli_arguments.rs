@@ -160,6 +160,20 @@ fn oauth_authorize_refuses_incomplete_requests_before_any_network_use() {
     }
 }
 
+#[test]
+fn internal_dns_resolver_returns_bounded_socket_addresses() {
+    let output = run(&["--internal-dns-resolve", "127.0.0.1:993"]);
+    assert!(output.status.success(), "{}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line == "127.0.0.1:993"),
+        "{stdout}"
+    );
+
+    let malformed = run(&["--internal-dns-resolve", "127.0.0.1:993", "extra"]);
+    assert_eq!(malformed.status.code(), Some(2));
+}
+
 /// `mailswiftsync ... | head` closes stdout early. The command must end
 /// quietly rather than panic with "failed printing to stdout".
 #[test]

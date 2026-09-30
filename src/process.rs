@@ -722,16 +722,45 @@ const ENGINE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
     "NUMBER_OF_PROCESSORS",
 ];
 
+/// The resolver helper must use the same per-process resolver overrides as
+/// the controller (notably split-DNS settings), without inheriting unrelated
+/// application secrets or the engine-specific Perl/TLS environment.
+#[cfg(not(test))]
+const DNS_ENVIRONMENT_ALLOWLIST: &[&str] = &[
+    "PATH",
+    "HOME",
+    "LOCALDOMAIN",
+    "RES_OPTIONS",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+];
+
 /// Start an engine (or the launcher that becomes it) from an empty
 /// environment plus the allowlist above.
 pub(crate) fn apply_engine_environment(command: &mut Command) {
+    apply_environment_allowlist(command, ENGINE_ENVIRONMENT_ALLOWLIST);
+}
+
+/// Start the internal system-DNS helper with only settings that affect the
+/// platform resolver. This keeps split-DNS behavior while excluding cloud
+/// credentials, proxies, key material, and unrelated application variables.
+#[cfg(not(test))]
+pub(crate) fn apply_dns_environment(command: &mut Command) {
+    apply_environment_allowlist(command, DNS_ENVIRONMENT_ALLOWLIST);
+}
+
+fn apply_environment_allowlist(command: &mut Command, allowlist: &[&str]) {
     command.env_clear();
     for (name, value) in std::env::vars_os() {
         let Some(name_text) = name.to_str() else {
             continue;
         };
         // Windows variable names are case-insensitive (`Path`, `SystemRoot`).
-        if ENGINE_ENVIRONMENT_ALLOWLIST
+        if allowlist
             .iter()
             .any(|allowed| allowed.eq_ignore_ascii_case(name_text))
         {
