@@ -9,6 +9,19 @@ pub struct QuotaResource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamespaceEntry {
+    pub prefix: String,
+    pub delimiter: Option<char>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NamespaceInfo {
+    pub personal: Vec<NamespaceEntry>,
+    pub shared: Vec<NamespaceEntry>,
+    pub other_users: Vec<NamespaceEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerCapabilities {
     pub values: BTreeSet<String>,
     pub inventory_complete: bool,
@@ -17,6 +30,7 @@ pub struct ServerCapabilities {
     pub quota_observed: bool,
     pub quota_exceeded: bool,
     pub quota_resources: BTreeMap<String, QuotaResource>,
+    pub namespace: Option<NamespaceInfo>,
 }
 
 impl ServerCapabilities {
@@ -79,6 +93,7 @@ impl ServerCapabilities {
             quota_observed: false,
             quota_exceeded: false,
             quota_resources: BTreeMap::new(),
+            namespace: None,
         }
     }
 

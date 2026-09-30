@@ -108,6 +108,36 @@ pub(crate) fn assess_plan(
     }
     append_capability_check(&mut checks, "Source", source_capabilities, false);
     append_capability_check(&mut checks, "Destination", destination_capabilities, true);
+    if let (Some(source), Some(destination)) = (source_capabilities, destination_capabilities)
+        && let (Some(source_ns), Some(destination_ns)) = (&source.namespace, &destination.namespace)
+    {
+        let incompatible = source_ns.personal != destination_ns.personal;
+        let mut detail = format!(
+            "Source personal namespace: {} · Destination personal namespace: {}",
+            namespace_entries(&source_ns.personal),
+            namespace_entries(&destination_ns.personal),
+        );
+        if !source_ns.shared.is_empty() || !destination_ns.shared.is_empty() {
+            detail.push_str(&format!(
+                " · Shared namespace detected: source {}; destination {}",
+                namespace_entries(&source_ns.shared),
+                namespace_entries(&destination_ns.shared),
+            ));
+        }
+        if !source_ns.other_users.is_empty() || !destination_ns.other_users.is_empty() {
+            detail.push_str(&format!(
+                " · Other-user namespaces: source {}; destination {}",
+                namespace_entries(&source_ns.other_users),
+                namespace_entries(&destination_ns.other_users),
+            ));
+        }
+        if incompatible {
+            detail.push_str(
+                " · Personal namespace prefixes or delimiters differ; review mailbox mapping before migration.",
+            );
+        }
+        checks.push(("Namespace mapping".into(), detail, !incompatible));
+    }
     if form.engine() == core::Engine::ImapSync {
         checks.push((
             "Transport security".into(),
@@ -176,6 +206,23 @@ fn quota_summary(capabilities: &core::ServerCapabilities, quota_is_blocking: boo
     } else {
         "quota status unavailable; verify capacity with the provider".into()
     }
+}
+
+fn namespace_entries(entries: &[core::NamespaceEntry]) -> String {
+    if entries.is_empty() {
+        return "none reported".into();
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let delimiter = entry
+                .delimiter
+                .map(|delimiter| format!("\"{delimiter}\""))
+                .unwrap_or_else(|| "NIL".into());
+            format!("prefix=\"{}\" delimiter={delimiter}", entry.prefix)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[cfg(test)]

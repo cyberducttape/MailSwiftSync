@@ -43,7 +43,7 @@ mod reports;
 mod run_queries;
 mod runs;
 mod state;
-pub use capabilities::ServerCapabilities;
+pub use capabilities::{NamespaceEntry, NamespaceInfo, ServerCapabilities};
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{

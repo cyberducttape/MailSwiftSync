@@ -18,6 +18,8 @@ use std::{
 
 #[path = "imap_probe/fetch_parser.rs"]
 mod fetch_parser;
+#[path = "imap_probe/namespace.rs"]
+mod namespace_parser;
 use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
 use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 #[cfg(test)]
@@ -1657,11 +1659,8 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
     stream
         .write_all(b"a004 NAMESPACE\r\n")
         .map_err(|e| e.to_string())?;
-    let mut _namespace_response = String::new();
-    read_imap_tagged(&mut stream, "a004", &mut _namespace_response, &mut buffer)?;
-    // NAMESPACE is useful for mapping, but not required by IMAP or by every
-    // usable migration endpoint. LIST remains the authoritative inventory
-    // gate; callers may surface this response as a compatibility warning.
+    let mut namespace_response = String::new();
+    read_imap_tagged(&mut stream, "a004", &mut namespace_response, &mut buffer)?;
     stream
         .write_all(authenticated_list_command(advertises_capability(
             &post_auth_response,
@@ -1686,6 +1685,7 @@ fn complete_authenticated_imap_probe<S: Read + Write>(
         ));
     }
     let mut caps = caps;
+    caps.namespace = namespace_parser::parse(&namespace_response);
     if caps.supports("QUOTA") {
         let mut quota_response = String::new();
         stream
