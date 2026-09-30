@@ -239,6 +239,7 @@ impl eframe::App for App {
         self.projects_dialog(&ctx);
         self.settings_dialog(&ctx);
         self.keyring_dialog(&ctx);
+        self.credential_delete_confirmation(&ctx);
         self.engine_dialog(&ctx);
         self.preview(&ctx);
         self.advanced_dialog(&ctx);

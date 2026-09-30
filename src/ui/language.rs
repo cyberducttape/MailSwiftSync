@@ -764,6 +764,26 @@ impl UiLanguage {
             "Destination OAuth refresh configuration deleted" => {
                 "OAuth-Erneuerungskonfiguration des Ziels gelöscht"
             }
+            "Delete saved credential?" => "Gespeicherte Zugangsdaten löschen?",
+            "{}: {} · keyring ID: {}" => "{}: {} · Schlüsselbund-ID: {}",
+            "This permanently removes the selected item from the OS keyring. The profile reference and any credential already loaded in this session are not changed." => {
+                "Dieser Vorgang entfernt den ausgewählten Eintrag dauerhaft aus dem OS-Schlüsselbund. Der Profilverweis und bereits in dieser Sitzung geladene Zugangsdaten bleiben unverändert."
+            }
+            "Delete saved credential" => "Gespeicherte Zugangsdaten löschen",
+            "saved password / access token" => "gespeichertes Passwort / Zugriffstoken",
+            "automatic OAuth refresh configuration" => {
+                "automatische OAuth-Erneuerungskonfiguration"
+            }
+            "Refreshing OAuth token…" => "OAuth-Token wird erneuert…",
+            "Refreshing OAuth token in the background…" => {
+                "OAuth-Token wird im Hintergrund erneuert…"
+            }
+            "OAuth refresh worker stopped before returning a result." => {
+                "Der OAuth-Erneuerungsprozess wurde vor der Rückgabe eines Ergebnisses beendet."
+            }
+            "OAuth refresh finished after account settings changed; its access token was discarded. Review the account and refresh again." => {
+                "Die OAuth-Erneuerung endete nach einer Änderung der Kontoeinstellungen; das Zugriffstoken wurde verworfen. Prüfen und erneuern Sie das Konto erneut."
+            }
             "{} OAuth access token refreshed (expires in {}s)" => {
                 "{} OAuth-Zugriffstoken erneuert (läuft in {} s ab)"
             }
@@ -1228,6 +1248,9 @@ impl UiLanguage {
             "Credential settings are locked while a migration is running." => {
                 "Zugangsdaten sind während einer laufenden Migration gesperrt."
             }
+            "Credential settings are locked while a migration is running or OAuth refresh is in progress." => {
+                "Zugangsdaten sind während einer laufenden Migration oder OAuth-Erneuerung gesperrt."
+            }
             "Automatic OAuth refresh (optional)" => "Automatische OAuth-Erneuerung (optional)",
             "Source refresh ID" => "Erneuerungs-ID der Quelle",
             "Destination refresh ID" => "Erneuerungs-ID des Ziels",
@@ -1670,9 +1693,20 @@ mod tests {
             "Destination credential stored in OS keyring",
             "Destination credential loaded",
             "Destination credential deleted from OS keyring",
+            "Credential settings are locked while a migration is running or OAuth refresh is in progress.",
             "This is password storage, not OAuth/Modern Auth. Do not use it as a substitute for provider-specific OAuth setup or unattended secret brokering.",
             "Source OAuth refresh configuration deleted",
             "Destination OAuth refresh configuration deleted",
+            "Delete saved credential?",
+            "{}: {} · keyring ID: {}",
+            "This permanently removes the selected item from the OS keyring. The profile reference and any credential already loaded in this session are not changed.",
+            "Delete saved credential",
+            "saved password / access token",
+            "automatic OAuth refresh configuration",
+            "Refreshing OAuth token…",
+            "Refreshing OAuth token in the background…",
+            "OAuth refresh worker stopped before returning a result.",
+            "OAuth refresh finished after account settings changed; its access token was discarded. Review the account and refresh again.",
             "{} OAuth access token refreshed (expires in {}s)",
             "{} OAuth access token refreshed",
             "No automatic refresh is configured for the {}",

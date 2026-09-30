@@ -1,5 +1,9 @@
 use crate::{App, StatusSeverity, auth_method_is_oauth, credentials::SecretString};
 use eframe::egui::{self, Color32, RichText};
+use sha2::{Digest, Sha256};
+use std::sync::mpsc;
+
+use super::app_state::{CredentialDeleteTarget, ManualOAuthRefreshResult};
 
 use super::ThemeColors;
 
@@ -183,7 +187,7 @@ impl App {
                     .color(self.theme_colors().text_secondary),
                 );
                 ui.add_space(8.0);
-                let editable = !self.running();
+                let editable = !self.running() && self.manual_oauth_refresh_receiver.is_none();
                 ui.add_enabled_ui(editable, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(self.language.text("Source ID"));
@@ -213,10 +217,8 @@ impl App {
                             }
                         }
                         if ui.button(self.language.text("Delete source")).clicked() {
-                            match self.form.delete_keyring_password(true) {
-                                Ok(()) => self.set_status(self.language.text("Source credential deleted from OS keyring"), StatusSeverity::Success),
-                                Err(error) => self.set_status(error, StatusSeverity::Error),
-                            }
+                            self.credential_delete_confirmation =
+                                Some(CredentialDeleteTarget::Password { source: true });
                         }
                     });
                     ui.horizontal(|ui| {
@@ -238,15 +240,13 @@ impl App {
                             }
                         }
                         if ui.button(self.language.text("Delete destination")).clicked() {
-                            match self.form.delete_keyring_password(false) {
-                                Ok(()) => self.set_status(self.language.text("Destination credential deleted from OS keyring"), StatusSeverity::Success),
-                                Err(error) => self.set_status(error, StatusSeverity::Error),
-                            }
+                            self.credential_delete_confirmation =
+                                Some(CredentialDeleteTarget::Password { source: false });
                         }
                     });
                 });
                 if !editable {
-                    ui.label(RichText::new(self.language.text("Credential settings are locked while a migration is running.")).color(self.theme_colors().text_secondary));
+                    ui.label(RichText::new(self.language.text("Credential settings are locked while a migration is running or OAuth refresh is in progress.")).color(self.theme_colors().text_secondary));
                 }
                 ui.add_space(6.0);
                 ui.label(
@@ -330,42 +330,102 @@ impl App {
                 }
             });
             ui.horizontal(|ui| {
-                if ui.button(self.language.text("Refresh source now")).clicked() {
+                let refresh_pending = self.manual_oauth_refresh_receiver.is_some();
+                if ui
+                    .add_enabled(
+                        !refresh_pending,
+                        egui::Button::new(if refresh_pending {
+                            self.language.text("Refreshing OAuth token…")
+                        } else {
+                            self.language.text("Refresh source now")
+                        }),
+                    )
+                    .clicked()
+                {
                     self.run_manual_oauth_refresh(true);
                 }
-                if ui.button(self.language.text("Refresh destination now")).clicked() {
+                if ui
+                    .add_enabled(
+                        !refresh_pending,
+                        egui::Button::new(self.language.text("Refresh destination now")),
+                    )
+                    .clicked()
+                {
                     self.run_manual_oauth_refresh(false);
                 }
             });
             ui.horizontal(|ui| {
                 if ui.button(self.language.text("Delete source refresh config")).clicked() {
-                    match self.form.delete_oauth_refresh_config(true) {
-                        Ok(()) => self.set_status(
-                            self.language.text("Source OAuth refresh configuration deleted"),
-                            StatusSeverity::Success,
-                        ),
-                        Err(error) => self.set_status(error, StatusSeverity::Error),
-                    }
+                    self.credential_delete_confirmation =
+                        Some(CredentialDeleteTarget::OAuthRefresh { source: true });
                 }
                 if ui.button(self.language.text("Delete destination refresh config")).clicked() {
-                    match self.form.delete_oauth_refresh_config(false) {
-                        Ok(()) => self.set_status(
-                            self.language.text("Destination OAuth refresh configuration deleted"),
-                            StatusSeverity::Success,
-                        ),
-                        Err(error) => self.set_status(error, StatusSeverity::Error),
-                    }
+                    self.credential_delete_confirmation =
+                        Some(CredentialDeleteTarget::OAuthRefresh { source: false });
                 }
             });
         });
     }
 
     fn run_manual_oauth_refresh(&mut self, source: bool) {
-        let side = self
-            .language
-            .text(if source { "Source" } else { "Destination" });
-        match self.form.refresh_oauth_access_token(source) {
-            Ok(crate::migration_plan::OAuthRefreshOutcome::Refreshed { expires_in }) => {
+        if self.manual_oauth_refresh_receiver.is_some() {
+            return;
+        }
+        let form = self.form.clone();
+        let worker_marker = manual_oauth_refresh_marker(&form, source);
+        let (sender, receiver) = mpsc::channel();
+        match std::thread::Builder::new()
+            .name("mailswiftsync-oauth-refresh-ui".into())
+            .spawn(move || {
+                let mut form = form;
+                let result = form.refresh_oauth_access_token(source).map(|outcome| {
+                    let access_token = if source {
+                        form.source_password
+                    } else {
+                        form.destination_password
+                    };
+                    (outcome, access_token)
+                });
+                let _ = sender.send(ManualOAuthRefreshResult {
+                    source,
+                    marker: worker_marker,
+                    result,
+                });
+            }) {
+            Ok(_) => {
+                self.manual_oauth_refresh_receiver = Some(receiver);
+                self.set_status(
+                    "Refreshing OAuth token in the background…",
+                    StatusSeverity::Info,
+                );
+            }
+            Err(error) => self.set_status(
+                format!("Could not start OAuth refresh worker: {error}"),
+                StatusSeverity::Error,
+            ),
+        }
+    }
+
+    pub(crate) fn complete_manual_oauth_refresh(&mut self, result: ManualOAuthRefreshResult) {
+        if result.marker != manual_oauth_refresh_marker(&self.form, result.source) {
+            self.set_status(
+                "OAuth refresh finished after account settings changed; its access token was discarded. Review the account and refresh again.",
+                StatusSeverity::Warning,
+            );
+            return;
+        }
+        let side = self.language.text(if result.source {
+            "Source"
+        } else {
+            "Destination"
+        });
+        match result.result {
+            Ok((crate::migration_plan::OAuthRefreshOutcome::Refreshed { expires_in }, token)) => {
+                if result.source {
+                    self.form.source_password = token;
+                } else {
+                    self.form.destination_password = token;
+                }
                 let message = match expires_in {
                     Some(seconds) => self
                         .language
@@ -379,13 +439,122 @@ impl App {
                 };
                 self.set_status(message, StatusSeverity::Success);
             }
-            Ok(crate::migration_plan::OAuthRefreshOutcome::NotConfigured) => self.set_status(
-                self.language
-                    .text("No automatic refresh is configured for the {}")
-                    .replace("{}", &side.to_lowercase()),
-                StatusSeverity::Info,
-            ),
+            Ok((crate::migration_plan::OAuthRefreshOutcome::NotConfigured, _)) => {
+                self.set_status(
+                    self.language
+                        .text("No automatic refresh is configured for the {}")
+                        .replace("{}", &side.to_lowercase()),
+                    StatusSeverity::Info,
+                );
+            }
             Err(error) => self.set_status(error, StatusSeverity::Error),
+        }
+    }
+
+    pub(crate) fn credential_delete_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(target) = self.credential_delete_confirmation else {
+            return;
+        };
+        let (source, kind, keyring_id) = match target {
+            CredentialDeleteTarget::Password { source } => (
+                source,
+                self.language.text("saved password / access token"),
+                if source {
+                    self.form.profile.source_credential_id.as_str()
+                } else {
+                    self.form.profile.destination_credential_id.as_str()
+                }
+                .to_owned(),
+            ),
+            CredentialDeleteTarget::OAuthRefresh { source } => (
+                source,
+                self.language.text("automatic OAuth refresh configuration"),
+                if source {
+                    self.form
+                        .profile
+                        .source_oauth_refresh_credential_id
+                        .as_str()
+                } else {
+                    self.form
+                        .profile
+                        .destination_oauth_refresh_credential_id
+                        .as_str()
+                }
+                .to_owned(),
+            ),
+        };
+        let side = self
+            .language
+            .text(if source { "Source" } else { "Destination" });
+        let mut close = false;
+        let response = egui::Modal::new(egui::Id::new("credential_delete_confirmation"))
+            .show(ctx, |ui| {
+                ui.heading(
+                    RichText::new(self.language.text("Delete saved credential?"))
+                        .color(self.theme_colors().danger),
+                );
+                ui.label(
+                    self.language
+                        .text("{}: {} · keyring ID: {}")
+                        .replacen("{}", side, 1)
+                        .replacen("{}", kind, 1)
+                        .replacen("{}", &keyring_id, 1),
+                );
+                ui.label(self.language.text(
+                    "This permanently removes the selected item from the OS keyring. The profile reference and any credential already loaded in this session are not changed.",
+                ));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let cancel = ui.button(self.language.text("Cancel"));
+                    if !self.credential_delete_focus_requested {
+                        cancel.request_focus();
+                        self.credential_delete_focus_requested = true;
+                    }
+                    if cancel.clicked() {
+                        close = true;
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(self.language.text("Delete saved credential"))
+                                .fill(self.theme_colors().danger),
+                        )
+                        .clicked()
+                    {
+                        close = true;
+                        let result = match target {
+                            CredentialDeleteTarget::Password { source } => {
+                                self.form.delete_keyring_password(source)
+                            }
+                            CredentialDeleteTarget::OAuthRefresh { source } => {
+                                self.form.delete_oauth_refresh_config(source)
+                            }
+                        };
+                        match result {
+                            Ok(()) => self.set_status(
+                                self.language.text(match target {
+                                    CredentialDeleteTarget::Password { source: true } => {
+                                        "Source credential deleted from OS keyring"
+                                    }
+                                    CredentialDeleteTarget::Password { source: false } => {
+                                        "Destination credential deleted from OS keyring"
+                                    }
+                                    CredentialDeleteTarget::OAuthRefresh { source: true } => {
+                                        "Source OAuth refresh configuration deleted"
+                                    }
+                                    CredentialDeleteTarget::OAuthRefresh { source: false } => {
+                                        "Destination OAuth refresh configuration deleted"
+                                    }
+                                }),
+                                StatusSeverity::Success,
+                            ),
+                            Err(error) => self.set_status(error, StatusSeverity::Error),
+                        }
+                    }
+                });
+            });
+        if close || response.should_close() {
+            self.credential_delete_confirmation = None;
+            self.credential_delete_focus_requested = false;
         }
     }
 
@@ -408,5 +577,64 @@ impl App {
             ),
             Err(error) => self.set_status(error, StatusSeverity::Error),
         }
+    }
+}
+
+fn manual_oauth_refresh_marker(form: &crate::migration_plan::Form, source: bool) -> String {
+    let (host, user, auth, refresh_id, access_token) = if source {
+        (
+            &form.profile.source_host,
+            &form.profile.source_user,
+            &form.profile.source_auth,
+            &form.profile.source_oauth_refresh_credential_id,
+            form.source_password.as_str(),
+        )
+    } else {
+        (
+            &form.profile.destination_host,
+            &form.profile.destination_user,
+            &form.profile.destination_auth,
+            &form.profile.destination_oauth_refresh_credential_id,
+            form.destination_password.as_str(),
+        )
+    };
+    let mut digest = Sha256::new();
+    for value in [
+        host.as_str(),
+        user.as_str(),
+        auth.as_str(),
+        refresh_id.as_str(),
+    ] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+    digest.update((access_token.len() as u64).to_be_bytes());
+    digest.update(access_token.as_bytes());
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::manual_oauth_refresh_marker;
+    use crate::migration_plan::Form;
+
+    #[test]
+    fn manual_refresh_marker_is_side_scoped_and_never_contains_token_material() {
+        let mut form = Form::default();
+        form.profile.source_host = "imap.source.example".into();
+        form.profile.source_user = "source@example.test".into();
+        form.profile.source_auth = "oauth2".into();
+        form.profile.source_oauth_refresh_credential_id = "source-refresh".into();
+        form.source_password = crate::credentials::SecretString::from("DO_NOT_EXPOSE");
+        let initial = manual_oauth_refresh_marker(&form, true);
+        assert!(!initial.contains("DO_NOT_EXPOSE"));
+        form.profile.destination_host = "other.example".into();
+        assert_eq!(initial, manual_oauth_refresh_marker(&form, true));
+        form.profile.source_host = "changed.example".into();
+        assert_ne!(initial, manual_oauth_refresh_marker(&form, true));
     }
 }

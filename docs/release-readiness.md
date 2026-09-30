@@ -340,7 +340,9 @@ An empty matrix is an explicit release blocker, not evidence of compatibility.
 
 ## Remaining roadmap (not a release gate by itself)
 
-1. Add provider OAuth/Modern Auth and a secret-safe remote execution path.
+1. Qualify the implemented provider OAuth/Modern Auth flow against live Google
+   and Microsoft tenants; keep remote Dovecot execution disabled until a
+   secret-safe credential-delivery mechanism is available.
 2. Expand the compatibility matrix with provider-specific dry/live pilots,
    interruption recovery, and evidence exports.
 3. Extend restartable verification staging to provider-specific recovery drills and qualify the UIDVALIDITY-bound Dovecot resume path and opt-in body-hash path against representative providers and large mailboxes.

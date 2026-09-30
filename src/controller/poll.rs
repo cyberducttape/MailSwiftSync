@@ -31,6 +31,22 @@ impl App {
             self.bulk_import_receiver = None;
             self.apply_bulk_import_result(result);
         }
+        if let Some(receiver) = &self.manual_oauth_refresh_receiver {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.manual_oauth_refresh_receiver = None;
+                    self.complete_manual_oauth_refresh(result);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.manual_oauth_refresh_receiver = None;
+                    self.set_status(
+                        "OAuth refresh worker stopped before returning a result.",
+                        StatusSeverity::Error,
+                    );
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
         let start_credentials_result = self
             .start_credentials_receiver
             .as_ref()

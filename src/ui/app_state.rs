@@ -4,6 +4,24 @@ use crate::controller::{BatchActionPlan, BatchConfirmationIdentity};
 use crate::*;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CredentialDeleteTarget {
+    Password { source: bool },
+    OAuthRefresh { source: bool },
+}
+
+pub(crate) struct ManualOAuthRefreshResult {
+    pub(crate) source: bool,
+    pub(crate) marker: String,
+    pub(crate) result: Result<
+        (
+            crate::migration_plan::OAuthRefreshOutcome,
+            crate::credentials::SecretString,
+        ),
+        String,
+    >,
+}
+
 /// The application's full in-memory state. This struct lives in `ui` (rather
 /// than the crate root) because it is fundamentally UI/controller shared
 /// state: the fields are read and mutated across `ui::*` render code,
@@ -115,6 +133,7 @@ pub(crate) struct App {
     /// Both digests are captured at probe launch and must still match when
     /// the run is admitted.
     pub(crate) live_auth_receiver: Option<Receiver<Result<LiveAuthProof, String>>>,
+    pub(crate) manual_oauth_refresh_receiver: Option<Receiver<ManualOAuthRefreshResult>>,
     /// Loading an OS-keyring credential can involve IPC and must not block an
     /// egui frame. The cloned form is returned only after the worker has
     /// completed the load.
@@ -133,6 +152,8 @@ pub(crate) struct App {
     pub(crate) stop_confirm_open: bool,
     pub(crate) stop_confirm_focus_requested: bool,
     pub(crate) keyring_open: bool,
+    pub(crate) credential_delete_confirmation: Option<CredentialDeleteTarget>,
+    pub(crate) credential_delete_focus_requested: bool,
     /// Session-only editor buffers for an automatic OAuth refresh
     /// configuration. Populated by the operator, then written into the OS
     /// keyring by `store_oauth_refresh_config`; never persisted to the
@@ -360,6 +381,7 @@ impl App {
         self.running()
             || self.capability_receiver.is_some()
             || self.live_auth_receiver.is_some()
+            || self.manual_oauth_refresh_receiver.is_some()
             || self.start_credentials_receiver.is_some()
             || self.bulk_import_receiver.is_some()
     }
