@@ -237,7 +237,7 @@ impl DiagnosticLogger {
             .filter_map(|entry| {
                 let path = entry.path();
                 let name = path.file_name()?.to_str()?;
-                (name.starts_with("mailswiftsync-") && entry.file_type().ok()?.is_file())
+                (is_managed_log_filename(name) && entry.file_type().ok()?.is_file())
                     .then(|| {
                         entry
                             .metadata()
@@ -274,7 +274,7 @@ impl DiagnosticLogger {
                     && entry
                         .file_name()
                         .to_str()
-                        .is_some_and(|name| name.starts_with("mailswiftsync-"))
+                        .is_some_and(is_managed_log_filename)
             })
             .filter_map(|entry| entry.metadata().ok())
             .filter(|metadata| metadata.is_file())
@@ -309,6 +309,38 @@ fn safe_component(value: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Match only the exact filename shape emitted by `new_file`. The diagnostic
+/// directory is operator-selected and may contain unrelated files, so a broad
+/// prefix match is not sufficient authority to prune a file.
+fn is_managed_log_filename(name: &str) -> bool {
+    let Some(stem) = name
+        .strip_prefix("mailswiftsync-")
+        .and_then(|name| name.strip_suffix(".log"))
+    else {
+        return false;
+    };
+    let Some((identity, part)) = stem.rsplit_once("-mailbox-") else {
+        return false;
+    };
+    if identity.is_empty()
+        || !identity
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return false;
+    }
+    let Some((hash, part)) = part.split_at_checked(24) else {
+        return false;
+    };
+    if !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    part.is_empty()
+        || part
+            .strip_prefix("-part-")
+            .is_some_and(|number| number.len() >= 4 && number.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn pseudonym_hash(value: &str) -> String {
@@ -349,6 +381,62 @@ mod tests {
     #[test]
     fn lines_are_bounded() {
         assert!(truncate_line(&"x".repeat(MAX_LINE_BYTES + 100)).len() < MAX_LINE_BYTES + 32);
+    }
+
+    #[test]
+    fn log_filename_recognition_is_limited_to_generated_names() {
+        assert!(is_managed_log_filename(
+            "mailswiftsync-project-run-mailbox-0123456789abcdef01234567.log"
+        ));
+        assert!(is_managed_log_filename(
+            "mailswiftsync-project-run-mailbox-0123456789abcdef01234567-part-0001.log"
+        ));
+        for name in [
+            "mailswiftsync-not-ours.log",
+            "mailswiftsync-project-run-mailbox-not-a-hash.log",
+            "mailswiftsync-project-run-mailbox-0123456789abcdef01234567-part-x.log",
+            "prefix-mailswiftsync-project-run-mailbox-0123456789abcdef01234567.log",
+        ] {
+            assert!(!is_managed_log_filename(name), "unexpected match: {name}");
+        }
+    }
+
+    #[test]
+    fn retention_pruning_preserves_unrelated_mailswiftsync_prefixed_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-diagnostic-prune-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let unrelated = directory.join("mailswiftsync-important-user-data.log");
+        fs::write(&unrelated, b"preserve me").unwrap();
+        for index in 0..=RETAIN_FILES {
+            let filename =
+                format!("mailswiftsync-project-run-{index}-mailbox-0123456789abcdef01234567.log");
+            fs::write(directory.join(filename), b"old generated log").unwrap();
+        }
+
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        drop(logger);
+
+        assert_eq!(fs::read(&unrelated).unwrap(), b"preserve me");
+        let managed_count = fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(is_managed_log_filename)
+            })
+            .count();
+        assert!(managed_count <= RETAIN_FILES);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
