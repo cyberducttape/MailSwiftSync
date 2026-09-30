@@ -13,7 +13,17 @@ pub(crate) fn write_private_atomic(path: &Path, content: &str) -> std::io::Resul
             "artifact path has no parent directory",
         )
     })?;
-    crate::credentials::ensure_private_directory(parent)?;
+    // Another user who can write the folder could replace the artifact
+    // after it is written, so exports require an owner-only folder.
+    crate::credentials::ensure_private_directory(parent).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "export folder {} is not private ({error}); choose a folder only you can write, or run `chmod go-w` on it",
+                parent.display()
+            ),
+        )
+    })?;
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = std::fs::OpenOptions::new();
@@ -101,6 +111,21 @@ fn sync_directory(_: Option<&Path>) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_export_folder_error_names_the_folder_and_the_fix() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = std::env::temp_dir().join(format!("mss-export-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&folder).unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o775)).unwrap();
+        let error = write_private_atomic(&folder.join("proof.json"), "{}").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains(&folder.display().to_string()), "{message}");
+        assert!(message.contains("chmod go-w"), "{message}");
+        assert!(!folder.join("proof.json").exists());
+        fs::remove_dir(&folder).unwrap();
+    }
 
     #[test]
     fn atomic_write_creates_new_file() -> std::io::Result<()> {

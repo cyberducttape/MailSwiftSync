@@ -247,7 +247,7 @@ mailswiftsync sign path/to/mailswiftsync-project-report.json path/to/operator-ke
 mailswiftsync verify path/to/mailswiftsync-project-report.json <public-key-hex>
 ```
 
-Unsigned reports remain supported as integrity-only artifacts. The public key is embedded for portability, but a trust pin is required to establish that the signer is the expected operator or organization.
+Unsigned reports remain supported as integrity-only artifacts when no key is given. With a pinned public key, `verify` fails on an unsigned report, so removing a signature cannot pass as a verified one. The public key is embedded for portability, but a trust pin is required to establish that the signer is the expected operator or organization.
 
 Run manifests also retain the engine version reported by `imapsync` or
 `doveadm` when available; older wrappers that do not support `--version` are

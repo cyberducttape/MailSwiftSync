@@ -449,6 +449,10 @@ mod tests {
                 .unwrap()
                 .contains("Internal checksum verified")
         );
+        // Signature stripping: an unsigned proof must not satisfy a pinned
+        // signer, even though its plain digest is valid.
+        let error = reports::signing::verify_file(&path, Some(&"11".repeat(32))).unwrap_err();
+        assert!(error.contains("unsigned"), "{error}");
 
         let mut tampered = proof;
         tampered["project"]["name"] = "Altered migration".into();

@@ -391,6 +391,15 @@ pub(crate) fn verify_file(path: &Path, trusted_public_key: Option<&str>) -> Resu
             "Migration proof integrity verified: {actual}; Ed25519 signature valid for key {key_id}; {trust_message}; this validates the {format} artifact and signer, not independent migration completion"
         ));
     }
+    // A pinned signer asks "was this signed by that key?". An unsigned
+    // artifact must fail that question: otherwise stripping the signature
+    // and recomputing the plain digest would pass verification.
+    if trusted_public_key.is_some() {
+        return Err(
+            "Migration proof is unsigned, but a trusted public key was required; refusing to treat a checksum as signer verification."
+                .into(),
+        );
+    }
     Ok(format!(
         "Internal checksum verified: {actual}; artifact authenticity is not established; a modified report can be re-digested. This validates {format} corruption resistance only, not signer identity or independent migration completion"
     ))
