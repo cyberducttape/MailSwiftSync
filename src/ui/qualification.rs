@@ -125,6 +125,18 @@ impl App {
                 }
             })
             .unwrap_or("namespace mapping not yet assessed");
+        let source_namespace_details = format_namespace_details(
+            self.source_capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.namespace.as_ref()),
+            self.language,
+        );
+        let destination_namespace_details = format_namespace_details(
+            self.destination_capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.namespace.as_ref()),
+            self.language,
+        );
         let risks = simulation_risks(
             namespace_assessment != "personal namespaces match"
                 && namespace_assessment != "namespace mapping not yet assessed",
@@ -243,6 +255,16 @@ impl App {
                     );
                     simulation_row(
                         ui,
+                        self.language.message("ui.source-namespace"),
+                        &source_namespace_details,
+                    );
+                    simulation_row(
+                        ui,
+                        self.language.message("ui.destination-namespace"),
+                        &destination_namespace_details,
+                    );
+                    simulation_row(
+                        ui,
                         self.language.message("ui.auth"),
                         &format!(
                             "Source ({}): {} · Destination ({}): {}",
@@ -268,6 +290,75 @@ impl App {
                 .color(colors.text_secondary),
             );
         });
+    }
+}
+
+fn format_namespace_details(
+    namespace: Option<&core::NamespaceInfo>,
+    language: crate::ui::UiLanguage,
+) -> String {
+    let Some(namespace) = namespace else {
+        return language.message("ui.namespace-not-reported").to_owned();
+    };
+    let sections = [
+        ("ui.namespace-personal", namespace.personal.as_slice()),
+        ("ui.namespace-shared", namespace.shared.as_slice()),
+        ("ui.namespace-other-users", namespace.other_users.as_slice()),
+    ];
+    sections
+        .into_iter()
+        .map(|(label, entries)| {
+            let values = if entries.is_empty() {
+                language.message("ui.namespace-none-advertised").to_owned()
+            } else {
+                entries
+                    .iter()
+                    .map(|entry| {
+                        format!("prefix={:?}, delimiter={:?}", entry.prefix, entry.delimiter)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            format!("{}: {values}", language.message(label))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+#[cfg(test)]
+mod namespace_detail_tests {
+    use super::format_namespace_details;
+    use crate::core::{NamespaceEntry, NamespaceInfo};
+    use crate::ui::UiLanguage;
+
+    #[test]
+    fn namespace_details_show_prefix_delimiter_and_shared_entries() {
+        let namespace = NamespaceInfo {
+            personal: vec![NamespaceEntry {
+                prefix: String::new(),
+                delimiter: Some('/'),
+            }],
+            shared: vec![NamespaceEntry {
+                prefix: "Shared/".into(),
+                delimiter: Some('/'),
+            }],
+            other_users: Vec::new(),
+        };
+        let details = format_namespace_details(Some(&namespace), UiLanguage::English);
+        assert!(details.contains(r#"Personal: prefix="", delimiter=Some('/')"#));
+        assert!(details.contains(r#"Shared: prefix="Shared/", delimiter=Some('/')"#));
+        assert!(details.contains("Other users: none advertised"));
+    }
+
+    #[test]
+    fn namespace_details_distinguish_not_reported_from_empty_namespaces() {
+        assert_eq!(
+            format_namespace_details(None, UiLanguage::English),
+            "not reported"
+        );
+        let details =
+            format_namespace_details(Some(&NamespaceInfo::default()), UiLanguage::English);
+        assert!(details.contains("Personal: none advertised"));
     }
 }
 
