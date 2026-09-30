@@ -436,7 +436,7 @@ impl App {
                     )
                     .clicked()
                 {
-                    match self.store.clear_active_processes_after_review() {
+                    match self.acknowledge_process_review() {
                         Ok(()) => {
                             self.process_review_required = false;
                             self.set_status(self.language.message("ui.process-review-acknowledged-execution-gates-are-available-again"), StatusSeverity::Success);
@@ -627,7 +627,7 @@ impl App {
                         )
                         .clicked()
                     {
-                        match self.store.reopen_project(&project_id, &self.reopen_reason) {
+                        match self.reopen_completed_project(&project_id, &self.reopen_reason) {
                             Ok(()) => {
                                 self.reopen_reason.clear();
                                 self.set_status(

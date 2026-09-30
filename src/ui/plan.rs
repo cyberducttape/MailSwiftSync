@@ -200,7 +200,7 @@ impl App {
             );
             return;
         }
-        match self.store.create_project_with_mailbox(
+        match self.persist_new_project(
             &self.form.profile.name,
             &self.form.profile.source_host,
             &self.form.profile.destination_host,

@@ -8,6 +8,7 @@ mod batch_work_item;
 mod batch_worker;
 mod events;
 pub(crate) mod failure;
+mod operator_actions;
 mod orchestrator;
 mod poll;
 mod poll_completion;
@@ -17,7 +18,6 @@ pub(crate) mod probe;
 mod run;
 mod single_admission;
 mod single_start;
-mod verification;
 
 pub(crate) use batch::{
     BatchActionPlan, BatchActionRow, BatchConfirmationIdentity, BatchExecutionMode,
