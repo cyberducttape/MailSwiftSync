@@ -35,23 +35,44 @@ pub(crate) fn parts(input: &str, default_port: u16) -> Result<(String, u16), Str
         if host.trim().is_empty() {
             return Err("endpoint has an empty host".into());
         }
-        validate_host_name(host.trim())?;
+        let host = canonical_host_name(host.trim())?;
         let port = port_text
             .parse::<u16>()
             .map_err(|_| "invalid endpoint port".to_owned())?;
         if port == 0 {
             return Err("endpoint port must be between 1 and 65535".into());
         }
-        return Ok((host.trim().to_owned(), port));
+        return Ok((host, port));
     }
     if input.matches(':').count() > 1 {
         if input.parse::<std::net::Ipv6Addr>().is_err() {
             return Err("invalid IPv6 endpoint".into());
         }
-    } else {
-        validate_host_name(input)?;
+        return Ok((input.to_owned(), default_port));
     }
-    Ok((input.to_owned(), default_port))
+    Ok((canonical_host_name(input)?, default_port))
+}
+
+/// Validate a host name and return the one form every layer uses: DNS
+/// lookup, TLS SNI and certificate matching, engine arguments, destination
+/// locking, and plan identity. Internationalized names become their IDNA
+/// ASCII form (`mail.bücher.example` → `mail.xn--bcher-kva.example`), because
+/// rustls and the engines accept only DNS-form names. ASCII names are
+/// returned unchanged so existing plan identities stay stable.
+fn canonical_host_name(host: &str) -> Result<String, String> {
+    validate_host_name(host)?;
+    if host.is_ascii() {
+        return Ok(host.to_owned());
+    }
+    // URL host parsing applies UTS-46 IDNA processing.
+    let url = reqwest::Url::parse(&format!("http://{host}/"))
+        .map_err(|error| format!("endpoint host is not a valid internationalized name: {error}"))?;
+    let ascii = url
+        .host_str()
+        .ok_or("endpoint host is not a valid internationalized name")?
+        .to_owned();
+    validate_host_name(&ascii)?;
+    Ok(ascii)
 }
 
 /// A DNS name (including internationalized names) or an IPv4 address.
@@ -161,7 +182,11 @@ mod tests {
         );
         assert_eq!(
             parts("mail.bücher.example", 993).unwrap().0,
-            "mail.bücher.example"
+            "mail.xn--bcher-kva.example"
+        );
+        assert_eq!(
+            parts("mail.bücher.example:143", 993).unwrap(),
+            ("mail.xn--bcher-kva.example".into(), 143)
         );
         assert_eq!(
             parts("imap_internal.example", 993).unwrap().0,
@@ -182,6 +207,25 @@ mod tests {
             }
             let _ = parts(&input, 993);
         }
+    }
+
+    /// The Unicode and IDNA spellings of one host are one destination, and
+    /// the canonical form is accepted by rustls as a TLS server name.
+    #[test]
+    fn internationalized_hosts_share_one_canonical_identity() {
+        let unicode =
+            canonical_destination_identity("user@example.test", "mail.bücher.example", "imaps", "")
+                .unwrap();
+        let ascii = canonical_destination_identity(
+            "user@example.test",
+            "mail.xn--bcher-kva.example",
+            "imaps",
+            "",
+        )
+        .unwrap();
+        assert_eq!(unicode, ascii);
+        let (host, _) = parts("mail.bücher.example", 993).unwrap();
+        assert!(rustls::pki_types::ServerName::try_from(host).is_ok());
     }
 
     #[test]

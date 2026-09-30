@@ -12,7 +12,7 @@ use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-    sync::{Arc, Mutex, OnceLock, mpsc},
+    sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
 
@@ -23,64 +23,69 @@ use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 #[cfg(test)]
 use fetch_parser::{parse_message_fetch_metadata_response_bytes, parse_message_id_header};
 
-const DNS_RESOLVER_WORKERS: usize = 4;
-const DNS_RESOLVER_QUEUE: usize = 32;
+/// Lookups that may be in flight at once, including ones whose callers have
+/// already timed out. The system resolver call cannot be cancelled, so each
+/// lookup runs on its own disposable thread: a hung lookup only occupies
+/// itself, and capacity returns as soon as the stuck call finishes.
+const MAX_OUTSTANDING_DNS_LOOKUPS: usize = 16;
 const MAX_DNS_ADDRESSES: usize = 64;
 const BUDGETED_IMAP_IO_SLICE: Duration = Duration::from_millis(250);
+/// RFC 8305 connection attempt delay between address attempts.
+const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
+/// Addresses raced per connection; enough for both families on real hosts.
+const MAX_CONNECTION_ATTEMPTS: usize = 8;
 
-struct DnsResolverRequest {
-    address: String,
-    result: mpsc::Sender<std::io::Result<Vec<SocketAddr>>>,
+static OUTSTANDING_DNS_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
+
+type DnsResult = std::io::Result<Vec<SocketAddr>>;
+
+/// Releases one outstanding-lookup slot when the lookup thread ends.
+struct OutstandingLookup(&'static AtomicUsize);
+
+impl Drop for OutstandingLookup {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
-struct DnsResolverPool {
-    requests: mpsc::SyncSender<DnsResolverRequest>,
+fn start_dns_lookup(address: String) -> Result<mpsc::Receiver<DnsResult>, String> {
+    start_lookup_with(
+        &OUTSTANDING_DNS_LOOKUPS,
+        MAX_OUTSTANDING_DNS_LOOKUPS,
+        move || address.to_socket_addrs().and_then(collect_dns_addresses),
+    )
 }
 
-static DNS_RESOLVER_POOL: OnceLock<Result<DnsResolverPool, String>> = OnceLock::new();
-
-impl DnsResolverPool {
-    fn new() -> Result<Self, String> {
-        let (requests, receiver) = mpsc::sync_channel::<DnsResolverRequest>(DNS_RESOLVER_QUEUE);
-        let receiver = Arc::new(Mutex::new(receiver));
-        for worker_number in 0..DNS_RESOLVER_WORKERS {
-            let receiver = Arc::clone(&receiver);
-            std::thread::Builder::new()
-                .name(format!("mailswiftsync-dns-{worker_number}"))
-                .spawn(move || {
-                    loop {
-                        let request = match receiver.lock() {
-                            Ok(receiver) => receiver.recv(),
-                            Err(_) => return,
-                        };
-                        let Ok(request) = request else {
-                            return;
-                        };
-                        let result = request
-                            .address
-                            .to_socket_addrs()
-                            .and_then(collect_dns_addresses);
-                        let _ = request.result.send(result);
-                    }
-                })
-                .map_err(|error| format!("could not start DNS resolver worker: {error}"))?;
-        }
-        Ok(Self { requests })
-    }
-
-    fn resolve(
-        &self,
-        address: String,
-    ) -> Result<mpsc::Receiver<std::io::Result<Vec<SocketAddr>>>, String> {
-        let (result, receiver) = mpsc::channel();
-        self.requests
-            .try_send(DnsResolverRequest { address, result })
-            .map_err(|error| match error {
-                mpsc::TrySendError::Full(_) => "DNS resolver queue is full".to_owned(),
-                mpsc::TrySendError::Disconnected(_) => "DNS resolver pool stopped".to_owned(),
-            })?;
-        Ok(receiver)
-    }
+fn start_lookup_with<F>(
+    outstanding: &'static AtomicUsize,
+    limit: usize,
+    resolve: F,
+) -> Result<mpsc::Receiver<DnsResult>, String>
+where
+    F: FnOnce() -> DnsResult + Send + 'static,
+{
+    outstanding
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |current| (current < limit).then_some(current + 1),
+        )
+        .map_err(|_| {
+            format!(
+                "the system DNS resolver is not responding: {limit} lookups are still pending; retry once they finish"
+            )
+        })?;
+    let slot = OutstandingLookup(outstanding);
+    let (sender, receiver) = mpsc::channel();
+    // On spawn failure the closure, and with it the slot, is dropped.
+    std::thread::Builder::new()
+        .name("mailswiftsync-dns".into())
+        .spawn(move || {
+            let _slot = slot;
+            let _ = sender.send(resolve());
+        })
+        .map_err(|error| format!("could not start DNS lookup: {error}"))?;
+    Ok(receiver)
 }
 
 fn collect_dns_addresses<I>(mut addresses: I) -> std::io::Result<Vec<SocketAddr>>
@@ -103,11 +108,92 @@ where
     Ok(collected)
 }
 
-fn dns_resolver_pool() -> Result<&'static DnsResolverPool, String> {
-    DNS_RESOLVER_POOL
-        .get_or_init(DnsResolverPool::new)
-        .as_ref()
-        .map_err(Clone::clone)
+/// RFC 8305 ordering: alternate address families, starting with the family
+/// the resolver listed first, so one unreachable family cannot hold every
+/// early attempt.
+fn interleave_address_families(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    let first_is_v6 = addresses.first().is_some_and(SocketAddr::is_ipv6);
+    let (mut preferred, mut other): (Vec<_>, Vec<_>) = addresses
+        .into_iter()
+        .partition(|address| address.is_ipv6() == first_is_v6);
+    preferred.reverse();
+    other.reverse();
+    let mut ordered = Vec::with_capacity(preferred.len() + other.len());
+    while let Some(address) = preferred.pop() {
+        ordered.push(address);
+        if let Some(address) = other.pop() {
+            ordered.push(address);
+        }
+    }
+    ordered.extend(other.into_iter().rev());
+    ordered
+}
+
+/// Race connection attempts (RFC 8305 "Happy Eyeballs"): start the next
+/// address every 250 ms, or immediately when the previous attempts have all
+/// failed, and keep the first connection that succeeds. Every attempt
+/// shares one overall deadline, so a blackholed first address cannot spend
+/// the whole budget alone.
+fn connect_racing(
+    addresses: Vec<SocketAddr>,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<TcpStream, String> {
+    let candidates = interleave_address_families(addresses)
+        .into_iter()
+        .take(MAX_CONNECTION_ATTEMPTS)
+        .collect::<Vec<_>>();
+    let (sender, receiver) = mpsc::channel::<std::io::Result<TcpStream>>();
+    let mut started = 0_usize;
+    let mut failed = 0_usize;
+    let mut last_error = None;
+    let mut next_start = Instant::now();
+    loop {
+        if cancelled() {
+            return Err("connection cancelled".into());
+        }
+        let now = Instant::now();
+        let remaining = deadline.saturating_duration_since(now);
+        if remaining.is_zero() {
+            break;
+        }
+        if started < candidates.len() && (now >= next_start || failed == started) {
+            let address = candidates[started];
+            let sender = sender.clone();
+            // A losing attempt that connects late drops its stream when the
+            // send fails; each thread ends by the shared deadline.
+            std::thread::Builder::new()
+                .name("mailswiftsync-connect".into())
+                .spawn(move || {
+                    let _ = sender.send(TcpStream::connect_timeout(&address, remaining));
+                })
+                .map_err(|error| format!("could not start connection attempt: {error}"))?;
+            started += 1;
+            next_start = now + CONNECTION_ATTEMPT_DELAY;
+        }
+        let mut wait = remaining.min(Duration::from_millis(50));
+        if started < candidates.len() {
+            wait = wait.min(next_start.saturating_duration_since(now));
+        }
+        match receiver.recv_timeout(wait.max(Duration::from_millis(1))) {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => {
+                failed += 1;
+                last_error = Some(error);
+                if failed == candidates.len() {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Err(format!(
+        "could not connect to any resolved address: {}",
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "connection deadline exceeded".into())
+    ))
 }
 
 pub(crate) fn endpoint_for_probe(host: &str, configured_port: &str) -> Result<String, String> {
@@ -1178,7 +1264,7 @@ fn connect_tls_stream_inner(
     } else {
         format!("{server_name}:{port}")
     };
-    let resolver = dns_resolver_pool()?.resolve(address)?;
+    let resolver = start_dns_lookup(address).map_err(|error| format!("{host}: {error}"))?;
     let dns_deadline = budget
         .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
@@ -1201,35 +1287,13 @@ fn connect_tls_stream_inner(
     if sockets.is_empty() {
         return Err(format!("{host}: no address found"));
     }
-    let mut last_error = None;
-    let mut tcp = None;
     let connect_deadline = budget
         .map(|budget| budget.deadline.min(Instant::now() + Duration::from_secs(8)))
         .unwrap_or_else(|| Instant::now() + Duration::from_secs(8));
-    for socket in sockets {
-        if budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed)) {
-            return Err(format!("{host}: connection cancelled"));
-        }
-        let remaining = connect_deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        match TcpStream::connect_timeout(&socket, remaining) {
-            Ok(stream) => {
-                tcp = Some(stream);
-                break;
-            }
-            Err(error) => last_error = Some(error),
-        }
-    }
-    let mut tcp = tcp.ok_or_else(|| {
-        format!(
-            "{host}: could not connect to any resolved address: {}",
-            last_error
-                .map(|error| error.to_string())
-                .unwrap_or_else(|| "unknown connection error".into())
-        )
-    })?;
+    let cancelled =
+        || budget.is_some_and(|budget| budget.cancel.load(std::sync::atomic::Ordering::Relaxed));
+    let mut tcp = connect_racing(sockets, connect_deadline, &cancelled)
+        .map_err(|error| format!("{host}: {error}"))?;
     let io_timeout = budget
         .map(|budget| {
             budget
@@ -2426,15 +2490,19 @@ mod tests {
         ListInventorySummary, MAX_DNS_ADDRESSES, MAX_ESTIMATED_FETCHED_STATE_BYTES,
         MAX_IMAP_LIST_INVENTORY_BYTES, MailboxFetchError, MessageFetchBudget, MessageStateBudget,
         StateReservation, TaggedResponseScanner, authenticated_list_command,
-        classify_mailbox_fetch_error, dns_resolver_pool, format_folder_failures,
-        parse_list_delimiter, parse_list_mailbox_name, parse_message_fetch_metadata_response_bytes,
-        parse_message_id_header, read_imap_list_response, read_imap_list_response_with_mailboxes,
-        read_with_deadline, record_list_entry, tagged_response_outside_literals,
+        classify_mailbox_fetch_error, connect_racing, format_folder_failures,
+        interleave_address_families, parse_list_delimiter, parse_list_mailbox_name,
+        parse_message_fetch_metadata_response_bytes, parse_message_id_header,
+        read_imap_list_response, read_imap_list_response_with_mailboxes, read_with_deadline,
+        record_list_entry, start_dns_lookup, start_lookup_with, tagged_response_outside_literals,
         write_imap_command,
     };
     use std::collections::HashMap;
     use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
     use std::time::Duration;
+    use std::time::Instant;
     use std::{
         io::{self, Cursor, Read, Write},
         net::SocketAddr,
@@ -2514,16 +2582,87 @@ mod tests {
     }
 
     #[test]
-    fn dns_resolution_uses_the_bounded_shared_pool() {
-        let receiver = dns_resolver_pool()
-            .unwrap()
-            .resolve("127.0.0.1:993".to_owned())
-            .unwrap();
+    fn dns_lookup_resolves_literals() {
+        let receiver = start_dns_lookup("127.0.0.1:993".to_owned()).unwrap();
         let addresses = receiver
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap();
         assert!(addresses.iter().any(|address| address.ip().is_loopback()));
+    }
+
+    /// Hung resolver calls cannot be cancelled. They must not wedge later
+    /// lookups forever: the cap fails fast with a clear error, and capacity
+    /// returns when a stuck call finishes.
+    #[test]
+    fn hung_dns_lookups_are_bounded_and_release_capacity() {
+        static OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
+        let (release_first, first_gate) = mpsc::channel::<()>();
+        let (release_second, second_gate) = mpsc::channel::<()>();
+        let hung = |gate: mpsc::Receiver<()>| {
+            move || {
+                let _ = gate.recv();
+                Ok(Vec::new())
+            }
+        };
+        let first = start_lookup_with(&OUTSTANDING, 2, hung(first_gate)).unwrap();
+        let _second = start_lookup_with(&OUTSTANDING, 2, hung(second_gate)).unwrap();
+        // The callers time out, but the threads are still stuck.
+        assert!(first.recv_timeout(Duration::from_millis(20)).is_err());
+        let error = start_lookup_with(&OUTSTANDING, 2, || Ok(Vec::new())).unwrap_err();
+        assert!(error.contains("not responding"), "{error}");
+        release_first.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while OUTSTANDING.load(std::sync::atomic::Ordering::Acquire) >= 2 {
+            assert!(Instant::now() < deadline, "capacity was never released");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let receiver = start_lookup_with(&OUTSTANDING, 2, || Ok(Vec::new())).unwrap();
+        assert!(
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        release_second.send(()).unwrap();
+    }
+
+    #[test]
+    fn address_families_are_interleaved_starting_with_the_first() {
+        let v6 = |port| SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port));
+        let v4 = |port| SocketAddr::from(([127, 0, 0, 1], port));
+        assert_eq!(
+            interleave_address_families(vec![v6(1), v6(2), v6(3), v4(4)]),
+            vec![v6(1), v4(4), v6(2), v6(3)]
+        );
+        assert_eq!(
+            interleave_address_families(vec![v4(1), v6(2), v4(3), v6(4)]),
+            vec![v4(1), v6(2), v4(3), v6(4)]
+        );
+    }
+
+    /// A blackholed first address must not consume the whole budget. The
+    /// first candidate is a non-routable TEST-NET address that never
+    /// answers; the second is a listening loopback socket.
+    #[test]
+    fn blackholed_first_address_does_not_starve_a_healthy_one() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let healthy = listener.local_addr().unwrap();
+        let blackholed = SocketAddr::from(([192, 0, 2, 1], healthy.port()));
+        let started = Instant::now();
+        let stream = connect_racing(
+            vec![blackholed, healthy],
+            Instant::now() + Duration::from_secs(8),
+            &|| false,
+        )
+        .expect("the healthy address must win");
+        assert_eq!(stream.peer_addr().unwrap(), healthy);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
