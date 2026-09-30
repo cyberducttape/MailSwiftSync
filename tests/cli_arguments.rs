@@ -203,20 +203,29 @@ fn completions_reject_unknown_shells() {
 
 /// Engines must not inherit the controller's environment. The launcher is
 /// the process that becomes the engine, so start it with a secret in its own
-/// environment and have a dummy engine report what it can see.
-#[cfg(unix)]
+/// environment and have a dummy engine report what it can see on each OS.
 #[test]
 fn engine_does_not_inherit_controller_environment_secrets() {
     use std::io::Write;
     use std::process::Stdio;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"));
+    command.arg("--internal-launcher");
+    #[cfg(unix)]
+    command.args([
+        "/bin/sh",
+        "--",
+        "-c",
+        "echo secret=${MAILSWIFTSYNC_TEST_SECRET:-absent} path=${PATH:+present}",
+    ]);
+    #[cfg(windows)]
+    command
+        .arg(std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()))
         .args([
-            "--internal-launcher",
-            "/bin/sh",
             "--",
-            "-c",
-            "echo secret=${MAILSWIFTSYNC_TEST_SECRET:-absent} path=${PATH:+present}",
-        ])
+            "/C",
+            "echo secret=%MAILSWIFTSYNC_TEST_SECRET% path=%PATH%",
+        ]);
+    let mut child = command
         .env("MAILSWIFTSYNC_TEST_SECRET", "DO_NOT_LEAK")
         .env("AWS_SECRET_ACCESS_KEY", "DO_NOT_LEAK")
         .stdin(Stdio::piped())
@@ -232,7 +241,13 @@ fn engine_does_not_inherit_controller_environment_secrets() {
         !stdout.contains("DO_NOT_LEAK"),
         "engine saw a secret: {stdout}"
     );
+    #[cfg(unix)]
     assert!(stdout.contains("secret=absent"), "{stdout}");
+    #[cfg(windows)]
+    assert!(
+        stdout.contains("secret=%MAILSWIFTSYNC_TEST_SECRET%"),
+        "{stdout}"
+    );
     // Allowlisted variables still reach the engine.
     assert!(stdout.contains("path=present"), "{stdout}");
 }
