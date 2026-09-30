@@ -175,6 +175,11 @@ const DEFAULT_UI_SCALE: f32 = 1.10;
 const MIN_UI_SCALE: f32 = 0.90;
 const MAX_UI_SCALE: f32 = 2.00;
 
+#[cfg(test)]
+pub(crate) fn is_github_hosted_runner(environment: Option<&str>) -> bool {
+    environment == Some("github-hosted")
+}
+
 use bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
 
 fn main() -> eframe::Result<()> {
@@ -188,6 +193,13 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use uuid::Uuid;
 
+    #[test]
+    fn only_github_hosted_runner_environment_skips_privileged_windows_tests() {
+        assert!(is_github_hosted_runner(Some("github-hosted")));
+        assert!(!is_github_hosted_runner(Some("self-hosted")));
+        assert!(!is_github_hosted_runner(None));
+    }
+
     fn create_private_test_directory(path: &std::path::Path) {
         std::fs::create_dir_all(path).unwrap();
         #[cfg(unix)]
@@ -199,15 +211,15 @@ mod tests {
         }
     }
 
-    // GitHub Actions Windows runners restrict certain security operations (ACLs, nested jobs).
-    // This macro skips tests that require unrestricted filesystem or process permissions.
+    // GitHub-hosted Windows runners restrict certain security operations
+    // (ACLs, nested jobs). Self-hosted Actions runners must execute these tests.
     #[allow(unused_macros)]
     macro_rules! skip_on_windows_hosted_runner {
         () => {
             #[cfg(windows)]
-            if std::env::var("GITHUB_ACTIONS").is_ok() {
+            if crate::is_github_hosted_runner(std::env::var("RUNNER_ENVIRONMENT").ok().as_deref()) {
                 eprintln!(
-                    "⊘ Skipping: GitHub Actions Windows runner does not permit this operation"
+                    "⊘ Skipping: GitHub-hosted Windows runner does not permit this operation"
                 );
                 return;
             }

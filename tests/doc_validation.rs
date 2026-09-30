@@ -132,6 +132,29 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
 }
 
 #[test]
+fn stable_release_requires_privileged_self_hosted_windows_qualification() {
+    let release = fs::read_to_string(".github/workflows/release.yml")
+        .expect("release workflow should be readable");
+    let qualification = release
+        .split("  windows-privileged-qualification:")
+        .nth(1)
+        .and_then(|section| section.split("\n  publish:").next())
+        .expect("stable release must define the privileged Windows job");
+
+    assert!(qualification.contains("needs.verify.outputs.release-channel == 'stable'"));
+    assert!(qualification.contains("[self-hosted, windows, x64, mailswiftsync-release]"));
+    assert!(qualification.contains("RUNNER_ENVIRONMENT -ne 'self-hosted'"));
+    assert!(qualification.contains("cargo test --locked --all-targets --all-features"));
+    let publish = release
+        .split("  publish:")
+        .nth(1)
+        .expect("release workflow must define publication");
+    assert!(publish.contains("windows-privileged-qualification"));
+    assert!(publish.contains("needs.windows-privileged-qualification.result == 'success'"));
+    assert!(publish.contains("needs.verify.outputs.release-channel == 'preview'"));
+}
+
+#[test]
 fn capability_manifest_is_current() {
     let capabilities = fs::read_to_string("capabilities.toml")
         .expect("machine-readable capability status should exist");

@@ -264,15 +264,15 @@ mod tests {
     use super::*;
     use std::io;
 
-    // GitHub Actions Windows runners restrict certain security operations (ACLs, nested jobs).
-    // This macro skips tests that require unrestricted filesystem or process permissions.
+    // GitHub-hosted Windows runners restrict certain security operations
+    // (ACLs, nested jobs). Self-hosted Actions runners must execute these tests.
     #[allow(unused_macros)]
     macro_rules! skip_on_windows_hosted_runner {
         () => {
             #[cfg(windows)]
-            if std::env::var("GITHUB_ACTIONS").is_ok() {
+            if crate::is_github_hosted_runner(std::env::var("RUNNER_ENVIRONMENT").ok().as_deref()) {
                 eprintln!(
-                    "⊘ Skipping: GitHub Actions Windows runner does not permit this operation"
+                    "⊘ Skipping: GitHub-hosted Windows runner does not permit this operation"
                 );
                 return;
             }

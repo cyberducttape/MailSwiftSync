@@ -13,8 +13,13 @@ jobs:
   verify:
     name: Release quality gate
     runs-on: ubuntu-24.04
+    outputs:
+      release-channel: ${{ steps.release-channel.outputs.value }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Classify release channel
+        id: release-channel
+        run: echo "value=$(scripts/release-channel.sh "$GITHUB_REF_NAME")" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
         with:
           components: rustfmt, clippy
@@ -157,7 +162,8 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} bundle/mailswiftsync-${{ matrix.target }}
           scripts/stage-release-docs.sh bundle
           chmod 0755 bundle/mailswiftsync-${{ matrix.target }}
-          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             (cd bundle && ditto -c -k . "../dist/mailswiftsync-${{ matrix.target }}.zip")
             scripts/verify-release-bundle.sh "dist/mailswiftsync-${{ matrix.target }}.zip"
@@ -314,8 +320,68 @@ jobs:
         shell: bash
         run: cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture
 
+  windows-privileged-qualification:
+    name: Windows privileged qualification (self-hosted)
+    if: ${{ needs.verify.outputs.release-channel == 'stable' }}
+    needs: [verify]
+    runs-on: [self-hosted, windows, x64, mailswiftsync-release]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Assert isolated self-hosted runner and release revision
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_ENVIRONMENT -ne 'self-hosted') { throw 'Privileged suite must run on a self-hosted runner' }
+          if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Tested revision differs from release tag SHA' }
+          "Runner environment: $env:RUNNER_ENVIRONMENT"
+          "Runner OS/arch: $env:RUNNER_OS/$env:RUNNER_ARCH"
+          "Release revision: $env:GITHUB_SHA"
+      - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
+        with:
+          components: rustfmt, clippy
+      - name: Initialize MSVC build environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Select the MSVC linker explicitly
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
+          if (-not (Test-Path $linker)) { throw "Could not locate the x64 MSVC linker at $linker" }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run Windows suite including hosted-runner exceptions
+        shell: pwsh
+        env:
+          RUST_BACKTRACE: full
+        run: |
+          $resumeToken = [guid]::NewGuid().ToString('N')
+          Write-Output "::stop-commands::$resumeToken"
+          cargo test --locked --all-targets --all-features -- --test-threads=1 --nocapture 2>&1 | Tee-Object -FilePath windows-privileged-test.log
+          $testExitCode = $LASTEXITCODE
+          Write-Output "::$resumeToken::"
+          if ($testExitCode -ne 0) { throw "Privileged Windows test suite failed with exit code $testExitCode" }
+          if (Select-String -Path windows-privileged-test.log -Quiet -Pattern 'Skipping: GitHub-hosted Windows runner') {
+            throw 'A Windows privileged test unexpectedly skipped on the self-hosted qualification runner'
+          }
+      - name: Upload privileged Windows test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-privileged-qualification-${{ github.sha }}
+          path: windows-privileged-test.log
+          if-no-files-found: warn
+
   publish:
-    needs: [build, sbom, verify, packaged-integration, native-runtime-tests]
+    needs: [build, sbom, verify, packaged-integration, native-runtime-tests, windows-privileged-qualification]
+    if: >-
+      always() && needs.build.result == 'success' && needs.sbom.result == 'success' &&
+      needs.verify.result == 'success' && needs.packaged-integration.result == 'success' &&
+      needs.native-runtime-tests.result == 'success' &&
+      (needs.windows-privileged-qualification.result == 'success' ||
+      (needs.windows-privileged-qualification.result == 'skipped' &&
+      needs.verify.outputs.release-channel == 'preview'))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
