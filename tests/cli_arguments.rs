@@ -236,13 +236,27 @@ fn engine_does_not_inherit_controller_environment_secrets() {
     child.stdin.take().unwrap().write_all(b"GO\n").unwrap();
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "{stdout}");
+    assert!(
+        output.status.success(),
+        "dummy engine exited unsuccessfully"
+    );
     assert!(
         !stdout.contains("DO_NOT_LEAK"),
-        "engine saw a secret: {stdout}"
+        "dummy engine inherited a controller secret"
     );
     #[cfg(unix)]
-    assert!(stdout.contains("secret=absent"), "{stdout}");
+    assert!(stdout.contains("secret=absent"), "secret was not absent");
     // Allowlisted variables still reach the engine.
-    assert!(stdout.contains("path=present"), "{stdout}");
+    #[cfg(unix)]
+    assert!(
+        stdout.contains("path=present"),
+        "allowlisted PATH was missing"
+    );
+    #[cfg(windows)]
+    assert!(
+        stdout
+            .split_once(" path=")
+            .is_some_and(|(_, path)| !path.trim().is_empty()),
+        "allowlisted PATH was missing"
+    );
 }
