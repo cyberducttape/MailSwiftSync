@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-Convert customer-proof JSON into provider evidence records for release gate validation.
+Convert qualification-augmented customer-proof JSON into provider evidence records.
+
+The current customer-proof exporter does not emit the qualification dataset digest,
+scenario observations, or individual-message verification required by the release
+gate. Ordinary customer-proof exports therefore cannot qualify a provider pair.
+This script rejects missing qualification fields and marks aggregate-only evidence
+as nonqualifying; it must never turn balanced transfer totals into a qualification pass.
 
 Usage:
   generate-provider-evidence.py <customer-proof.json> <source-provider> <destination-provider> <testing-phase> \
@@ -8,8 +14,8 @@ Usage:
     --mailswiftsync-commit <sha> --mailswiftsync-binary-sha256 <sha256> \
     --imapsync-binary-sha256 <sha256> --qualification-bundle-id <id> [--engine <name>] [--output <evidence.json>]
 
-The generated evidence records link back to the customer-proof via digest reference
-and aggregate test results into the format expected by verify-evidence-gate.sh.
+Generated records link to a digest-verified proof. The release gate independently
+requires scenario coverage and high-confidence message verification.
 """
 
 import json

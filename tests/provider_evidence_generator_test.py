@@ -114,7 +114,7 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
                 qualification_bundle_id=arguments.pop("qualification_bundle_id"), **arguments
             )
 
-    def test_qualified_customer_proof_generates_strict_evidence(self):
+    def test_synthetic_qualification_augmented_proof_generates_nonqualifying_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "proof.json"
             path.write_text(json.dumps(proof()), encoding="utf-8")
@@ -125,6 +125,35 @@ class ProviderEvidenceGeneratorTests(unittest.TestCase):
         self.assertNotIn("messages_verified", evidence["results"])
         self.assertEqual(evidence["results"]["verification_confidence"], "aggregate_only")
         self.assertEqual(evidence["proof_verification"], "canonical_digest_verified")
+
+    def test_actual_customer_proof_shape_cannot_be_mistaken_for_qualification(self):
+        value = proof()
+        # Match src/reports/customer.rs: project exports only project_id/name/phase,
+        # and provider identity has no dataset digest or scenario observations.
+        value["project"] = {"project_id": "project", "name": "fixture", "phase": "Complete"}
+        value["mailboxes"][0]["evidence"] = {
+            "scope": "message-reconciliation",
+            "verification_method": "metadata_reconciliation",
+            "verification_outcome": "exact_match",
+            "verification_level": "Exact metadata match",
+            "evidence_level": "Exact metadata match",
+            "source_messages": 2,
+            "destination_messages": 2,
+            "source_bytes": 100,
+            "destination_bytes": 100,
+            "source_folders": 3,
+            "destination_folders": 3,
+            "unmatched_messages": 0,
+            "missing_count": 0,
+            "extra_count": 0,
+            "modified_count": 0,
+            "probable_count": 0,
+            "metadata_matched_count": 2,
+            "failed_messages": 0,
+        }
+        value["proof_digest"] = MODULE.canonical_proof_digest(value)
+        with self.assertRaisesRegex(ValueError, "real project.dataset_digest"):
+            self.generate(value)
 
     def test_customer_proof_without_structured_qualification_observations_is_rejected(self):
         value = proof()
