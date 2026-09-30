@@ -1,12 +1,13 @@
 //! Pure filtering policy for the verification mailbox projection.
 
-use crate::core::ReportMailboxSnapshot;
+use crate::core::{AttentionReason, ReportMailboxSnapshot};
 use crate::ui::{contains_ascii_case_insensitive, needs_operator_review};
 
 pub(crate) fn verification_row_matches(
     mailbox: &ReportMailboxSnapshot,
     filter: &str,
     search: &str,
+    attention_reason: Option<AttentionReason>,
 ) -> bool {
     let state = mailbox.job.state.as_str();
     let result_match = match filter {
@@ -18,7 +19,9 @@ pub(crate) fn verification_row_matches(
     let text_match = search.is_empty()
         || contains_ascii_case_insensitive(&mailbox.job.source_mailbox, search)
         || contains_ascii_case_insensitive(&mailbox.job.destination_mailbox, search);
-    result_match && text_match
+    result_match
+        && text_match
+        && attention_reason.is_none_or(|reason| mailbox.attention_reason == Some(reason))
 }
 
 impl crate::App {
@@ -29,6 +32,7 @@ impl crate::App {
         let row_count = self.ui_snapshot.verification_rows.len();
         if self.verification_filter_cache_search == search
             && self.verification_filter_cache_state == self.verification_filter
+            && self.verification_filter_cache_reason == self.verification_attention_reason
             && self.verification_filter_cache_offset == self.verification_offset
             && self.verification_filter_cache_revision == revision
             && self.verification_filter_cache_project == project_id
@@ -38,12 +42,18 @@ impl crate::App {
         }
         self.verification_visible_indices.clear();
         for (index, mailbox) in self.ui_snapshot.verification_rows.iter().enumerate() {
-            if verification_row_matches(mailbox, &self.verification_filter, &search) {
+            if verification_row_matches(
+                mailbox,
+                &self.verification_filter,
+                &search,
+                self.verification_attention_reason,
+            ) {
                 self.verification_visible_indices.push(index);
             }
         }
         self.verification_filter_cache_search = search;
         self.verification_filter_cache_state = self.verification_filter.clone();
+        self.verification_filter_cache_reason = self.verification_attention_reason;
         self.verification_filter_cache_offset = self.verification_offset;
         self.verification_filter_cache_revision = revision;
         self.verification_filter_cache_project = project_id;
@@ -78,15 +88,45 @@ mod tests {
         assert!(verification_row_matches(
             &verified,
             "verified",
-            "alice@dest"
+            "alice@dest",
+            None
         ));
-        assert!(!verification_row_matches(&verified, "review", "alice"));
+        assert!(!verification_row_matches(
+            &verified, "review", "alice", None
+        ));
         assert!(verification_row_matches(
             &review,
             "review",
-            "source.example"
+            "source.example",
+            None
         ));
-        assert!(!verification_row_matches(&review, "difference", "alice"));
-        assert!(!verification_row_matches(&verified, "all", "missing"));
+        assert!(!verification_row_matches(
+            &review,
+            "difference",
+            "alice",
+            None
+        ));
+        assert!(!verification_row_matches(&verified, "all", "missing", None));
+    }
+
+    #[test]
+    fn attention_reason_filter_matches_only_the_selected_durable_category() {
+        let mut authentication = mailbox("attention");
+        authentication.attention_reason = Some(AttentionReason::AuthenticationFailed);
+        let mut capacity = mailbox("attention");
+        capacity.attention_reason = Some(AttentionReason::CapacityLimited);
+
+        assert!(verification_row_matches(
+            &authentication,
+            "review",
+            "",
+            Some(AttentionReason::AuthenticationFailed)
+        ));
+        assert!(!verification_row_matches(
+            &capacity,
+            "review",
+            "",
+            Some(AttentionReason::AuthenticationFailed)
+        ));
     }
 }

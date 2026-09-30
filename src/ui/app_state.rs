@@ -263,9 +263,11 @@ pub(crate) struct App {
     pub(crate) verification_exception_reason: String,
     pub(crate) verification_search: String,
     pub(crate) verification_filter: String,
+    pub(crate) verification_attention_reason: Option<core::AttentionReason>,
     pub(crate) verification_visible_indices: Vec<usize>,
     pub(crate) verification_filter_cache_search: String,
     pub(crate) verification_filter_cache_state: String,
+    pub(crate) verification_filter_cache_reason: Option<core::AttentionReason>,
     pub(crate) verification_filter_cache_offset: u32,
     pub(crate) verification_filter_cache_revision: Option<i64>,
     pub(crate) verification_filter_cache_project: Option<String>,
@@ -388,6 +390,7 @@ impl App {
                 },
                 verification_offset: self.verification_offset,
                 verification_cursor: self.verification_cursor,
+                verification_attention_reason: self.verification_attention_reason,
                 load_report: matches!(
                     self.active_view,
                     WorkspaceView::Overview

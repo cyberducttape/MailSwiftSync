@@ -140,8 +140,58 @@ impl App {
                                     );
                                 }
                             });
+                        let previous_reason = self.verification_attention_reason;
+                        let selected_reason = self
+                            .verification_attention_reason
+                            .map(|reason| self.language.text(reason.label()).to_owned())
+                            .unwrap_or_else(|| {
+                                self.language.message("ui.all-attention-reasons").to_owned()
+                            });
+                        egui::ComboBox::from_id_salt("verification_attention_reason_filter")
+                            .selected_text(selected_reason)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.verification_attention_reason,
+                                    None,
+                                    self.language.message("ui.all-attention-reasons"),
+                                );
+                                for reason in [
+                                    crate::core::AttentionReason::Interrupted,
+                                    crate::core::AttentionReason::VerificationIncomplete,
+                                    crate::core::AttentionReason::VerificationDifference,
+                                    crate::core::AttentionReason::ProcessIdentityUnverified,
+                                    crate::core::AttentionReason::AuthenticationFailed,
+                                    crate::core::AttentionReason::TransportFailed,
+                                    crate::core::AttentionReason::PolicyBlocked,
+                                    crate::core::AttentionReason::ConfigurationInvalid,
+                                    crate::core::AttentionReason::CapacityLimited,
+                                    crate::core::AttentionReason::MessageRejected,
+                                    crate::core::AttentionReason::Unknown,
+                                ] {
+                                    ui.selectable_value(
+                                        &mut self.verification_attention_reason,
+                                        Some(reason),
+                                        self.language.text(reason.label()),
+                                    );
+                                }
+                            });
+                        if previous_reason != self.verification_attention_reason {
+                            self.verification_offset = 0;
+                            self.verification_cursor = None;
+                            self.verification_cursor_stack.clear();
+                        }
                     });
                     self.refresh_verification_filter_cache();
+                    let filtered_total = self
+                        .verification_attention_reason
+                        .map(|reason| {
+                            self.ui_snapshot
+                                .attention_reason_counts
+                                .get(reason.as_str())
+                                .copied()
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or(mailbox_counts.total);
                     let verification_rows = &self.ui_snapshot.verification_rows;
                     let visible = &self.verification_visible_indices;
                     ui.label(
@@ -154,11 +204,11 @@ impl App {
                                     "{}",
                                     &((self.verification_offset as usize
                                         + verification_rows.len())
-                                    .min(mailbox_counts.total))
+                                    .min(filtered_total))
                                     .to_string(),
                                     1,
                                 )
-                                .replacen("{}", &mailbox_counts.total.to_string(), 1),
+                                .replacen("{}", &filtered_total.to_string(), 1),
                         )
                         .color(self.theme_colors().text_secondary),
                     );
@@ -228,7 +278,7 @@ impl App {
                         let next = ui
                             .add_enabled(
                                 self.verification_offset as usize + verification_rows.len()
-                                    < mailbox_counts.total,
+                                    < filtered_total,
                                 egui::Button::new(self.language.message("ui.next")),
                             )
                             .clicked();

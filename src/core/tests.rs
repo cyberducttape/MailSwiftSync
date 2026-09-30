@@ -4269,6 +4269,26 @@ fn project_attention_reasons_are_loaded_as_one_read_model() {
             ("capacity_limited".to_owned(), 1),
         ])
     );
+    let authentication_page = db
+        .verification_rows_for_attention_reason(
+            &project.id,
+            None,
+            20,
+            AttentionReason::AuthenticationFailed,
+        )
+        .unwrap();
+    assert_eq!(authentication_page.rows.len(), 1);
+    assert_eq!(authentication_page.rows[0].job.id, first);
+    let capacity_page = db
+        .verification_rows_for_attention_reason(
+            &project.id,
+            None,
+            20,
+            AttentionReason::CapacityLimited,
+        )
+        .unwrap();
+    assert_eq!(capacity_page.rows.len(), 1);
+    assert_eq!(capacity_page.rows[0].job.id, second);
 }
 
 #[test]

@@ -281,7 +281,20 @@ impl App {
             .iter()
             .filter(|mailbox| mailbox.attention_reason.is_some())
             .collect::<Vec<_>>();
-        if attention.is_empty() {
+        let mut reason_counts = self
+            .ui_snapshot
+            .attention_reason_counts
+            .iter()
+            .filter_map(|(key, count)| {
+                crate::core::AttentionReason::parse(key).map(|reason| (reason, *count))
+            })
+            .collect::<Vec<_>>();
+        reason_counts.sort_by(|(reason_a, count_a), (reason_b, count_b)| {
+            count_b
+                .cmp(count_a)
+                .then_with(|| reason_a.as_str().cmp(reason_b.as_str()))
+        });
+        if attention.is_empty() && reason_counts.is_empty() {
             return;
         }
         let colors = self.theme_colors();
@@ -321,13 +334,28 @@ impl App {
                 .size(11.0)
                 .color(colors.text_secondary),
             );
+            if !reason_counts.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    for (reason, count) in &reason_counts {
+                        let label = format!("{} · {count}", self.language.text(reason.label()));
+                        if ui.button(label).clicked() {
+                            self.verification_attention_reason = Some(*reason);
+                            self.verification_filter = "review".into();
+                            self.verification_search.clear();
+                            self.verification_offset = 0;
+                            self.verification_cursor = None;
+                            self.verification_cursor_stack.clear();
+                            self.active_view = WorkspaceView::Verification;
+                        }
+                    }
+                });
+            }
             for mailbox in attention.iter().take(5) {
                 let Some(reason) = mailbox.attention_reason else {
                     continue;
                 };
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(&mailbox.job.source_mailbox).strong());
                     ui.label(format!(
                         "{} → {}",
                         mailbox.job.source_mailbox, mailbox.job.destination_mailbox

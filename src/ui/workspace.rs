@@ -32,6 +32,7 @@ pub(crate) struct WorkspaceRefreshOptions<'a> {
     pub(crate) mailbox_cursor: Option<i64>,
     pub(crate) verification_offset: u32,
     pub(crate) verification_cursor: Option<i64>,
+    pub(crate) verification_attention_reason: Option<core::AttentionReason>,
     pub(crate) load_report: bool,
     pub(crate) load_runs: bool,
 }
@@ -89,6 +90,8 @@ pub(crate) struct WorkspaceSnapshot {
     mailbox_first_rowid: Option<i64>,
     mailbox_last_rowid: Option<i64>,
     pub(crate) mailbox_counts: core::MailboxStateCounts,
+    pub(crate) attention_reason_counts: std::collections::BTreeMap<String, usize>,
+    verification_attention_reason: Option<core::AttentionReason>,
     snapshot_project_id: Option<String>,
     durable_revision: Option<i64>,
     project_revision: Option<i64>,
@@ -171,7 +174,8 @@ impl WorkspaceSnapshot {
         let report_needs_load = options.load_report
             && (!self.verification_loaded
                 || self.verification_offset != options.verification_offset
-                || self.verification_cursor != options.verification_cursor);
+                || self.verification_cursor != options.verification_cursor
+                || self.verification_attention_reason != options.verification_attention_reason);
         let runs_need_load = options.load_runs && self.runs_revision != self.project_revision;
         if !project_changed
             && !report_needs_load
@@ -242,6 +246,8 @@ impl WorkspaceSnapshot {
             self.runs_revision = None;
             self.project = None;
             self.jobs.clear();
+            self.attention_reason_counts.clear();
+            self.verification_attention_reason = None;
         }
 
         let Some(project_id) = project_id else {
@@ -293,19 +299,33 @@ impl WorkspaceSnapshot {
                 Ok(value) => self.mailbox_counts = value,
                 Err(error) => refresh_errors.push(format!("mailbox counts: {error}")),
             }
+            match store.mailbox_attention_reason_counts(&project_id) {
+                Ok(value) => self.attention_reason_counts = value,
+                Err(error) => refresh_errors.push(format!("attention reason counts: {error}")),
+            }
         }
         if options.load_report {
-            match store.verification_rows(
-                &project_id,
-                options.verification_cursor,
-                MAILBOX_PAGE_SIZE,
-            ) {
+            let page = match options.verification_attention_reason {
+                Some(reason) => store.verification_rows_for_attention_reason(
+                    &project_id,
+                    options.verification_cursor,
+                    MAILBOX_PAGE_SIZE,
+                    reason,
+                ),
+                None => store.verification_rows(
+                    &project_id,
+                    options.verification_cursor,
+                    MAILBOX_PAGE_SIZE,
+                ),
+            };
+            match page {
                 Ok(value) => {
                     self.verification_rows = value.rows;
                     self.verification_last_rowid = value.last_rowid;
                     self.verification_loaded = true;
                     self.verification_offset = options.verification_offset;
                     self.verification_cursor = options.verification_cursor;
+                    self.verification_attention_reason = options.verification_attention_reason;
                 }
                 Err(error) => refresh_errors.push(format!("verification rows: {error}")),
             }

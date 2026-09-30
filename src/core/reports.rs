@@ -208,14 +208,41 @@ impl StateStore {
         after_rowid: Option<i64>,
         limit: u32,
     ) -> rusqlite::Result<ReportMailboxPage> {
+        self.verification_rows_filtered(project_id, after_rowid, limit, None)
+    }
+
+    /// Load a cursor-paginated evidence page narrowed to one durable attention
+    /// category. Unknown future wire values are grouped under `Unknown`.
+    pub fn verification_rows_for_attention_reason(
+        &self,
+        project_id: &str,
+        after_rowid: Option<i64>,
+        limit: u32,
+        reason: AttentionReason,
+    ) -> rusqlite::Result<ReportMailboxPage> {
+        self.verification_rows_filtered(project_id, after_rowid, limit, Some(reason))
+    }
+
+    fn verification_rows_filtered(
+        &self,
+        project_id: &str,
+        after_rowid: Option<i64>,
+        limit: u32,
+        reason: Option<AttentionReason>,
+    ) -> rusqlite::Result<ReportMailboxPage> {
         let limit = limit.min(MAX_REPORT_PAGE_ROWS);
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare(
-            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,j.rowid FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence e ON e.job_id=j.id WHERE j.project_id=?1 AND j.rowid>?2 ORDER BY j.rowid LIMIT ?3",
+            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,j.rowid FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence e ON e.job_id=j.id WHERE j.project_id=?1 AND j.rowid>?2 AND (?3 IS NULL OR j.attention_reason=?3 OR (?3='unknown' AND j.attention_reason NOT IN ('interrupted','verification_incomplete','verification_difference','process_identity_unverified','authentication_failed','transport_failed','policy_blocked','configuration_invalid','capacity_limited','message_rejected','unknown'))) ORDER BY j.rowid LIMIT ?4",
         )?;
         let rows = statement
             .query_map(
-                rusqlite::params![project_id, after_rowid.unwrap_or(0), limit],
+                rusqlite::params![
+                    project_id,
+                    after_rowid.unwrap_or(0),
+                    reason.map(AttentionReason::as_str),
+                    limit
+                ],
                 |row| {
                     let acceptance_run_id: Option<String> = row.get(5)?;
                     let acceptance = acceptance_run_id
