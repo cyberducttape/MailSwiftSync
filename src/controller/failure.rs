@@ -84,6 +84,11 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
         return class;
     }
 
+    // Runner diagnostics append a presentation-only tail after this marker.
+    // It can contain arbitrary mailbox/server prose and must never influence
+    // retry, cooldown, or terminal-state policy.
+    let error = control_error_text(error);
+
     // Keep the controller taxonomy as the durable contract, but delegate
     // provider/IMAP signal recognition to the provider-intelligence module.
     // This is deliberately provider-neutral here because a failure can be
@@ -287,6 +292,7 @@ pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count:
 }
 
 pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
+    let error = control_error_text(error);
     let provider_error =
         crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error);
     let base_millis = provider_error.suggested_retry_delay().map_or_else(
@@ -317,6 +323,14 @@ pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
     Duration::from_millis(exponential.saturating_add(jitter).min(120_000))
 }
 
+/// Return only the primary failure, excluding untrusted diagnostic text added
+/// for operator presentation by the process runner.
+pub(crate) fn control_error_text(error: &str) -> &str {
+    error
+        .split_once("; recent output:")
+        .map_or(error, |(primary, _)| primary)
+}
+
 pub(crate) fn classified_failure_detail(error: &str) -> String {
     let class = classify_failure(error);
     format!(
@@ -328,7 +342,7 @@ pub(crate) fn classified_failure_detail(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FailureClass, classify_failure, should_retry_batch_error};
+    use super::{FailureClass, classify_failure, should_retry_batch_error, transient_retry_delay};
 
     #[test]
     fn message_counts_cannot_trigger_capacity_or_http_status_retries() {
@@ -369,5 +383,19 @@ mod tests {
         assert_eq!(classify_failure(error), FailureClass::Capacity);
         assert!(should_retry_batch_error(error, 0, 2));
         assert!(super::transient_retry_delay(error, 0) >= std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn recent_engine_output_cannot_change_retry_class_or_backoff() {
+        let error =
+            "connection reset by peer; recent output: too many connections; rate limit exceeded";
+        assert_eq!(classify_failure(error), FailureClass::Transport);
+        assert!(should_retry_batch_error(error, 0, 2));
+        assert!(transient_retry_delay(error, 0) < std::time::Duration::from_secs(20));
+
+        let diagnostics_only =
+            "Migration failed unexpectedly; recent output: HTTP/1.1 429 Too Many Requests";
+        assert_eq!(classify_failure(diagnostics_only), FailureClass::Unknown);
+        assert!(!should_retry_batch_error(diagnostics_only, 0, 2));
     }
 }

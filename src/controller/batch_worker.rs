@@ -77,10 +77,12 @@ impl AdaptiveProviderLimiter {
         {
             return;
         }
-        let base =
-            crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error)
-                .suggested_retry_delay()
-                .unwrap_or(Duration::from_secs(5));
+        let base = crate::core::provider_intelligence::ProviderErrorClassifier::classify(
+            "generic",
+            crate::controller::failure::control_error_text(error),
+        )
+        .suggested_retry_delay()
+        .unwrap_or(Duration::from_secs(5));
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(_) => return,
@@ -472,5 +474,23 @@ mod tests {
             cooldown.blocked_until.duration_since(now) >= std::time::Duration::from_secs(29)
         }));
         assert!(!state.contains_key("network-only"));
+    }
+
+    #[test]
+    fn presentation_tail_cannot_change_provider_cooldown_duration() {
+        let limiter = AdaptiveProviderLimiter::new();
+        limiter.observe_failure(
+            "provider-pair",
+            "too many connections; recent output: HTTP/1.1 429 Too Many Requests",
+        );
+
+        let state = limiter.state.lock().unwrap();
+        let remaining = state
+            .get("provider-pair")
+            .expect("primary capacity signal schedules a cooldown")
+            .blocked_until
+            .duration_since(std::time::Instant::now());
+        assert!(remaining >= std::time::Duration::from_secs(29));
+        assert!(remaining < std::time::Duration::from_secs(60));
     }
 }
