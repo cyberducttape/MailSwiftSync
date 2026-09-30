@@ -17,6 +17,7 @@ pub(crate) mod probe;
 mod run;
 mod single_admission;
 mod single_start;
+mod verification;
 
 pub(crate) use batch::{
     BatchActionPlan, BatchActionRow, BatchConfirmationIdentity, BatchExecutionMode,

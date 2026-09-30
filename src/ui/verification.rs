@@ -518,7 +518,7 @@ impl App {
                             .clicked()
                         {
                             match selected_project.as_deref() {
-                                Some(project_id) => match self.store.accept_verification_difference(
+                                Some(project_id) => match self.accept_verification_difference(
                                     project_id,
                                     &mailbox.job.id,
                                     &self.verification_exception_operator,
