@@ -115,6 +115,8 @@ ls -la /run/secrets/gmail-*
 ```bash
 export MAILSWIFTSYNC_PROVIDER_BINARY="/usr/local/bin/mailswiftsync"
 export MAILSWIFTSYNC_PROVIDER="gmail"
+export MAILSWIFTSYNC_SOURCE_PROVIDER="gmail"
+export MAILSWIFTSYNC_DESTINATION_PROVIDER="gmail"
 export MAILSWIFTSYNC_PROVIDER_SOURCE_ENDPOINT="imap.gmail.com:993"
 export MAILSWIFTSYNC_PROVIDER_SOURCE_USER="mailswiftsync-source-test@gmail.com"
 export MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET="/run/secrets/gmail-source"
@@ -136,21 +138,19 @@ export MAILSWIFTSYNC_EVIDENCE_OUTPUT="/tmp/gmail-provider-evidence"
 bash scripts/provider-integration-test.sh gmail
 ```
 
-### Expected Output
+### Expected Smoke-Test Output
 
 ```
 === Starting dry pilot for gmail ===
 ✓ Dry pilot preflight succeeded
 === Starting live migration for gmail ===
 ✓ Live migration succeeded
-=== Exporting evidence for gmail ===
-✓ Customer proof exported
-=== Verifying proof integrity ===
-✓ Proof integrity verified
+✓ Integrity verified for all three smoke proofs
 === Test Summary for gmail ===
 [durable state summary]
-✓ All tests passed for gmail
-Evidence: /tmp/gmail-provider-evidence/gmail-to-gmail-live_pilot.json
+✓ Provider smoke scenarios passed for gmail
+Smoke proofs saved to: /tmp/gmail-provider-evidence/gmail-to-gmail-smoke-...
+NOT PROVIDER QUALIFICATION: these small-run proofs do not satisfy the release evidence policy.
 ```
 
 ## Recording Evidence
@@ -192,19 +192,15 @@ are available.
    - No residual data
    ```
 
-2. **Customer proof** — save anonymized copy (no credentials or endpoints):
-   ```bash
-   cat /tmp/gmail-provider-evidence/customer-proof.json | jq '.' \
-     > docs/provider-tests/gmail-proof-YYYY-MM-DD.json
-   # Evidence records are in the same directory, one per required phase.
-   ls -1 /tmp/gmail-provider-evidence/*-to-*-*.json
-   ```
+2. **Smoke proofs** — the harness writes three digest-verifiable artifacts to
+   a unique private subdirectory beneath `MAILSWIFTSYNC_EVIDENCE_OUTPUT`. They
+   contain mailbox identifiers and are not release qualification evidence.
+   Keep them outside Git; the ordinary JSON formatter does not anonymize them.
 
-3. **Update compatibility matrix row:**
-   Edit `docs/compatibility-matrix.md` and update the Gmail row:
-   ```markdown
-   | Gmail/Workspace | Gmail/Workspace | imapsync | [TLS/auth] | Gmail labels → [Gmail]/ folders | [versions] | [actual dry-pilot evidence] | [actual live-pilot evidence] | [actual recovery evidence] | [actual evidence result] | Test metadata: docs/provider-tests/gmail-test-YYYY-MM-DD.md |
-   ```
+3. **Do not update the compatibility matrix from this smoke test.** The Gmail
+   release row remains unqualified until every required scenario and phase in
+   `tests/provider-evidence/policy.json` has real, independently reviewable
+   evidence accepted by `scripts/verify-evidence-gate.sh`.
 
 ## Cleanup
 
@@ -244,7 +240,8 @@ shred -u /run/secrets/gmail-source /run/secrets/gmail-dest
 
 ## Next Steps
 
-Once this test is documented and recorded:
-1. Update the compatibility matrix row with evidence markers
-2. Create a CI/CD job to run this test on a schedule (monthly or per-release)
-3. Add similar tests for Microsoft 365 and Fastmail following the same pattern
+This smoke test is not a qualification milestone. Do not update the compatibility
+matrix or claim Gmail support from its output. Qualification requires executing
+the full policy-defined Gmail provider-pair scenarios, retaining the test-dataset
+manifest and observations, producing high-confidence message verification, and
+passing the evidence gate. The current smoke harness does not implement that suite.

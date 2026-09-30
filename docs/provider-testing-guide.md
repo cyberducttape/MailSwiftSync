@@ -20,11 +20,13 @@ claim live-transfer totals. The release routes are Gmail/Workspace → Microsoft
 365 (OAuth/OAuth), Microsoft 365 → Gmail/Workspace (OAuth/OAuth), and Fastmail
 → Microsoft 365 (app-specific password/OAuth).
 
-The checked-in `provider-integration-test.sh` is currently a small-run harness,
-not a provider qualification run: it exercises a basic mailbox and forced
-interruption only. It does not create or measure the full release dataset and
-does not satisfy the release scenario policy. Do not submit its output as
-qualification evidence until the remaining scenarios are run and recorded.
+The checked-in `provider-integration-test.sh` is a small-run smoke harness, not
+a provider qualification run: it exercises a basic mailbox and forced
+interruption only. It retains digest-verifiable customer-proof artifacts in a
+private, unique output directory, but does not create or measure the full
+release dataset and cannot generate records accepted by the release gate. Its
+success message explicitly says the run is not qualification evidence. Do not
+submit its smoke proofs to the release evidence policy.
 
 ## Setup Requirements
 
@@ -180,8 +182,9 @@ mailswiftsync headless /tmp/gmail-test.db live \
   path.
 - **Rate limits:** Connection throttling possible under load
 
-For a Gmail → Microsoft 365 qualification run, the harness must be invoked
-with `MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2`. The destination secret file
+For a Gmail → Microsoft 365 smoke run, set the source/destination provider
+variables explicitly as shown below and use
+`MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2`. The destination secret file
 must contain a current OAuth access token with the delegated IMAP scope; a
 password or app password is rejected before the test starts. The source side
 may independently use `password` or `oauth2`:
@@ -194,12 +197,12 @@ export MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2
 bash scripts/provider-integration-test.sh gmail
 ```
 
-Every provider qualification run also requires a separate, empty recovery
+Every provider smoke run also requires a separate, empty recovery
 destination account. Set `MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT`,
 `MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER`, and
 `MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET`; the harness rejects reuse of
-the normal live destination so recovery evidence cannot become an idempotent
-rerun against an already-populated mailbox.
+the normal live destination so recovery behavior is exercised against an
+isolated mailbox. This smoke run does not qualify a provider pair.
 
 ### Fastmail
 
@@ -237,9 +240,11 @@ For CI/CD, consider:
 - Running provider tests on a schedule (not on every push, due to rate limits)
 - Publishing evidence artifacts alongside releases
 
-## When Complete
+## When Qualification Is Complete
 
-Update the compatibility matrix row with:
+Only after every policy-required scenario and phase has been executed, the
+evidence has been reviewed, and `scripts/verify-evidence-gate.sh` passes for the
+pair, update the compatibility matrix row with:
 - Dry pilot: `Documented manual test [YYYY-MM-DD]` (or `Automated CI fixture`)
 - Live pilot: `Documented manual test with incremental delta` (or `Automated`)
 - Recovery: `Manual interruption test confirming no duplicates`

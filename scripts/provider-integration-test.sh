@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Provider-specific IMAP integration test template.
+# Provider-specific IMAP smoke test template. This is not a release
+# qualification harness: it exercises only a small mailbox and interruption.
 #
-# This script demonstrates how to test MailSwiftSync against a real IMAP
-# provider (Gmail, Microsoft 365, Fastmail, etc.) by running a complete
-# dry pilot, live migration, recovery, and evidence export cycle.
+# This script runs a small dry pilot, live migration, controller interruption,
+# and recovery cycle against a real IMAP provider. Its proofs are smoke-test
+# artifacts only and cannot satisfy the hosted-provider release evidence gate.
 #
 # CREDENTIALS HANDLING:
 # This script expects credentials to be supplied as environment variables or
@@ -26,6 +27,7 @@ set -euo pipefail
 #   MAILSWIFTSYNC_PROVIDER_DEST_ENDPOINT    — destination IMAP server
 #   MAILSWIFTSYNC_PROVIDER_DEST_USER        — destination account username
 #   MAILSWIFTSYNC_PROVIDER_DEST_SECRET      — file containing dest password/token
+#   MAILSWIFTSYNC_EVIDENCE_OUTPUT           — directory for private smoke-proof bundles
 
 provider="${1:-}"
 if [[ -z "$provider" ]]; then
@@ -61,7 +63,6 @@ default_destination_auth=password
 source_auth="${MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH:-$default_source_auth}"
 destination_auth="${MAILSWIFTSYNC_PROVIDER_DEST_AUTH:-$default_destination_auth}"
 fixture_id="${MAILSWIFTSYNC_PROVIDER_FIXTURE_ID:-provider-${source_provider}-to-${destination_provider}}"
-qualification_bundle_id="${MAILSWIFTSYNC_PROVIDER_QUALIFICATION_BUNDLE_ID:-${source_provider}-to-${destination_provider}-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}}"
 recovery_dest_endpoint="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT:-}"
 recovery_dest_user="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_USER:-}"
 recovery_dest_secret="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_SECRET:-}"
@@ -74,23 +75,23 @@ if [[ "$destination_auth" != "password" && "$destination_auth" != "oauth2" ]]; t
   exit 1
 fi
 if [[ "$destination_provider" == "microsoft365" && "$destination_auth" != "oauth2" ]]; then
-  echo "ERROR: Microsoft 365 IMAP qualification requires destination OAuth/XOAUTH2" >&2
+  echo "ERROR: Microsoft 365 IMAP smoke testing requires destination OAuth/XOAUTH2" >&2
   echo "Set MAILSWIFTSYNC_PROVIDER_DEST_AUTH=oauth2 and provide an access token file." >&2
   exit 1
 fi
 if [[ "$source_provider" == "microsoft365" && "$source_auth" != "oauth2" ]]; then
-  echo "ERROR: Microsoft 365 IMAP qualification requires source OAuth/XOAUTH2" >&2
+  echo "ERROR: Microsoft 365 IMAP smoke testing requires source OAuth/XOAUTH2" >&2
   echo "Set MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH=oauth2 and provide an access token file." >&2
   exit 1
 fi
-# Scenario IDs are deliberately limited to scenarios this harness actually
-# executes. Do not accept an environment override that can turn labels for
-# unimplemented scenarios into qualification claims. Hosted-provider release
-# qualification remains blocked until each required fixture has an executable
-# test and structured observations.
-scenario_ids="basic-small,forced-interruption"
+# These phase-specific IDs describe only what this smoke harness actually
+# executes. In particular, the dry-pilot proof is exported before interruption
+# occurs and must not claim forced-interruption coverage.
+dry_scenario_ids="basic-small"
+live_scenario_ids="basic-small"
+recovery_scenario_ids="basic-small,forced-interruption"
 if [[ -z "$recovery_dest_endpoint" || -z "$recovery_dest_user" || -z "$recovery_dest_secret" ]]; then
-  echo "ERROR: recovery qualification requires a separate destination endpoint, user, and secret" >&2
+  echo "ERROR: recovery smoke testing requires a separate destination endpoint, user, and secret" >&2
   echo "Set MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT, _USER, and _SECRET." >&2
   exit 1
 fi
@@ -249,7 +250,7 @@ dry_proof="$workspace/${source_provider}-to-${destination_provider}-dry_pilot-pr
 "$binary" customer-proof "$state" "$dry_proof" --allow-incomplete \
   --source-provider "$source_provider" --destination-provider "$destination_provider" \
   --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
-  --scenario-ids "$scenario_ids" \
+  --scenario-ids "$dry_scenario_ids" \
   >"$workspace/dry-proof.log" 2>&1 || {
   cat "$workspace/dry-proof.log" >&2
   echo "FAIL: could not export phase-specific dry-pilot proof" >&2
@@ -263,7 +264,7 @@ dry_proof="$workspace/${source_provider}-to-${destination_provider}-dry_pilot-pr
 echo "=== Starting recovery test for $provider ==="
 recovery_state="$workspace/recovery-state.db"
 # Snapshot through MailSwiftSync's SQLite online-backup path so WAL pages and
-# the durable ledger are copied consistently for the recovery qualification.
+# the durable ledger are copied consistently for the recovery smoke test.
 "$binary" backup "$state" "$recovery_state" >"$workspace/recovery-backup.log" 2>&1 || {
   cat "$workspace/recovery-backup.log" >&2
   echo "FAIL: could not create a consistent recovery database snapshot" >&2
@@ -381,15 +382,15 @@ recovery_proof="$workspace/${source_provider}-to-${destination_provider}-recover
 "$binary" customer-proof "$recovery_state" "$recovery_proof" \
   --source-provider "$source_provider" --destination-provider "$destination_provider" \
   --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
-  --scenario-ids "$scenario_ids" \
+  --scenario-ids "$recovery_scenario_ids" \
   >"$workspace/recovery-proof.log" 2>&1 || {
   cat "$workspace/recovery-proof.log" >&2
   echo "FAIL: could not export phase-specific recovery proof" >&2
   exit 1
 }
 
-# 3. LIVE MIGRATION (for live_pilot phase). This runs the normal state after
-# the independent interruption/recovery qualification has completed.
+# 3. LIVE MIGRATION (for live_pilot smoke proof). This runs the normal state
+# after the separate interruption/recovery smoke test has completed.
 export XDG_CONFIG_HOME="$workspace/config"
 echo "=== Starting live migration for $provider (live_pilot) ==="
 "$binary" headless "$state" live \
@@ -405,93 +406,41 @@ live_proof="$workspace/${source_provider}-to-${destination_provider}-live_pilot-
 "$binary" customer-proof "$state" "$live_proof" \
   --source-provider "$source_provider" --destination-provider "$destination_provider" \
   --source-auth "$source_auth" --destination-auth "$destination_auth" --fixture-id "$fixture_id" \
-  --scenario-ids "$scenario_ids" \
+  --scenario-ids "$live_scenario_ids" \
   >"$workspace/live-proof.log" 2>&1 || {
   cat "$workspace/live-proof.log" >&2
   echo "FAIL: could not export phase-specific live proof" >&2
   exit 1
 }
 
-# 4. GENERATE PROVIDER EVIDENCE FOR EACH TESTING PHASE
-echo "=== Generating provider evidence records ==="
-
-evidence_dir="${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-.}"
-mkdir -p "$evidence_dir"
-
-# Helper function to export and convert to evidence format
-export_phase_evidence() {
-  local proof="$1"
-  local phase="$2"
-  local run_name="${source_provider}-to-${destination_provider}-${phase}"
-  local run_id
-  run_id="$(python3 - "$proof" "$phase" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    proof = json.load(handle)
-phase = sys.argv[2]
-runs = [
-    run for run in proof.get("runs", [])
-    if isinstance(run, dict)
-    and run.get("status") == "completed"
-    and run.get("started_at")
-    and (phase != "dry_pilot" or run.get("phase_at_start") == "preflight")
-]
-if not runs:
-    raise SystemExit("proof contains no completed run")
-selected = max(runs, key=lambda run: (run["started_at"], run["run_id"]))
-print(selected["run_id"])
-PY
-)" || {
-    echo "FAIL: could not select a completed run for $phase" >&2
-    return 1
-  }
-
-  # Generate provider evidence record
-  local evidence="$evidence_dir/${run_name}.json"
-  cp -- "$proof" "$evidence_dir/$(basename "$proof")"
-  python3 "$(dirname "$0")/generate-provider-evidence.py" \
-    "$proof" "$source_provider" "$destination_provider" "$phase" \
-    --run-id "$run_id" --engine-version "$imapsync_version" \
-    --mailswiftsync-version "$mailswiftsync_version" \
-    --mailswiftsync-commit "$mailswiftsync_commit" \
-    --mailswiftsync-binary-sha256 "$mailswiftsync_binary_sha256" \
-    --imapsync-binary-sha256 "$imapsync_binary_sha256" \
-    --qualification-bundle-id "$qualification_bundle_id" \
-    --output "$evidence" || {
-    echo "FAIL: Could not generate phase-specific evidence record for $phase" >&2
-    return 1
-  }
-
-  echo "✓ Generated evidence for $phase: $evidence"
-  echo "$evidence"
-}
-
-# Generate evidence for each phase
-echo "Exporting dry_pilot evidence..."
-export_phase_evidence "$dry_proof" "dry_pilot"
-
-echo "Exporting live_pilot evidence..."
-export_phase_evidence "$live_proof" "live_pilot"
-
-echo "Exporting recovery_test evidence..."
-export_phase_evidence "$recovery_proof" "recovery_test"
-
-# 5. VERIFY EVIDENCE INTEGRITY (for live_pilot phase)
-if [[ -f "$live_proof" ]]; then
-  echo "=== Verifying proof integrity ==="
-  "$binary" verify "$live_proof" >"$workspace/verify.log" 2>&1 || {
+# 4. VERIFY AND RETAIN SMOKE PROOFS (not qualification evidence)
+proof_output="${MAILSWIFTSYNC_EVIDENCE_OUTPUT:-${TMPDIR:-/tmp}/mailswiftsync-provider-smoke}"
+mkdir -p "$proof_output"
+proof_bundle="$proof_output/${source_provider}-to-${destination_provider}-smoke-$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+for phase_proof in "$dry_proof" "$live_proof" "$recovery_proof"; do
+  "$binary" verify "$phase_proof" >"$workspace/verify.log" 2>&1 || {
     cat "$workspace/verify.log" >&2
-    echo "FAIL: customer-proof integrity verification failed" >&2
+    echo "FAIL: customer-proof integrity verification failed: $phase_proof" >&2
     exit 1
   }
-  echo "✓ Customer-proof integrity verified"
-fi
+done
+echo "✓ Integrity verified for all three smoke proofs"
+mkdir -m 0700 "$proof_bundle" || {
+  echo "FAIL: could not create a unique private smoke-proof directory: $proof_bundle" >&2
+  exit 1
+}
+cp -- "$dry_proof" "$proof_bundle/${source_provider}-to-${destination_provider}-dry_pilot-smoke-proof.json"
+cp -- "$live_proof" "$proof_bundle/${source_provider}-to-${destination_provider}-live_pilot-smoke-proof.json"
+cp -- "$recovery_proof" "$proof_bundle/${source_provider}-to-${destination_provider}-recovery_test-smoke-proof.json"
 
-# 6. PRINT SUMMARY
+# 5. PRINT SUMMARY
 echo "=== Test Summary for $provider ==="
+echo "MailSwiftSync: $mailswiftsync_version (git $mailswiftsync_commit, sha256 $mailswiftsync_binary_sha256)"
+echo "imapsync: $imapsync_version (sha256 $imapsync_binary_sha256)"
 "$binary" status "$state" --summary >"$workspace/summary.log" 2>&1 || true
 cat "$workspace/summary.log" || true
 
 echo ""
-echo "✓ All tests passed for $provider"
-echo "Evidence records saved to: $evidence_dir"
+echo "✓ Provider smoke scenarios passed for $provider"
+echo "Smoke proofs saved to: $proof_bundle"
+echo "NOT PROVIDER QUALIFICATION: these small-run proofs do not satisfy the release evidence policy."
