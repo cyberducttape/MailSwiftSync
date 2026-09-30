@@ -11,6 +11,9 @@ pub(crate) fn parts(input: &str, default_port: u16) -> Result<(String, u16), Str
         if host.is_empty() {
             return Err("IPv6 endpoint has an empty host".into());
         }
+        if host.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err("bracketed endpoint is not an IPv6 address".into());
+        }
         let suffix = &rest[end + 1..];
         if !suffix.is_empty() && !suffix.starts_with(':') {
             return Err("invalid characters after IPv6 endpoint".into());
@@ -32,6 +35,7 @@ pub(crate) fn parts(input: &str, default_port: u16) -> Result<(String, u16), Str
         if host.trim().is_empty() {
             return Err("endpoint has an empty host".into());
         }
+        validate_host_name(host.trim())?;
         let port = port_text
             .parse::<u16>()
             .map_err(|_| "invalid endpoint port".to_owned())?;
@@ -40,10 +44,34 @@ pub(crate) fn parts(input: &str, default_port: u16) -> Result<(String, u16), Str
         }
         return Ok((host.trim().to_owned(), port));
     }
-    if input.matches(':').count() > 1 && input.parse::<std::net::Ipv6Addr>().is_err() {
-        return Err("invalid IPv6 endpoint".into());
+    if input.matches(':').count() > 1 {
+        if input.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err("invalid IPv6 endpoint".into());
+        }
+    } else {
+        validate_host_name(input)?;
     }
     Ok((input.to_owned(), default_port))
+}
+
+/// A DNS name (including internationalized names) or an IPv4 address.
+/// Engines receive the host as a command-line value; refusing spaces,
+/// separators, and a leading `-` keeps a malformed field from ever looking
+/// like an engine option.
+fn validate_host_name(host: &str) -> Result<(), String> {
+    if host.len() > 253 {
+        return Err("endpoint host name is longer than 253 characters".into());
+    }
+    if host.starts_with(['-', '.']) {
+        return Err("endpoint host name cannot start with '-' or '.'".into());
+    }
+    if !host
+        .chars()
+        .all(|character| character.is_alphanumeric() || matches!(character, '.' | '-' | '_'))
+    {
+        return Err("endpoint host may contain only letters, digits, '.', '-', and '_'".into());
+    }
+    Ok(())
 }
 
 /// Return the identity used to prevent concurrent writes to one destination
@@ -116,6 +144,29 @@ mod tests {
         assert!(parts("host:99999", 993).is_err());
         assert!(parts("[2001:db8::1]garbage", 993).is_err());
         assert!(parts("mail.example.com:993:garbage", 993).is_err());
+        assert!(parts("--debugimap1", 993).is_err());
+        assert!(parts("-host:993", 993).is_err());
+        assert!(parts("mail example.com", 993).is_err());
+        assert!(parts("mail.example.com/path", 993).is_err());
+        assert!(parts("user@mail.example.com", 993).is_err());
+        assert!(parts("[not-ipv6]:993", 993).is_err());
+        assert!(parts(".example", 993).is_err());
+    }
+
+    #[test]
+    fn accepts_ipv4_and_internationalized_host_names() {
+        assert_eq!(
+            parts("192.0.2.10:143", 993).unwrap(),
+            ("192.0.2.10".into(), 143)
+        );
+        assert_eq!(
+            parts("mail.bücher.example", 993).unwrap().0,
+            "mail.bücher.example"
+        );
+        assert_eq!(
+            parts("imap_internal.example", 993).unwrap().0,
+            "imap_internal.example"
+        );
     }
 
     #[test]
