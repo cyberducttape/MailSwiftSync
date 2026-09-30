@@ -55,6 +55,8 @@ jobs:
       - run: python3 tests/verify_evidence_gate_test.py
       - run: scripts/verify-compatibility-matrix.sh docs/compatibility-matrix.md
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Compile libFuzzer targets
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
       - run: cargo test --locked --all-targets --all-features
       - name: Publish runnable test inventory
         if: always()

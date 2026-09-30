@@ -18,6 +18,8 @@ use std::{
 
 #[path = "imap_probe/fetch_parser.rs"]
 mod fetch_parser;
+mod list_parser;
+mod literal_framing;
 #[path = "imap_probe/namespace.rs"]
 mod namespace_parser;
 mod resolver;
@@ -25,6 +27,10 @@ use fetch_parser::parse_message_fetch_body_hashes_response_bytes;
 use fetch_parser::parse_message_fetch_metadata_response_bytes_with_mailbox;
 #[cfg(test)]
 use fetch_parser::{parse_message_fetch_metadata_response_bytes, parse_message_id_header};
+#[cfg(test)]
+use list_parser::tokens as parse_list_tokens;
+use list_parser::{delimiter as parse_list_delimiter, mailbox_name as parse_list_mailbox_name};
+use literal_framing::TaggedResponseScanner;
 use resolver::{connect_racing, start_dns_lookup};
 
 const BUDGETED_IMAP_IO_SLICE: Duration = Duration::from_millis(250);
@@ -243,88 +249,6 @@ fn read_imap_tagged_bytes_with_budget<S: Read>(
             return Ok(response);
         }
     }
-}
-
-/// Incrementally locate a tagged completion line without interpreting bytes
-/// inside IMAP literals as protocol framing. The scanner owns only offsets and
-/// literal state; it never rescans bytes already consumed, so a growing FETCH
-/// response is processed in O(n) time across all socket reads.
-struct TaggedResponseScanner<'a> {
-    tag: &'a [u8],
-    cursor: usize,
-    line_start: usize,
-    literal_remaining: usize,
-}
-
-impl<'a> TaggedResponseScanner<'a> {
-    fn new(tag: &'a str) -> Self {
-        Self {
-            tag: tag.as_bytes(),
-            cursor: 0,
-            line_start: 0,
-            literal_remaining: 0,
-        }
-    }
-
-    fn scan(&mut self, response: &[u8]) -> bool {
-        while self.cursor < response.len() {
-            if self.literal_remaining > 0 {
-                let consumed = self
-                    .literal_remaining
-                    .min(response.len().saturating_sub(self.cursor));
-                self.cursor += consumed;
-                self.literal_remaining -= consumed;
-                if self.literal_remaining == 0 {
-                    // Literal bytes are payload, not part of the following
-                    // protocol line. Multiple literals may occur in one
-                    // FETCH response line, so resume line accounting here.
-                    self.line_start = self.cursor;
-                }
-                continue;
-            }
-
-            if response[self.cursor] != b'\r' {
-                self.cursor += 1;
-                continue;
-            }
-            if self.cursor + 1 >= response.len() {
-                // Keep a trailing CR for the next socket read, when the LF
-                // completing this line may arrive in a separate chunk.
-                break;
-            }
-            if response[self.cursor + 1] != b'\n' {
-                self.cursor += 1;
-                continue;
-            }
-
-            let line_end = self.cursor;
-            let line = &response[self.line_start..line_end];
-            if line.starts_with(self.tag)
-                && line
-                    .get(self.tag.len())
-                    .is_some_and(|byte| byte.is_ascii_whitespace())
-            {
-                return true;
-            }
-            self.literal_remaining = parse_imap_literal_length(line).unwrap_or(0);
-            self.cursor += 2;
-            self.line_start = self.cursor;
-        }
-        false
-    }
-}
-
-fn parse_imap_literal_length(line: &[u8]) -> Option<usize> {
-    line.strip_suffix(b"}")
-        .and_then(|line| line.iter().rposition(|byte| *byte == b'{'))
-        .and_then(|start| std::str::from_utf8(&line[start + 1..line.len() - 1]).ok())
-        .and_then(|length| {
-            length
-                .strip_suffix('+')
-                .unwrap_or(length)
-                .parse::<usize>()
-                .ok()
-        })
 }
 
 /// Locate a tagged completion line without interpreting bytes inside IMAP
@@ -851,81 +775,6 @@ fn record_list_entry(
         });
     }
     Ok(())
-}
-
-fn parse_list_mailbox_name(line: &str) -> Option<String> {
-    let tokens = parse_list_tokens(line)?;
-    tokens
-        .last()
-        .filter(|value| !value.starts_with('{'))
-        .cloned()
-}
-
-fn parse_list_delimiter(line: &str) -> Option<String> {
-    let tokens = parse_list_tokens(line)?;
-    let mut index = 2;
-    if tokens.get(index)?.starts_with('(') {
-        while !tokens.get(index)?.ends_with(')') {
-            index += 1;
-        }
-        index += 1;
-    }
-    let delimiter = tokens.get(index)?;
-    (!delimiter.is_empty()).then(|| delimiter.to_owned())
-}
-
-/// Tokenize the bounded, non-literal portion of an IMAP LIST response.
-/// Quoted strings may contain UTF-8, whitespace, and escaped quote/backslash
-/// bytes; decode the complete token only after processing quoted pairs.
-fn parse_list_tokens(line: &str) -> Option<Vec<String>> {
-    let bytes = line.as_bytes();
-    let mut tokens = Vec::new();
-    let mut offset = 0;
-    while offset < bytes.len() {
-        while bytes.get(offset).is_some_and(u8::is_ascii_whitespace) {
-            offset += 1;
-        }
-        if offset == bytes.len() {
-            break;
-        }
-        if bytes[offset] == b'"' {
-            offset += 1;
-            let mut value = Vec::new();
-            let mut closed = false;
-            while offset < bytes.len() {
-                match bytes[offset] {
-                    b'\\' => {
-                        offset += 1;
-                        value.push(*bytes.get(offset)?);
-                        offset += 1;
-                    }
-                    b'"' => {
-                        offset += 1;
-                        closed = true;
-                        break;
-                    }
-                    byte => {
-                        value.push(byte);
-                        offset += 1;
-                    }
-                }
-            }
-            if !closed {
-                return None;
-            }
-            tokens.push(String::from_utf8(value).ok()?);
-        } else {
-            let start = offset;
-            while bytes
-                .get(offset)
-                .is_some_and(|byte| !byte.is_ascii_whitespace())
-            {
-                offset += 1;
-            }
-            tokens.push(std::str::from_utf8(&bytes[start..offset]).ok()?.to_owned());
-        }
-    }
-    Some(tokens)
 }
 
 fn list_special_use(line: &str) -> Vec<String> {

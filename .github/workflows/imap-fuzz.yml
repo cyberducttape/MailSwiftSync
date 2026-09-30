@@ -1,0 +1,77 @@
+name: IMAP parser fuzzing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/imap_probe/**"
+      - "src/core/capabilities.rs"
+      - "src/core/message_extraction.rs"
+      - "src/imap_protocol.rs"
+      - "fuzz/**"
+      - ".github/workflows/imap-fuzz.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/imap_probe/**"
+      - "src/core/capabilities.rs"
+      - "src/core/message_extraction.rs"
+      - "src/imap_protocol.rs"
+      - "fuzz/**"
+      - ".github/workflows/imap-fuzz.yml"
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: imap-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fetch_response
+          - list_response
+          - literal_framing
+          - namespace_response
+    env:
+      FUZZ_SECONDS: ${{ github.event_name == 'pull_request' && '90' || github.event_name == 'push' && '300' || '900' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Restore accumulated fuzz corpus
+        id: corpus-cache
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}/
+          key: imap-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            imap-corpus-${{ matrix.target }}-${{ github.ref_name }}-
+            imap-corpus-${{ matrix.target }}-main-
+      - name: Install nightly Rust and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +stable install cargo-fuzz --version 0.13.2 --locked
+      - name: Fuzz ${{ matrix.target }}
+        run: cargo fuzz run --release "${{ matrix.target }}" -- -max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=4096 -max_len=1048576
+      - name: Retain evolved corpus
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: imap-fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save accumulated fuzz corpus
+        if: always() && steps.corpus-cache.outcome == 'success'
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: fuzz/corpus/${{ matrix.target }}/
+          key: imap-corpus-${{ matrix.target }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}

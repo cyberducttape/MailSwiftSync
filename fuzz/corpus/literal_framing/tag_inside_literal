@@ -1,0 +1,3 @@
+* 1 FETCH (BODY[] {23}
+a001 OK fake completion)
+a001 OK actual completion

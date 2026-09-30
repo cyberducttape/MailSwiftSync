@@ -1,0 +1,43 @@
+[package]
+name = "mailswiftsync-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sha2 = "0.11"
+
+[[bin]]
+name = "fetch_response"
+path = "fuzz_targets/fetch_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "list_response"
+path = "fuzz_targets/list_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "literal_framing"
+path = "fuzz_targets/literal_framing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "namespace_response"
+path = "fuzz_targets/namespace_response.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

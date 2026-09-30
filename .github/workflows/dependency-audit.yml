@@ -24,5 +24,7 @@ jobs:
         # cargo-audit scans the committed Cargo.lock directly; unlike Cargo,
         # cargo-audit 0.22.x has no --locked option.
         run: cargo audit
+      - name: Audit IMAP fuzzing dependencies
+        run: cargo audit --file fuzz/Cargo.lock
       - name: Enforce dependency policy
         run: cargo deny check advisories bans licenses sources
