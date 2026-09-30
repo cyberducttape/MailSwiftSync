@@ -38,6 +38,37 @@ fn headless_path_option_without_value_names_the_option() {
 }
 
 #[test]
+fn batch_headless_accepts_opt_in_diagnostic_directory() {
+    let root = std::env::temp_dir().join(format!(
+        "mailswiftsync-cli-batch-diagnostic-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let state = root.join("state.db");
+    let diagnostics = root.join("diagnostics");
+    let output = run(&[
+        "headless",
+        state.to_str().unwrap(),
+        "batch-preflight",
+        "--diagnostic-log",
+        diagnostics.to_str().unwrap(),
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("single-mailbox-only"), "{stderr}");
+    assert!(
+        stderr.contains("diagnostic logs are owner-only and bounded"),
+        "{stderr}"
+    );
+    assert!(diagnostics.is_dir(), "{stderr}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn headless_repeated_path_option_is_refused() {
     let state = missing_ledger("repeated-secret");
     let output = run(&[

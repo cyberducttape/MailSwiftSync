@@ -168,6 +168,7 @@ pub(crate) struct BatchExecutionContext {
     pub(crate) batch_run_id: String,
     pub(crate) jobs: Vec<BulkJob>,
     pub(crate) verification_state_path: Option<std::path::PathBuf>,
+    pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
 }
 
 /// Create the bounded event channel, cancellation token, and batch worker as
@@ -198,6 +199,7 @@ pub(crate) fn spawn_batch_worker(
         batch_run_id,
         jobs,
         verification_state_path,
+        diagnostic_logger,
     } = context;
     let launch_limiter = Arc::new(ProcessLaunchLimiter::new(BATCH_PROCESS_STARTS_PER_SECOND));
     let provider_limiter = Arc::new(AdaptiveProviderLimiter::new());
@@ -243,6 +245,7 @@ pub(crate) fn spawn_batch_worker(
             let resolved_imapsync = Arc::clone(&resolved_imapsync);
             let oauth_refresh_locks = Arc::clone(&oauth_refresh_locks);
             let verification_state_path = verification_state_path.clone();
+            let diagnostic_logger = diagnostic_logger.clone();
             workers.push(thread::spawn(move || {
                 process_batch_work_items(BatchWorkerContext {
                     concurrency,
@@ -260,6 +263,7 @@ pub(crate) fn spawn_batch_worker(
                     resolved_imapsync,
                     oauth_refresh_locks,
                     verification_state_path,
+                    diagnostic_logger,
                 });
             }));
         }

@@ -152,6 +152,7 @@ pub(crate) struct BatchWorkerContext {
     pub(crate) resolved_imapsync: Arc<std::collections::HashMap<String, ResolvedImapsyncIdentity>>,
     pub(crate) oauth_refresh_locks: OAuthRefreshLocks,
     pub(crate) verification_state_path: Option<std::path::PathBuf>,
+    pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
 }
 
 fn refresh_live_credentials(
@@ -250,6 +251,7 @@ struct BatchAttemptContext<'a> {
     cancel: Arc<AtomicBool>,
     imapsync_output_profile: ImapsyncOutputProfile,
     verification_state_path: Option<std::path::PathBuf>,
+    diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
     transfer_attempt_number: &'a mut u32,
     verification_failure: &'a mut Option<String>,
 }
@@ -271,6 +273,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
         cancel,
         imapsync_output_profile,
         verification_state_path,
+        diagnostic_logger,
         transfer_attempt_number,
         verification_failure,
     } = context;
@@ -329,7 +332,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     dovecot_exit_two_is_delta: form.engine() == core::Engine::Dovecot
                         && !form.dry_run,
                     imapsync_output_profile,
-                    diagnostic_logger: None,
+                    diagnostic_logger: diagnostic_logger.clone(),
                     attempt_number: *transfer_attempt_number,
                     live_transfer: live,
                 })
@@ -474,6 +477,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         resolved_imapsync,
         oauth_refresh_locks,
         verification_state_path,
+        diagnostic_logger,
     } = context;
     let live = mode.is_live();
     while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
@@ -730,6 +734,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 cancel: cancel.clone(),
                 imapsync_output_profile,
                 verification_state_path: verification_state_path.clone(),
+                diagnostic_logger: diagnostic_logger.clone(),
                 transfer_attempt_number: &mut transfer_attempt_number,
                 verification_failure: &mut verification_failure,
             });
@@ -865,6 +870,11 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 detail: "cancelled by operator".into(),
                 credential_fingerprint: None,
             });
+        }
+        if let Some(logger) = &diagnostic_logger
+            && let Err(error) = logger.finish_run(&child_run_id)
+        {
+            eprintln!("could not finalize mailbox diagnostic transcript: {error}");
         }
     }
 }

@@ -105,14 +105,17 @@ and require the corresponding integration run.
   credentials, endpoints, plans, command paths, mailbox content, or diagnostic
   text. Large projects retain exact mailbox totals and state counts while
   limiting detailed mailbox statuses to an explicitly marked 1,000-row sample.
-- Headless single-mailbox preflight/live commands support an opt-in
-  `--diagnostic-log <directory>` transcript. It is disabled by default; when
-  enabled, engine output is secret-redacted, bounded to 20 owner-only files,
-  names files with project/run identifiers, and warns that mailbox metadata may
-  be present. Newly created directories are restricted, while existing
-  directory permissions are preserved and must be selected appropriately by
-  the operator. Batch commands reject this option until their per-child log
-  lifecycle is explicitly defined.
+- Headless preflight/live and batch commands support opt-in
+  `--diagnostic-log <directory>` transcripts. Each batch child has a separate
+  file; mailbox job IDs are hashed in filenames. Engine output is redacted for
+  known secrets and bounded to 8 MiB per file / 128 MiB per directory, with
+  retention capped at 20 completed files. These plaintext logs can still
+  contain provider, mailbox, folder, and message metadata; transcript contents
+  are not account-pseudonymized, encrypted, or compressed, and support bundles
+  do not collect them. Operators must select and handle logs explicitly.
+  Logging is disabled by default. Newly created directories are restricted;
+  existing directory permissions are preserved and must be selected
+  appropriately by the operator.
 - A headless `customer-proof <state.db> <output.json>` export uses the same
   redacted customer artifact as the GUI, so automation can produce a proof
   without depending on a file dialog. It requires durable project completion

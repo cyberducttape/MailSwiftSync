@@ -5,6 +5,7 @@
 //! by default and requires an operator-selected directory.
 
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -13,6 +14,7 @@ use std::{
 };
 
 use crate::credentials::{ensure_private_directory, restrict_file_permissions};
+use sha2::{Digest, Sha256};
 
 const RETAIN_FILES: usize = 20;
 const MAX_LINE_BYTES: usize = 16 * 1024;
@@ -25,7 +27,14 @@ const FLUSH_LINES: usize = 64;
 
 pub(crate) struct DiagnosticLogger {
     directory: PathBuf,
-    file: Mutex<Option<FileState>>,
+    state: Mutex<LoggerState>,
+}
+
+#[derive(Default)]
+struct LoggerState {
+    files: HashMap<String, FileState>,
+    run_paths: HashMap<String, Vec<PathBuf>>,
+    total_bytes: u64,
 }
 
 struct FileState {
@@ -33,6 +42,7 @@ struct FileState {
     project_id: String,
     job_id: String,
     part: u32,
+    path: PathBuf,
     file: BufWriter<File>,
     bytes_written: usize,
     pending_flush_bytes: usize,
@@ -45,9 +55,13 @@ impl DiagnosticLogger {
             .map_err(|error| format!("could not secure diagnostic log directory: {error}"))?;
         let logger = Self {
             directory: directory.to_owned(),
-            file: Mutex::new(None),
+            state: Mutex::new(LoggerState::default()),
         };
-        logger.prune()?;
+        if let Ok(mut state) = logger.state.lock() {
+            logger.prune(&mut state)?;
+        } else {
+            return Err("diagnostic log lock was poisoned".to_owned());
+        }
         Ok(logger)
     }
 
@@ -60,54 +74,103 @@ impl DiagnosticLogger {
         line: &str,
     ) -> Result<(), String> {
         let mut state = self
-            .file
+            .state
             .lock()
             .map_err(|_| "diagnostic log lock was poisoned".to_owned())?;
-        if state
-            .as_ref()
-            .is_none_or(|current| current.run_id != run_id)
-        {
-            *state = Some(self.new_file(project_id, run_id, job_id, 0)?);
-            self.prune()?;
+        if !state.files.contains_key(run_id) {
+            let file = self.new_file(project_id, run_id, job_id, 0)?;
+            state
+                .run_paths
+                .entry(run_id.to_owned())
+                .or_default()
+                .push(file.path.clone());
+            state.files.insert(run_id.to_owned(), file);
+            self.prune(&mut state)?;
         }
-        let Some(state) = state.as_mut() else {
-            return Err("diagnostic log state was not initialized".to_owned());
-        };
+        let file_state = state
+            .files
+            .get_mut(run_id)
+            .ok_or_else(|| "diagnostic log state was not initialized".to_owned())?;
+        if file_state.project_id != project_id || file_state.job_id != job_id {
+            return Err("diagnostic run identifier was reused for another mailbox".to_owned());
+        }
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
         let bounded = truncate_line(line);
         let rendered = format!("{timestamp} [{stream}] {bounded}\n");
-        if state.bytes_written > 0
-            && state.bytes_written.saturating_add(rendered.len()) > MAX_FILE_BYTES
+        let rotation = if file_state.bytes_written > 0
+            && file_state.bytes_written.saturating_add(rendered.len()) > MAX_FILE_BYTES
         {
-            state
+            file_state
                 .file
                 .flush()
                 .map_err(|error| format!("could not rotate diagnostic log: {error}"))?;
-            let next_part = state.part.saturating_add(1);
-            let replacement =
-                self.new_file(&state.project_id, &state.run_id, &state.job_id, next_part)?;
-            *state = replacement;
-            self.prune()?;
+            Some((
+                file_state.project_id.clone(),
+                file_state.run_id.clone(),
+                file_state.job_id.clone(),
+                file_state.part.saturating_add(1),
+            ))
+        } else {
+            None
+        };
+        if let Some((project_id, run_id, job_id, part)) = rotation {
+            let replacement = self.new_file(&project_id, &run_id, &job_id, part)?;
+            state
+                .run_paths
+                .entry(run_id.to_owned())
+                .or_default()
+                .push(replacement.path.clone());
+            state.files.insert(run_id.to_owned(), replacement);
+            self.prune(&mut state)?;
         }
-        state
+        if state.total_bytes.saturating_add(rendered.len() as u64) > MAX_DIRECTORY_BYTES {
+            return Err("diagnostic directory byte limit reached".to_owned());
+        }
+        let total_bytes = state.total_bytes.saturating_add(rendered.len() as u64);
+        let file_state = state
+            .files
+            .get_mut(run_id)
+            .ok_or_else(|| "diagnostic log state was not initialized".to_owned())?;
+        file_state
             .file
             .write_all(rendered.as_bytes())
             .map_err(|error| format!("could not write diagnostic log: {error}"))?;
-        state.bytes_written = state.bytes_written.saturating_add(rendered.len());
-        state.pending_flush_bytes = state.pending_flush_bytes.saturating_add(rendered.len());
-        state.pending_flush_lines = state.pending_flush_lines.saturating_add(1);
-        if state.pending_flush_bytes >= FLUSH_BYTES || state.pending_flush_lines >= FLUSH_LINES {
-            state
+        file_state.bytes_written = file_state.bytes_written.saturating_add(rendered.len());
+        file_state.pending_flush_bytes = file_state
+            .pending_flush_bytes
+            .saturating_add(rendered.len());
+        file_state.pending_flush_lines = file_state.pending_flush_lines.saturating_add(1);
+        if file_state.pending_flush_bytes >= FLUSH_BYTES
+            || file_state.pending_flush_lines >= FLUSH_LINES
+        {
+            file_state
                 .file
                 .flush()
                 .map_err(|error| format!("could not flush diagnostic log: {error}"))?;
-            state.pending_flush_bytes = 0;
-            state.pending_flush_lines = 0;
+            file_state.pending_flush_bytes = 0;
+            file_state.pending_flush_lines = 0;
         }
+        state.total_bytes = total_bytes;
         Ok(())
+    }
+
+    pub(crate) fn finish_run(&self, run_id: &str) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "diagnostic log lock was poisoned".to_owned())?;
+        let flush_result = state.files.remove(run_id).map(|mut file| {
+            file.file
+                .flush()
+                .map_err(|error| format!("could not flush completed diagnostic log: {error}"))
+        });
+        state.run_paths.remove(run_id);
+        let prune_result = self.prune(&mut state);
+        flush_result.unwrap_or(Ok(()))?;
+        prune_result
     }
 
     fn new_file(
@@ -117,15 +180,16 @@ impl DiagnosticLogger {
         job_id: &str,
         part: u32,
     ) -> Result<FileState, String> {
+        let mailbox_hash = pseudonym_hash(job_id);
         let filename = if part == 0 {
             format!(
-                "mailswiftsync-{project_id}-{run_id}.log",
+                "mailswiftsync-{project_id}-{run_id}-mailbox-{mailbox_hash}.log",
                 project_id = safe_component(project_id),
                 run_id = safe_component(run_id),
             )
         } else {
             format!(
-                "mailswiftsync-{project_id}-{run_id}-part-{part:04}.log",
+                "mailswiftsync-{project_id}-{run_id}-mailbox-{mailbox_hash}-part-{part:04}.log",
                 project_id = safe_component(project_id),
                 run_id = safe_component(run_id),
             )
@@ -142,15 +206,18 @@ impl DiagnosticLogger {
             .map_err(|error| format!("could not restrict diagnostic log permissions: {error}"))?;
         let mut file = BufWriter::with_capacity(WRITER_CAPACITY, file);
         let header = format!(
-            "# MailSwiftSync diagnostic log; project_id={project_id} run_id={run_id} job_id={job_id}\n"
+            "# MailSwiftSync diagnostic log; project_id={project_id} run_id={run_id} mailbox_hash={mailbox_hash}\n"
         );
         file.write_all(header.as_bytes())
             .map_err(|error| format!("could not initialize diagnostic log: {error}"))?;
+        file.flush()
+            .map_err(|error| format!("could not flush diagnostic log header: {error}"))?;
         Ok(FileState {
             run_id: run_id.to_owned(),
             project_id: project_id.to_owned(),
             job_id: job_id.to_owned(),
             part,
+            path,
             file,
             bytes_written: header.len(),
             pending_flush_bytes: header.len(),
@@ -158,14 +225,19 @@ impl DiagnosticLogger {
         })
     }
 
-    fn prune(&self) -> Result<(), String> {
+    fn prune(&self, state: &mut LoggerState) -> Result<(), String> {
+        let active_paths = state
+            .run_paths
+            .values()
+            .flat_map(|paths| paths.iter().cloned())
+            .collect::<HashSet<_>>();
         let mut files = fs::read_dir(&self.directory)
             .map_err(|error| format!("could not list diagnostic log directory: {error}"))?
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let path = entry.path();
                 let name = path.file_name()?.to_str()?;
-                name.starts_with("mailswiftsync-")
+                (name.starts_with("mailswiftsync-") && entry.file_type().ok()?.is_file())
                     .then(|| {
                         entry
                             .metadata()
@@ -178,27 +250,49 @@ impl DiagnosticLogger {
             .collect::<Vec<_>>();
         files.sort_by(|left, right| right.0.cmp(&left.0));
         let mut retained_bytes = 0_u64;
-        for (index, (_, path)) in files.into_iter().enumerate() {
+        let mut retained_files = 0_usize;
+        for (_, path) in files {
             let size = fs::metadata(&path)
                 .map(|metadata| metadata.len())
                 .unwrap_or(0);
-            if index < RETAIN_FILES && retained_bytes.saturating_add(size) <= MAX_DIRECTORY_BYTES {
+            if active_paths.contains(&path)
+                || (retained_files < RETAIN_FILES
+                    && retained_bytes.saturating_add(size) <= MAX_DIRECTORY_BYTES)
+            {
+                retained_files = retained_files.saturating_add(1);
                 retained_bytes = retained_bytes.saturating_add(size);
                 continue;
             }
             fs::remove_file(path)
                 .map_err(|error| format!("could not prune diagnostic log: {error}"))?;
         }
+        state.total_bytes = fs::read_dir(&self.directory)
+            .map_err(|error| format!("could not recount diagnostic logs: {error}"))?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_file())
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("mailswiftsync-"))
+            })
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+            .sum();
         Ok(())
     }
 }
 
 impl Drop for DiagnosticLogger {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.file.lock()
-            && let Some(state) = state.as_mut()
-        {
-            let _ = state.file.flush();
+        if let Ok(mut state) = self.state.lock() {
+            for file in state.files.values_mut() {
+                let _ = file.file.flush();
+            }
+            state.files.clear();
+            state.run_paths.clear();
+            let _ = self.prune(&mut state);
         }
     }
 }
@@ -214,6 +308,14 @@ fn safe_component(value: &str) -> String {
                 '_'
             }
         })
+        .collect()
+}
+
+fn pseudonym_hash(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    digest[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
         .collect()
 }
 
@@ -321,5 +423,85 @@ mod tests {
             0o600
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn concurrent_child_runs_write_separate_pseudonymous_transcripts() {
+        let directory = std::env::temp_dir().join(format!(
+            "mailswiftsync-diagnostic-concurrent-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let logger = std::sync::Arc::new(DiagnosticLogger::create(&directory).unwrap());
+        let workers = (0..8)
+            .map(|index| {
+                let logger = std::sync::Arc::clone(&logger);
+                std::thread::spawn(move || {
+                    let job_id = format!("private-mailbox-id-{index}");
+                    let run_id = format!("child-run-{index}");
+                    for _ in 0..8 {
+                        logger
+                            .write_line(
+                                "project",
+                                &run_id,
+                                &job_id,
+                                "stdout",
+                                &format!("marker-{index}"),
+                            )
+                            .unwrap();
+                    }
+                    logger.finish_run(&run_id).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        drop(logger);
+
+        let files = fs::read_dir(&directory)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(files.len(), 8);
+        for entry in &files {
+            let content = fs::read_to_string(entry.path()).unwrap();
+            let marker = (0..8)
+                .map(|index| format!("marker-{index}"))
+                .find(|marker| content.contains(marker))
+                .expect("each child transcript contains its marker");
+            let own_index = marker
+                .trim_start_matches("marker-")
+                .parse::<usize>()
+                .unwrap();
+            assert_eq!(content.matches(&marker).count(), 8);
+            assert!(!content.contains("private-mailbox-id-"));
+            assert!(
+                !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("private-mailbox-id-")
+            );
+            for other in 0..8 {
+                if other != own_index {
+                    assert!(!content.contains(&format!("marker-{other}")));
+                }
+            }
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn mailbox_pseudonym_is_stable_and_does_not_contain_the_identifier() {
+        let identifier = "customer-mailbox-123";
+        let hash = pseudonym_hash(identifier);
+        assert_eq!(hash, pseudonym_hash(identifier));
+        assert_eq!(hash.len(), 24);
+        assert!(!hash.contains(identifier));
     }
 }

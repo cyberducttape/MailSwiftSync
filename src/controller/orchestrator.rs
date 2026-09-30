@@ -299,5 +299,10 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
         {
             eprintln!("reliable panic-recovery event delivery failed: {error}");
         }
+        if let Some(logger) = &diagnostic_logger
+            && let Err(error) = logger.finish_run(&run_id)
+        {
+            eprintln!("could not finalize diagnostic transcript: {error}");
+        }
     });
 }

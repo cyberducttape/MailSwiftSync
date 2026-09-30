@@ -1024,10 +1024,9 @@ pub(crate) fn run() -> eframe::Result<()> {
         if mode.is_batch()
             && (source_secret_file.is_some()
                 || destination_secret_file.is_some()
-                || diagnostic_log.is_some()
                 || reopen_reason.is_some())
         {
-            eprintln!("Single-mailbox-only headless options cannot be used with batch modes.");
+            eprintln!("Secret files and reopen reasons are single-mailbox-only headless options.");
             std::process::exit(2);
         }
         if !mode.is_batch() && mailbox_ids.is_some() {
@@ -1089,15 +1088,20 @@ pub(crate) fn run() -> eframe::Result<()> {
                 reopen_reason.as_deref(),
                 acknowledge_destination_loss,
             ),
-            HeadlessMode::BatchPreflight => {
-                headless_batch_execute_selected(&state, false, mailbox_ids.as_ref(), false)
-                    .map_err(crate::headless::HeadlessFailure::from)
-            }
+            HeadlessMode::BatchPreflight => headless_batch_execute_selected(
+                &state,
+                false,
+                mailbox_ids.as_ref(),
+                false,
+                diagnostic_log.as_deref(),
+            )
+            .map_err(crate::headless::HeadlessFailure::from),
             HeadlessMode::BatchLive => headless_batch_execute_selected(
                 &state,
                 true,
                 mailbox_ids.as_ref(),
                 acknowledge_destination_loss,
+                diagnostic_log.as_deref(),
             )
             .map_err(crate::headless::HeadlessFailure::from),
         };

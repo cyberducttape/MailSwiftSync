@@ -576,6 +576,9 @@ pub(crate) fn headless_execute_with_credentials(
         app.diagnostic_logger = Some(std::sync::Arc::new(crate::DiagnosticLogger::create(
             directory,
         )?));
+        eprintln!(
+            "WARNING: opt-in diagnostic logs are owner-only and bounded, but are plaintext and may retain provider, mailbox, and folder metadata. Review and securely remove them after troubleshooting."
+        );
     }
     if let Some(credentials) = credentials {
         app.form.source_password = credentials.source;
@@ -745,7 +748,7 @@ pub(crate) fn headless_batch_execute(
     live: bool,
     acknowledge_destination_loss: bool,
 ) -> Result<String, String> {
-    headless_batch_execute_selected(state_path, live, None, acknowledge_destination_loss)
+    headless_batch_execute_selected(state_path, live, None, acknowledge_destination_loss, None)
 }
 
 /// Execute only the requested durable batch jobs. This is the automation
@@ -756,8 +759,17 @@ pub(crate) fn headless_batch_execute_selected(
     live: bool,
     requested_ids: Option<&HashSet<String>>,
     acknowledge_destination_loss: bool,
+    diagnostic_log: Option<&std::path::Path>,
 ) -> Result<String, String> {
     let mut app = App::from_state_path(Some(state_path));
+    if let Some(directory) = diagnostic_log {
+        app.diagnostic_logger = Some(std::sync::Arc::new(crate::DiagnosticLogger::create(
+            directory,
+        )?));
+        eprintln!(
+            "WARNING: opt-in batch diagnostic logs are owner-only and bounded, but are plaintext and may retain provider, mailbox, and folder metadata. Review and securely remove them after troubleshooting."
+        );
+    }
     if !app.persistence_available {
         return Err("durable SQLite state is unavailable; batch execution is blocked".into());
     }

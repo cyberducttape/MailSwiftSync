@@ -301,14 +301,20 @@ mailswiftsync headless /path/to/state.db batch-live
 mailswiftsync oauth-authorize google|microsoft|custom <keyring-id> --client-id <id>
 ```
 
-For opt-in headless incident troubleshooting, single-mailbox preflight/live
-commands may also receive `--diagnostic-log /secure/directory`. This writes
-redacted engine output to owner-only files named with the project and run IDs,
-retains the newest 20 transcripts, and warns that mailbox/folder metadata may
-be present. Newly created log directories are restricted; permissions on an
-existing directory are not changed, so operators must choose an appropriately
-protected directory. It is disabled by default and is not accepted for batch
-commands.
+For opt-in headless incident troubleshooting, preflight/live and batch
+commands may receive `--diagnostic-log /secure/directory`. Batch execution
+writes each child mailbox run to its own owner-only transcript; filenames use
+a stable hash of the mailbox job ID rather than the ID itself. Transcripts are
+secret-redacted, capped at 8 MiB per file and 128 MiB per directory, and
+retention is limited to the newest 20 files when runs finish. The option prints
+a warning because logs are plaintext and may still contain provider, mailbox,
+folder, or message metadata. Mailbox names in transcript contents are not
+pseudonymized, logs are not encrypted or compressed, and the sanitized support
+bundle does not include them. Select logs manually for any support handoff and
+securely remove them after troubleshooting. Newly created log directories are
+restricted; permissions on an existing directory are not changed, so operators
+must choose an appropriately protected directory. Logging is disabled by
+default.
 
 Use `mailswiftsync --help` for the complete command contract and
 `mailswiftsync --version` when collecting support or audit metadata. Headless
