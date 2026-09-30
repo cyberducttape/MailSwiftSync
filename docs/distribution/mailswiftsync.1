@@ -27,6 +27,20 @@ Write a sanitized diagnostic bundle.
 .TP
 .B runbook SOURCE DESTINATION
 Print provider setup guidance.
+.TP
+.B doctor [STATE] [--strict]
+Report engine qualification, directory permissions, and host readiness.
+.TP
+.B headless STATE preflight|live|batch-preflight|batch-live
+Run the durable controller without a window.
+.SH EXIT STATUS
+Commands exit 0 on success, 1 on failure, and 2 on a usage error.
+.B headless live
+exits 3 when another delta pass is required, 4 on a verification
+difference, and 5 when operator attention is required.
+.B doctor --strict
+exits 1 when a check is blocked and 3 when imapsync is not the qualified
+version.
 .SH SAFETY
 Use the dry preflight and review the generated execution plan before any live
 run. Do not treat process exit status as proof of mailbox equality; review the

@@ -277,7 +277,7 @@ or recovered without opening the GUI:
 mailswiftsync status /path/to/state.db
 mailswiftsync status /path/to/state.db <project-id>
 mailswiftsync fleet-status /path/to/ledger-directory
-mailswiftsync doctor [/path/to/state.db]
+mailswiftsync doctor [/path/to/state.db] [--strict]
 mailswiftsync recover /path/to/state.db
 mailswiftsync support-bundle /path/to/state.db /path/to/support-bundle.json
 mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
@@ -354,13 +354,15 @@ Treat either representation as sensitive operational data; see
 
 `doctor` is a read-only qualification-envelope check. It reports the
 operating system, configured engine/TLS/auth modes, keyring reference
-presence, database state, free space, and the selected transfer executable.
+presence, database state, whether the state and secret runtime directories are owner-only, free space, and the selected transfer executable.
 For imapsync it requires the exact 2.314 verification qualification; for
 native Dovecot it reports the configured `doveadm` availability without
 claiming provider or storage-format qualification. It never prints
 credential material. A `review` result means the host may still be usable for
 a technical preview, but the operator is outside a qualified envelope and
-should resolve the reported condition before claiming trusted verification.
+should resolve the reported condition before claiming trusted verification. With `--strict`, `doctor` also sets its exit status for
+automation and package checks: `1` when any check is blocked, `3` when the
+imapsync executable is present but not the qualified version, otherwise `0`.
 `supervise` is a foreground, GUI-independent batch controller. It processes
 only automation-safe queued/retryable work, waits through GUI lock ownership,
 and leaves Attention and verification-difference rows untouched. The optional

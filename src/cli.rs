@@ -11,6 +11,35 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::{collections::HashSet, ffi::OsString};
 
+/// Write one line to standard output. A closed pipe (for example
+/// `mailswiftsync status ... | head`) ends the command quietly instead of
+/// panicking. SIGPIPE stays ignored process-wide because the controller
+/// writes to child-process stdin and must not be killed by a dead child.
+macro_rules! out {
+    ($($argument:tt)*) => {
+        $crate::cli::write_stdout(&format!("{}\n", format_args!($($argument)*)))
+    };
+}
+
+fn out_raw(text: &str) {
+    write_stdout(text);
+}
+
+pub(crate) fn write_stdout(text: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    if let Err(error) = stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        if error.kind() == std::io::ErrorKind::BrokenPipe {
+            std::process::exit(0);
+        }
+        eprintln!("could not write to standard output: {error}");
+        std::process::exit(1);
+    }
+}
+
 const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]]";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -129,7 +158,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Usage: mailswiftsync --version");
             std::process::exit(2);
         }
-        println!(
+        out!(
             "MailSwiftSync {} (git {})",
             env!("CARGO_PKG_VERSION"),
             option_env!("MAILSWIFTSYNC_GIT_SHA").unwrap_or("unknown")
@@ -152,7 +181,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         match crate::reports::signing::verify_file(std::path::Path::new(&path), trusted_public_key)
         {
             Ok(message) => {
-                println!("{message}");
+                out!("{message}");
                 return Ok(());
             }
             Err(error) => {
@@ -183,7 +212,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         let key_id = key_id.to_string_lossy();
         match crate::reports::signing::sign_file(&report, &signing_key, &key_id) {
             Ok(message) => {
-                println!("{message}");
+                out!("{message}");
                 return Ok(());
             }
             Err(error) => {
@@ -213,7 +242,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             std::path::Path::new(&output),
         ) {
             Ok(result) => {
-                println!(
+                out!(
                     "Migration assurance {}: {} difference(s). Report: {}",
                     if result.differences == 0 {
                         "passed"
@@ -249,7 +278,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         );
         match serde_json::to_string_pretty(&report) {
             Ok(report) => {
-                println!("{report}");
+                out!("{report}");
                 return Ok(());
             }
             Err(error) => {
@@ -258,15 +287,46 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
-    if command == std::ffi::OsStr::new("doctor") {
-        let state = arguments.next().map(std::path::PathBuf::from);
-        if arguments.next().is_some() {
-            eprintln!("Usage: mailswiftsync doctor [state.db]");
-            std::process::exit(2);
+    if command == std::ffi::OsStr::new("completions") {
+        let shell = arguments.next();
+        let script = shell
+            .as_deref()
+            .and_then(std::ffi::OsStr::to_str)
+            .and_then(crate::completions::script);
+        match (script, arguments.next()) {
+            (Some(script), None) => {
+                out_raw(&script);
+                return Ok(());
+            }
+            _ => {
+                eprintln!(
+                    "Usage: mailswiftsync completions {}",
+                    crate::completions::SHELLS.join("|")
+                );
+                std::process::exit(2);
+            }
         }
-        match serde_json::to_string_pretty(&crate::doctor::run(state.as_deref())) {
-            Ok(report) => {
-                println!("{report}");
+    }
+    if command == std::ffi::OsStr::new("doctor") {
+        let mut state = None;
+        let mut strict = false;
+        for argument in arguments.by_ref() {
+            if argument == std::ffi::OsStr::new("--strict") && !strict {
+                strict = true;
+            } else if state.is_none() && argument != std::ffi::OsStr::new("--strict") {
+                state = Some(std::path::PathBuf::from(argument));
+            } else {
+                eprintln!("Usage: mailswiftsync doctor [state.db] [--strict]");
+                std::process::exit(2);
+            }
+        }
+        let report = crate::doctor::run(state.as_deref());
+        match serde_json::to_string_pretty(&report) {
+            Ok(rendered) => {
+                out!("{rendered}");
+                if strict {
+                    std::process::exit(crate::doctor::strict_exit_code(&report));
+                }
                 return Ok(());
             }
             Err(error) => {
@@ -303,7 +363,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         );
         match serde_json::to_string_pretty(&report) {
             Ok(report) => {
-                println!("{report}");
+                out!("{report}");
                 return Ok(());
             }
             Err(error) => {
@@ -333,7 +393,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         );
         match serde_json::to_string_pretty(&report) {
             Ok(report) => {
-                println!("{report}");
+                out!("{report}");
                 return Ok(());
             }
             Err(error) => {
@@ -366,7 +426,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             "guidance": guidance,
         })) {
             Ok(guidance) => {
-                println!("{guidance}");
+                out!("{guidance}");
                 return Ok(());
             }
             Err(error) => {
@@ -397,7 +457,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             .and_then(|store| store.backup_to(&destination))
         {
             Ok(()) => {
-                println!("Created verified ledger backup: {}", destination.display());
+                out!("Created verified ledger backup: {}", destination.display());
                 return Ok(());
             }
             Err(error) => {
@@ -426,7 +486,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         };
         match restore_ledger(&backup, &destination) {
             Ok(Some(previous)) => {
-                println!(
+                out!(
                     "Restored verified ledger to {}; previous ledger preserved at {}.",
                     destination.display(),
                     previous.display()
@@ -434,7 +494,7 @@ pub(crate) fn run() -> eframe::Result<()> {
                 return Ok(());
             }
             Ok(None) => {
-                println!("Restored verified ledger to {}.", destination.display());
+                out!("Restored verified ledger to {}.", destination.display());
                 return Ok(());
             }
             Err(error) => {
@@ -484,7 +544,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         };
         match result {
             Ok(status) => {
-                println!("{status}");
+                out!("{status}");
                 return Ok(());
             }
             Err(error) => {
@@ -508,7 +568,7 @@ pub(crate) fn run() -> eframe::Result<()> {
                 .map_err(|error| format!("could not serialize fleet status: {error}"))
         }) {
             Ok(status) => {
-                println!("{status}");
+                out!("{status}");
                 return Ok(());
             }
             Err(error) => {
@@ -536,9 +596,10 @@ pub(crate) fn run() -> eframe::Result<()> {
         };
         match headless_recover(&state) {
             Ok(result) => {
-                println!(
+                out!(
                     "Recovered {} job(s); preserved {} unverified process identity(ies).",
-                    result.recovered_jobs, result.preserved_processes
+                    result.recovered_jobs,
+                    result.preserved_processes
                 );
                 if result.preserved_processes > 0 {
                     eprintln!(
@@ -573,7 +634,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         };
         match export_support_bundle(&state, &output) {
             Ok(()) => {
-                println!("Created sanitized support bundle: {}", output.display());
+                out!("Created sanitized support bundle: {}", output.display());
                 return Ok(());
             }
             Err(error) => {
@@ -729,7 +790,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             provider_identity.as_ref(),
         ) {
             Ok(()) => {
-                println!("Created customer migration proof: {}", output.display());
+                out!("Created customer migration proof: {}", output.display());
                 return Ok(());
             }
             Err(error) => {
@@ -809,7 +870,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         };
         match webhook::post_json(&url, &body) {
             Ok(status_code) if (200..300).contains(&status_code) => {
-                println!("Webhook notification delivered (HTTP {status_code}).");
+                out!("Webhook notification delivered (HTTP {status_code}).");
                 return Ok(());
             }
             Ok(status_code) => {
@@ -837,7 +898,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             supervise.maintenance_window,
         ) {
             Ok(message) => {
-                println!("{message}");
+                out!("{message}");
                 return Ok(());
             }
             Err(error) => {
@@ -849,7 +910,7 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("oauth-authorize") {
         match oauth_authorize_command(arguments) {
             Ok(message) => {
-                println!("{message}");
+                out!("{message}");
                 return Ok(());
             }
             Err((code, message)) => {
@@ -1003,7 +1064,7 @@ pub(crate) fn run() -> eframe::Result<()> {
         };
         match result {
             Ok(message) => {
-                println!("{message}");
+                out!("{message}");
                 return Ok(());
             }
             Err(failure) => {
@@ -1020,21 +1081,21 @@ pub(crate) fn run() -> eframe::Result<()> {
 }
 
 fn print_cli_help() {
-    println!("MailSwiftSync — durable, evidence-first mailbox migration control plane");
-    println!(
+    out!("MailSwiftSync — durable, evidence-first mailbox migration control plane");
+    out!(
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
-    println!(
+    out!(
         "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate credential-free operational status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST minimal credential-free operational status to HTTPS; opt into customer metadata explicitly\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n  oauth-authorize <provider> <keyring-id> --client-id <id>  Authorize IMAP access in a browser and store the refresh configuration"
     );
-    println!(
+    out!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
     );
-    println!(
+    out!(
         "\nAdditional operator workflow command:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON"
     );
-    println!(
-        "\nDoctor:\n  doctor [state.db]              Report the local qualification envelope as JSON"
+    out!(
+        "\nDoctor:\n  doctor [state.db] [--strict]   Report the local qualification envelope as JSON; --strict sets the exit status\n\nShell integration:\n  completions bash|zsh|fish      Print a shell completion script"
     );
 }
 

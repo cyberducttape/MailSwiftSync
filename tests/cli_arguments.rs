@@ -128,3 +128,30 @@ fn oauth_authorize_refuses_incomplete_requests_before_any_network_use() {
         assert!(stderr.contains(expected), "{arguments:?}: {stderr}");
     }
 }
+
+/// `mailswiftsync ... | head` closes stdout early. The command must end
+/// quietly rather than panic with "failed printing to stdout".
+#[test]
+fn closed_stdout_does_not_panic() {
+    use std::process::Stdio;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
+        .args(["completions", "bash"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("mailswiftsync binary must launch");
+    drop(child.stdout.take());
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("panicked"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn completions_reject_unknown_shells() {
+    let output = run(&["completions", "powershell"]);
+    assert_eq!(output.status.code(), Some(2));
+}

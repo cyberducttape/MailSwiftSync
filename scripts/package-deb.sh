@@ -48,6 +48,16 @@ install -m 0644 docs/distribution/INSTALL.md \
 install -m 0644 docs/distribution/mailswiftsync.1 \
   "$stage/usr/share/man/man1/mailswiftsync.1"
 gzip -n -9 "$stage/usr/share/man/man1/mailswiftsync.1"
+# Completions come from the shipped binary so they list its exact commands.
+install -d -m 0755 "$stage/usr/share/bash-completion/completions" \
+  "$stage/usr/share/zsh/vendor-completions" \
+  "$stage/usr/share/fish/vendor_completions.d"
+"$binary" completions bash > "$stage/usr/share/bash-completion/completions/mailswiftsync"
+"$binary" completions zsh > "$stage/usr/share/zsh/vendor-completions/_mailswiftsync"
+"$binary" completions fish > "$stage/usr/share/fish/vendor_completions.d/mailswiftsync.fish"
+chmod 0644 "$stage/usr/share/bash-completion/completions/mailswiftsync" \
+  "$stage/usr/share/zsh/vendor-completions/_mailswiftsync" \
+  "$stage/usr/share/fish/vendor_completions.d/mailswiftsync.fish"
 
 # Normalize every staged timestamp so rebuilding the same source and binary
 # produces the same archive bytes.
@@ -61,9 +71,13 @@ Section: mail
 Priority: optional
 Architecture: $architecture
 Maintainer: Stephan Loesevitz <stephan.loesevitz@gmail.com>
+Suggests: imapsync (= 2.314), dovecot-core
 Description: local-first mailbox migration workbench
  MailSwiftSync plans, executes, verifies, and audits mailbox migrations.
- This package does not bundle or configure an IMAP transfer engine.
+ This package does not bundle or configure an IMAP transfer engine. Trusted
+ verification requires imapsync 2.314; run "mailswiftsync doctor --strict"
+ to check the installed engine. Removing the package leaves migration
+ ledgers in the operator's data directory untouched.
 EOF
 
 mkdir -p "$output_dir"

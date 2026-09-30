@@ -4,6 +4,7 @@ mod branding;
 mod bulk_import;
 mod cli;
 mod command;
+mod completions;
 mod controller;
 mod core;
 mod credentials;

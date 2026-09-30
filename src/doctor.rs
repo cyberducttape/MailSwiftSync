@@ -104,6 +104,25 @@ pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
         });
     }
     checks.push(check_state_path(state_path));
+    if let Some(path) = state_path {
+        let directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        checks.push(check_private_directory(
+            "state directory permissions",
+            directory,
+            "review",
+            "does not exist yet",
+        ));
+    }
+    // Passfiles and OAuth token files live here for the life of a run.
+    checks.push(check_private_directory(
+        "secret runtime directory",
+        &crate::credentials::secret_runtime_base(),
+        "ready",
+        "will be created owner-only on first run",
+    ));
     checks.push(check_free_space(state_path));
 
     let overall = if checks.iter().any(|check| check.status == "blocked") {
@@ -263,6 +282,49 @@ fn check_state_path(path: Option<&Path>) -> DoctorCheck {
     }
 }
 
+/// The controller refuses to persist state, or to write passfiles, in a
+/// directory another user can write. Report that before a run does.
+fn check_private_directory(
+    name: &'static str,
+    directory: &Path,
+    missing_status: &'static str,
+    missing_detail: &str,
+) -> DoctorCheck {
+    match crate::credentials::verify_private_directory(directory) {
+        Ok(()) => DoctorCheck {
+            name,
+            status: "ready",
+            detail: format!("{} is owner-only", directory.display()),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DoctorCheck {
+            name,
+            status: missing_status,
+            detail: format!("{} {missing_detail}", directory.display()),
+        },
+        Err(error) => DoctorCheck {
+            name,
+            status: "blocked",
+            detail: format!("{}: {error}", directory.display()),
+        },
+    }
+}
+
+/// Process exit status for `doctor --strict`: 1 when a check is blocked, 3
+/// when the transfer engine is present but not the qualified version, else 0.
+pub(crate) fn strict_exit_code(report: &DoctorReport) -> i32 {
+    if report.overall == "blocked" {
+        1
+    } else if report
+        .checks
+        .iter()
+        .any(|check| check.name == "imapsync executable" && check.status == "review")
+    {
+        3
+    } else {
+        0
+    }
+}
+
 fn check_free_space(path: Option<&Path>) -> DoctorCheck {
     let directory = path
         .and_then(Path::parent)
@@ -325,6 +387,47 @@ mod tests {
                 .any(|line| line.contains("line truncated by MailSwiftSync"))
         );
         assert!(captured.lines.iter().map(String::len).sum::<usize>() <= 2 * 1024 * 1024 + 128);
+    }
+
+    #[test]
+    fn private_directory_check_blocks_shared_directories() {
+        let base = std::env::temp_dir().join(format!("mss-doctor-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&base).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o777)).unwrap();
+            let check =
+                check_private_directory("state directory permissions", &base, "review", "missing");
+            assert_eq!(check.status, "blocked", "{}", check.detail);
+            std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let check =
+            check_private_directory("state directory permissions", &base, "review", "missing");
+        assert_eq!(check.status, "ready", "{}", check.detail);
+        std::fs::remove_dir(&base).unwrap();
+        let missing =
+            check_private_directory("secret runtime directory", &base, "ready", "missing");
+        assert_eq!(missing.status, "ready");
+    }
+
+    #[test]
+    fn strict_exit_code_distinguishes_blocked_and_unqualified_engines() {
+        let report = |overall, engine_status| DoctorReport {
+            product_version: "test",
+            git_revision: "test",
+            operating_system: String::new(),
+            state_path: None,
+            checks: vec![DoctorCheck {
+                name: "imapsync executable",
+                status: engine_status,
+                detail: String::new(),
+            }],
+            overall,
+        };
+        assert_eq!(strict_exit_code(&report("blocked", "blocked")), 1);
+        assert_eq!(strict_exit_code(&report("review", "review")), 3);
+        assert_eq!(strict_exit_code(&report("review", "qualified")), 0);
     }
 
     #[test]

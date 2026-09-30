@@ -22,9 +22,10 @@ artifacts.
 Portable archives, a deterministic signed Debian package, and the pinned
 container image are sufficient for the alpha preview. Before a stable Linux
 release, complete the remaining Linux distribution work: signed Debian/Ubuntu
-and RHEL-family repositories, x86_64 and ARM64 artifacts, shell completions,
-deterministic upgrade/uninstall behavior, and automated enforcement of the
-qualified imapsync `2.314` engine contract. The Debian package installs the
+and RHEL-family repositories, x86_64 and ARM64 artifacts, and RPM parity for
+the Debian package's lifecycle. Shell completions ship in the `.deb`, and
+`mailswiftsync doctor --strict` enforces the qualified imapsync `2.314` engine
+contract with a nonzero exit status. The Debian package installs the
 control plane and documentation only; do not present it as verification-
 qualified merely because a transfer can run with it.
 
