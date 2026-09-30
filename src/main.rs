@@ -173,7 +173,7 @@ const MAX_ACTIVITY_HISTORY_ROWS: u32 = 250;
 const MAX_EVENTS_PER_FRAME: usize = 250;
 const DEFAULT_UI_SCALE: f32 = 1.10;
 const MIN_UI_SCALE: f32 = 0.90;
-const MAX_UI_SCALE: f32 = 1.50;
+const MAX_UI_SCALE: f32 = 2.00;
 
 use bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
 
@@ -2834,7 +2834,8 @@ mod tests {
     fn ui_scale_cycles_through_readable_operator_presets() {
         assert_eq!(next_ui_scale(0.90), 1.00);
         assert_eq!(next_ui_scale(1.10), 1.25);
-        assert_eq!(next_ui_scale(1.50), 0.90);
+        assert_eq!(next_ui_scale(1.50), 2.00);
+        assert_eq!(next_ui_scale(2.00), 0.90);
     }
 
     #[test]

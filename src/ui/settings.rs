@@ -117,7 +117,7 @@ pub(crate) fn show(
                         *ui_scale = (*ui_scale - 0.10).max(0.90);
                     }
                     if ui.button(language.message("ui.increase")).clicked() {
-                        *ui_scale = (*ui_scale + 0.10).min(1.50);
+                        *ui_scale = (*ui_scale + 0.10).min(crate::MAX_UI_SCALE);
                     }
                     if *ui_scale != scale_before
                         && let Err(value) = (crate::ui::AppearancePreferences {

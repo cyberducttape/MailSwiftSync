@@ -524,13 +524,7 @@ impl AppearancePreferences {
         let preferences = text
             .and_then(|text| toml::from_str::<Self>(&text).ok())
             .unwrap_or_default();
-        let ui_scale = if preferences.ui_scale.is_finite() {
-            preferences
-                .ui_scale
-                .clamp(crate::MIN_UI_SCALE, crate::MAX_UI_SCALE)
-        } else {
-            crate::DEFAULT_UI_SCALE
-        };
+        let ui_scale = normalize_ui_scale(preferences.ui_scale);
         Self {
             theme: preferences.theme,
             language: preferences.language,
@@ -551,9 +545,17 @@ impl AppearancePreferences {
     }
 }
 
+fn normalize_ui_scale(ui_scale: f32) -> f32 {
+    if ui_scale.is_finite() {
+        ui_scale.clamp(crate::MIN_UI_SCALE, crate::MAX_UI_SCALE)
+    } else {
+        crate::DEFAULT_UI_SCALE
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn next_ui_scale(current: f32) -> f32 {
-    const SCALES: [f32; 5] = [0.90, 1.00, 1.10, 1.25, 1.50];
+    const SCALES: [f32; 6] = [0.90, 1.00, 1.10, 1.25, 1.50, 2.00];
     SCALES
         .iter()
         .copied()
@@ -746,5 +748,12 @@ mod tests {
         let german: AppearancePreferences =
             toml::from_str("language = 'German'\ndark_mode = true\nui_scale = 1.0\n").unwrap();
         assert_eq!(german.language, super::super::UiLanguage::German);
+    }
+
+    #[test]
+    fn appearance_scale_supports_two_hundred_percent_and_clamps_invalid_values() {
+        assert_eq!(normalize_ui_scale(2.0), 2.0);
+        assert_eq!(normalize_ui_scale(3.0), crate::MAX_UI_SCALE);
+        assert_eq!(normalize_ui_scale(f32::NAN), crate::DEFAULT_UI_SCALE);
     }
 }

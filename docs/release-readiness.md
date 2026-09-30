@@ -34,6 +34,20 @@ images. The imapsync package is independently SHA-256 verified before
 installation. Base-image digest updates are deliberate supply-chain changes
 and require the corresponding integration run.
 
+## Desktop accessibility release gate
+
+Do not infer desktop accessibility from egui defaults or unit tests alone.
+Before a stable release, attach repeatable evidence for keyboard-only completion
+of the primary workflows (including every confirmation dialog), predictable
+focus order and visible focus, and inspection of the AccessKit accessibility
+tree with a supported screen reader on each desktop platform. Exercise the
+high-contrast theme, 200% interface scale, and state communication without
+relying on red/green discrimination. A failure in a safety confirmation,
+unreachable control, missing accessible name/role/state, or clipped content at
+200% is a release blocker. Keep platform/screen-reader versions and the tested
+scenes in the release evidence; automated egui tests complement, but do not
+replace, those manual assistive-technology checks.
+
 ## Completed in the current hardening pass
 
 - Remote Dovecot password-in-argv execution is rejected rather than exposed by

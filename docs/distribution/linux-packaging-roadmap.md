@@ -12,6 +12,8 @@ The release gate is:
 |---|---|
 | Debian/Ubuntu | Signed `.deb` is implemented; signed APT repository metadata remains |
 | RHEL/Alma/Rocky | Signed `.rpm` and signed YUM/DNF repository metadata |
+| Windows | Signed native installer (MSI or MSIX), upgrade/uninstall lifecycle validation |
+| macOS | Signed and notarized `.pkg` or `.dmg`, upgrade/uninstall lifecycle validation |
 | Architectures | x86_64 and ARM64 artifacts, each tested on its target architecture |
 | Shell integration | Implemented: `mailswiftsync completions` for bash, zsh, and fish; the `.deb` installs all three, generated from the shipped binary |
 | Documentation | Installed man page plus the one-page safe first migration path |
