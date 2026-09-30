@@ -29,7 +29,9 @@ pub(crate) struct WorkspaceRefreshOptions<'a> {
     pub(crate) active_project_id: Option<&'a str>,
     pub(crate) all_projects_loaded: bool,
     pub(crate) mailbox_offset: u32,
+    pub(crate) mailbox_cursor: Option<i64>,
     pub(crate) verification_offset: u32,
+    pub(crate) verification_cursor: Option<i64>,
     pub(crate) load_report: bool,
     pub(crate) load_runs: bool,
 }
@@ -80,13 +82,18 @@ pub(crate) struct WorkspaceSnapshot {
     pub(crate) verification_rows: Vec<core::ReportMailboxSnapshot>,
     pub(crate) verification_loaded: bool,
     verification_offset: u32,
+    verification_cursor: Option<i64>,
+    pub(crate) verification_last_rowid: Option<i64>,
     pub(crate) project: Option<core::Project>,
     pub(crate) jobs: Vec<core::MailboxJob>,
+    mailbox_first_rowid: Option<i64>,
+    mailbox_last_rowid: Option<i64>,
     pub(crate) mailbox_counts: core::MailboxStateCounts,
     snapshot_project_id: Option<String>,
     durable_revision: Option<i64>,
     project_revision: Option<i64>,
     mailbox_offset: Option<u32>,
+    mailbox_cursor: Option<i64>,
     runs_revision: Option<i64>,
     refreshed_at: Option<Instant>,
     last_successful_refresh: Option<Instant>,
@@ -122,9 +129,14 @@ impl WorkspaceSnapshot {
         self.verification_rows.clear();
         self.verification_loaded = false;
         self.verification_offset = 0;
+        self.verification_cursor = None;
+        self.verification_last_rowid = None;
         self.durable_revision = None;
         self.project_revision = None;
         self.mailbox_offset = None;
+        self.mailbox_cursor = None;
+        self.mailbox_first_rowid = None;
+        self.mailbox_last_rowid = None;
         self.runs_revision = None;
     }
 
@@ -158,7 +170,8 @@ impl WorkspaceSnapshot {
         let project_changed = project_id.as_deref() != self.snapshot_project_id.as_deref();
         let report_needs_load = options.load_report
             && (!self.verification_loaded
-                || self.verification_offset != options.verification_offset);
+                || self.verification_offset != options.verification_offset
+                || self.verification_cursor != options.verification_cursor);
         let runs_need_load = options.load_runs && self.runs_revision != self.project_revision;
         if !project_changed
             && !report_needs_load
@@ -223,6 +236,8 @@ impl WorkspaceSnapshot {
             self.verification_rows.clear();
             self.verification_loaded = false;
             self.verification_offset = 0;
+            self.verification_cursor = None;
+            self.verification_last_rowid = None;
             self.runs.clear();
             self.runs_revision = None;
             self.project = None;
@@ -243,7 +258,8 @@ impl WorkspaceSnapshot {
         let project_data_changed = project_changed
             || observed_project_revision != self.project_revision
             || self.project.is_none()
-            || self.mailbox_offset != Some(options.mailbox_offset);
+            || self.mailbox_offset != Some(options.mailbox_offset)
+            || self.mailbox_cursor != options.mailbox_cursor;
         if project_data_changed {
             match store.project(&project_id) {
                 Ok(value) => {
@@ -263,10 +279,13 @@ impl WorkspaceSnapshot {
                 }
                 Err(error) => refresh_errors.push(format!("selected project: {error}")),
             }
-            match store.mailbox_page(&project_id, options.mailbox_offset, MAILBOX_PAGE_SIZE) {
+            match store.mailbox_page(&project_id, options.mailbox_cursor, MAILBOX_PAGE_SIZE) {
                 Ok(value) => {
-                    self.jobs = value;
+                    self.jobs = value.rows;
+                    self.mailbox_first_rowid = value.first_rowid;
+                    self.mailbox_last_rowid = value.last_rowid;
                     self.mailbox_offset = Some(options.mailbox_offset);
+                    self.mailbox_cursor = options.mailbox_cursor;
                 }
                 Err(error) => refresh_errors.push(format!("mailboxes: {error}")),
             }
@@ -278,13 +297,15 @@ impl WorkspaceSnapshot {
         if options.load_report {
             match store.verification_rows(
                 &project_id,
-                options.verification_offset,
+                options.verification_cursor,
                 MAILBOX_PAGE_SIZE,
             ) {
                 Ok(value) => {
-                    self.verification_rows = value;
+                    self.verification_rows = value.rows;
+                    self.verification_last_rowid = value.last_rowid;
                     self.verification_loaded = true;
                     self.verification_offset = options.verification_offset;
+                    self.verification_cursor = options.verification_cursor;
                 }
                 Err(error) => refresh_errors.push(format!("verification rows: {error}")),
             }
@@ -404,6 +425,8 @@ impl App {
                 .clicked()
             {
                 self.historical_mailbox_offset = self.historical_mailbox_offset.saturating_sub(200);
+                self.historical_mailbox_cursor =
+                    self.historical_mailbox_cursor_stack.pop().flatten();
                 self.refresh_ui_snapshot_now();
             }
             if ui
@@ -413,6 +436,11 @@ impl App {
                 )
                 .clicked()
             {
+                if let Some(last_rowid) = self.ui_snapshot.mailbox_last_rowid {
+                    self.historical_mailbox_cursor_stack
+                        .push(self.historical_mailbox_cursor);
+                    self.historical_mailbox_cursor = Some(last_rowid);
+                }
                 self.historical_mailbox_offset = self.historical_mailbox_offset.saturating_add(200);
                 self.refresh_ui_snapshot_now();
             }

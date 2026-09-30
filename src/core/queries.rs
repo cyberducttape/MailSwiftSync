@@ -184,24 +184,37 @@ impl StateStore {
     pub fn mailbox_page(
         &self,
         project_id: &str,
-        offset: u32,
+        after_rowid: Option<i64>,
         limit: u32,
-    ) -> rusqlite::Result<Vec<MailboxJob>> {
+    ) -> rusqlite::Result<MailboxPage> {
         let limit = limit.min(MAX_MAILBOX_PAGE_ROWS);
         let mut statement = self.connection.prepare(
-            "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
+            "SELECT rowid,id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 AND rowid>?2 ORDER BY rowid LIMIT ?3",
         )?;
-        statement
-            .query_map(params![project_id, limit, offset], |row| {
-                Ok(MailboxJob {
-                    id: row.get(0)?,
-                    source_mailbox: row.get(1)?,
-                    destination_mailbox: row.get(2)?,
-                    state: row.get(3)?,
-                    config: row.get(4)?,
-                })
-            })?
-            .collect()
+        let rows = statement
+            .query_map(
+                params![project_id, after_rowid.unwrap_or(0), limit],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        MailboxJob {
+                            id: row.get(1)?,
+                            source_mailbox: row.get(2)?,
+                            destination_mailbox: row.get(3)?,
+                            state: row.get(4)?,
+                            config: row.get(5)?,
+                        },
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let first_rowid = rows.first().map(|(rowid, _)| *rowid);
+        let last_rowid = rows.last().map(|(rowid, _)| *rowid);
+        Ok(MailboxPage {
+            rows: rows.into_iter().map(|(_, mailbox)| mailbox).collect(),
+            first_rowid,
+            last_rowid,
+        })
     }
 
     /// Load a bounded, secret-free mailbox status page with its attention
@@ -211,30 +224,44 @@ impl StateStore {
     pub fn mailbox_status_page(
         &self,
         project_id: &str,
-        offset: u32,
+        after_rowid: Option<i64>,
         limit: u32,
-    ) -> rusqlite::Result<Vec<(MailboxJob, Option<AttentionReason>)>> {
+    ) -> rusqlite::Result<MailboxStatusPage> {
         let limit = limit.min(MAX_MAILBOX_STATUS_ROWS);
         let mut statement = self.connection.prepare(
-            "SELECT id,source_mailbox,destination_mailbox,state,attention_reason FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2 OFFSET ?3",
+            "SELECT id,source_mailbox,destination_mailbox,state,attention_reason,rowid FROM mailbox_jobs WHERE project_id=?1 AND rowid>?2 ORDER BY rowid LIMIT ?3",
         )?;
-        statement
-            .query_map(params![project_id, limit, offset], |row| {
-                let reason = row.get::<_, Option<String>>(4)?.map(|value| {
-                    AttentionReason::parse(&value).unwrap_or(AttentionReason::Unknown)
-                });
-                Ok((
-                    MailboxJob {
-                        id: row.get(0)?,
-                        source_mailbox: row.get(1)?,
-                        destination_mailbox: row.get(2)?,
-                        state: row.get(3)?,
-                        config: None,
-                    },
-                    reason,
-                ))
-            })?
-            .collect()
+        let rows = statement
+            .query_map(
+                params![project_id, after_rowid.unwrap_or(0), limit],
+                |row| {
+                    let reason = row.get::<_, Option<String>>(4)?.map(|value| {
+                        AttentionReason::parse(&value).unwrap_or(AttentionReason::Unknown)
+                    });
+                    Ok((
+                        row.get::<_, i64>(5)?,
+                        MailboxJob {
+                            id: row.get(0)?,
+                            source_mailbox: row.get(1)?,
+                            destination_mailbox: row.get(2)?,
+                            state: row.get(3)?,
+                            config: None,
+                        },
+                        reason,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let first_rowid = rows.first().map(|(rowid, _, _)| *rowid);
+        let last_rowid = rows.last().map(|(rowid, _, _)| *rowid);
+        Ok(MailboxStatusPage {
+            rows: rows
+                .into_iter()
+                .map(|(_, job, reason)| (job, reason))
+                .collect(),
+            first_rowid,
+            last_rowid,
+        })
     }
 
     pub fn mailbox_state_counts(&self, project_id: &str) -> rusqlite::Result<MailboxStateCounts> {

@@ -211,7 +211,14 @@ impl App {
                             .clicked();
                         if previous {
                             self.verification_offset = self.verification_offset.saturating_sub(200);
+                            self.verification_cursor =
+                                self.verification_cursor_stack.pop().flatten();
                         } else if next {
+                            if let Some(last_rowid) = self.ui_snapshot.verification_last_rowid {
+                                self.verification_cursor_stack
+                                    .push(self.verification_cursor);
+                                self.verification_cursor = Some(last_rowid);
+                            }
                             self.verification_offset = self.verification_offset.saturating_add(200);
                         }
                     });

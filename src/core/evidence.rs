@@ -153,6 +153,13 @@ pub struct ReportMailboxSnapshot {
     pub evidence: Option<(String, MailboxEvidence, Option<String>)>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportMailboxPage {
+    pub rows: Vec<ReportMailboxSnapshot>,
+    pub first_rowid: Option<i64>,
+    pub last_rowid: Option<i64>,
+}
+
 /// Operator-facing assurance facts derived only from durable mailbox state and
 /// evidence. This is deliberately a read model: it never upgrades an unknown
 /// fact into a success claim.

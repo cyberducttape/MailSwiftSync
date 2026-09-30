@@ -205,79 +205,91 @@ impl StateStore {
     pub fn verification_rows(
         &self,
         project_id: &str,
-        offset: u32,
+        after_rowid: Option<i64>,
         limit: u32,
-    ) -> rusqlite::Result<Vec<ReportMailboxSnapshot>> {
+    ) -> rusqlite::Result<ReportMailboxPage> {
         let limit = limit.min(MAX_REPORT_PAGE_ROWS);
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare(
-            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence_history eh ON eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=j.id) WHERE j.project_id=?1 ORDER BY j.rowid LIMIT ?2 OFFSET ?3",
+            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages,j.rowid FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence_history eh ON eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=j.id) WHERE j.project_id=?1 AND j.rowid>?2 ORDER BY j.rowid LIMIT ?3",
         )?;
         let rows = statement
-            .query_map(rusqlite::params![project_id, limit, offset], |row| {
-                let acceptance_run_id: Option<String> = row.get(5)?;
-                let acceptance = acceptance_run_id
-                    .map(|run_id| -> rusqlite::Result<VerificationAcceptance> {
-                        Ok(VerificationAcceptance {
-                            job_id: row.get(0)?,
-                            run_id,
-                            operator: row.get(6)?,
-                            reason: row.get(7)?,
-                            accepted_at: row.get(8)?,
+            .query_map(
+                rusqlite::params![project_id, after_rowid.unwrap_or(0), limit],
+                |row| {
+                    let acceptance_run_id: Option<String> = row.get(5)?;
+                    let acceptance = acceptance_run_id
+                        .map(|run_id| -> rusqlite::Result<VerificationAcceptance> {
+                            Ok(VerificationAcceptance {
+                                job_id: row.get(0)?,
+                                run_id,
+                                operator: row.get(6)?,
+                                reason: row.get(7)?,
+                                accepted_at: row.get(8)?,
+                            })
                         })
-                    })
-                    .transpose()?;
-                let evidence = row
-                    .get::<_, Option<String>>(9)?
-                    .map(|run_id| {
-                        Ok::<_, rusqlite::Error>((
-                            run_id,
-                            MailboxEvidence {
-                                verification_method: VerificationMethod::parse(
-                                    &row.get::<_, String>(10)?,
-                                )
-                                .ok_or(rusqlite::Error::InvalidQuery)?,
-                                verification_outcome: Some(
-                                    VerificationOutcome::parse(&row.get::<_, String>(11)?)
-                                        .ok_or(rusqlite::Error::InvalidQuery)?,
-                                ),
-                                source_messages: sqlite_u64(row.get(12)?)?,
-                                destination_messages: sqlite_u64(row.get(13)?)?,
-                                source_bytes: sqlite_u64(row.get(14)?)?,
-                                destination_bytes: sqlite_u64(row.get(15)?)?,
-                                unmatched_messages: sqlite_optional_u64(row.get(16)?)?,
-                                failed_messages: sqlite_u64(row.get(17)?)?,
-                                source_folders: sqlite_u64(row.get(18)?)?,
-                                destination_folders: sqlite_u64(row.get(19)?)?,
-                                authoritative: row.get::<_, i64>(20)? != 0,
-                                missing_messages: sqlite_u64(row.get(21)?)?,
-                                extra_messages: sqlite_u64(row.get(22)?)?,
-                                modified_messages: sqlite_u64(row.get(23)?)?,
-                                probable_messages: sqlite_u64(row.get(24)?)?,
+                        .transpose()?;
+                    let evidence = row
+                        .get::<_, Option<String>>(9)?
+                        .map(|run_id| {
+                            Ok::<_, rusqlite::Error>((
+                                run_id,
+                                MailboxEvidence {
+                                    verification_method: VerificationMethod::parse(
+                                        &row.get::<_, String>(10)?,
+                                    )
+                                    .ok_or(rusqlite::Error::InvalidQuery)?,
+                                    verification_outcome: Some(
+                                        VerificationOutcome::parse(&row.get::<_, String>(11)?)
+                                            .ok_or(rusqlite::Error::InvalidQuery)?,
+                                    ),
+                                    source_messages: sqlite_u64(row.get(12)?)?,
+                                    destination_messages: sqlite_u64(row.get(13)?)?,
+                                    source_bytes: sqlite_u64(row.get(14)?)?,
+                                    destination_bytes: sqlite_u64(row.get(15)?)?,
+                                    unmatched_messages: sqlite_optional_u64(row.get(16)?)?,
+                                    failed_messages: sqlite_u64(row.get(17)?)?,
+                                    source_folders: sqlite_u64(row.get(18)?)?,
+                                    destination_folders: sqlite_u64(row.get(19)?)?,
+                                    authoritative: row.get::<_, i64>(20)? != 0,
+                                    missing_messages: sqlite_u64(row.get(21)?)?,
+                                    extra_messages: sqlite_u64(row.get(22)?)?,
+                                    modified_messages: sqlite_u64(row.get(23)?)?,
+                                    probable_messages: sqlite_u64(row.get(24)?)?,
+                                },
+                                None,
+                            ))
+                        })
+                        .transpose()?;
+                    Ok((
+                        row.get::<_, i64>(25)?,
+                        ReportMailboxSnapshot {
+                            job: MailboxJob {
+                                id: row.get(0)?,
+                                source_mailbox: row.get(1)?,
+                                destination_mailbox: row.get(2)?,
+                                state: row.get(3)?,
+                                config: None,
                             },
-                            None,
-                        ))
-                    })
-                    .transpose()?;
-                Ok(ReportMailboxSnapshot {
-                    job: MailboxJob {
-                        id: row.get(0)?,
-                        source_mailbox: row.get(1)?,
-                        destination_mailbox: row.get(2)?,
-                        state: row.get(3)?,
-                        config: None,
-                    },
-                    attention_reason: row.get::<_, Option<String>>(4)?.map(|reason| {
-                        AttentionReason::parse(&reason).unwrap_or(AttentionReason::Unknown)
-                    }),
-                    acceptance,
-                    evidence,
-                })
-            })?
+                            attention_reason: row.get::<_, Option<String>>(4)?.map(|reason| {
+                                AttentionReason::parse(&reason).unwrap_or(AttentionReason::Unknown)
+                            }),
+                            acceptance,
+                            evidence,
+                        },
+                    ))
+                },
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
         tx.commit()?;
-        Ok(rows)
+        let first_rowid = rows.first().map(|(rowid, _)| *rowid);
+        let last_rowid = rows.last().map(|(rowid, _)| *rowid);
+        Ok(ReportMailboxPage {
+            rows: rows.into_iter().map(|(_, row)| row).collect(),
+            first_rowid,
+            last_rowid,
+        })
     }
 
     pub fn recent_run_list(

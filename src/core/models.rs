@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::Phase;
+use super::{AttentionReason, Phase};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
@@ -31,6 +31,21 @@ pub struct MailboxJob {
     pub state: String,
     /// Secret-free serialized configuration, if the importer supplied one.
     pub config: Option<String>,
+}
+
+/// A bounded mailbox page plus stable rowid cursors for seek-based navigation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxPage {
+    pub rows: Vec<MailboxJob>,
+    pub first_rowid: Option<i64>,
+    pub last_rowid: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailboxStatusPage {
+    pub rows: Vec<(MailboxJob, Option<AttentionReason>)>,
+    pub first_rowid: Option<i64>,
+    pub last_rowid: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]

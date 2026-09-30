@@ -489,7 +489,11 @@ impl App {
             reopen_reason: String::new(),
             ui_snapshot: WorkspaceSnapshot::default(),
             historical_mailbox_offset: 0,
+            historical_mailbox_cursor: None,
+            historical_mailbox_cursor_stack: Vec::new(),
             verification_offset: 0,
+            verification_cursor: None,
+            verification_cursor_stack: Vec::new(),
             source_provider: ProviderPreset::GenericImap,
             destination_provider: ProviderPreset::GenericImap,
         }

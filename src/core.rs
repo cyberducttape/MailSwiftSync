@@ -47,9 +47,9 @@ pub use capabilities::{NamespaceEntry, NamespaceInfo, ServerCapabilities};
 pub use engine::Engine;
 #[allow(unused_imports)]
 pub use evidence::{
-    EvidenceScope, MailboxAssurance, MailboxEvidence, ProjectReportSnapshot, ReportMailboxSnapshot,
-    ReportRunSnapshot, VerificationAcceptance, VerificationEvidence, VerificationMethod,
-    VerificationOutcome,
+    EvidenceScope, MailboxAssurance, MailboxEvidence, ProjectReportSnapshot, ReportMailboxPage,
+    ReportMailboxSnapshot, ReportRunSnapshot, VerificationAcceptance, VerificationEvidence,
+    VerificationMethod, VerificationOutcome,
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 pub(crate) use message_staging::{
@@ -57,12 +57,13 @@ pub(crate) use message_staging::{
 };
 pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
 pub use models::{
-    ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxStateCounts, Project,
-    ProjectListItem, RunListItem, RunSummary,
+    ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxPage,
+    MailboxStateCounts, MailboxStatusPage, Project, ProjectListItem, RunListItem, RunSummary,
 };
 pub use state::{AttentionReason, MailboxState, Phase};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+pub const CURRENT_SCHEMA_VERSION: i64 = 13;
+pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 
 pub(crate) use policy::{

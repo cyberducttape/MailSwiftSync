@@ -1913,7 +1913,7 @@ fn writable_open_backups_and_repairs_current_schema_with_wrong_run_index_predica
             entry
                 .file_name()
                 .to_string_lossy()
-                .contains("state.db.pre-migrate-v12.")
+                .contains("state.db.pre-migrate-v13.")
         })
         .count();
     assert_eq!(migration_backups, 1);
@@ -2215,7 +2215,7 @@ fn writable_open_repairs_unconstrained_current_schema_with_backup() {
             entry
                 .file_name()
                 .to_string_lossy()
-                .contains("state.db.pre-migrate-v12.")
+                .contains("state.db.pre-migrate-v13.")
         })
         .count();
     assert_eq!(backup_count, 1);
@@ -3082,18 +3082,28 @@ fn paged_workspace_reads_keep_large_mailbox_projects_bounded() {
         tx.commit().unwrap();
     }
 
-    let first_page = db.mailbox_page(&project.id, 0, PAGE_SIZE).unwrap();
-    let last_page = db
-        .mailbox_page(
-            &project.id,
-            (MAILBOX_COUNT as u32).saturating_sub(PAGE_SIZE),
-            PAGE_SIZE,
-        )
+    let first_page = db.mailbox_page(&project.id, None, PAGE_SIZE).unwrap();
+    let cursor_plan: String = db
+        .connection
+        .prepare("EXPLAIN QUERY PLAN SELECT id FROM mailbox_jobs WHERE project_id=?1 AND rowid>?2 ORDER BY rowid LIMIT ?3")
+        .unwrap()
+        .query_map(rusqlite::params![project.id, 0_i64, PAGE_SIZE], |row| row.get(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<String>>>()
+        .unwrap()
+        .join(" ");
+    assert!(
+        cursor_plan.contains("idx_mailbox_jobs_project_rowid"),
+        "{cursor_plan}"
+    );
+    let next_page = db
+        .mailbox_page(&project.id, first_page.last_rowid, PAGE_SIZE)
         .unwrap();
-    assert_eq!(first_page.len(), PAGE_SIZE as usize);
-    assert_eq!(last_page.len(), PAGE_SIZE as usize);
-    assert_eq!(first_page[0].source_mailbox, "user-0@source.example");
-    assert_eq!(last_page[0].source_mailbox, "user-99800@source.example");
+    assert_eq!(first_page.rows.len(), PAGE_SIZE as usize);
+    assert_eq!(next_page.rows.len(), PAGE_SIZE as usize);
+    assert_eq!(first_page.rows[0].source_mailbox, "user-0@source.example");
+    assert_eq!(next_page.rows[0].source_mailbox, "user-200@source.example");
+    assert!(first_page.last_rowid < next_page.first_rowid);
 
     let counts = db.mailbox_state_counts(&project.id).unwrap();
     assert_eq!(counts.total, MAILBOX_COUNT);
@@ -3145,23 +3155,42 @@ fn workspace_reload_scale_benchmark() {
     let reload_elapsed = reload_started.elapsed();
 
     let read_started = std::time::Instant::now();
-    let first_page = db.mailbox_page(&project_id, 0, PAGE_SIZE).unwrap();
-    let last_page = db
-        .mailbox_page(
-            &project_id,
-            (MAILBOX_COUNT as u32).saturating_sub(PAGE_SIZE),
-            PAGE_SIZE,
-        )
+    let mut page = db.mailbox_page(&project_id, None, PAGE_SIZE).unwrap();
+    let first_page_len = page.rows.len();
+    let mut traversed = page.rows.len();
+    while traversed + PAGE_SIZE as usize <= MAILBOX_COUNT {
+        page = db
+            .mailbox_page(&project_id, page.last_rowid, PAGE_SIZE)
+            .unwrap();
+        traversed += page.rows.len();
+    }
+    let status_page = db
+        .mailbox_status_page(&project_id, None, PAGE_SIZE)
         .unwrap();
-    let status_page = db.mailbox_status_page(&project_id, 0, PAGE_SIZE).unwrap();
-    let verification_page = db.verification_rows(&project_id, 0, PAGE_SIZE).unwrap();
+    let status_next = db
+        .mailbox_status_page(&project_id, status_page.last_rowid, PAGE_SIZE)
+        .unwrap();
+    let verification_page = db.verification_rows(&project_id, None, PAGE_SIZE).unwrap();
+    let verification_next = db
+        .verification_rows(&project_id, verification_page.last_rowid, PAGE_SIZE)
+        .unwrap();
     let counts = db.mailbox_state_counts(&project_id).unwrap();
     let read_elapsed = read_started.elapsed();
 
-    assert_eq!(first_page.len(), PAGE_SIZE as usize);
-    assert_eq!(last_page.len(), PAGE_SIZE as usize);
-    assert_eq!(status_page.len(), PAGE_SIZE as usize);
-    assert_eq!(verification_page.len(), PAGE_SIZE as usize);
+    assert_eq!(first_page_len, PAGE_SIZE as usize);
+    assert_eq!(page.rows.len(), PAGE_SIZE as usize);
+    assert_eq!(page.rows[0].source_mailbox, "user-99800@source.example");
+    assert_eq!(status_page.rows.len(), PAGE_SIZE as usize);
+    assert_eq!(
+        status_next.rows[0].0.source_mailbox,
+        "user-200@source.example"
+    );
+    assert_eq!(verification_page.rows.len(), PAGE_SIZE as usize);
+    assert_eq!(
+        verification_next.rows[0].job.source_mailbox,
+        "user-200@source.example"
+    );
+    assert!(verification_page.last_rowid < verification_next.first_rowid);
     assert_eq!(counts.total, MAILBOX_COUNT);
     println!(
         "workspace reload benchmark: rows={MAILBOX_COUNT} seed_ms={} reopen_ms={} bounded_reads_ms={}",
@@ -3454,6 +3483,14 @@ destination_port = ""
             [&jobs[0]],
         )
         .unwrap();
+    // Simulate a pre-v13 ledger. The v13 migration must recompute identity
+    // policy v2 once before marking that invariant current.
+    db.connection
+        .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION - 1)
+        .unwrap();
+    db.connection
+        .execute("DROP INDEX idx_mailbox_jobs_project_rowid", [])
+        .unwrap();
     db.migrate().unwrap();
     let identity: String = db
         .connection
@@ -3464,6 +3501,59 @@ destination_port = ""
         )
         .unwrap();
     assert_eq!(identity, "endpoint:mail.example.test:993:User@example.test");
+    let cursor_index: i64 = db
+        .connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_mailbox_jobs_project_rowid')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cursor_index, 1);
+}
+
+#[test]
+fn current_destination_identity_version_avoids_startup_config_reparse() {
+    let directory =
+        std::env::temp_dir().join(format!("mailswiftsync-identity-version-{}", Uuid::new_v4()));
+    create_private_test_directory(&directory);
+    let database_path = directory.join("state.db");
+    let config = r#"
+destination_host = "MAIL.example.test."
+destination_user = "User@example.test"
+destination_tls = "imaps"
+destination_port = ""
+"#;
+    let (project_id, job_id) = {
+        let db = StateStore::open(&database_path).unwrap();
+        let (project, jobs) = db
+            .create_project_with_mailbox_configs(
+                "identity-version",
+                "source",
+                "batch",
+                &[("one".into(), "ignored-row-mailbox".into(), config.into())],
+            )
+            .unwrap();
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET destination_identity='deliberately-stale' WHERE id=?1",
+                [&jobs[0]],
+            )
+            .unwrap();
+        (project.id, jobs[0].clone())
+    };
+    let reopened = StateStore::open(&database_path).unwrap();
+    let identity: String = reopened
+        .connection
+        .query_row(
+            "SELECT destination_identity FROM mailbox_jobs WHERE project_id=?1 AND id=?2",
+            rusqlite::params![project_id, job_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(identity, "deliberately-stale");
+    drop(reopened);
+    std::fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

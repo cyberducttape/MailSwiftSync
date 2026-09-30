@@ -257,9 +257,9 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v12 application schema, rather than treating
+    /// Validate the complete v13 application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
-    /// the v12 CREATE TABLE statements in migrate(): a stamped database with
+    /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
     fn validate_schema_layout(connection: &Connection) -> rusqlite::Result<()> {
         const TABLES: &[SchemaTable] = &[
@@ -629,6 +629,12 @@ impl StateStore {
                 false,
             ),
             (
+                "idx_mailbox_jobs_project_rowid",
+                &["project_id"],
+                false,
+                false,
+            ),
+            (
                 "idx_runs_project_started",
                 &["project_id", "started_at"],
                 false,
@@ -688,6 +694,7 @@ impl StateStore {
         ];
         const INDEX_TABLES: &[(&str, &str)] = &[
             ("idx_mailbox_jobs_project_state", "mailbox_jobs"),
+            ("idx_mailbox_jobs_project_rowid", "mailbox_jobs"),
             ("idx_runs_project_started", "runs"),
             ("idx_runs_job_started", "runs"),
             ("idx_events_project_created", "events"),
@@ -990,21 +997,28 @@ impl StateStore {
                 [],
                 |row| row.get(0),
             )?;
+            // Schema v13 establishes destination-identity policy v2 for every
+            // existing row transactionally. Current-version startup trusts
+            // that invariant rather than parsing every mailbox config again.
+            let stored_schema_version: i64 =
+                connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
             let mut stale_identity = false;
-            let mut identities = connection.prepare(
-                "SELECT destination_mailbox, destination_identity, config FROM mailbox_jobs",
-            )?;
-            for row in identities.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            })? {
-                let (destination, identity, config) = row?;
-                if normalized_destination_identity(&destination, config.as_deref()) != identity {
-                    stale_identity = true;
-                    break;
+            if stored_schema_version < DESTINATION_IDENTITY_SCHEMA_VERSION {
+                let mut identities = connection.prepare(
+                    "SELECT destination_mailbox, destination_identity, config FROM mailbox_jobs",
+                )?;
+                for row in identities.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })? {
+                    let (destination, identity, config) = row?;
+                    if normalized_destination_identity(&destination, config.as_deref()) != identity {
+                        stale_identity = true;
+                        break;
+                    }
                 }
             }
             Ok(legacy_plan == 0
@@ -1217,7 +1231,9 @@ impl StateStore {
         // version 3 records lifecycle provenance for each admitted run;
         // version 4 adds a stable operator-review reason for attention rows;
         // version 5 adds durable verification-exception acceptance records;
-        // version 6 records observed engine-version metadata per run.
+        // version 6 records observed engine-version metadata per run; version
+        // 13 establishes destination identity policy v2 so clean startups can
+        // trust that versioned invariant without reparsing every config.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1242,7 +1258,7 @@ impl StateStore {
             let current_schema_is_clean = Self::current_schema_is_clean(&self.connection)
                 && Self::validate_schema_layout(&self.connection).is_ok();
             if current_schema_is_clean {
-                // A clean v12 ledger needs no launch-time data rewrite. The
+                // A clean v13 ledger needs no launch-time data rewrite. The
                 // identity is calculated when a mailbox is created or its
                 // configuration changes; raw output cleanup belongs to the
                 // compatibility-repair path below.
@@ -1266,6 +1282,7 @@ impl StateStore {
                  CREATE TABLE IF NOT EXISTS engine_versions (run_id TEXT PRIMARY KEY REFERENCES runs(id), version TEXT NOT NULL, captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE TABLE IF NOT EXISTS message_mismatches (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES mailbox_jobs(id), run_id TEXT NOT NULL REFERENCES runs(id), mismatch_type TEXT NOT NULL, source_uid TEXT, dest_uid TEXT, source_message_id TEXT, dest_message_id TEXT, source_size_bytes INTEGER CHECK(source_size_bytes IS NULL OR source_size_bytes >= 0), dest_size_bytes INTEGER CHECK(dest_size_bytes IS NULL OR dest_size_bytes >= 0), source_date TEXT, dest_date TEXT, source_folder TEXT, destination_folder TEXT, source_uidvalidity INTEGER CHECK(source_uidvalidity IS NULL OR source_uidvalidity >= 0), destination_uidvalidity INTEGER CHECK(destination_uidvalidity IS NULL OR destination_uidvalidity >= 0), source_fingerprint TEXT, destination_fingerprint TEXT, recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_state ON mailbox_jobs(project_id, state);
+                 CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_rowid ON mailbox_jobs(project_id);
                  CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);

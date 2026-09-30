@@ -235,7 +235,11 @@ pub(crate) struct App {
     /// of issuing SQLite queries on every egui repaint.
     pub(crate) ui_snapshot: WorkspaceSnapshot,
     pub(crate) historical_mailbox_offset: u32,
+    pub(crate) historical_mailbox_cursor: Option<i64>,
+    pub(crate) historical_mailbox_cursor_stack: Vec<Option<i64>>,
     pub(crate) verification_offset: u32,
+    pub(crate) verification_cursor: Option<i64>,
+    pub(crate) verification_cursor_stack: Vec<Option<i64>>,
     pub(crate) source_provider: ProviderPreset,
     pub(crate) destination_provider: ProviderPreset,
 }
@@ -334,7 +338,13 @@ impl App {
                 } else {
                     0
                 },
+                mailbox_cursor: if self.workspace_read_only {
+                    self.historical_mailbox_cursor
+                } else {
+                    None
+                },
                 verification_offset: self.verification_offset,
+                verification_cursor: self.verification_cursor,
                 load_report: matches!(
                     self.active_view,
                     WorkspaceView::Overview
@@ -395,7 +405,11 @@ impl App {
         self.workspace_read_only = editable_id.as_deref() != Some(project_id.as_str());
         self.selected_project_id = Some(project_id);
         self.historical_mailbox_offset = 0;
+        self.historical_mailbox_cursor = None;
+        self.historical_mailbox_cursor_stack.clear();
         self.verification_offset = 0;
+        self.verification_cursor = None;
+        self.verification_cursor_stack.clear();
         self.active_view = WorkspaceView::Overview;
         self.capability_receiver = None;
         self.capability_probe_request_id = None;

@@ -109,12 +109,14 @@ pub(crate) fn export_support_bundle_with_sample_limit(
         let jobs = store
             .mailbox_status_page(
                 &project.id,
-                0,
+                None,
                 sample_limit.min(remaining_mailbox_rows.try_into().unwrap_or(u32::MAX)),
             )
             .map_err(|error| error.to_string())?;
-        remaining_mailbox_rows = remaining_mailbox_rows.saturating_sub(jobs.len());
+        remaining_mailbox_rows = remaining_mailbox_rows.saturating_sub(jobs.rows.len());
+        let sampled_mailbox_count = jobs.rows.len();
         let mailbox_values = jobs
+            .rows
             .iter()
             .map(|(job, attention_reason)| {
                 Ok(serde_json::json!({
@@ -150,7 +152,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             "phase": project.phase.as_str(),
             "mailbox_count": counts.total,
             "mailbox_sample_limit": sample_limit,
-            "mailboxes_truncated": counts.total > jobs.len(),
+            "mailboxes_truncated": counts.total > sampled_mailbox_count,
             "mailbox_state_counts": {
                 "ready": counts.ready,
                 "running": counts.running,
@@ -258,8 +260,9 @@ pub(crate) fn headless_status(
             .try_into()
             .unwrap_or(0);
         for (mailbox, attention_reason) in store
-            .mailbox_status_page(&project.id, 0, mailbox_limit)
+            .mailbox_status_page(&project.id, None, mailbox_limit)
             .map_err(|error| error.to_string())?
+            .rows
         {
             mailboxes.push(HeadlessMailboxStatus {
                 attention_reason: attention_reason.map(|reason| reason.as_str().to_owned()),
