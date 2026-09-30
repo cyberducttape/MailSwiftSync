@@ -156,7 +156,6 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
         "too many requests",
         "server busy",
         "temporarily overloaded",
-        "429",
     ]
     .iter()
     .any(|marker| error.contains(marker))
@@ -325,4 +324,42 @@ pub(crate) fn classified_failure_detail(error: &str) -> String {
         class.attention_reason().as_str(),
         class.label()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FailureClass, classify_failure, should_retry_batch_error};
+
+    #[test]
+    fn message_counts_cannot_trigger_capacity_or_http_status_retries() {
+        for diagnostic in [
+            "Migration failed unexpectedly\n429 messages copied before termination",
+            "folder contains 401 messages",
+            "processed 403 items",
+        ] {
+            assert_ne!(
+                classify_failure(diagnostic),
+                FailureClass::Capacity,
+                "diagnostic: {diagnostic}"
+            );
+            assert!(!should_retry_batch_error(diagnostic, 0, 2), "{diagnostic}");
+        }
+    }
+
+    #[test]
+    fn protocol_status_lines_still_drive_the_intended_retry_classes() {
+        assert_eq!(
+            classify_failure("HTTP/1.1 429 Too Many Requests"),
+            FailureClass::Capacity
+        );
+        assert!(should_retry_batch_error(
+            "HTTP/1.1 429 Too Many Requests",
+            0,
+            2
+        ));
+        assert_eq!(
+            classify_failure("HTTP/1.1 401 Unauthorized"),
+            FailureClass::Authentication
+        );
+    }
 }

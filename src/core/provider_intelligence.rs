@@ -78,6 +78,12 @@ impl ProviderErrorClassifier {
     /// Classify an error based on message content and provider context.
     pub fn classify(provider: &str, error_msg: &str) -> ProviderErrorType {
         let lower = error_msg.to_lowercase();
+        let http_401 = has_http_status_line(error_msg, 401);
+        let http_403 = has_http_status_line(error_msg, 403);
+        let http_404 = has_http_status_line(error_msg, 404);
+        let http_429 = has_http_status_line(error_msg, 429);
+        let http_502 = has_http_status_line(error_msg, 502);
+        let http_503 = has_http_status_line(error_msg, 503);
 
         // Adapters should emit these stable tags at the source. Keep the
         // textual classifier as a compatibility fallback for legacy engine
@@ -131,13 +137,13 @@ impl ProviderErrorClassifier {
             || lower.contains("too many requests")
             || lower.contains("throttled")
             || lower.contains("slow down")
-            || lower.contains(" 429")
+            || http_429
         {
             return ProviderErrorType::RateLimited;
         }
 
         // Authentication patterns
-        if lower.contains("401")
+        if http_401
             || lower.contains("unauthorized")
             || lower.contains("invalid credentials")
             || lower.contains("authentication failed")
@@ -146,7 +152,7 @@ impl ProviderErrorClassifier {
         }
 
         // Permission patterns
-        if lower.contains("403")
+        if http_403
             || lower.contains("forbidden")
             || lower.contains("permission denied")
             || lower.contains("insufficient privileges")
@@ -155,7 +161,7 @@ impl ProviderErrorClassifier {
         }
 
         // Not found patterns
-        if lower.contains("404")
+        if http_404
             || lower.contains("not found")
             || lower.contains("no such")
             || lower.contains("does not exist")
@@ -164,8 +170,8 @@ impl ProviderErrorClassifier {
         }
 
         // Temporary unavailability
-        if lower.contains("502")
-            || lower.contains("503")
+        if http_502
+            || http_503
             || lower.contains("temporarily unavailable")
             || lower.contains("service unavailable")
             || lower.contains("bad gateway")
@@ -210,6 +216,65 @@ impl ProviderErrorClassifier {
         }
 
         ProviderErrorType::PermanentProviderFailure
+    }
+}
+
+/// Recognize a numeric status only when it is presented as an HTTP status
+/// line, never when the digits merely occur in engine output (for example,
+/// "429 messages copied"). A bare status line must also carry its standard
+/// reason phrase; a versioned `HTTP/...` line is itself sufficient protocol
+/// context.
+fn has_http_status_line(error: &str, expected: u16) -> bool {
+    let reason = match expected {
+        401 => "unauthorized",
+        403 => "forbidden",
+        404 => "not found",
+        429 => "too many requests",
+        502 => "bad gateway",
+        503 => "service unavailable",
+        _ => return false,
+    };
+    error.lines().any(|line| {
+        let line = line.trim();
+        let versioned = line
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("HTTP/"));
+        let status_and_reason = if versioned {
+            let Some((_, status)) = take_protocol_token(&line[5..]) else {
+                return false;
+            };
+            status
+        } else {
+            line
+        };
+        let Some((status, trailing)) = take_protocol_token(status_and_reason) else {
+            return false;
+        };
+        if status.parse::<u16>().ok() != Some(expected) {
+            return false;
+        }
+        // A versioned status line is unambiguous even when the reason phrase
+        // is omitted (permitted by HTTP). Bare numeric lines need the known
+        // phrase so message/count diagnostics cannot masquerade as statuses.
+        if versioned {
+            true
+        } else {
+            trailing
+                .get(..reason.len())
+                .is_some_and(|value| value.eq_ignore_ascii_case(reason))
+                && trailing
+                    .get(reason.len()..)
+                    .is_none_or(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace))
+        }
+    })
+}
+
+fn take_protocol_token(value: &str) -> Option<(&str, &str)> {
+    let value = value.trim_start();
+    match value.find(char::is_whitespace) {
+        Some(split) => Some((&value[..split], value[split..].trim_start())),
+        None if !value.is_empty() => Some((value, "")),
+        None => None,
     }
 }
 
@@ -287,6 +352,37 @@ mod tests {
         assert_eq!(
             ProviderErrorClassifier::classify("generic", "[imap=bad] invalid command"),
             ProviderErrorType::ImapBad
+        );
+    }
+
+    #[test]
+    fn numeric_message_counts_do_not_masquerade_as_http_statuses() {
+        for diagnostic in [
+            "Migration failed unexpectedly\n429 messages copied before termination",
+            "folder contains 401 messages",
+            "processed 403 items",
+        ] {
+            assert_eq!(
+                ProviderErrorClassifier::classify("generic", diagnostic),
+                ProviderErrorType::PermanentProviderFailure,
+                "diagnostic: {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_statuses_require_http_line_context_or_a_status_reason_phrase() {
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "HTTP/1.1 429 Too Many Requests"),
+            ProviderErrorType::RateLimited
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "401 Unauthorized"),
+            ProviderErrorType::Authentication
+        );
+        assert_eq!(
+            ProviderErrorClassifier::classify("generic", "HTTP/2 503"),
+            ProviderErrorType::TemporaryProviderFailure
         );
     }
 }
