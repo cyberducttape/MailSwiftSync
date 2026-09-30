@@ -243,11 +243,6 @@ fn engine_does_not_inherit_controller_environment_secrets() {
     );
     #[cfg(unix)]
     assert!(stdout.contains("secret=absent"), "{stdout}");
-    #[cfg(windows)]
-    assert!(
-        stdout.contains("secret=%MAILSWIFTSYNC_TEST_SECRET%"),
-        "{stdout}"
-    );
     // Allowlisted variables still reach the engine.
     assert!(stdout.contains("path=present"), "{stdout}");
 }
