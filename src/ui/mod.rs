@@ -35,11 +35,13 @@ pub(crate) use output::{
     contains_ascii_case_insensitive, markdown_escape, push_visible_output, redact_secrets,
     truncate_utf8,
 };
+#[cfg(test)]
+pub(crate) use status::recommended_next_action;
 pub(crate) use status::{
     StatusMessage, StatusSeverity, customer_proof_ready, display_job_state, display_state_key,
     format_elapsed, format_phase_name, job_state_badge, needs_operator_review,
-    project_health_state_counts, recommended_batch_next_action, recommended_next_action,
-    status_color, successful_run_severity, successful_run_status,
+    project_health_state_counts, recommended_workspace_action, status_color,
+    successful_run_severity, successful_run_status,
 };
 #[cfg(test)]
 pub(crate) use theme::contrast_ratio;

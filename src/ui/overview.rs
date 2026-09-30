@@ -4,7 +4,7 @@ use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
 use crate::ui::{StatusSeverity, WorkspaceView};
-use crate::ui::{customer_proof_ready, recommended_batch_next_action, recommended_next_action};
+use crate::ui::{customer_proof_ready, recommended_workspace_action};
 use eframe::egui::{self, RichText};
 
 impl App {
@@ -35,16 +35,14 @@ impl App {
         let proof_ready = project.as_ref().is_some_and(|project| {
             customer_proof_ready(project.phase, attention_count, self.ui_snapshot.is_stale())
         });
-        let next_action =
-            recommended_batch_next_action(has_bulk_jobs, workspace_attention_count, self.running())
-                .unwrap_or_else(|| {
-                    recommended_next_action(
-                        phase,
-                        !self.preflight.is_empty(),
-                        attention_count,
-                        self.running(),
-                    )
-                });
+        let next_action = recommended_workspace_action(
+            phase,
+            !self.preflight.is_empty(),
+            workspace_attention_count,
+            self.running(),
+            has_bulk_jobs,
+            proof_ready,
+        );
 
         if project.is_none() && self.bulk_jobs.is_empty() {
             crate::ui::card(ui, |ui| {
@@ -161,14 +159,14 @@ impl App {
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
             crate::ui::section_label(ui, self.language.text("Recommended next step"));
-            ui.label(RichText::new(self.language.text(next_action)).size(15.0));
+            ui.label(RichText::new(self.language.text(next_action.text)).size(15.0));
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.add_enabled_ui(!self.workspace_read_only, |ui| {
-                    if crate::ui::primary_button(ui, self.language.text("Open migration plan  →"))
+                    if crate::ui::primary_button(ui, self.language.text(next_action.button_label))
                         .clicked()
                     {
-                        self.active_view = WorkspaceView::Plan;
+                        self.active_view = next_action.destination;
                     }
                     if ui
                         .button(self.language.text("Refresh preflight assessment"))

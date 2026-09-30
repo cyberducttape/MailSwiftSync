@@ -486,6 +486,14 @@ impl App {
         let side = self
             .language
             .text(if source { "Source" } else { "Destination" });
+        let impact = match target {
+            CredentialDeleteTarget::Password { .. } => self.language.text(
+                "This permanently removes the saved credential from the OS keyring.",
+            ),
+            CredentialDeleteTarget::OAuthRefresh { .. } => self.language.text(
+                "This removes only the locally stored OAuth refresh configuration; it does not revoke the provider token.",
+            ),
+        };
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("credential_delete_confirmation"))
             .show(ctx, |ui| {
@@ -500,8 +508,9 @@ impl App {
                         .replacen("{}", kind, 1)
                         .replacen("{}", &keyring_id, 1),
                 );
-                ui.label(self.language.text(
-                    "This permanently removes the selected item from the OS keyring. The profile reference and any credential already loaded in this session are not changed.",
+                ui.label(format!(
+                    "{impact} {}",
+                    self.language.text("The profile reference and any credential already loaded in this session are not changed.")
                 ));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -559,25 +568,49 @@ impl App {
     }
 
     fn store_oauth_refresh_editor(&mut self, source: bool) {
-        let config = crate::oauth_refresh::OAuthRefreshConfig {
-            token_endpoint: std::mem::take(&mut self.oauth_refresh_editor_endpoint),
-            client_id: std::mem::take(&mut self.oauth_refresh_editor_client_id),
-            client_secret: std::mem::take(&mut self.oauth_refresh_editor_client_secret),
-            refresh_token: std::mem::take(&mut self.oauth_refresh_editor_refresh_token),
-        };
         let side = self
             .language
             .text(if source { "Source" } else { "Destination" });
-        match self.form.store_oauth_refresh_config(source, &config) {
-            Ok(()) => self.set_status(
-                self.language
-                    .text("{} OAuth refresh configuration stored in OS keyring")
-                    .replace("{}", side),
-                StatusSeverity::Success,
-            ),
+        let result = store_oauth_refresh_editor_values(
+            &mut self.oauth_refresh_editor_endpoint,
+            &mut self.oauth_refresh_editor_client_id,
+            &mut self.oauth_refresh_editor_client_secret,
+            &mut self.oauth_refresh_editor_refresh_token,
+            |config| self.form.store_oauth_refresh_config(source, config),
+        );
+        match result {
+            Ok(()) => {
+                self.set_status(
+                    self.language
+                        .text("{} OAuth refresh configuration stored in OS keyring")
+                        .replace("{}", side),
+                    StatusSeverity::Success,
+                );
+            }
             Err(error) => self.set_status(error, StatusSeverity::Error),
         }
     }
+}
+
+fn store_oauth_refresh_editor_values(
+    endpoint: &mut String,
+    client_id: &mut String,
+    client_secret: &mut crate::credentials::SecretString,
+    refresh_token: &mut crate::credentials::SecretString,
+    persist: impl FnOnce(&crate::oauth_refresh::OAuthRefreshConfig) -> Result<(), String>,
+) -> Result<(), String> {
+    let config = crate::oauth_refresh::OAuthRefreshConfig {
+        token_endpoint: endpoint.clone(),
+        client_id: client_id.clone(),
+        client_secret: client_secret.clone(),
+        refresh_token: refresh_token.clone(),
+    };
+    persist(&config)?;
+    endpoint.clear();
+    client_id.clear();
+    *client_secret = crate::credentials::SecretString::default();
+    *refresh_token = crate::credentials::SecretString::default();
+    Ok(())
 }
 
 fn manual_oauth_refresh_marker(form: &crate::migration_plan::Form, source: bool) -> String {
@@ -619,7 +652,7 @@ fn manual_oauth_refresh_marker(form: &crate::migration_plan::Form, source: bool)
 
 #[cfg(test)]
 mod tests {
-    use super::manual_oauth_refresh_marker;
+    use super::{manual_oauth_refresh_marker, store_oauth_refresh_editor_values};
     use crate::migration_plan::Form;
 
     #[test]
@@ -636,5 +669,53 @@ mod tests {
         assert_eq!(initial, manual_oauth_refresh_marker(&form, true));
         form.profile.source_host = "changed.example".into();
         assert_ne!(initial, manual_oauth_refresh_marker(&form, true));
+    }
+
+    #[test]
+    fn failed_oauth_config_persistence_preserves_editor_values() {
+        let mut endpoint = "https://issuer.example/token".to_owned();
+        let mut client_id = "registered-client".to_owned();
+        let mut client_secret = crate::credentials::SecretString::from("client-secret");
+        let mut refresh_token = crate::credentials::SecretString::from("refresh-token");
+
+        let result = store_oauth_refresh_editor_values(
+            &mut endpoint,
+            &mut client_id,
+            &mut client_secret,
+            &mut refresh_token,
+            |_| Err("keyring unavailable".into()),
+        );
+
+        assert_eq!(result.unwrap_err(), "keyring unavailable");
+        assert_eq!(endpoint, "https://issuer.example/token");
+        assert_eq!(client_id, "registered-client");
+        assert_eq!(client_secret.as_str(), "client-secret");
+        assert_eq!(refresh_token.as_str(), "refresh-token");
+    }
+
+    #[test]
+    fn successful_oauth_config_persistence_clears_editor_values() {
+        let mut endpoint = "https://issuer.example/token".to_owned();
+        let mut client_id = "registered-client".to_owned();
+        let mut client_secret = crate::credentials::SecretString::from("client-secret");
+        let mut refresh_token = crate::credentials::SecretString::from("refresh-token");
+
+        store_oauth_refresh_editor_values(
+            &mut endpoint,
+            &mut client_id,
+            &mut client_secret,
+            &mut refresh_token,
+            |config| {
+                assert_eq!(config.client_secret.as_str(), "client-secret");
+                assert_eq!(config.refresh_token.as_str(), "refresh-token");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(endpoint.is_empty());
+        assert!(client_id.is_empty());
+        assert!(client_secret.is_empty());
+        assert!(refresh_token.is_empty());
     }
 }

@@ -5,7 +5,111 @@ use std::{collections::BTreeMap, time::Duration};
 use eframe::egui::Color32;
 
 use super::ThemeColors;
+use super::WorkspaceView;
 use crate::core;
+
+pub(crate) struct RecommendedAction {
+    pub(crate) text: &'static str,
+    pub(crate) destination: WorkspaceView,
+    pub(crate) button_label: &'static str,
+}
+
+pub(crate) fn recommended_workspace_action(
+    phase: core::Phase,
+    has_preflight: bool,
+    attention_count: usize,
+    running: bool,
+    has_imported_queue: bool,
+    proof_ready: bool,
+) -> RecommendedAction {
+    let (text, destination, button_label) = if running {
+        (
+            "A migration is running — monitor Activity or use Stop migration if you need to halt it.",
+            WorkspaceView::Activity,
+            "Open Activity  →",
+        )
+    } else if attention_count > 0 {
+        (
+            if has_imported_queue {
+                "Review Attention items in the imported batch before starting another operation."
+            } else {
+                "Review Attention items before starting another migration."
+            },
+            WorkspaceView::Mailboxes,
+            "Review mailboxes  →",
+        )
+    } else if proof_ready {
+        (
+            "The project is complete; export the report and retain the audit record.",
+            WorkspaceView::Verification,
+            "Open customer proof  →",
+        )
+    } else if has_imported_queue {
+        (
+            "Review the imported mailbox rows, then run a dry preflight before any live migration.",
+            WorkspaceView::Mailboxes,
+            "Review batch mailboxes  →",
+        )
+    } else {
+        match phase {
+            core::Phase::Discovery => (
+                "Create the project, then run a dry preflight against a test mailbox.",
+                WorkspaceView::Plan,
+                "Open migration plan  →",
+            ),
+            core::Phase::Preflight if !has_preflight => (
+                "Run the dry preflight and review every blocker before going live.",
+                WorkspaceView::Plan,
+                "Review preflight  →",
+            ),
+            core::Phase::Preflight => (
+                "Review the preflight, then choose a small pilot mailbox.",
+                WorkspaceView::Plan,
+                "Review migration plan  →",
+            ),
+            core::Phase::Pilot => (
+                "Review the pilot result and prepare the seed operation.",
+                WorkspaceView::Activity,
+                "Review pilot activity  →",
+            ),
+            core::Phase::Seed => (
+                "Run the seed operation, then schedule a catch-up pass.",
+                WorkspaceView::Mailboxes,
+                "Open mailbox actions  →",
+            ),
+            core::Phase::CatchUp => (
+                "Run catch-up during the migration window and review its result.",
+                WorkspaceView::Mailboxes,
+                "Open mailbox actions  →",
+            ),
+            core::Phase::FinalDelta => (
+                "Run the final delta, then open Verification for reconciliation.",
+                WorkspaceView::Mailboxes,
+                "Run final delta  →",
+            ),
+            core::Phase::Verification => (
+                "Review evidence for each mailbox and export the verification report.",
+                WorkspaceView::Verification,
+                "Open verification  →",
+            ),
+            core::Phase::Complete => (
+                "The project is complete; export the report and retain the audit record.",
+                WorkspaceView::Verification,
+                "Open customer proof  →",
+            ),
+            core::Phase::Attention => (
+                "Review Attention items before starting another migration.",
+                WorkspaceView::Mailboxes,
+                "Review mailboxes  →",
+            ),
+        }
+    };
+    RecommendedAction {
+        text,
+        destination,
+        button_label,
+    }
+}
 
 pub(crate) fn format_phase_name(phase: core::Phase) -> &'static str {
     match phase {
@@ -33,6 +137,7 @@ pub(crate) fn format_elapsed(elapsed: Duration) -> String {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn recommended_next_action(
     phase: core::Phase,
     has_preflight: bool,
@@ -69,6 +174,7 @@ pub(crate) fn recommended_next_action(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn recommended_batch_next_action(
     has_imported_queue: bool,
     attention_count: usize,
@@ -267,6 +373,32 @@ mod tests {
         assert!(!customer_proof_ready(core::Phase::Verification, 0, false));
         assert!(!customer_proof_ready(core::Phase::Complete, 1, false));
         assert!(!customer_proof_ready(core::Phase::Complete, 0, true));
+    }
+
+    #[test]
+    fn recommended_action_routes_to_the_view_needed_for_the_next_step() {
+        let running = recommended_workspace_action(core::Phase::Seed, true, 0, true, false, false);
+        assert!(running.destination == WorkspaceView::Activity);
+        assert_eq!(running.button_label, "Open Activity  →");
+
+        let attention =
+            recommended_workspace_action(core::Phase::Preflight, false, 1, false, false, false);
+        assert!(attention.destination == WorkspaceView::Mailboxes);
+
+        let preflight =
+            recommended_workspace_action(core::Phase::Preflight, false, 0, false, false, false);
+        assert!(preflight.destination == WorkspaceView::Plan);
+        assert_eq!(preflight.button_label, "Review preflight  →");
+
+        let proof =
+            recommended_workspace_action(core::Phase::Complete, true, 0, false, false, true);
+        assert!(proof.destination == WorkspaceView::Verification);
+        assert_eq!(proof.button_label, "Open customer proof  →");
+
+        let imported =
+            recommended_workspace_action(core::Phase::Discovery, false, 0, false, true, false);
+        assert!(imported.destination == WorkspaceView::Mailboxes);
+        assert_eq!(imported.button_label, "Review batch mailboxes  →");
     }
 
     #[test]

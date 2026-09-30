@@ -766,6 +766,15 @@ impl UiLanguage {
             }
             "Delete saved credential?" => "Gespeicherte Zugangsdaten löschen?",
             "{}: {} · keyring ID: {}" => "{}: {} · Schlüsselbund-ID: {}",
+            "This permanently removes the saved credential from the OS keyring." => {
+                "Dadurch werden die gespeicherten Zugangsdaten dauerhaft aus dem Betriebssystem-Schlüsselbund entfernt."
+            }
+            "This removes only the locally stored OAuth refresh configuration; it does not revoke the provider token." => {
+                "Dadurch wird nur die lokal gespeicherte OAuth-Erneuerungskonfiguration entfernt; das Anbietertoken wird nicht widerrufen."
+            }
+            "The profile reference and any credential already loaded in this session are not changed." => {
+                "Der Profilverweis und bereits in dieser Sitzung geladene Zugangsdaten bleiben unverändert."
+            }
             "This permanently removes the selected item from the OS keyring. The profile reference and any credential already loaded in this session are not changed." => {
                 "Dieser Vorgang entfernt den ausgewählten Eintrag dauerhaft aus dem OS-Schlüsselbund. Der Profilverweis und bereits in dieser Sitzung geladene Zugangsdaten bleiben unverändert."
             }
@@ -837,6 +846,16 @@ impl UiLanguage {
             "EVIDENCE" => "NACHWEISE",
             "Recommended next step" => "Empfohlener nächster Schritt",
             "Open migration plan  →" => "Migrationsplan öffnen  →",
+            "Review preflight  →" => "Vorabprüfung prüfen  →",
+            "Review migration plan  →" => "Migrationsplan prüfen  →",
+            "Open Activity  →" => "Aktivität öffnen  →",
+            "Review mailboxes  →" => "Postfächer prüfen  →",
+            "Open customer proof  →" => "Kundennachweis öffnen  →",
+            "Review pilot activity  →" => "Pilotaktivität prüfen  →",
+            "Open mailbox actions  →" => "Postfachaktionen öffnen  →",
+            "Run final delta  →" => "Letzte Delta-Synchronisierung starten  →",
+            "Open verification  →" => "Verifizierung öffnen  →",
+            "Review batch mailboxes  →" => "Stapelpostfächer prüfen  →",
             "Refresh preflight assessment" => "Vorabprüfung aktualisieren",
             "Preflight is the default" => "Vorabprüfung ist der Standard",
             "Saved profiles exclude passwords" => "Gespeicherte Profile enthalten keine Passwörter",
@@ -1627,6 +1646,16 @@ mod tests {
             "Verification authority",
             "The transfer finished, but no mailbox-level evidence has been captured yet.",
             "Open migration plan  →",
+            "Review preflight  →",
+            "Review migration plan  →",
+            "Open Activity  →",
+            "Review mailboxes  →",
+            "Open customer proof  →",
+            "Review pilot activity  →",
+            "Open mailbox actions  →",
+            "Run final delta  →",
+            "Open verification  →",
+            "Review batch mailboxes  →",
             "Refresh preflight assessment",
             "Preflight is the default",
             "Saved profiles exclude passwords",
@@ -1699,6 +1728,9 @@ mod tests {
             "Destination OAuth refresh configuration deleted",
             "Delete saved credential?",
             "{}: {} · keyring ID: {}",
+            "This permanently removes the saved credential from the OS keyring.",
+            "This removes only the locally stored OAuth refresh configuration; it does not revoke the provider token.",
+            "The profile reference and any credential already loaded in this session are not changed.",
             "This permanently removes the selected item from the OS keyring. The profile reference and any credential already loaded in this session are not changed.",
             "Delete saved credential",
             "saved password / access token",
