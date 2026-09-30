@@ -30,8 +30,21 @@ workaround after Basic Authentication removal.
 
 ## Authorize with MailSwiftSync
 
-After registering an OAuth application (steps below), run the consent flow
-once per mailbox account on a computer with a browser:
+After registering an OAuth application (steps below), authorize from the
+desktop using **Migration plan → Advanced migration settings → OS keyring
+credentials → Connect provider account** or use the
+CLI flow for automation. In the desktop, select the source/destination and
+provider, enter the client ID, optional client secret, sign-in hint, and the
+profile's OS keyring ID. Microsoft also requires the tenant. The exact
+loopback redirect URI is displayed while the browser flow is waiting; register
+that URI with the OAuth application. After consent, MailSwiftSync stores and
+reads back the refresh configuration, tests a refresh, then verifies IMAP
+authentication for the configured mailbox. These are one-time readiness checks
+in the current application session; they are not hosted-provider qualification
+evidence. Save the migration profile to retain its OAuth method and keyring ID.
+
+For automation, run the consent flow once per mailbox account on a computer
+with a browser:
 
 ```text
 # Google: a "Desktop app" OAuth client; its client secret goes in an owner-only file.
@@ -46,8 +59,9 @@ mailswiftsync oauth-authorize microsoft m365-destination \
   --tenant contoso.onmicrosoft.com
 ```
 
-The command prints the provider's consent URL and waits up to five minutes on
-a one-shot loopback listener (`http://127.0.0.1:<port>/` for Google,
+The command prints the provider's consent URL and exact redirect URI, and waits
+up to five minutes on a one-shot loopback listener
+(`http://127.0.0.1:<port>/` for Google,
 `http://localhost:<port>/` for Microsoft; override with `--redirect-host`).
 It sends a PKCE S256 challenge and a random `state`, refuses a redirect whose
 `state` does not match, exchanges the code over certificate-validated HTTPS

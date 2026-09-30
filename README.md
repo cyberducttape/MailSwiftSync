@@ -88,6 +88,7 @@ The default live imapsync result is labeled `Metadata reconciled — message bod
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
 - The Plan page shows provider-pair qualification state and a pre-migration simulation of scope, destination mutation behavior, engine, mapping, authentication, observed readiness risks, and known inventory. Hosted-provider pairs remain visibly unqualified until live qualification evidence exists; unknown message counts and data volume are not estimated.
+- The keyring dialog can authorize Google Workspace or Microsoft 365 in a browser using the operator's OAuth app and PKCE, then test refresh and IMAP authentication. Those checks are session-local readiness observations, not hosted-provider qualification.
 - Running jobs show elapsed time and can be stopped through an explicit confirmation; Advanced options include contextual guidance for per-process throttles.
 
 Experimental or planned:
@@ -95,12 +96,11 @@ Experimental or planned:
 - Native Dovecot execution is implemented and wired, but remains experimental
   until its integration fixture and recovery scenarios pass in CI. The
   capability manifest tracks this separately from code and wiring status.
-- Unattended secret brokering beyond the OS keyring, and an in-GUI provider
-  sign-in. Consent itself is available from the CLI:
-  `mailswiftsync oauth-authorize` runs the authorization-code flow with PKCE
-  against the operator's registered application and stores the refresh
-  configuration that live launches use. It has not yet been qualified against
-  live Google or Microsoft tenants.
+- Hosted-provider qualification and unattended secret brokering beyond the OS
+  keyring. The GUI and `mailswiftsync oauth-authorize` both use an
+  authorization-code flow with PKCE against the operator's own registered
+  application; MailSwiftSync ships no OAuth client and these flows have not yet
+  been qualified against live Google or Microsoft tenants.
 - Native installers. Portable signed archives and cross-platform binary distribution are available when release signing credentials are configured.
 - A scheduler/API that can survive the desktop closing. (`supervise` provides a foreground, maintenance-window-aware batch controller; body hashing is currently an explicit per-mailbox opt-in rather than a default batch mode.)
 - UIDVALIDITY-aware delta checkpoint binding is implemented for native Dovecot; encrypted-imapsync verification persists bounded metadata pages, body fingerprints, and UID cursors across controller interruption, while provider qualification and large-mailbox recovery evidence remain outstanding.
@@ -206,7 +206,7 @@ Bulk migration alone is not the differentiator: scripts and existing IMAP tools 
 
 ### Current security boundary
 
-The desktop runner does not persist passwords or OAuth access tokens. For imapsync, choose **OAuth 2.0 / XOAUTH2** per endpoint and enter a currently valid access token, or load it through an OS-keyring ID; live runs write it to a short-lived owner-only token file that imapsync reads without exposing it in argv. The readiness probe performs the same XOAUTH2 authentication before live admission. The operator registers their own OAuth application with the provider; there is no in-app "sign in with Google/Microsoft" button, but `mailswiftsync oauth-authorize` completes consent in a browser with PKCE and stores the initial refresh configuration (see [OAUTH_SETUP.md](OAUTH_SETUP.md#authorize-with-mailswiftsync)). A refresh token obtained through the provider's own tooling can be entered instead. Once that refresh token, the token endpoint, and the client ID/secret are stored under an OS-keyring ID (in the OAuth keyring dialog's "Automatic OAuth refresh" section, separate from the plain credential entry), MailSwiftSync exchanges it for a fresh access token before every live launch, including each mailbox in a batch queue, so a long unattended run does not stall on a token that expired while it waited. Refresh-token rotation is followed automatically. Without a configured refresh entry, behavior is unchanged: operators obtain and rotate tokens by hand. Dovecot native execution currently supports password authentication only. Remote Dovecot execution is unavailable until a secret broker can deliver credentials without destination-host process exposure. Never put real passwords, tokens, refresh tokens, or client secrets in a committed CSV.
+The desktop runner does not persist passwords or OAuth access tokens. For imapsync, choose **OAuth 2.0 / XOAUTH2** per endpoint. In **Migration plan → Advanced migration settings → OS keyring credentials → Connect provider account**, select the source or destination, enter the mailbox user on the Migration plan, provide your registered Google/Microsoft OAuth client details and keyring ID, then authorize in the browser. MailSwiftSync stores the refresh configuration in the OS keyring, tests a token refresh, and verifies IMAP authentication; the displayed validation time is session-local and does not constitute provider qualification. The exact loopback redirect URI is shown for OAuth app registration. The CLI `mailswiftsync oauth-authorize` uses the same PKCE flow for automation (see [OAUTH_SETUP.md](OAUTH_SETUP.md#authorize-with-mailswiftsync)). Alternatively, provide a current access token or a refresh token obtained through provider tooling. Live runs write access tokens to short-lived owner-only files that imapsync reads without exposing them in argv; configured refresh entries are exchanged before each live launch, including each mailbox in a batch queue, and token rotation is followed automatically. Dovecot native execution currently supports password authentication only. Remote Dovecot execution is unavailable until a secret broker can deliver credentials without destination-host process exposure. Never put real passwords, tokens, refresh tokens, or client secrets in a committed CSV.
 
 ### Dovecot mode
 
@@ -216,16 +216,17 @@ Dovecot mode configures the destination-side command using the selected migratio
 
 Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches are labeled `Aggregate match — not message-body proof`; they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
 
-Current live verification reaches **Level 2 — Aggregate reconciliation — not message-body proof** for
-native Dovecot runs and **metadata-level message reconciliation** for encrypted
-imapsync runs when the independent IMAP fetch succeeds. An explicit forensic
-profile can instead fetch and SHA-256 hash RFC822 bodies on both sides, within
-configured per-message and total-byte bounds; that evidence is labeled
-`body_hash` and fails closed on incomplete coverage or resource limits. The
-default metadata path compares Message-ID, INTERNALDATE, and RFC822.SIZE across
-every selectable folder and is surfaced as `Metadata reconciled — message bodies
-not compared`. A successful process
-without usable evidence is Level 0 — process completed, verification incomplete.
+MailSwiftSync presents three verification levels. **Level 1 — Aggregate
+evidence** compares folder/message/byte totals and engine-reported counters;
+individual messages are not compared. Native Dovecot runs currently provide
+this level. **Level 2 — Per-message metadata reconciliation** independently
+compares Message-ID, INTERNALDATE, and RFC822.SIZE across selectable folders;
+message bodies are not compared. Encrypted imapsync runs use this by default
+when independent IMAP fetch succeeds. **Level 3 — Bounded content
+fingerprints** is an explicit forensic mode that hashes bounded RFC822 body
+content on both sides. It is not a complete byte-for-byte mailbox proof and is
+not yet provider-qualified. Incomplete or failed evidence has no verification
+level; process success alone never counts as verification.
 The verifier fails closed for `--automap`, `--justfolders`, `--addheader`,
 disabled internal-date sync, or `--allowsizemismatch` plans until their
 semantics can be represented without overstating exact evidence. New profiles

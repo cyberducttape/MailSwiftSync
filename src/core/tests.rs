@@ -586,7 +586,7 @@ fn folder_mismatch_cannot_claim_full_confidence() {
     assert_eq!(evidence.evidence_level(), "Aggregate mismatch");
     assert_eq!(
         evidence.verification_level(),
-        "Level 2 — Aggregate reconciliation — not message-body proof"
+        "Level 1 — Aggregate evidence — individual messages not compared"
     );
     assert!(!evidence.is_exact_match());
 }
@@ -651,7 +651,7 @@ fn empty_mailbox_with_failures_is_not_verified() {
     assert_eq!(evidence.evidence_level(), "Incomplete evidence");
     assert_eq!(
         evidence.verification_level(),
-        "Level 0 — Process completed, verification incomplete"
+        "Incomplete evidence — no verification level"
     );
 }
 
@@ -685,6 +685,26 @@ fn aggregate_match_has_bounded_but_nonmisleading_score() {
         EvidenceScope::AggregateReconciled
     );
     assert_eq!(evidence.evidence_scope().label(), "aggregate-reconciled");
+    assert_eq!(
+        evidence.verification_level(),
+        "Level 1 — Aggregate evidence — individual messages not compared"
+    );
+    assert_eq!(
+        MailboxEvidence {
+            verification_method: VerificationMethod::MetadataReconciliation,
+            ..evidence.clone()
+        }
+        .verification_level(),
+        "Level 2 — Per-message metadata reconciliation — bodies not compared"
+    );
+    assert_eq!(
+        MailboxEvidence {
+            verification_method: VerificationMethod::BodyHash,
+            ..evidence
+        }
+        .verification_level(),
+        "Level 3 — Bounded content fingerprints — not full byte-for-byte proof"
+    );
 }
 
 #[test]

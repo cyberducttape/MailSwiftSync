@@ -362,7 +362,7 @@ impl VerificationEvidence {
         }
         let exact = self.aggregate_totals_match();
         if self.evidence_scope() == EvidenceScope::BodyHashed && exact {
-            "Level 4 — Bounded body-content reconciliation"
+            "Level 3 — Bounded content fingerprints"
         } else if self.evidence_scope() == EvidenceScope::EngineConfirmed && exact {
             "Engine-confirmed exact match — not message-body proof"
         } else if exact {
@@ -395,21 +395,24 @@ impl VerificationEvidence {
         }
     }
 
-    /// Named assurance level exposed to operators and proof consumers. Live
-    /// adapters currently provide aggregate reconciliation; message identity
-    /// sampling and full reconciliation are deliberately not inferred.
+    /// Named evidence tier exposed to operators and proof consumers. A tier
+    /// describes the kind of comparison performed, not its outcome or
+    /// completeness; those remain separate fields.
     pub fn verification_level(&self) -> &'static str {
-        // Compatibility wording for older callers. New reports and UI use
-        // `verification_outcome` directly so this legacy aggregate label
-        // cannot affect customer semantics.
         if self.unmatched_messages.is_none() || self.failed_messages > 0 {
-            "Level 0 — Process completed, verification incomplete"
-        } else if self.verification_method == VerificationMethod::BodyHash
-            && self.verification_outcome() == VerificationOutcome::ExactBodyMatch
-        {
-            "Level 4 — Bounded body-content reconciliation"
+            "Incomplete evidence — no verification level"
         } else {
-            "Level 2 — Aggregate reconciliation — not message-body proof"
+            match self.verification_method {
+                VerificationMethod::AggregateEngine | VerificationMethod::NativeDovecot => {
+                    "Level 1 — Aggregate evidence — individual messages not compared"
+                }
+                VerificationMethod::MetadataReconciliation => {
+                    "Level 2 — Per-message metadata reconciliation — bodies not compared"
+                }
+                VerificationMethod::BodyHash => {
+                    "Level 3 — Bounded content fingerprints — not full byte-for-byte proof"
+                }
+            }
         }
     }
 

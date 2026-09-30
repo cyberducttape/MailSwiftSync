@@ -500,6 +500,33 @@ mod tests {
     }
 
     #[test]
+    fn provider_authorization_and_verification_levels_are_translated() {
+        for key in [
+            "ui.connect-provider-account",
+            "ui.oauth-app-registration-required",
+            "ui.oauth-authorization-stored",
+            "ui.oauth-token-refresh-tested",
+            "ui.imap-authentication-verified-for",
+            "ui.oauth-code-received-completing-authorization",
+            "ui.testing-oauth-token-refresh",
+            "ui.verifying-imap-authentication",
+            "ui.verification-levels",
+            "ui.verification-level-1",
+            "ui.verification-level-2",
+            "ui.verification-level-3",
+            "ui.verification-level-1-description",
+            "ui.verification-level-2-description",
+            "ui.verification-level-3-description",
+        ] {
+            assert_ne!(
+                UiLanguage::German.message(key),
+                UiLanguage::English.message(key),
+                "missing German UI translation: {key}"
+            );
+        }
+    }
+
+    #[test]
     fn dynamic_engine_and_attention_copy_is_translated() {
         for engine in [
             crate::core::Engine::Auto,

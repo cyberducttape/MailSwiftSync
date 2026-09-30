@@ -1150,10 +1150,7 @@ const OAUTH_AUTHORIZE_USAGE: &str = "Usage: mailswiftsync oauth-authorize google
 fn oauth_authorize_command(
     mut arguments: impl Iterator<Item = OsString>,
 ) -> Result<String, (i32, String)> {
-    use crate::oauth_authorize::{
-        AUTHORIZATION_TIMEOUT, AuthorizationRequest, CodeExchange, ProviderOverrides, RedirectHost,
-        RedirectListener,
-    };
+    use crate::oauth_authorize::{PendingAuthorization, ProviderOverrides, RedirectHost};
     let usage = |detail: &str| (2, format!("{detail}\n{OAUTH_AUTHORIZE_USAGE}"));
     let text = |value: OsString, name: &str| {
         value
@@ -1203,8 +1200,6 @@ fn oauth_authorize_command(
         .map(RedirectHost::parse)
         .transpose()
         .map_err(|error| usage(&error))?;
-    let profile = crate::oauth_authorize::provider_profile(&provider, overrides)
-        .map_err(|error| usage(&error))?;
     let client_secret = client_secret_file
         .map(|path| read_secret_file(std::path::Path::new(&path)))
         .transpose()
@@ -1216,36 +1211,22 @@ fn oauth_authorize_command(
         })?;
 
     let failure = |error: String| (1, format!("OAuth authorization failed: {error}"));
-    let pkce = crate::oauth_authorize::new_pkce().map_err(failure)?;
-    let state = crate::oauth_authorize::new_state().map_err(failure)?;
-    let listener = RedirectListener::bind(profile.redirect_host).map_err(failure)?;
-    let redirect_uri = crate::oauth_authorize::redirect_uri(profile.redirect_host, listener.port());
-    let url = crate::oauth_authorize::authorization_url(&AuthorizationRequest {
-        profile: &profile,
-        client_id: &client_id,
-        redirect_uri: &redirect_uri,
-        state: &state,
-        code_challenge: &pkce.challenge,
-        login_hint: login_hint.as_deref(),
-    })
-    .map_err(failure)?;
+    let (authorization, url) = PendingAuthorization::begin(
+        &provider,
+        overrides,
+        &client_id,
+        client_secret,
+        login_hint.as_deref(),
+    )
+    .map_err(|error| usage(&error))?;
+    let redirect_uri = authorization.redirect_uri().to_owned();
     eprintln!(
-        "Open this URL in a browser on this computer and sign in to the mailbox account:\n\n{url}\n\nThe provider will redirect to {redirect_uri}; the OAuth application must allow this loopback redirect. Waiting up to {} minutes...",
-        AUTHORIZATION_TIMEOUT.as_secs() / 60
+        "Open this URL in a browser on this computer and sign in to the mailbox account:\n\n{url}\n\nRegister this loopback redirect URI in the OAuth application: {redirect_uri}\nWaiting for authorization..."
     );
-    let code = listener
-        .wait_for_code(&state, AUTHORIZATION_TIMEOUT)
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    authorization
+        .complete_and_store(&keyring_id, &cancelled, |_| {})
         .map_err(failure)?;
-    let config = crate::oauth_authorize::exchange_code(&CodeExchange {
-        token_endpoint: &profile.token_endpoint,
-        client_id: &client_id,
-        client_secret: client_secret.as_ref().map(|secret| secret.as_str()),
-        code: &code,
-        redirect_uri: &redirect_uri,
-        code_verifier: &pkce.verifier,
-    })
-    .map_err(failure)?;
-    crate::oauth_authorize::store_refresh_config(&keyring_id, &config).map_err(failure)?;
     // The operator supplied the keyring ID; not echoing it keeps credential
     // lookup names out of terminal logs.
     Ok("Stored the OAuth refresh configuration in the OS keyring under the ID you supplied. Enter that ID as the source or destination OAuth refresh keyring ID in the migration profile; live launches will refresh the access token automatically.".to_owned())

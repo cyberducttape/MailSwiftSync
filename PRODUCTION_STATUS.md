@@ -54,8 +54,8 @@ very large accounts.
 ### Provider Support ⚠️ PRESETS, NOT PROVIDER INTEGRATIONS
 | Provider | Status | Coverage |
 |----------|--------|----------|
-| Gmail/Workspace | ⚠️ Endpoint preset | No provider-specific intelligence is wired into execution |
-| Microsoft 365 | ⚠️ Endpoint preset | No provider-specific intelligence is wired into execution |
+| Gmail/Workspace | ⚠️ Endpoint preset | GUI/CLI delegated OAuth with PKCE is wired using an operator-registered app; no provider-specific execution intelligence or live qualification evidence |
+| Microsoft 365 | ⚠️ Endpoint preset | GUI/CLI delegated OAuth with PKCE is wired using an operator-registered app; no provider-specific execution intelligence or live qualification evidence |
 | Fastmail | ⚠️ Endpoint preset | No provider-specific intelligence is wired into execution |
 | Generic IMAP | ✅ Generic path | Uses typed plan controls and controller retry behavior |
 

@@ -13,6 +13,16 @@ impl App {
             self.language.message("ui.do-not-trust-a-completed-process-until-the-destination-reconciles-with-the-source"),
         );
         crate::ui::card(ui, |ui| {
+            ui.heading(self.language.message("ui.verification-levels"));
+            for key in [
+                "ui.verification-level-1-description",
+                "ui.verification-level-2-description",
+                "ui.verification-level-3-description",
+            ] {
+                ui.label(self.language.message(key));
+            }
+        });
+        crate::ui::card(ui, |ui| {
             ui.heading(self.language.message("ui.verification-and-audit-report"));
             ui.label(RichText::new(self.language.message("ui.the-transfer-engine-is-only-one-part-of-the-migration-this-report-is-the-op-9798e5abba")).color(self.theme_colors().text_secondary));
             if self.active_project_id().is_some() {
@@ -95,7 +105,7 @@ impl App {
                     ui.heading(self.language.message("ui.mailbox-evidence"));
                     ui.label(
                         self.language
-                            .text("{} of {} verified · {} require review")
+                            .message("ui.terminal-verification-results-count")
                             .replace("{}", &mailbox_counts.verified.to_string())
                             .replacen("{}", &mailbox_counts.total.to_string(), 1)
                             .replacen("{}", &mailbox_counts.needs_review.to_string(), 1),
@@ -172,9 +182,22 @@ impl App {
                                             .evidence
                                             .as_ref()
                                             .map(|(_, evidence, _)| {
-                                                evidence.verification_outcome().display_label()
+                                                format!(
+                                                    "{} · {}",
+                                                    self.language.message(verification_level_key(
+                                                        evidence.verification_method(),
+                                                        evidence.verification_outcome(),
+                                                    )),
+                                                    self.language.text(
+                                                        evidence
+                                                            .verification_outcome()
+                                                            .display_label()
+                                                    )
+                                                )
                                             })
-                                            .unwrap_or("No evidence");
+                                            .unwrap_or_else(|| {
+                                                self.language.message("ui.no-evidence").to_owned()
+                                            });
                                         let (badge, color) =
                                             job_state_badge(&mailbox.job.state, colors);
                                         if ui
@@ -187,7 +210,7 @@ impl App {
                                         {
                                             self.job_id = Some(mailbox.job.id.clone());
                                         }
-                                        ui.label(evidence_label);
+                                        ui.label(&evidence_label);
                                         ui.label(
                                             RichText::new(self.language.text(badge)).color(color),
                                         );
@@ -307,6 +330,16 @@ impl App {
                 }
                 match mailbox.evidence.as_ref() {
                     Some((_, evidence, _)) => {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(self.language.message("ui.recorded-evidence-level"))
+                                    .strong(),
+                            );
+                            ui.label(self.language.message(verification_level_key(
+                                evidence.verification_method(),
+                                evidence.verification_outcome(),
+                            )));
+                        });
                         ui.label(self.language.message("ui.durable-mailbox-reconciliation"));
                         ui.label(
                             RichText::new(
@@ -496,5 +529,68 @@ impl App {
                 );
             }
         });
+    }
+}
+
+fn verification_level_key(
+    method: crate::core::VerificationMethod,
+    outcome: crate::core::VerificationOutcome,
+) -> &'static str {
+    if matches!(
+        outcome,
+        crate::core::VerificationOutcome::Incomplete | crate::core::VerificationOutcome::Failed
+    ) {
+        return "ui.verification-incomplete-no-level";
+    }
+    match method {
+        crate::core::VerificationMethod::AggregateEngine
+        | crate::core::VerificationMethod::NativeDovecot => "ui.verification-level-1",
+        crate::core::VerificationMethod::MetadataReconciliation => "ui.verification-level-2",
+        crate::core::VerificationMethod::BodyHash => "ui.verification-level-3",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verification_level_key;
+    use crate::core::{VerificationMethod, VerificationOutcome};
+
+    #[test]
+    fn evidence_methods_map_to_precise_operator_levels() {
+        assert_eq!(
+            verification_level_key(
+                VerificationMethod::AggregateEngine,
+                VerificationOutcome::ExactMetadataMatch
+            ),
+            "ui.verification-level-1"
+        );
+        assert_eq!(
+            verification_level_key(
+                VerificationMethod::NativeDovecot,
+                VerificationOutcome::ExactMetadataMatch
+            ),
+            "ui.verification-level-1"
+        );
+        assert_eq!(
+            verification_level_key(
+                VerificationMethod::MetadataReconciliation,
+                VerificationOutcome::ExactMetadataMatch
+            ),
+            "ui.verification-level-2"
+        );
+        assert_eq!(
+            verification_level_key(
+                VerificationMethod::BodyHash,
+                VerificationOutcome::ExactBodyMatch
+            ),
+            "ui.verification-level-3"
+        );
+        assert_eq!(
+            verification_level_key(
+                VerificationMethod::MetadataReconciliation,
+                VerificationOutcome::Incomplete
+            ),
+            "ui.verification-incomplete-no-level"
+        );
     }
 }

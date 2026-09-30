@@ -1,6 +1,6 @@
 # Authoritative capability status for documentation and release review.
 schema_version = 1
-last_reviewed = "2026-09-29"
+last_reviewed = "2026-09-30"
 
 [documentation]
 # Terms that must appear only under README's experimental/planned status
@@ -46,8 +46,8 @@ production_supported = false
 
 [capabilities.provider_oauth_authorization]
 code = "implemented"
-controller = "cli"
-ui = "not_wired"
+controller = "wired"
+ui = "wired"
 generic_lab = "passed"
 gmail_live = false
 m365_live = false

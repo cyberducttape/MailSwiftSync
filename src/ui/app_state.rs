@@ -22,6 +22,32 @@ pub(crate) struct ManualOAuthRefreshResult {
     >,
 }
 
+pub(crate) struct OAuthAuthorizationResult {
+    pub(crate) source: bool,
+    pub(crate) marker: String,
+    pub(crate) provider: String,
+    pub(crate) tenant: String,
+    pub(crate) mailbox: String,
+    pub(crate) checked_at: String,
+    pub(crate) stored: bool,
+    pub(crate) refresh_tested: bool,
+    pub(crate) imap_authenticated: bool,
+    pub(crate) detail: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OAuthAuthorizationStage {
+    WaitingForBrowser,
+    ExchangingCode,
+    TestingRefresh,
+    VerifyingImap,
+}
+
+pub(crate) enum OAuthAuthorizationMessage {
+    Progress(OAuthAuthorizationStage),
+    Finished(OAuthAuthorizationResult),
+}
+
 /// The application's full in-memory state. This struct lives in `ui` (rather
 /// than the crate root) because it is fundamentally UI/controller shared
 /// state: the fields are read and mutated across `ui::*` render code,
@@ -137,6 +163,17 @@ pub(crate) struct App {
     /// the run is admitted.
     pub(crate) live_auth_receiver: Option<Receiver<Result<LiveAuthProof, String>>>,
     pub(crate) manual_oauth_refresh_receiver: Option<Receiver<ManualOAuthRefreshResult>>,
+    pub(crate) oauth_authorization_receiver: Option<Receiver<OAuthAuthorizationMessage>>,
+    pub(crate) oauth_authorization_cancel: Option<Arc<AtomicBool>>,
+    pub(crate) oauth_authorization_stage: Option<OAuthAuthorizationStage>,
+    pub(crate) oauth_authorization_provider: String,
+    pub(crate) oauth_authorization_tenant: String,
+    pub(crate) oauth_authorization_client_id: String,
+    pub(crate) oauth_authorization_client_secret: SecretString,
+    pub(crate) oauth_authorization_login_hint: String,
+    pub(crate) oauth_authorization_source: bool,
+    pub(crate) oauth_authorization_redirect_uri: String,
+    pub(crate) oauth_authorization_result: Option<OAuthAuthorizationResult>,
     /// Loading an OS-keyring credential can involve IPC and must not block an
     /// egui frame. The cloned form is returned only after the worker has
     /// completed the load.
@@ -449,6 +486,7 @@ impl App {
             || self.capability_receiver.is_some()
             || self.live_auth_receiver.is_some()
             || self.manual_oauth_refresh_receiver.is_some()
+            || self.oauth_authorization_receiver.is_some()
             || self.start_credentials_receiver.is_some()
             || self.bulk_import_receiver.is_some()
     }

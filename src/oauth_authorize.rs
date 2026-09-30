@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use std::{
     io::{ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
@@ -260,6 +261,100 @@ pub(crate) struct RedirectListener {
     port: u16,
 }
 
+/// One in-progress interactive authorization, prepared on the UI thread and
+/// completed on a worker so neither the loopback wait nor HTTPS calls block
+/// egui. PKCE/state material stays owned by the session and is zeroized when
+/// it is dropped.
+pub(crate) struct PendingAuthorization {
+    profile: ProviderProfile,
+    client_id: String,
+    client_secret: Option<SecretString>,
+    redirect_uri: String,
+    state: Zeroizing<String>,
+    pkce: Pkce,
+    listener: RedirectListener,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AuthorizationProgress {
+    CodeReceived,
+    ConfigurationStored,
+}
+
+impl PendingAuthorization {
+    pub(crate) fn begin(
+        provider: &str,
+        overrides: ProviderOverrides,
+        client_id: &str,
+        client_secret: Option<SecretString>,
+        login_hint: Option<&str>,
+    ) -> Result<(Self, String), String> {
+        if client_id.trim().is_empty() || client_id.chars().any(char::is_control) {
+            return Err(
+                "the OAuth client ID must be non-empty and contain no control characters".into(),
+            );
+        }
+        if login_hint.is_some_and(|hint| hint.chars().any(char::is_control)) {
+            return Err("the OAuth login hint must not contain control characters".into());
+        }
+        let profile = provider_profile(provider, overrides)?;
+        let pkce = new_pkce()?;
+        let state = new_state()?;
+        let listener = RedirectListener::bind(profile.redirect_host)?;
+        let redirect_uri = redirect_uri(profile.redirect_host, listener.port());
+        let url = authorization_url(&AuthorizationRequest {
+            profile: &profile,
+            client_id,
+            redirect_uri: &redirect_uri,
+            state: &state,
+            code_challenge: &pkce.challenge,
+            login_hint,
+        })?;
+        Ok((
+            Self {
+                profile,
+                client_id: client_id.to_owned(),
+                client_secret,
+                redirect_uri,
+                state,
+                pkce,
+                listener,
+            },
+            url,
+        ))
+    }
+
+    pub(crate) fn complete_and_store(
+        self,
+        keyring_id: &str,
+        cancelled: &AtomicBool,
+        mut progress: impl FnMut(AuthorizationProgress),
+    ) -> Result<(), String> {
+        validate_keyring_id(keyring_id)?;
+        let code = self.listener.wait_for_code_cancellable(
+            &self.state,
+            AUTHORIZATION_TIMEOUT,
+            cancelled,
+        )?;
+        progress(AuthorizationProgress::CodeReceived);
+        let config = exchange_code(&CodeExchange {
+            token_endpoint: &self.profile.token_endpoint,
+            client_id: &self.client_id,
+            client_secret: self.client_secret.as_ref().map(SecretString::as_str),
+            code: &code,
+            redirect_uri: &self.redirect_uri,
+            code_verifier: &self.pkce.verifier,
+        })?;
+        store_refresh_config(keyring_id, &config)?;
+        progress(AuthorizationProgress::ConfigurationStored);
+        Ok(())
+    }
+
+    pub(crate) fn redirect_uri(&self) -> &str {
+        &self.redirect_uri
+    }
+}
+
 impl RedirectListener {
     pub(crate) fn bind(host: RedirectHost) -> Result<Self, String> {
         let ipv4 = TcpListener::bind(("127.0.0.1", 0))
@@ -288,14 +383,36 @@ impl RedirectListener {
     }
 
     /// Wait for the provider's redirect and return the authorization code.
+    #[cfg(test)]
     pub(crate) fn wait_for_code(
         &self,
         expected_state: &str,
         timeout: Duration,
     ) -> Result<Zeroizing<String>, String> {
+        self.wait_for_code_inner(expected_state, timeout, None)
+    }
+
+    fn wait_for_code_cancellable(
+        &self,
+        expected_state: &str,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<Zeroizing<String>, String> {
+        self.wait_for_code_inner(expected_state, timeout, Some(cancelled))
+    }
+
+    fn wait_for_code_inner(
+        &self,
+        expected_state: &str,
+        timeout: Duration,
+        cancelled: Option<&AtomicBool>,
+    ) -> Result<Zeroizing<String>, String> {
         let deadline = Instant::now() + timeout;
         let mut unrelated = 0_usize;
         loop {
+            if cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Err("OAuth authorization was cancelled; no token was stored".into());
+            }
             let mut accepted = None;
             for listener in &self.listeners {
                 match listener.accept() {
@@ -664,6 +781,59 @@ mod tests {
             "plain-HTTP endpoints are refused"
         );
         assert!(provider_profile("yahoo", ProviderOverrides::default()).is_err());
+    }
+
+    #[test]
+    fn pending_google_authorization_prepares_a_loopback_pkce_url() {
+        let (authorization, url) = PendingAuthorization::begin(
+            "google",
+            ProviderOverrides::default(),
+            "desktop-client.apps.googleusercontent.com",
+            None,
+            Some("operator@example.test"),
+        )
+        .unwrap();
+        let url = reqwest::Url::parse(&url).unwrap();
+        let parameters = url
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(parameters.get("response_type").unwrap(), "code");
+        assert_eq!(parameters.get("code_challenge_method").unwrap(), "S256");
+        assert_eq!(parameters.get("scope").unwrap(), "https://mail.google.com/");
+        assert_eq!(
+            parameters.get("login_hint").unwrap(),
+            "operator@example.test"
+        );
+        assert!(parameters.contains_key("state"));
+        assert!(parameters.contains_key("code_challenge"));
+        assert!(authorization.redirect_uri.starts_with("http://127.0.0.1:"));
+    }
+
+    #[test]
+    fn pending_microsoft_authorization_binds_tenant_to_consent_endpoint() {
+        let overrides = ProviderOverrides {
+            tenant: Some("example.onmicrosoft.com".into()),
+            ..ProviderOverrides::default()
+        };
+        let (authorization, url) =
+            PendingAuthorization::begin("microsoft", overrides, "registered-client", None, None)
+                .unwrap();
+        assert!(url.starts_with(
+            "https://login.microsoftonline.com/example.onmicrosoft.com/oauth2/v2.0/authorize?"
+        ));
+        assert!(authorization.redirect_uri.starts_with("http://localhost:"));
+    }
+
+    #[test]
+    fn cancellable_browser_wait_returns_without_waiting_for_timeout() {
+        let listener = RedirectListener::bind(RedirectHost::Ipv4Loopback).unwrap();
+        let cancelled = AtomicBool::new(true);
+        let result =
+            listener.wait_for_code_cancellable("state", Duration::from_secs(30), &cancelled);
+        assert_eq!(
+            result.unwrap_err(),
+            "OAuth authorization was cancelled; no token was stored"
+        );
     }
 
     #[test]

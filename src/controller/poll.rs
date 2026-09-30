@@ -47,6 +47,35 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
+        loop {
+            let message = self
+                .oauth_authorization_receiver
+                .as_ref()
+                .map(Receiver::try_recv);
+            match message {
+                Some(Ok(crate::ui::OAuthAuthorizationMessage::Progress(stage))) => {
+                    self.oauth_authorization_stage = Some(stage);
+                }
+                Some(Ok(crate::ui::OAuthAuthorizationMessage::Finished(result))) => {
+                    self.oauth_authorization_receiver = None;
+                    self.oauth_authorization_cancel = None;
+                    self.oauth_authorization_stage = None;
+                    self.complete_oauth_authorization(result);
+                    break;
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                    self.oauth_authorization_receiver = None;
+                    self.oauth_authorization_cancel = None;
+                    self.oauth_authorization_stage = None;
+                    self.set_status(
+                        "OAuth authorization worker stopped before returning a result.",
+                        StatusSeverity::Error,
+                    );
+                    break;
+                }
+                Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => break,
+            }
+        }
         let start_credentials_result = self
             .start_credentials_receiver
             .as_ref()
