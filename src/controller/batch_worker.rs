@@ -104,13 +104,48 @@ impl AdaptiveProviderLimiter {
 }
 
 pub(crate) fn provider_scope_key(form: &crate::Form) -> String {
-    format!(
-        "{}:{}|{}:{}",
-        form.profile.source_host.trim().to_ascii_lowercase(),
-        form.profile.source_port.trim(),
-        form.profile.destination_host.trim().to_ascii_lowercase(),
-        form.profile.destination_port.trim(),
-    )
+    let source = canonical_provider_endpoint(
+        &form.profile.source_host,
+        &form.profile.source_port,
+        &form.profile.source_tls,
+    );
+    let destination = canonical_provider_endpoint(
+        &form.profile.destination_host,
+        &form.profile.destination_port,
+        crate::effective_destination_tls(&form.profile.destination_tls),
+    );
+    format!("{source}|{destination}")
+}
+
+fn canonical_provider_endpoint(host: &str, configured_port: &str, tls_mode: &str) -> String {
+    let default_port = crate::default_imap_port(tls_mode);
+    let fallback = || {
+        format!(
+            "invalid:{}:{}",
+            host.trim().to_ascii_lowercase(),
+            configured_port.trim()
+        )
+    };
+    let Ok((host, embedded_port)) = crate::endpoint::parts(host, default_port) else {
+        return fallback();
+    };
+    let port = if configured_port.trim().is_empty() {
+        embedded_port
+    } else {
+        match configured_port.trim().parse::<u16>() {
+            Ok(port) if port != 0 => port,
+            _ => return fallback(),
+        }
+    };
+    let host = match host.parse::<std::net::IpAddr>() {
+        Ok(address) => address.to_string(),
+        Err(_) => host.trim_end_matches('.').to_ascii_lowercase(),
+    };
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 pub(crate) struct BatchWorkerLaunch {
@@ -334,8 +369,74 @@ pub(crate) fn spawn_batch_worker(
 
 #[cfg(test)]
 mod tests {
-    use super::AdaptiveProviderLimiter;
+    use super::{AdaptiveProviderLimiter, provider_scope_key};
     use std::sync::atomic::AtomicBool;
+
+    fn form(
+        source_host: &str,
+        source_port: &str,
+        destination_host: &str,
+        destination_port: &str,
+    ) -> crate::Form {
+        let mut form = crate::Form::default();
+        form.profile.source_host = source_host.into();
+        form.profile.source_port = source_port.into();
+        form.profile.destination_host = destination_host.into();
+        form.profile.destination_port = destination_port.into();
+        form
+    }
+
+    #[test]
+    fn provider_scope_canonicalizes_equivalent_host_and_port_forms() {
+        let implicit = form("imap.example.com", "", "dest.example.com", "");
+        let explicit = form("IMAP.EXAMPLE.COM.", "993", "dest.example.com:993", "");
+        let host_embedded = form("imap.example.com:993", "", "DEST.EXAMPLE.COM", "993");
+        let key = provider_scope_key(&implicit);
+
+        assert_eq!(key, provider_scope_key(&explicit));
+        assert_eq!(key, provider_scope_key(&host_embedded));
+        assert_eq!(key, "imap.example.com:993|dest.example.com:993");
+    }
+
+    #[test]
+    fn provider_scope_uses_tls_specific_defaults_and_configured_port_precedence() {
+        let implicit_tls = form("imap.example.com", "", "dest.example.com", "");
+        let mut starttls = form("imap.example.com", "", "dest.example.com", "");
+        starttls.profile.source_tls = "starttls".into();
+        starttls.profile.destination_tls = "starttls".into();
+        assert_ne!(
+            provider_scope_key(&implicit_tls),
+            provider_scope_key(&starttls)
+        );
+        assert_eq!(
+            provider_scope_key(&starttls),
+            "imap.example.com:143|dest.example.com:143"
+        );
+
+        let configured_overrides_embedded =
+            form("imap.example.com:143", "993", "dest.example.com:143", "993");
+        assert_eq!(
+            provider_scope_key(&implicit_tls),
+            provider_scope_key(&configured_overrides_embedded)
+        );
+    }
+
+    #[test]
+    fn provider_scope_canonicalizes_idn_and_ipv6_addresses() {
+        let unicode = form("mail.bücher.example", "993", "[2001:0db8::1]", "993");
+        let ascii = form("mail.xn--bcher-kva.example.", "", "[2001:db8::1]", "");
+        assert_eq!(provider_scope_key(&unicode), provider_scope_key(&ascii));
+    }
+
+    #[test]
+    fn provider_scope_keeps_distinct_effective_ports_separate() {
+        let standard = form("imap.example.com", "", "dest.example.com", "");
+        let alternate = form("imap.example.com", "1993", "dest.example.com", "");
+        assert_ne!(
+            provider_scope_key(&standard),
+            provider_scope_key(&alternate)
+        );
+    }
 
     #[test]
     fn adaptive_provider_limiter_scopes_capacity_and_honors_cancellation() {
