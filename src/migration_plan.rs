@@ -1,5 +1,7 @@
 mod credential_identity;
 mod profile;
+#[cfg(test)]
+pub(crate) use profile::DestinationMutationPolicy;
 
 use crate::atomic_artifact::write_private_atomic;
 use crate::command::remove_option;
@@ -1185,6 +1187,10 @@ impl Form {
                     &profile.destination_ca_bundle,
                 ),
                 dovecot_config_sha256: configured_file_content_identity(&profile.dovecot_config),
+                destination_mutation_policy: profile
+                    .destination_mutation_policy()
+                    .as_str()
+                    .to_owned(),
             },
         };
         toml::to_string(&snapshot)
@@ -1195,14 +1201,9 @@ impl Form {
         self.profile.source_tls == "plain" && !self.profile.allow_insecure_source_transport
     }
     pub(crate) fn engine(&self) -> core::Engine {
-        match self.profile.engine {
-            // The desktop cannot safely infer the destination's mail stack
-            // from a hostname or from a locally installed executable.
-            // Hostnames are not reliable server fingerprints. Auto is an
-            // explicit conservative default, not environment detection.
-            core::Engine::Auto => core::Engine::ImapSync,
-            selected => selected,
-        }
+        // The desktop cannot safely infer the destination's mail stack from a
+        // hostname or a locally installed executable; see effective_engine.
+        self.profile.effective_engine()
     }
     pub(crate) fn command(&self, redact: bool) -> (String, Vec<String>) {
         self.command_with_checkpoint(redact, None)
@@ -1536,6 +1537,32 @@ mod tests {
             .err()
             .expect("oversized report snapshot must be rejected");
         assert!(error.contains("exceeds"));
+    }
+
+    /// Run snapshots record the destination mutation policy; snapshots
+    /// written before the field existed still report the derived policy.
+    #[test]
+    fn run_snapshots_record_and_derive_the_destination_policy() {
+        let mut form = Form::default();
+        form.profile.engine = crate::core::Engine::Dovecot;
+        form.profile.dovecot_strategy =
+            crate::migration_plan::DovecotMigrationStrategy::InitialMirror;
+        let snapshot = form.plan_snapshot();
+        assert!(
+            snapshot
+                .contains("destination_mutation_policy = \"mirror_may_remove_destination_state\""),
+            "{snapshot}"
+        );
+        let legacy = snapshot
+            .lines()
+            .filter(|line| !line.starts_with("destination_mutation_policy"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let decoded = decode_report_run_snapshot(&legacy).unwrap().unwrap();
+        assert_eq!(
+            decoded.profile.destination_mutation_policy(),
+            "mirror_may_remove_destination_state"
+        );
     }
 
     #[test]

@@ -564,6 +564,7 @@ pub(crate) fn headless_execute_with_credentials(
     credentials: Option<HeadlessCredentials>,
     diagnostic_log: Option<&std::path::Path>,
     reopen_reason: Option<&str>,
+    acknowledge_destination_loss: bool,
 ) -> Result<String, HeadlessFailure> {
     // Use the same startup recovery as the GUI, but pass the ledger path as
     // data instead of mutating process-global environment state.
@@ -596,6 +597,19 @@ pub(crate) fn headless_execute_with_credentials(
         );
     }
 
+    if live {
+        // The command line is the confirmation for unattended runs; a plan
+        // that may remove destination state needs its own explicit flag,
+        // checked before any preflight work.
+        let policy = app.form.profile.destination_mutation_policy();
+        eprintln!("Destination mutation policy: {}", policy.warning());
+        if policy.may_remove_destination_state() && !acknowledge_destination_loss {
+            return Err(HeadlessFailure::from(format!(
+                "live run refused: {} Re-run with --acknowledge-destination-loss to proceed.",
+                policy.warning()
+            )));
+        }
+    }
     if live && crate::runner::automap_blocks_live_certification(&app.form) {
         return Err("headless live requires independent message-verification evidence; imapsync automapping is not replayable from an immutable mapping snapshot. Disable automap and retry".into());
     }
@@ -726,8 +740,9 @@ pub(crate) fn headless_execute_with_credentials(
 pub(crate) fn headless_batch_execute(
     state_path: &std::path::Path,
     live: bool,
+    acknowledge_destination_loss: bool,
 ) -> Result<String, String> {
-    headless_batch_execute_selected(state_path, live, None)
+    headless_batch_execute_selected(state_path, live, None, acknowledge_destination_loss)
 }
 
 /// Execute only the requested durable batch jobs. This is the automation
@@ -737,6 +752,7 @@ pub(crate) fn headless_batch_execute_selected(
     state_path: &std::path::Path,
     live: bool,
     requested_ids: Option<&HashSet<String>>,
+    acknowledge_destination_loss: bool,
 ) -> Result<String, String> {
     let mut app = App::from_state_path(Some(state_path));
     if !app.persistence_available {
@@ -827,6 +843,31 @@ pub(crate) fn headless_batch_execute_selected(
         }
     }
     app.bulk_selected_ids = eligible_ids;
+    if live {
+        let removing = app
+            .bulk_jobs
+            .iter()
+            .zip(&app.bulk_job_ids)
+            .filter(|(job, id)| {
+                app.bulk_selected_ids.contains(*id)
+                    && job
+                        .defaults
+                        .profile
+                        .destination_mutation_policy()
+                        .may_remove_destination_state()
+            })
+            .count();
+        if removing > 0 {
+            eprintln!(
+                "Destination mutation policy: {removing} selected mailbox(es) use destination mirror or --delete2; destination-only messages/mailboxes may be removed or replaced."
+            );
+            if !acknowledge_destination_loss {
+                return Err(format!(
+                    "batch live run refused: {removing} selected mailbox(es) may remove destination-only mail. Re-run with --acknowledge-destination-loss to proceed."
+                ));
+            }
+        }
+    }
     if app.bulk_selected_ids.is_empty() {
         return Err(
             "no automation-safe batch work is queued; operator-review and verification-difference rows were not retried"
@@ -958,6 +999,7 @@ pub(crate) fn headless_supervise(
     poll_interval: Duration,
     max_idle_polls: usize,
     maintenance_window: Option<MaintenanceWindow>,
+    acknowledge_destination_loss: bool,
 ) -> Result<String, String> {
     let mut idle_polls = 0_usize;
     let mut completed_passes = 0_usize;
@@ -1002,7 +1044,7 @@ pub(crate) fn headless_supervise(
             continue;
         }
         idle_polls = 0;
-        match headless_batch_execute(state_path, true) {
+        match headless_batch_execute(state_path, true, acknowledge_destination_loss) {
             Ok(message) => {
                 completed_passes = completed_passes.saturating_add(1);
                 eprintln!("{message}");

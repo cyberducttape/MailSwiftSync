@@ -586,7 +586,7 @@ run_product headless "$state" preflight \
 echo "PASS: packaged MailSwiftSync preflight completed against real STARTTLS servers"
 assert_mailbox_state ready
 
-run_product headless "$state" live \
+run_product headless "$state" live --acknowledge-destination-loss \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
   --diagnostic-log "$diagnostic_dir"
 echo "PASS: packaged MailSwiftSync live migration completed"
@@ -652,7 +652,7 @@ Content-Type: text/plain; charset=utf-8
 This message proves that a subsequent incremental pass is exercised.
 EOF
 
-run_product headless "$state" live \
+run_product headless "$state" live --acknowledge-destination-loss \
   --source-secret-file "$source_secret" --destination-secret-file "$destination_secret" \
   --reopen-reason "integration fixture incremental synchronization" \
   --diagnostic-log "$diagnostic_dir"

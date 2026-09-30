@@ -970,6 +970,36 @@ impl UiLanguage {
             "Viewing a historical project read-only. Start a new migration to edit or execute a plan." => {
                 "Historisches Projekt schreibgeschützt geöffnet. Starten Sie eine neue Migration, um einen Plan zu bearbeiten oder auszuführen."
             }
+            // Destination mutation policy.
+            "DESTINATION STATE MAY BE REMOVED" => "ZIELZUSTAND KANN ENTFERNT WERDEN",
+            "Destination-only messages and mailboxes are kept for every selected mailbox." => {
+                "Nur im Ziel vorhandene Nachrichten und Postfächer bleiben für jedes ausgewählte Postfach erhalten."
+            }
+            "I confirm destination-only mail may be removed for these mailboxes" => {
+                "Ich bestätige, dass nur im Ziel vorhandene E-Mails für diese Postfächer entfernt werden können"
+            }
+            "I confirm destination-only mail may be removed for this mailbox" => {
+                "Ich bestätige, dass nur im Ziel vorhandene E-Mails für dieses Postfach entfernt werden können"
+            }
+            "⚠ {} selected mailbox(es) use destination mirror or --delete2: destination-only messages/mailboxes may be removed or replaced." => {
+                "⚠ {} ausgewählte(s) Postfach/Postfächer nutzen Zielspiegelung oder --delete2: Nur im Ziel vorhandene Nachrichten/Postfächer können entfernt oder ersetzt werden."
+            }
+            "Additive copy" => "Hinzufügende Kopie",
+            "Merge preserving destination" => "Zusammenführung mit Erhalt des Ziels",
+            "Destination mirror" => "Zielspiegelung",
+            "Delete destination-only messages" => "Nur im Ziel vorhandene Nachrichten löschen",
+            "Additive copy — destination-only messages and mailboxes are kept." => {
+                "Hinzufügende Kopie — nur im Ziel vorhandene Nachrichten und Postfächer bleiben erhalten."
+            }
+            "Merge preserving destination — destination-side changes are kept; review merge conflicts." => {
+                "Zusammenführung mit Erhalt des Ziels — Änderungen im Ziel bleiben erhalten; prüfen Sie Zusammenführungskonflikte."
+            }
+            "Destination mirror mode — destination-only messages/mailboxes may be removed or replaced." => {
+                "Zielspiegelung — nur im Ziel vorhandene Nachrichten/Postfächer können entfernt oder ersetzt werden."
+            }
+            "Destination deletion (--delete2) — destination messages missing from the source will be removed." => {
+                "Löschen im Ziel (--delete2) — Nachrichten im Ziel, die in der Quelle fehlen, werden entfernt."
+            }
             "Dismiss" => "Ausblenden",
             "Queue settings" => "Warteschlangeneinstellungen",
             "Concurrent workers" => "Parallele Prozesse",
@@ -1486,6 +1516,25 @@ mod tests {
                 key,
                 "missing German translation: {key}"
             );
+        }
+    }
+
+    #[test]
+    fn destination_mutation_policy_text_is_translated() {
+        use crate::migration_plan::DestinationMutationPolicy as Policy;
+        for policy in [
+            Policy::Additive,
+            Policy::MergePreservingDestination,
+            Policy::MirrorMayRemoveDestinationState,
+            Policy::ExplicitDeleteMissingSourceMessages,
+        ] {
+            for text in [policy.label(), policy.warning()] {
+                assert_ne!(
+                    UiLanguage::German.text(text),
+                    text,
+                    "missing German: {text}"
+                );
+            }
         }
     }
 

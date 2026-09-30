@@ -94,7 +94,7 @@ pub(crate) fn build_project_report(
             ));
         }
     }
-    report.push_str("\n## Recent runs\n\n| Run | Engine | Engine version | Phase at start | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|---|---|\n");
+    report.push_str("\n## Recent runs\n\n| Run | Engine | Engine version | Phase at start | Destination policy | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|---|---|---|\n");
     for report_run in snapshot.runs.iter().rev().take(20) {
         let run = &report_run.run;
         let engine_version = report_run
@@ -102,11 +102,12 @@ pub(crate) fn build_project_report(
             .clone()
             .unwrap_or_else(|| "unavailable".into());
         report.push_str(&format!(
-            "| `{}` | {} | {} | `{}` | `{}` | `{}` | {} | {} | {} |\n",
+            "| `{}` | {} | {} | `{}` | `{}` | `{}` | `{}` | {} | {} | {} |\n",
             markdown_escape(&run.id),
             markdown_escape(&run.engine),
             markdown_escape(&engine_version),
             markdown_escape(&run.phase_at_start),
+            run_destination_policy(&run.plan_snapshot),
             markdown_escape(&run.status),
             markdown_escape(&plan_snapshot_sha256(&run.plan_snapshot)),
             markdown_escape(&run.started_at),
@@ -204,6 +205,7 @@ pub(crate) fn build_project_json(
                 "engine": run.engine,
                 "engine_version": report_run.engine_version,
                 "phase_at_start": run.phase_at_start,
+                "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
                 "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                 "status": run.status,
                 "started_at": run.started_at,
@@ -404,6 +406,7 @@ pub(crate) fn export_health(
                 "parent_run_id": run.parent_run_id,
                 "engine": run.engine,
                 "phase_at_start": run.phase_at_start,
+                "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
                 "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),
                 "status": run.status,
                 "started_at": run.started_at,
@@ -431,4 +434,13 @@ pub(crate) fn export_health(
     });
     let report = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     write_private_atomic(path, &report).map_err(|e| e.to_string())
+}
+
+/// What the run was allowed to do to existing destination state, from its
+/// immutable plan snapshot. Unreadable or absent snapshots say so.
+fn run_destination_policy(plan_snapshot: &str) -> &'static str {
+    match decode_report_run_snapshot(plan_snapshot) {
+        Ok(Some(snapshot)) => snapshot.profile.destination_mutation_policy(),
+        _ => "unknown",
+    }
 }

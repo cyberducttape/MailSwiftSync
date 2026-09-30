@@ -64,19 +64,27 @@ impl App {
                         )
                         .color(self.theme_colors().warning),
                     );
-                } else {
-                    let deletion_enabled = self.form.profile.delete2;
-                    ui.label(
-                        RichText::new(self.language.text(if deletion_enabled {
-                            "Destination deletion: ENABLED ⚠"
-                        } else {
-                            "Destination deletion: disabled"
-                        }))
-                        .color(if deletion_enabled {
+                }
+                // One derived policy covers both engines: Dovecot backup
+                // mirrors, imapsync --delete2 deletes, everything else keeps
+                // destination-only state.
+                let policy = self.form.profile.destination_mutation_policy();
+                let removes = policy.may_remove_destination_state();
+                ui.label(
+                    RichText::new(self.language.text(policy.warning()))
+                        .strong()
+                        .color(if removes {
                             self.theme_colors().danger
                         } else {
                             self.theme_colors().text_secondary
                         }),
+                );
+                if removes {
+                    ui.checkbox(
+                        &mut self.live_destination_loss_acknowledged,
+                        self.language.text(
+                            "I confirm destination-only mail may be removed for this mailbox",
+                        ),
                     );
                 }
                 ui.add_space(10.0);
@@ -89,8 +97,15 @@ impl App {
                     if cancel.clicked() {
                         close_requested = true;
                     }
+                    let acknowledged = !self
+                        .form
+                        .profile
+                        .destination_mutation_policy()
+                        .may_remove_destination_state()
+                        || self.live_destination_loss_acknowledged;
                     if ui
-                        .add(
+                        .add_enabled(
+                            acknowledged,
                             egui::Button::new(
                                 RichText::new(self.language.text("I understand — start migration"))
                                     .color(Color32::WHITE),
@@ -110,6 +125,7 @@ impl App {
         self.live_confirm_open = !(close_requested || response.should_close());
         if !self.live_confirm_open {
             self.live_confirm_focus_requested = false;
+            self.live_destination_loss_acknowledged = false;
         }
     }
     pub(crate) fn requires_live_imaps_auth_probe(&self) -> bool {

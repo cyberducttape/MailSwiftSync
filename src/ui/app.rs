@@ -428,25 +428,24 @@ impl App {
                     )
                 });
             });
-            if self.form.profile.delete2 {
-                ui.add_space(12.0);
-                crate::ui::card(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "⚠ {}",
-                            self.language.text("DESTINATION DELETION ENABLED")
-                        ))
-                        .strong()
-                        .color(colors.danger),
-                    );
-                    ui.label(
-                        egui::RichText::new(self.language.text(
-                            "Messages that exist only on the destination may be removed during live migration.",
-                        ))
-                        .color(colors.danger),
-                    );
-                });
-            }
+        }
+        // Both engines: Dovecot backup mirrors, imapsync --delete2 deletes.
+        let policy = self.form.profile.destination_mutation_policy();
+        if policy.may_remove_destination_state() {
+            ui.add_space(12.0);
+            crate::ui::card(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "⚠ {}",
+                        self.language.text("DESTINATION STATE MAY BE REMOVED")
+                    ))
+                    .strong()
+                    .color(colors.danger),
+                );
+                ui.label(
+                    egui::RichText::new(self.language.text(policy.warning())).color(colors.danger),
+                );
+            });
         }
         ui.add_space(16.0);
         crate::ui::card(ui, |ui| self.provider_runbook_panel(ui));

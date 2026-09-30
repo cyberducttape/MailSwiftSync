@@ -77,6 +77,22 @@ pub(crate) struct RunProfileSnapshot {
     pub(crate) destination_ca_bundle_sha256: String,
     #[serde(default)]
     pub(crate) dovecot_config_sha256: String,
+    /// `DestinationMutationPolicy::as_str` of the plan, recorded so audit
+    /// artifacts state what the run was allowed to do to the destination.
+    /// Empty in snapshots written before the field existed.
+    #[serde(default)]
+    pub(crate) destination_mutation_policy: String,
+}
+
+impl RunProfileSnapshot {
+    /// The recorded policy, or the policy derived from the recorded engine,
+    /// strategy, and options for snapshots that predate the field.
+    pub(crate) fn destination_mutation_policy(&self) -> &'static str {
+        if let Some(policy) = DestinationMutationPolicy::parse(&self.destination_mutation_policy) {
+            return policy.as_str();
+        }
+        DestinationMutationPolicy::derive(self.engine, self.dovecot_strategy, self.delete2).as_str()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +137,99 @@ impl DovecotMigrationStrategy {
             self,
             Self::FinalPreservationPass | Self::DestinationAlreadyActive
         )
+    }
+}
+
+/// What a live run may do to state that already exists on the destination.
+/// This is the single safety model for review, confirmation, batch plans,
+/// reports, and CLI warnings; it is derived from the complete plan (engine,
+/// Dovecot strategy, and imapsync options), never from one engine flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DestinationMutationPolicy {
+    /// imapsync without `--delete2`: copies and updates messages; never
+    /// removes destination-only mail.
+    Additive,
+    /// `doveadm sync -1`: one-way merge that preserves destination changes.
+    MergePreservingDestination,
+    /// `doveadm backup`: forces the destination to match the source and may
+    /// remove or replace destination-only messages and mailboxes.
+    MirrorMayRemoveDestinationState,
+    /// imapsync `--delete2`: removes destination messages missing from the
+    /// source.
+    ExplicitDeleteMissingSourceMessages,
+}
+
+impl DestinationMutationPolicy {
+    /// Derive the policy from the plan elements that decide it.
+    pub(crate) fn derive(
+        engine: core::Engine,
+        strategy: DovecotMigrationStrategy,
+        delete2: bool,
+    ) -> Self {
+        match engine {
+            core::Engine::Dovecot if strategy.uses_preservation_sync() => {
+                Self::MergePreservingDestination
+            }
+            // `doveadm backup` ignores --delete2; the mirror itself removes.
+            core::Engine::Dovecot => Self::MirrorMayRemoveDestinationState,
+            _ if delete2 => Self::ExplicitDeleteMissingSourceMessages,
+            _ => Self::Additive,
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        [
+            Self::Additive,
+            Self::MergePreservingDestination,
+            Self::MirrorMayRemoveDestinationState,
+            Self::ExplicitDeleteMissingSourceMessages,
+        ]
+        .into_iter()
+        .find(|policy| policy.as_str() == value)
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Additive => "additive",
+            Self::MergePreservingDestination => "merge_preserving_destination",
+            Self::MirrorMayRemoveDestinationState => "mirror_may_remove_destination_state",
+            Self::ExplicitDeleteMissingSourceMessages => "explicit_delete_missing_source_messages",
+        }
+    }
+
+    /// Whether a live run can remove or replace mail or mailboxes that exist
+    /// only on the destination. Such plans need explicit acknowledgement.
+    pub(crate) fn may_remove_destination_state(self) -> bool {
+        matches!(
+            self,
+            Self::MirrorMayRemoveDestinationState | Self::ExplicitDeleteMissingSourceMessages
+        )
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Additive => "Additive copy",
+            Self::MergePreservingDestination => "Merge preserving destination",
+            Self::MirrorMayRemoveDestinationState => "Destination mirror",
+            Self::ExplicitDeleteMissingSourceMessages => "Delete destination-only messages",
+        }
+    }
+
+    /// One sentence describing the effect on existing destination state.
+    pub(crate) fn warning(self) -> &'static str {
+        match self {
+            Self::Additive => "Additive copy — destination-only messages and mailboxes are kept.",
+            Self::MergePreservingDestination => {
+                "Merge preserving destination — destination-side changes are kept; review merge conflicts."
+            }
+            Self::MirrorMayRemoveDestinationState => {
+                "Destination mirror mode — destination-only messages/mailboxes may be removed or replaced."
+            }
+            Self::ExplicitDeleteMissingSourceMessages => {
+                "Destination deletion (--delete2) — destination messages missing from the source will be removed."
+            }
+        }
     }
 }
 
@@ -200,6 +309,26 @@ pub(crate) struct Profile {
     pub(crate) dovecot_strategy: DovecotMigrationStrategy,
     pub(crate) delete2: bool,
     pub(crate) extra_options: String,
+}
+
+impl Profile {
+    /// The engine a run actually uses. Auto is an explicit conservative
+    /// default that resolves to imapsync, not environment detection.
+    pub(crate) fn effective_engine(&self) -> core::Engine {
+        match self.engine {
+            core::Engine::Auto => core::Engine::ImapSync,
+            selected => selected,
+        }
+    }
+
+    /// The destination mutation policy of a live run of this plan.
+    pub(crate) fn destination_mutation_policy(&self) -> DestinationMutationPolicy {
+        DestinationMutationPolicy::derive(
+            self.effective_engine(),
+            self.dovecot_strategy,
+            self.delete2,
+        )
+    }
 }
 
 impl Default for Profile {
@@ -299,4 +428,72 @@ pub(crate) fn completeness(profile: &Profile) -> (usize, usize) {
     .filter(|ok| *ok)
     .count();
     (passed, 4)
+}
+
+#[cfg(test)]
+mod destination_mutation_policy_tests {
+    use super::{
+        DestinationMutationPolicy as Policy, DovecotMigrationStrategy as Strategy, Profile,
+    };
+    use crate::core::Engine;
+
+    fn profile(engine: Engine, strategy: Strategy, delete2: bool) -> Profile {
+        Profile {
+            engine,
+            dovecot_strategy: strategy,
+            delete2,
+            ..Profile::default()
+        }
+    }
+
+    /// The reviewer's case: `doveadm backup` with delete2 off must still be
+    /// treated as able to remove destination-only state.
+    #[test]
+    fn dovecot_mirror_is_destructive_without_delete2() {
+        for strategy in [Strategy::InitialMirror, Strategy::IncrementalMirror] {
+            let policy = profile(Engine::Dovecot, strategy, false).destination_mutation_policy();
+            assert_eq!(policy, Policy::MirrorMayRemoveDestinationState);
+            assert!(policy.may_remove_destination_state());
+        }
+    }
+
+    #[test]
+    fn preservation_sync_and_additive_imapsync_keep_destination_state() {
+        for strategy in [
+            Strategy::FinalPreservationPass,
+            Strategy::DestinationAlreadyActive,
+        ] {
+            // delete2 is an imapsync flag; doveadm sync -1 never uses it.
+            let policy = profile(Engine::Dovecot, strategy, true).destination_mutation_policy();
+            assert_eq!(policy, Policy::MergePreservingDestination);
+            assert!(!policy.may_remove_destination_state());
+        }
+        for engine in [Engine::ImapSync, Engine::Auto] {
+            let policy =
+                profile(engine, Strategy::InitialMirror, false).destination_mutation_policy();
+            assert_eq!(policy, Policy::Additive);
+        }
+    }
+
+    #[test]
+    fn imapsync_delete2_is_explicit_deletion() {
+        for engine in [Engine::ImapSync, Engine::Auto] {
+            let policy = profile(engine, Strategy::default(), true).destination_mutation_policy();
+            assert_eq!(policy, Policy::ExplicitDeleteMissingSourceMessages);
+            assert!(policy.may_remove_destination_state());
+        }
+    }
+
+    #[test]
+    fn policy_names_round_trip() {
+        for policy in [
+            Policy::Additive,
+            Policy::MergePreservingDestination,
+            Policy::MirrorMayRemoveDestinationState,
+            Policy::ExplicitDeleteMissingSourceMessages,
+        ] {
+            assert_eq!(Policy::parse(policy.as_str()), Some(policy));
+        }
+        assert_eq!(Policy::parse(""), None);
+    }
 }

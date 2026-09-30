@@ -120,7 +120,11 @@ pub(crate) fn admit_batch_launch(
                     .is_some_and(|id| selection_scope.contains(Some(id))),
                 visible: true,
                 durable_state: durable_states[index].as_deref(),
-                destructive: job.defaults.profile.delete2,
+                destructive: job
+                    .defaults
+                    .profile
+                    .destination_mutation_policy()
+                    .may_remove_destination_state(),
             })
             .collect::<Vec<_>>();
         let plan =

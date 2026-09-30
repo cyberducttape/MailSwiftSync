@@ -67,7 +67,9 @@ Only after validation succeeds and the durable project still matches the display
 
 For dual-IMAPS imapsync plans, live admission performs a fresh certificate-validated authentication probe against both endpoints immediately before mutation. If the plan is edited while that probe is running, the probe and live confirmation no longer apply to the edited plan.
 
-Native Dovecot mode exposes four migration strategies in the **Advanced** dialog: **Initial mirror** uses
+Native Dovecot mode exposes four migration strategies in the **Advanced** dialog. The two mirror
+strategies can remove or replace destination-only messages and mailboxes, so their live confirmation
+requires an explicit acknowledgement. **Initial mirror** uses
 `doveadm backup`; **Incremental mirror** repeats `backup` with the durable
 checkpoint; **Final preservation pass** uses `doveadm sync -1` for the cutover;
 and **Destination already active** is an advanced preservation mode using

@@ -33,7 +33,11 @@ impl App {
                     selected: true,
                     visible: self.bulk_visible_indices.binary_search(&index).is_ok(),
                     durable_state: Some(self.bulk_jobs[index].state.as_str()),
-                    destructive: self.bulk_jobs[index].defaults.profile.delete2,
+                    destructive: self.bulk_jobs[index]
+                        .defaults
+                        .profile
+                        .destination_mutation_policy()
+                        .may_remove_destination_state(),
                 },
                 None => BatchActionRow {
                     id,
@@ -693,17 +697,13 @@ impl App {
     }
 
     fn review_card(&self, ui: &mut egui::Ui, job: &crate::bulk_import::BulkJob) {
-        let delete2 = job.defaults.profile.delete2;
-        let destructive = if delete2 {
-            self.language
-                .text("DESTRUCTIVE: destination deletion enabled")
-        } else {
-            self.language.text("destination deletion disabled")
-        };
+        // The same derived policy the batch plan counts and confirms.
+        let policy = job.defaults.profile.destination_mutation_policy();
+        let removes = policy.may_remove_destination_state();
         let summary = review_state_summary(
             self.language.text("State: {} · {}"),
             self.language.text(crate::ui::display_job_state(&job.state)),
-            destructive,
+            self.language.text(policy.label()),
         );
         let line = |ui: &mut egui::Ui, text: RichText| {
             let full = text.text().to_owned();
@@ -718,7 +718,7 @@ impl App {
             line(ui, RichText::new(&job.destination_host));
             line(
                 ui,
-                if delete2 {
+                if removes {
                     RichText::new(summary)
                         .strong()
                         .color(self.theme_colors().danger)

@@ -21,6 +21,11 @@ capture. Batch commands require a complete queue already imported and
 validated in the GUI. These commands are not yet a persistent scheduler or
 independent supervisor.
 
+A live run whose plan can remove destination-only state (a Dovecot mirror
+strategy or imapsync `--delete2`) refuses to start unless the command adds
+`--acknowledge-destination-loss`; the same flag applies to `batch-live` and
+`supervise`. Every live run prints its destination mutation policy to stderr.
+
 Exit status: `0` success; `2` usage error. When a single-mailbox `live` run
 finishes without a verified terminal state, the status says why: `3` delta
 required (repeat the final pass), `4` verification difference, `5` operator

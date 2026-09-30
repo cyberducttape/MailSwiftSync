@@ -200,25 +200,31 @@ impl App {
                         .text("Worker concurrency: {}")
                         .replace("{}", &summary.concurrency.to_string()),
                 );
-                ui.label(
-                    RichText::new(
-                        self.language
-                            .text("Destination deletion: {}")
-                            .replace(
-                                "{}",
-                                self.language.text(if summary.destructive_count > 0 {
-                                    "ENABLED ⚠"
-                                } else {
-                                    "disabled"
-                                }),
-                            ),
-                    )
-                    .color(if summary.destructive_count > 0 {
-                        self.theme_colors().danger
-                    } else {
-                        self.theme_colors().text_secondary
-                    }),
-                );
+                let removes_destination_state = summary.destructive_count > 0;
+                if removes_destination_state {
+                    ui.label(
+                        RichText::new(
+                            self.language
+                                .text("⚠ {} selected mailbox(es) use destination mirror or --delete2: destination-only messages/mailboxes may be removed or replaced.")
+                                .replace("{}", &summary.destructive_count.to_string()),
+                        )
+                        .strong()
+                        .color(self.theme_colors().danger),
+                    );
+                    ui.checkbox(
+                        &mut self.bulk_destination_loss_acknowledged,
+                        self.language.text(
+                            "I confirm destination-only mail may be removed for these mailboxes",
+                        ),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(self.language.text(
+                            "Destination-only messages and mailboxes are kept for every selected mailbox.",
+                        ))
+                        .color(self.theme_colors().text_secondary),
+                    );
+                }
                 ui.label(
                     self.language
                         .text("Scope: {}.")
@@ -251,7 +257,10 @@ impl App {
                     }
                     if ui
                         .add_enabled(
-                            summary.blocked_count == 0 && summary.eligible_count > 0,
+                            summary.blocked_count == 0
+                                && summary.eligible_count > 0
+                                && (summary.destructive_count == 0
+                                    || self.bulk_destination_loss_acknowledged),
                             egui::Button::new(
                                 RichText::new(self.language.text("I understand — start batch")).color(Color32::WHITE),
                             )
@@ -288,6 +297,7 @@ impl App {
             self.bulk_live_confirm_focus_requested = false;
             self.bulk_confirmation_summary = None;
             self.bulk_confirmation_identity = None;
+            self.bulk_destination_loss_acknowledged = false;
         }
     }
 

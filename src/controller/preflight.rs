@@ -59,25 +59,14 @@ pub(crate) fn assess_plan(
             },
             form.dry_run,
         ),
-        if form.engine() == core::Engine::Dovecot {
+        // One derived policy for both engines: Dovecot backup mirrors,
+        // imapsync --delete2 deletes, everything else keeps destination state.
+        {
+            let policy = form.profile.destination_mutation_policy();
             (
-                "Dovecot migration strategy".into(),
-                format!(
-                    "{} — {}",
-                    form.profile.dovecot_strategy.label(),
-                    form.profile.dovecot_strategy.description()
-                ),
-                true,
-            )
-        } else {
-            (
-                "Destructive options".into(),
-                if form.profile.delete2 {
-                    "--delete2 enabled: destination-only messages may be removed".into()
-                } else {
-                    "No destination deletion option selected".into()
-                },
-                !form.profile.delete2,
+                "Destination mutation policy".into(),
+                policy.warning().into(),
+                !policy.may_remove_destination_state(),
             )
         },
         (
@@ -102,6 +91,21 @@ pub(crate) fn assess_plan(
                 || crate::runner::validate_body_hash_limits(form).is_ok(),
         ),
     ];
+    if form.engine() == core::Engine::Dovecot {
+        // Shown before the policy row it determines.
+        checks.insert(
+            3,
+            (
+                "Dovecot migration strategy".into(),
+                format!(
+                    "{} — {}",
+                    form.profile.dovecot_strategy.label(),
+                    form.profile.dovecot_strategy.description()
+                ),
+                true,
+            ),
+        );
+    }
     append_capability_check(&mut checks, "Source", source_capabilities, false);
     append_capability_check(&mut checks, "Destination", destination_capabilities, true);
     if form.engine() == core::Engine::ImapSync {

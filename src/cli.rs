@@ -40,7 +40,10 @@ pub(crate) fn write_stdout(text: &str) {
     }
 }
 
-const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]]";
+const SUPERVISE_USAGE: &str = "Usage: mailswiftsync supervise <state.db> [poll-seconds 1..3600] [idle-polls; 0 means continuous] [maintenance-window HH:MM-HH:MM[@Mon,Tue,...]] [--acknowledge-destination-loss]";
+/// Required for unattended live runs whose plan may remove destination-only
+/// state (Dovecot backup mirror or imapsync --delete2).
+const ACKNOWLEDGE_DESTINATION_LOSS: &str = "--acknowledge-destination-loss";
 
 #[derive(Debug, PartialEq, Eq)]
 struct SuperviseArguments {
@@ -48,6 +51,7 @@ struct SuperviseArguments {
     poll_seconds: u64,
     idle_polls: usize,
     maintenance_window: Option<MaintenanceWindow>,
+    acknowledge_destination_loss: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,7 +85,19 @@ fn parse_supervise_arguments<I>(arguments: I) -> Result<SuperviseArguments, &'st
 where
     I: IntoIterator<Item = OsString>,
 {
-    let mut arguments = arguments.into_iter();
+    let mut acknowledge_destination_loss = false;
+    let mut positional = Vec::new();
+    for argument in arguments {
+        if argument == ACKNOWLEDGE_DESTINATION_LOSS {
+            if acknowledge_destination_loss {
+                return Err(SUPERVISE_USAGE);
+            }
+            acknowledge_destination_loss = true;
+        } else {
+            positional.push(argument);
+        }
+    }
+    let mut arguments = positional.into_iter();
     let state = arguments.next().ok_or(SUPERVISE_USAGE)?;
     let poll_seconds = match arguments.next() {
         Some(value) => value
@@ -114,6 +130,7 @@ where
         poll_seconds,
         idle_polls,
         maintenance_window,
+        acknowledge_destination_loss,
     })
 }
 
@@ -896,6 +913,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             Duration::from_secs(supervise.poll_seconds),
             supervise.idle_polls,
             supervise.maintenance_window,
+            supervise.acknowledge_destination_loss,
         ) {
             Ok(message) => {
                 out!("{message}");
@@ -922,7 +940,7 @@ pub(crate) fn run() -> eframe::Result<()> {
     if command == std::ffi::OsStr::new("headless") {
         let (Some(state), Some(mode)) = (arguments.next(), arguments.next()) else {
             eprintln!(
-                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>] [--reopen-reason <reason>]"
+                "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>] [--reopen-reason <reason>] [--acknowledge-destination-loss]"
             );
             std::process::exit(2);
         };
@@ -930,7 +948,7 @@ pub(crate) fn run() -> eframe::Result<()> {
             Some(mode) => mode,
             None => {
                 eprintln!(
-                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>] [--reopen-reason <reason>]"
+                    "Usage: mailswiftsync headless <state.db> preflight|live|batch-preflight|batch-live [--mailboxes <job-id,...>] [--source-secret-file <path>] [--destination-secret-file <path>] [--diagnostic-log <directory>] [--reopen-reason <reason>] [--acknowledge-destination-loss]"
                 );
                 std::process::exit(2);
             }
@@ -940,12 +958,20 @@ pub(crate) fn run() -> eframe::Result<()> {
         let mut diagnostic_log = None;
         let mut reopen_reason = None;
         let mut mailbox_ids: Option<HashSet<String>> = None;
+        let mut acknowledge_destination_loss = false;
         while let Some(option) = arguments.next() {
             let Some(option) = option.to_str() else {
                 eprintln!("Headless migration refused: option must be valid UTF-8");
                 std::process::exit(2);
             };
             let target = match option {
+                ACKNOWLEDGE_DESTINATION_LOSS => {
+                    if std::mem::replace(&mut acknowledge_destination_loss, true) {
+                        eprintln!("Headless {ACKNOWLEDGE_DESTINATION_LOSS} may appear only once");
+                        std::process::exit(2);
+                    }
+                    continue;
+                }
                 "--reopen-reason" => {
                     let Some(value) = arguments.next() else {
                         eprintln!("Headless --reopen-reason option requires a reason");
@@ -1008,6 +1034,14 @@ pub(crate) fn run() -> eframe::Result<()> {
             eprintln!("Headless --mailboxes is supported only for batch execution.");
             std::process::exit(2);
         }
+        if acknowledge_destination_loss
+            && !matches!(mode, HeadlessMode::Live | HeadlessMode::BatchLive)
+        {
+            eprintln!(
+                "Headless {ACKNOWLEDGE_DESTINATION_LOSS} applies only to live and batch-live."
+            );
+            std::process::exit(2);
+        }
         if reopen_reason.is_some() && mode != HeadlessMode::Live {
             eprintln!("Headless --reopen-reason is supported only for live execution.");
             std::process::exit(2);
@@ -1045,6 +1079,7 @@ pub(crate) fn run() -> eframe::Result<()> {
                 credentials,
                 diagnostic_log.as_deref(),
                 None,
+                false,
             ),
             HeadlessMode::Live => headless_execute_with_credentials(
                 &state,
@@ -1052,15 +1087,19 @@ pub(crate) fn run() -> eframe::Result<()> {
                 credentials,
                 diagnostic_log.as_deref(),
                 reopen_reason.as_deref(),
+                acknowledge_destination_loss,
             ),
             HeadlessMode::BatchPreflight => {
-                headless_batch_execute_selected(&state, false, mailbox_ids.as_ref())
+                headless_batch_execute_selected(&state, false, mailbox_ids.as_ref(), false)
                     .map_err(crate::headless::HeadlessFailure::from)
             }
-            HeadlessMode::BatchLive => {
-                headless_batch_execute_selected(&state, true, mailbox_ids.as_ref())
-                    .map_err(crate::headless::HeadlessFailure::from)
-            }
+            HeadlessMode::BatchLive => headless_batch_execute_selected(
+                &state,
+                true,
+                mailbox_ids.as_ref(),
+                acknowledge_destination_loss,
+            )
+            .map_err(crate::headless::HeadlessFailure::from),
         };
         match result {
             Ok(message) => {
@@ -1228,6 +1267,7 @@ mod tests {
                 poll_seconds: 30,
                 idle_polls: 1,
                 maintenance_window: None,
+                acknowledge_destination_loss: false,
             })
         );
     }
@@ -1241,6 +1281,7 @@ mod tests {
                 poll_seconds: 60,
                 idle_polls: 0,
                 maintenance_window: None,
+                acknowledge_destination_loss: false,
             })
         );
     }
@@ -1254,7 +1295,25 @@ mod tests {
                 poll_seconds: 60,
                 idle_polls: 0,
                 maintenance_window: Some(MaintenanceWindow::parse("22:00-06:00@Mon,Tue").unwrap()),
+                acknowledge_destination_loss: false,
             })
+        );
+    }
+
+    #[test]
+    fn supervise_accepts_the_destination_loss_acknowledgement_anywhere_once() {
+        let parsed =
+            parse_supervise_arguments(args(&["state.db", "--acknowledge-destination-loss", "60"]))
+                .unwrap();
+        assert!(parsed.acknowledge_destination_loss);
+        assert_eq!(parsed.poll_seconds, 60);
+        assert!(
+            parse_supervise_arguments(args(&[
+                "state.db",
+                "--acknowledge-destination-loss",
+                "--acknowledge-destination-loss"
+            ]))
+            .is_err()
         );
     }
 

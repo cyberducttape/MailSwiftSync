@@ -167,6 +167,10 @@ pub(crate) struct App {
     pub(crate) bulk_live_confirm_open: bool,
     pub(crate) bulk_live_confirm_focus_requested: bool,
     pub(crate) bulk_live_confirmed: bool,
+    /// Explicit acknowledgement, inside the open confirmation, that the
+    /// plan may remove destination-only state. Reset whenever it closes.
+    pub(crate) bulk_destination_loss_acknowledged: bool,
+    pub(crate) live_destination_loss_acknowledged: bool,
     pub(crate) bulk_confirmation_summary: Option<BatchActionPlan>,
     /// Proof of what the operator saw when they opened the confirmation dialog.
     /// Must match exactly when they click "Confirm" or the dialog re-opens.
