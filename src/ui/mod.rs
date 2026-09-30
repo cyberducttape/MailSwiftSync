@@ -106,10 +106,124 @@ pub(crate) fn section_label(ui: &mut egui::Ui, text: &str) {
 
 /// Left-navigation row: full-width hit area, icon, label, and an accent bar
 /// on the selected entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkspaceIcon {
+    Overview,
+    Plan,
+    Mailboxes,
+    Activity,
+    Verification,
+    Projects,
+    Settings,
+}
+
+fn paint_workspace_icon(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    icon: WorkspaceIcon,
+    color: egui::Color32,
+    scale: f32,
+) {
+    use egui::{Pos2, Stroke, Vec2};
+    let s = scale;
+    let stroke = Stroke::new(1.55 * (s / 16.0), color);
+    let line = |points: &[Pos2]| {
+        painter.add(egui::Shape::line(points.to_vec(), stroke));
+    };
+    let p = |x: f32, y: f32| center + Vec2::new(x * s / 16.0, y * s / 16.0);
+    match icon {
+        WorkspaceIcon::Overview => {
+            for (x, y) in [(-6.0, -6.0), (1.0, -6.0), (-6.0, 1.0), (1.0, 1.0)] {
+                let a = p(x, y);
+                let b = p(x + 5.0, y + 5.0);
+                painter.line_segment([a, Pos2::new(b.x, a.y)], stroke);
+                painter.line_segment([Pos2::new(b.x, a.y), b], stroke);
+                painter.line_segment([b, Pos2::new(a.x, b.y)], stroke);
+                painter.line_segment([Pos2::new(a.x, b.y), a], stroke);
+            }
+        }
+        WorkspaceIcon::Plan => {
+            line(&[
+                p(-5.0, -7.0),
+                p(2.0, -7.0),
+                p(6.0, -3.0),
+                p(6.0, 7.0),
+                p(-5.0, 7.0),
+                p(-5.0, -7.0),
+            ]);
+            line(&[p(2.0, -7.0), p(2.0, -3.0), p(6.0, -3.0)]);
+            line(&[p(-2.0, 0.0), p(3.0, 0.0)]);
+            line(&[p(-2.0, 3.0), p(3.0, 3.0)]);
+        }
+        WorkspaceIcon::Mailboxes => {
+            line(&[
+                p(-7.0, -5.0),
+                p(7.0, -5.0),
+                p(7.0, 5.0),
+                p(-7.0, 5.0),
+                p(-7.0, -5.0),
+            ]);
+            line(&[p(-7.0, -4.0), p(0.0, 1.0), p(7.0, -4.0)]);
+        }
+        WorkspaceIcon::Activity => {
+            line(&[
+                p(-7.0, 0.0),
+                p(-4.0, 0.0),
+                p(-2.0, -5.0),
+                p(1.0, 5.0),
+                p(3.0, -2.0),
+                p(4.0, 0.0),
+                p(7.0, 0.0),
+            ]);
+        }
+        WorkspaceIcon::Verification => {
+            line(&[
+                p(0.0, -7.0),
+                p(6.0, -5.0),
+                p(5.0, 2.0),
+                p(0.0, 7.0),
+                p(-5.0, 2.0),
+                p(-6.0, -5.0),
+                p(0.0, -7.0),
+            ]);
+            line(&[p(-3.0, 0.0), p(-1.0, 2.0), p(3.0, -2.0)]);
+        }
+        WorkspaceIcon::Projects => {
+            painter.circle_stroke(p(0.0, -5.0), 6.0 * s / 16.0, stroke);
+            painter.circle_stroke(p(0.0, 0.0), 6.0 * s / 16.0, stroke);
+            painter.circle_stroke(p(0.0, 5.0), 6.0 * s / 16.0, stroke);
+            line(&[p(-6.0, -5.0), p(-6.0, 5.0)]);
+            line(&[p(6.0, -5.0), p(6.0, 5.0)]);
+        }
+        WorkspaceIcon::Settings => {
+            painter.circle_stroke(center, 5.5 * s / 16.0, stroke);
+            painter.circle_stroke(center, 2.0 * s / 16.0, stroke);
+            for (x, y) in [
+                (0.0, -7.0),
+                (0.0, 7.0),
+                (-7.0, 0.0),
+                (7.0, 0.0),
+                (-5.0, -5.0),
+                (5.0, -5.0),
+                (-5.0, 5.0),
+                (5.0, 5.0),
+            ] {
+                painter.line_segment(
+                    [
+                        center + Vec2::new(x * s / 16.0, y * s / 16.0),
+                        center + Vec2::new(x * s / 16.0 * 0.78, y * s / 16.0 * 0.78),
+                    ],
+                    stroke,
+                );
+            }
+        }
+    }
+}
+
 pub(crate) fn nav_item(
     ui: &mut egui::Ui,
     selected: bool,
-    icon: &str,
+    icon: WorkspaceIcon,
     label: &str,
 ) -> egui::Response {
     let height = 32.0;
@@ -145,12 +259,12 @@ pub(crate) fn nav_item(
             visuals.weak_text_color()
         };
         let center_y = rect.center().y;
-        ui.painter().text(
-            egui::pos2(rect.left() + 14.0, center_y),
-            egui::Align2::LEFT_CENTER,
+        paint_workspace_icon(
+            ui.painter(),
+            egui::pos2(rect.left() + 20.0, center_y),
             icon,
-            egui::FontId::proportional(14.0),
             icon_color,
+            16.0,
         );
         ui.painter().text(
             egui::pos2(rect.left() + 38.0, center_y),
@@ -171,7 +285,7 @@ pub(crate) fn nav_item(
 pub(crate) fn nav_icon_item(
     ui: &mut egui::Ui,
     selected: bool,
-    icon: &str,
+    icon: WorkspaceIcon,
     label: &str,
 ) -> egui::Response {
     let (rect, response) =
@@ -201,13 +315,7 @@ pub(crate) fn nav_icon_item(
         } else {
             visuals.weak_text_color()
         };
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(16.0),
-            color,
-        );
+        paint_workspace_icon(ui.painter(), rect.center(), icon, color, 17.0);
     }
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)

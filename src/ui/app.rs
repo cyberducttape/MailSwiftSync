@@ -27,6 +27,15 @@ fn plan_workflow_step(
     }
 }
 
+fn selection_inspector_in_side_panel(
+    view: WorkspaceView,
+    has_selection: bool,
+    inspector_open: bool,
+    wide_layout: bool,
+) -> bool {
+    view == WorkspaceView::Mailboxes && has_selection && inspector_open && wide_layout
+}
+
 impl eframe::App for App {
     /// Runs before every frame and, unlike `ui`, also while the window is
     /// minimized or hidden, so a running migration keeps draining events.
@@ -147,11 +156,27 @@ impl eframe::App for App {
                     ui.add_space(4.0);
                 }
                 for (view, icon, label) in [
-                    (WorkspaceView::Overview, "📊", "Overview"),
-                    (WorkspaceView::Plan, "📋", "Plan"),
-                    (WorkspaceView::Mailboxes, "✉", "Mailboxes"),
-                    (WorkspaceView::Activity, "⏱", "Activity"),
-                    (WorkspaceView::Verification, "✔", "Verification"),
+                    (
+                        WorkspaceView::Overview,
+                        crate::ui::WorkspaceIcon::Overview,
+                        "Overview",
+                    ),
+                    (WorkspaceView::Plan, crate::ui::WorkspaceIcon::Plan, "Plan"),
+                    (
+                        WorkspaceView::Mailboxes,
+                        crate::ui::WorkspaceIcon::Mailboxes,
+                        "Mailboxes",
+                    ),
+                    (
+                        WorkspaceView::Activity,
+                        crate::ui::WorkspaceIcon::Activity,
+                        "Activity",
+                    ),
+                    (
+                        WorkspaceView::Verification,
+                        crate::ui::WorkspaceIcon::Verification,
+                        "Verification",
+                    ),
                 ] {
                     let item = if compact_navigation {
                         crate::ui::nav_icon_item(
@@ -185,14 +210,14 @@ impl eframe::App for App {
                     crate::ui::nav_icon_item(
                         ui,
                         self.projects_open,
-                        "🗄",
+                        crate::ui::WorkspaceIcon::Projects,
                         self.language.message("ui.projects"),
                     )
                 } else {
                     crate::ui::nav_item(
                         ui,
                         self.projects_open,
-                        "🗄",
+                        crate::ui::WorkspaceIcon::Projects,
                         self.language.message("ui.projects"),
                     )
                 };
@@ -203,14 +228,14 @@ impl eframe::App for App {
                     crate::ui::nav_icon_item(
                         ui,
                         self.settings_open,
-                        "⚙",
+                        crate::ui::WorkspaceIcon::Settings,
                         self.language.message("ui.settings"),
                     )
                 } else {
                     crate::ui::nav_item(
                         ui,
                         self.settings_open,
-                        "⚙",
+                        crate::ui::WorkspaceIcon::Settings,
                         self.language.message("ui.settings"),
                     )
                 };
@@ -230,7 +255,9 @@ impl eframe::App for App {
                         )
                     };
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("⏺").color(dot).small());
+                        let (dot_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                        ui.painter().circle_filled(dot_rect.center(), 3.0, dot);
                         if !compact_navigation {
                             ui.label(
                                 egui::RichText::new(text)
@@ -242,10 +269,19 @@ impl eframe::App for App {
                 });
             });
 
+        if self.active_view != WorkspaceView::Mailboxes || self.bulk_selection_is_empty() {
+            self.bulk_inspector_open = false;
+        }
         let wide_mailbox_layout = ui.available_width() >= 1120.0;
+        self.bulk_inspector_side_panel = selection_inspector_in_side_panel(
+            self.active_view,
+            !self.bulk_selection_is_empty(),
+            self.bulk_inspector_open,
+            wide_mailbox_layout,
+        );
         if self.active_view == WorkspaceView::Mailboxes
             && !self.bulk_selection_is_empty()
-            && wide_mailbox_layout
+            && self.bulk_inspector_side_panel
         {
             // Once per frame, before the drawer that renders it.
             self.refresh_bulk_selection_view();
@@ -445,9 +481,59 @@ impl App {
             });
         }
         ui.add_space(12.0);
-        self.provider_qualification_card(ui);
-        ui.add_space(12.0);
-        self.migration_simulation_card(ui);
+        let mutation_policy = self.form.profile.destination_mutation_policy();
+        let folder_summary = if self.form.profile.justfolders {
+            self.language.message("ui.folders-only")
+        } else if self.form.profile.automap {
+            self.language.message("ui.mail-and-standard-folder-mapping")
+        } else {
+            self.language.message("ui.mail-and-original-folder-names")
+        };
+        let verification_summary = if dovecot {
+            self.language.message("ui.level-1-aggregate-evidence")
+        } else if self.form.profile.body_hash_verification {
+            self.language
+                .message("ui.level-3-bounded-content-fingerprints")
+        } else {
+            self.language
+                .message("ui.level-2-metadata-reconciliation-plan-dependent")
+        };
+        crate::ui::card(ui, |ui| {
+            ui.heading(self.language.message("ui.migration-policy"));
+            egui::Grid::new("migration_policy_summary")
+                .num_columns(2)
+                .spacing([16.0, 5.0])
+                .show(ui, |ui| {
+                    ui.label(self.language.message("ui.folder-handling"));
+                    ui.label(folder_summary);
+                    ui.end_row();
+                    ui.label(self.language.message("ui.destination-behavior"));
+                    ui.label(
+                        egui::RichText::new(self.language.text(mutation_policy.label())).color(
+                            if mutation_policy.may_remove_destination_state() {
+                                colors.danger
+                            } else {
+                                colors.success
+                            },
+                        ),
+                    );
+                    ui.end_row();
+                    ui.label(self.language.message("ui.verification"));
+                    ui.label(verification_summary);
+                    ui.end_row();
+                });
+        });
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new(
+            self.language
+                .message("ui.provider-qualification-and-detailed-simulation"),
+        )
+        .id_salt("provider_qualification_and_simulation")
+        .show(ui, |ui| {
+            self.provider_qualification_card(ui);
+            ui.add_space(8.0);
+            self.migration_simulation_card(ui);
+        });
         if !dovecot {
             ui.add_space(16.0);
             egui::CollapsingHeader::new(self.language.message("ui.advanced-engine-options"))
@@ -903,7 +989,8 @@ impl App {
 
 #[cfg(test)]
 mod workflow_tests {
-    use super::{PlanWorkflowStep, plan_workflow_step};
+    use super::{PlanWorkflowStep, plan_workflow_step, selection_inspector_in_side_panel};
+    use crate::ui::WorkspaceView;
 
     #[test]
     fn plan_actions_follow_assess_test_preflight_live_sequence() {
@@ -931,6 +1018,40 @@ mod workflow_tests {
             plan_workflow_step(true, true, false, false),
             PlanWorkflowStep::DryPreflight
         );
+    }
+
+    #[test]
+    fn batch_inspector_uses_a_side_panel_only_when_requested_and_wide() {
+        assert!(!selection_inspector_in_side_panel(
+            WorkspaceView::Mailboxes,
+            true,
+            false,
+            true
+        ));
+        assert!(!selection_inspector_in_side_panel(
+            WorkspaceView::Mailboxes,
+            true,
+            true,
+            false
+        ));
+        assert!(!selection_inspector_in_side_panel(
+            WorkspaceView::Mailboxes,
+            false,
+            true,
+            true
+        ));
+        assert!(!selection_inspector_in_side_panel(
+            WorkspaceView::Overview,
+            true,
+            true,
+            true
+        ));
+        assert!(selection_inspector_in_side_panel(
+            WorkspaceView::Mailboxes,
+            true,
+            true,
+            true
+        ));
     }
 
     #[test]

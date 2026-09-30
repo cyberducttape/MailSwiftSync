@@ -413,7 +413,23 @@ impl App {
                 .replacen("{}", &visible_and_selected.to_string(), 1)
                 .replacen("{}", &hidden_selected.to_string(), 1);
 
-            ui.label(RichText::new(status_text).color(self.theme_colors().text_secondary));
+            let has_selection = !self.bulk_selection_is_empty();
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(status_text).color(self.theme_colors().text_secondary));
+                if has_selection {
+                    let review_label = self
+                        .language
+                        .text("Review selected ({})")
+                        .replace("{}", &self.bulk_selection_count().to_string());
+                    let review_clicked = ui.small_button(review_label).clicked();
+                    let actions_clicked = ui
+                        .small_button(self.language.message("ui.actions-toggle-inspector"))
+                        .clicked();
+                    if review_clicked || actions_clicked {
+                        self.bulk_inspector_open = !self.bulk_inspector_open;
+                    }
+                }
+            });
             if hidden_selected > 0 {
                 ui.label(
                     RichText::new(
@@ -424,17 +440,11 @@ impl App {
                     .color(self.theme_colors().warning),
                 );
             }
-            let has_selection = !self.bulk_selection_is_empty();
             let mut open_assessment = None;
-            if has_selection && ui.available_width() < 1120.0 {
-                let inspector = egui::CollapsingHeader::new(
-                    self.language
-                        .text("Review selected ({})")
-                        .replace("{}", &self.bulk_selection_count().to_string()),
-                )
-                .id_salt("narrow_selection_inspector")
-                .show(ui, |ui| self.selection_review_drawer(ui));
-                open_assessment = inspector.body_returned.flatten();
+            if has_selection && self.bulk_inspector_open && !self.bulk_inspector_side_panel {
+                crate::ui::card(ui, |ui| {
+                    open_assessment = self.selection_review_drawer(ui);
+                });
             }
             let selected_count = self.bulk_selection_count();
             let live_count = self.bulk_selection_view.live_eligible;
@@ -443,73 +453,63 @@ impl App {
             let mut run_live = false;
             let mut run_delta = false;
             let mut review_selected = false;
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(self.language.message("ui.selected-mailbox-actions")).strong(),
-                );
-                if ui
-                    .add_enabled(
-                        has_selection && !self.running(),
-                        egui::Button::new(
-                            self.language
-                                .text("Run preflight ({})")
-                                .replace("{}", &selected_count.to_string()),
-                        ),
-                    )
-                    .clicked()
-                {
-                    run_preflight = true;
-                }
-                let live_enabled = live_count > 0 && !self.running();
-                let live_label = RichText::new(
-                    self.language
-                        .text("Run live migration ({})")
-                        .replace("{}", &live_count.to_string()),
-                );
-                if ui
-                    .add_enabled(
-                        live_enabled,
-                        egui::Button::new(live_label).fill(ui.visuals().widgets.active.bg_fill),
-                    )
-                    .clicked()
-                {
-                    run_live = true;
-                }
-                if ui
-                    .add_enabled(
-                        delta_count > 0 && !self.running(),
-                        egui::Button::new(
-                            self.language
-                                .text("Run final delta ({})")
-                                .replace("{}", &delta_count.to_string()),
-                        ),
-                    )
-                    .clicked()
-                {
-                    run_delta = true;
-                }
-                if ui
-                    .add_enabled(
-                        // Rows only have durable verification records once a
-                        // preflight has admitted the queue into a project.
-                        self.bulk_selection_count() == 1 && self.bulk_project_id.is_some(),
-                        egui::Button::new(self.language.message("ui.review-verification")),
-                    )
-                    .clicked()
-                {
-                    review_selected = true;
-                }
-                if !has_selection {
-                    ui.label(
-                        RichText::new(
-                            self.language
-                                .text("Select one or more rows to enable actions."),
+            if has_selection && self.bulk_inspector_open {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(
+                            has_selection && !self.running(),
+                            egui::Button::new(
+                                self.language
+                                    .text("Run preflight ({})")
+                                    .replace("{}", &selected_count.to_string()),
+                            ),
                         )
-                        .color(self.theme_colors().text_secondary),
+                        .clicked()
+                    {
+                        run_preflight = true;
+                    }
+                    let live_enabled = live_count > 0 && !self.running();
+                    let live_label = RichText::new(
+                        self.language
+                            .text("Run live migration ({})")
+                            .replace("{}", &live_count.to_string()),
                     );
-                }
-            });
-            if has_selection && live_count < selected_count {
+                    if ui
+                        .add_enabled(
+                            live_enabled,
+                            egui::Button::new(live_label).fill(ui.visuals().widgets.active.bg_fill),
+                        )
+                        .clicked()
+                    {
+                        run_live = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            delta_count > 0 && !self.running(),
+                            egui::Button::new(
+                                self.language
+                                    .text("Run final delta ({})")
+                                    .replace("{}", &delta_count.to_string()),
+                            ),
+                        )
+                        .clicked()
+                    {
+                        run_delta = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            // Rows only have durable verification records once a
+                            // preflight has admitted the queue into a project.
+                            self.bulk_selection_count() == 1 && self.bulk_project_id.is_some(),
+                            egui::Button::new(self.language.message("ui.review-verification")),
+                        )
+                        .clicked()
+                    {
+                        review_selected = true;
+                    }
+                });
+            }
+            if has_selection && self.bulk_inspector_open && live_count < selected_count {
                 let ineligible = selected_count - live_count;
                 ui.label(
                     RichText::new(
@@ -520,7 +520,7 @@ impl App {
                     .color(self.theme_colors().text_secondary),
                 );
             }
-            if has_selection && delta_count < selected_count {
+            if has_selection && self.bulk_inspector_open && delta_count < selected_count {
                 let ineligible = selected_count - delta_count;
                 ui.label(
                     RichText::new(
@@ -769,12 +769,20 @@ impl App {
         }
     }
 
-    pub(crate) fn selection_review_drawer(&self, ui: &mut egui::Ui) -> Option<String> {
-        ui.heading(
-            self.language
-                .text("Review selected ({})")
-                .replace("{}", &self.bulk_selection_count().to_string()),
-        );
+    pub(crate) fn selection_review_drawer(&mut self, ui: &mut egui::Ui) -> Option<String> {
+        ui.horizontal(|ui| {
+            ui.heading(
+                self.language
+                    .text("Review selected ({})")
+                    .replace("{}", &self.bulk_selection_count().to_string()),
+            );
+            if ui
+                .small_button(self.language.message("ui.close-inspector"))
+                .clicked()
+            {
+                self.bulk_inspector_open = false;
+            }
+        });
         ui.label(
             RichText::new(
                 self.language

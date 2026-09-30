@@ -69,6 +69,12 @@ pub(crate) struct App {
     /// Compact representation for selecting the entire loaded queue. In this
     /// mode `bulk_selected_ids` is not populated; it stores only exclusions.
     pub(crate) bulk_all_selected: bool,
+    /// The selection inspector is operator-opened; it never consumes table
+    /// width merely because the queue has selected rows.
+    pub(crate) bulk_inspector_open: bool,
+    /// Set by the shell for the current frame so the mailbox page knows
+    /// whether the inspector is already being rendered in a right panel.
+    pub(crate) bulk_inspector_side_panel: bool,
     /// Reused filtered-row index storage. Large batch views must not allocate
     /// a fresh index vector on every repaint.
     pub(crate) bulk_visible_indices: Vec<usize>,

@@ -517,6 +517,15 @@ mod tests {
             "ui.verification-level-1-description",
             "ui.verification-level-2-description",
             "ui.verification-level-3-description",
+            "ui.migration-policy",
+            "ui.folder-handling",
+            "ui.destination-behavior",
+            "ui.level-1-aggregate-evidence",
+            "ui.level-2-metadata-reconciliation-plan-dependent",
+            "ui.level-3-bounded-content-fingerprints",
+            "ui.provider-qualification-and-detailed-simulation",
+            "ui.actions-toggle-inspector",
+            "ui.close-inspector",
         ] {
             assert_ne!(
                 UiLanguage::German.message(key),
