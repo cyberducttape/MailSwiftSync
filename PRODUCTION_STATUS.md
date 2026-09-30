@@ -83,7 +83,7 @@ very large accounts.
 | Transfer attempt history | ✅ Initial layer | Engine attempt start/finish and bounded failure class are durably recorded and exposed in customer-proof run metadata; this is not a per-message resume index |
 | Resume from interruption | ⚠️ Engine-dependent | Dovecot resumes from its validated opaque engine state; imapsync reruns idempotently and may rescan/revisit prior work |
 | Crash recovery | ✅ | Startup process identity/recovery paths are wired |
-| Time-to-completion estimates | ⚠️ CLI only | RecoveryPlanner is exposed through recovery-guidance; estimates are not yet rendered in the GUI |
+| Time-to-completion estimates | ❌ Not available at runtime | The duration helper is test-only; runtime progress, observed throughput, and a defensible ETA are not implemented |
 | Recovery guidance | ⚠️ Partial GUI | Activity renders localized fail-closed guidance for interruption, transport, and throttling attention states; configuration and verification findings retain their dedicated remediation views |
 
 ---

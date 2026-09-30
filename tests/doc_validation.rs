@@ -89,6 +89,25 @@ fn production_readiness_surfaces_have_one_conservative_source() {
 }
 
 #[test]
+fn production_status_does_not_claim_runtime_eta_support() {
+    let status =
+        fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
+    let recovery = fs::read_to_string("src/core/recovery_dashboard.rs")
+        .expect("recovery planner source should exist");
+    assert!(
+        status.contains("Time-to-completion estimates | ❌ Not available at runtime")
+            && status.contains(
+                "runtime progress, observed throughput, and a defensible ETA are not implemented"
+            ),
+        "production status must not imply an ETA exists before runtime telemetry is wired"
+    );
+    assert!(
+        recovery.contains("#[cfg(test)]\n    pub fn estimate_resume_duration"),
+        "the documented ETA boundary should track the current test-only helper"
+    );
+}
+
+#[test]
 fn security_md_exists_and_complete() {
     let security = fs::read_to_string("SECURITY.md").expect("Could not read SECURITY.md");
 
