@@ -455,4 +455,18 @@ mod tests {
         assert!(!limiter.wait(key, &cancel));
         assert!(!limiter.wait("other-provider:993|other-destination:993", &cancel));
     }
+
+    #[test]
+    fn mixed_disconnect_and_capacity_error_activates_long_provider_cooldown() {
+        let limiter = AdaptiveProviderLimiter::new();
+        limiter.observe_failure("provider-pair", "connection closed: too many connections");
+        limiter.observe_failure("network-only", "connection closed by remote host");
+
+        let state = limiter.state.lock().unwrap();
+        let now = std::time::Instant::now();
+        assert!(state.get("provider-pair").is_some_and(|cooldown| {
+            cooldown.blocked_until.duration_since(now) >= std::time::Duration::from_secs(29)
+        }));
+        assert!(!state.contains_key("network-only"));
+    }
 }

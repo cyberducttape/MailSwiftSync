@@ -362,4 +362,12 @@ mod tests {
             FailureClass::Authentication
         );
     }
+
+    #[test]
+    fn connection_capacity_precedes_generic_disconnect_for_retry_policy() {
+        let error = "connection closed: too many connections";
+        assert_eq!(classify_failure(error), FailureClass::Capacity);
+        assert!(should_retry_batch_error(error, 0, 2));
+        assert!(super::transient_retry_delay(error, 0) >= std::time::Duration::from_secs(30));
+    }
 }

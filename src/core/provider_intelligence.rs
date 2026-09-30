@@ -113,8 +113,28 @@ impl ProviderErrorClassifier {
             return ProviderErrorType::VerificationError;
         }
 
-        // Quota failures are not rate limits. They require capacity/action,
-        // not exponential backoff, so classify them before generic signals.
+        // Specific capacity conditions take precedence over generic
+        // disconnect wording, and over other broad classifications that may
+        // also appear in a diagnostic tail.
+        if lower.contains("too many connections")
+            || lower.contains("connection limit")
+            || lower.contains("maximum connections")
+        {
+            return ProviderErrorType::ConnectionCapacity;
+        }
+
+        // Observed server/protocol signals only. These are not provider API
+        // quota estimates and must be paired with the engine's configured
+        // message/byte limits by an active controller.
+        if lower.contains("rate limit")
+            || lower.contains("too many requests")
+            || lower.contains("throttled")
+            || lower.contains("slow down")
+            || http_429
+        {
+            return ProviderErrorType::RateLimited;
+        }
+
         if lower.contains("storage quota")
             || lower.contains("disk quota")
             || lower.contains("storage full")
@@ -128,18 +148,6 @@ impl ProviderErrorClassifier {
             || lower.contains("quota exceeded")
         {
             return ProviderErrorType::MailboxQuotaExceeded;
-        }
-
-        // Observed server/protocol signals only. These are not provider API
-        // quota estimates and must be paired with the engine's configured
-        // message/byte limits by an active controller.
-        if lower.contains("rate limit")
-            || lower.contains("too many requests")
-            || lower.contains("throttled")
-            || lower.contains("slow down")
-            || http_429
-        {
-            return ProviderErrorType::RateLimited;
         }
 
         // Authentication patterns
@@ -181,7 +189,8 @@ impl ProviderErrorClassifier {
             return ProviderErrorType::TemporaryProviderFailure;
         }
 
-        // Connectivity patterns
+        // Generic connectivity patterns are deliberately last among the
+        // actionable transport/capacity conditions.
         if lower.contains("connection refused")
             || lower.contains("connection timeout")
             || lower.contains("connection reset")
@@ -191,13 +200,6 @@ impl ProviderErrorClassifier {
             || lower == "bye"
         {
             return ProviderErrorType::Network;
-        }
-
-        if lower.contains("too many connections")
-            || lower.contains("connection limit")
-            || lower.contains("maximum connections")
-        {
-            return ProviderErrorType::ConnectionCapacity;
         }
 
         // Provider-specific unsupported patterns
@@ -337,6 +339,19 @@ mod tests {
             ProviderErrorClassifier::classify("generic", "connection closed by server"),
             ProviderErrorType::Network
         );
+        for error in [
+            "connection closed: too many connections",
+            "connection refused; connection limit reached",
+            "connection reset after maximum connections exceeded",
+            "rate limit observed while too many connections are open",
+            "mailbox quota reported; too many connections",
+        ] {
+            assert_eq!(
+                ProviderErrorClassifier::classify("generic", error),
+                ProviderErrorType::ConnectionCapacity,
+                "diagnostic: {error}"
+            );
+        }
     }
 
     #[test]
