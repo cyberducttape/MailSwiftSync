@@ -912,6 +912,12 @@ impl UiLanguage {
             "Run preflight ({})" => "Vorabprüfung ausführen ({})",
             "Run live migration ({})" => "Live-Migration ausführen ({})",
             "Run final delta ({})" => "Finales Delta ausführen ({})",
+            "{} selected mailbox(es) are unavailable for live migration." => {
+                "{} ausgewählte Postfach/Postfächer sind für eine Live-Migration nicht verfügbar."
+            }
+            "{} selected mailbox(es) are not marked as requiring a final delta." => {
+                "{} ausgewählte Postfach/Postfächer sind nicht als finales Delta erforderlich markiert."
+            }
             "Selected mailbox actions" => "Aktionen für ausgewählte Postfächer",
             "⚠ {} mailbox(es) are selected but hidden by the current filter. They will still be included in batch operations." => {
                 "⚠ {} Postfach/er sind ausgewählt, aber durch den aktuellen Filter verborgen. Sie bleiben in Stapelvorgängen enthalten."

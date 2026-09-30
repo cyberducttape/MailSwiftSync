@@ -11,7 +11,7 @@ use crate::controller::{
 };
 use crate::ui::WorkspaceView;
 use crate::ui::job_state_badge;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use egui_extras::{Column, TableBuilder};
 
 impl App {
@@ -398,7 +398,7 @@ impl App {
                 {
                     run_preflight = true;
                 }
-                let live_enabled = has_selection && !self.running();
+                let live_enabled = live_count > 0 && !self.running();
                 let live_label = RichText::new(
                     self.language
                         .text("Run live migration ({})")
@@ -407,12 +407,7 @@ impl App {
                 if ui
                     .add_enabled(
                         live_enabled,
-                        if live_enabled {
-                            egui::Button::new(live_label.color(Color32::WHITE))
-                                .fill(self.theme_colors().danger.gamma_multiply(0.85))
-                        } else {
-                            egui::Button::new(live_label)
-                        },
+                        egui::Button::new(live_label).fill(ui.visuals().widgets.active.bg_fill),
                     )
                     .clicked()
                 {
@@ -420,7 +415,7 @@ impl App {
                 }
                 if ui
                     .add_enabled(
-                        has_selection && !self.running(),
+                        delta_count > 0 && !self.running(),
                         egui::Button::new(
                             self.language
                                 .text("Run final delta ({})")
@@ -452,6 +447,28 @@ impl App {
                     );
                 }
             });
+            if has_selection && live_count < selected_count {
+                let ineligible = selected_count - live_count;
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("{} selected mailbox(es) are unavailable for live migration.")
+                            .replace("{}", &ineligible.to_string()),
+                    )
+                    .color(self.theme_colors().text_secondary),
+                );
+            }
+            if has_selection && delta_count < selected_count {
+                let ineligible = selected_count - delta_count;
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("{} selected mailbox(es) are not marked as requiring a final delta.")
+                            .replace("{}", &ineligible.to_string()),
+                    )
+                    .color(self.theme_colors().text_secondary),
+                );
+            }
             if run_preflight {
                 self.bulk_mode = BatchExecutionMode::Preflight;
                 self.bulk_retry_scope = BulkRetryScope::All;
