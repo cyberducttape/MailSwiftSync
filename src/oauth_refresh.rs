@@ -240,7 +240,12 @@ pub(crate) fn post_token_request(
         .header(reqwest::header::USER_AGENT, user_agent)
         .form(form)
         .send()
-        .map_err(|error| format!("{host}: token endpoint request failed: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "{host}: token endpoint request failed: {}",
+                error.without_url()
+            )
+        })?;
     let status = response.status().as_u16();
     if response
         .content_length()
@@ -291,9 +296,14 @@ fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken,
         .split_whitespace()
         .nth(1)
         .ok_or_else(|| format!("could not parse token endpoint status line: {status_line}"))?;
-    let response: TokenResponse = serde_json::from_str(body)
-        .map_err(|error| format!("token endpoint response was not valid JSON: {error}"))?;
     if status_code != "200" {
+        // Outages often return an HTML or empty error page; report the HTTP
+        // status rather than a JSON parse error that hides it.
+        let Ok(response) = serde_json::from_str::<TokenResponse>(body) else {
+            return Err(format!(
+                "token endpoint rejected the token request (HTTP {status_code})"
+            ));
+        };
         let error_code = response.error.as_deref().unwrap_or("");
         let description = response.error_description.as_deref().unwrap_or("");
         return Err(format!(
@@ -306,6 +316,8 @@ fn parse_token_response(status_line: &str, body: &str) -> Result<RefreshedToken,
             }
         ));
     }
+    let response: TokenResponse = serde_json::from_str(body)
+        .map_err(|error| format!("token endpoint response was not valid JSON: {error}"))?;
     let access_token = response
         .access_token
         .filter(|token| !token.is_empty())
@@ -413,6 +425,14 @@ mod tests {
             r#"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#;
         let error = parse_token_response(status, body).unwrap_err();
         assert!(error.contains("Token has been expired or revoked."));
+    }
+
+    #[test]
+    fn non_json_error_page_reports_the_http_status() {
+        let error = parse_token_response("HTTP/1.1 503 Service Unavailable", "<html>down</html>")
+            .unwrap_err();
+        assert!(error.contains("HTTP 503"), "{error}");
+        assert!(!error.contains("JSON"), "{error}");
     }
 
     #[test]
