@@ -61,15 +61,6 @@ impl eframe::App for App {
                             colors.info,
                         );
                     }
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}: {}",
-                            self.language.text("Engine"),
-                            self.language.text(self.form.engine().label())
-                        ))
-                        .small()
-                        .color(colors.text_secondary),
-                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.running() && ui.button(self.language.text("Stop")).clicked() {
                             self.stop_confirm_open = true;
@@ -106,14 +97,17 @@ impl eframe::App for App {
             .fill(colors.panel)
             .inner_margin(egui::Margin::symmetric(10, 14))
             .stroke(egui::Stroke::new(1.0, colors.quiet_border()));
+        let compact_navigation = ui.available_width() < 1040.0;
         egui::Panel::left("workspace_navigation")
             .resizable(false)
             .show_separator_line(false)
-            .exact_size(200.0)
+            .exact_size(if compact_navigation { 64.0 } else { 200.0 })
             .frame(navigation_frame)
             .show(ui, |ui| {
-                crate::ui::section_label(ui, self.language.text("Workspace"));
-                ui.add_space(4.0);
+                if !compact_navigation {
+                    crate::ui::section_label(ui, self.language.text("Workspace"));
+                    ui.add_space(4.0);
+                }
                 for (view, icon, label) in [
                     (WorkspaceView::Overview, "📊", "Overview"),
                     (WorkspaceView::Plan, "📋", "Plan"),
@@ -121,14 +115,22 @@ impl eframe::App for App {
                     (WorkspaceView::Activity, "⏱", "Activity"),
                     (WorkspaceView::Verification, "✔", "Verification"),
                 ] {
-                    if crate::ui::nav_item(
-                        ui,
-                        self.active_view == view,
-                        icon,
-                        self.language.text(label),
-                    )
-                    .clicked()
-                    {
+                    let item = if compact_navigation {
+                        crate::ui::nav_icon_item(
+                            ui,
+                            self.active_view == view,
+                            icon,
+                            self.language.text(label),
+                        )
+                    } else {
+                        crate::ui::nav_item(
+                            ui,
+                            self.active_view == view,
+                            icon,
+                            self.language.text(label),
+                        )
+                    };
+                    if item.clicked() {
                         self.active_view = view;
                         self.refresh_ui_snapshot_now();
                         // Re-check readiness staleness on the next frame so a
@@ -137,16 +139,34 @@ impl eframe::App for App {
                     }
                 }
                 ui.add_space(12.0);
-                crate::ui::section_label(ui, self.language.text("Manage"));
-                ui.add_space(4.0);
-                if crate::ui::nav_item(ui, self.projects_open, "🗄", self.language.text("Projects"))
-                    .clicked()
-                {
+                if !compact_navigation {
+                    crate::ui::section_label(ui, self.language.text("Manage"));
+                    ui.add_space(4.0);
+                }
+                let projects_item = if compact_navigation {
+                    crate::ui::nav_icon_item(
+                        ui,
+                        self.projects_open,
+                        "🗄",
+                        self.language.text("Projects"),
+                    )
+                } else {
+                    crate::ui::nav_item(ui, self.projects_open, "🗄", self.language.text("Projects"))
+                };
+                if projects_item.clicked() {
                     self.projects_open = true;
                 }
-                if crate::ui::nav_item(ui, self.settings_open, "⚙", self.language.text("Settings"))
-                    .clicked()
-                {
+                let settings_item = if compact_navigation {
+                    crate::ui::nav_icon_item(
+                        ui,
+                        self.settings_open,
+                        "⚙",
+                        self.language.text("Settings"),
+                    )
+                } else {
+                    crate::ui::nav_item(ui, self.settings_open, "⚙", self.language.text("Settings"))
+                };
+                if settings_item.clicked() {
                     self.settings_open = true;
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
@@ -160,16 +180,22 @@ impl eframe::App for App {
                     };
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("⏺").color(dot).small());
-                        ui.label(
-                            egui::RichText::new(text)
-                                .small()
-                                .color(colors.text_secondary),
-                        );
+                        if !compact_navigation {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .small()
+                                    .color(colors.text_secondary),
+                            );
+                        }
                     });
                 });
             });
 
-        if self.active_view == WorkspaceView::Mailboxes && !self.bulk_jobs.is_empty() {
+        let wide_mailbox_layout = ui.available_width() >= 1120.0;
+        if self.active_view == WorkspaceView::Mailboxes
+            && !self.bulk_selected_ids.is_empty()
+            && wide_mailbox_layout
+        {
             // Once per frame, before the drawer that renders it.
             self.refresh_bulk_selection_view();
             egui::Panel::right("selection_review_drawer")
@@ -221,213 +247,107 @@ impl App {
             ui,
             self.language.text("Migration plan"),
             self.language
-                .text("Configure endpoints and credentials before running a dry preflight."),
+                .text("Choose the systems and accounts involved in this migration."),
         );
         crate::ui::card(ui, |ui| {
             crate::ui::form_row(ui, self.language.text("Plan name"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.name).desired_width(360.0))
             });
-            crate::ui::form_row(ui, self.language.text("Engine"), |ui| {
-                for (engine, label) in [
-                    (core::Engine::ImapSync, "imapsync"),
-                    (core::Engine::Dovecot, "Dovecot"),
-                ] {
-                    // Highlight the effective engine, including the
-                    // conservative default that resolves to imapsync.
-                    let selected = self.form.engine() == engine;
+            ui.checkbox(
+                &mut self.form.dry_run,
+                self.language.text("Dry run / preflight"),
+            );
+        });
+        crate::ui::card(ui, |ui| {
+            egui::CollapsingHeader::new(
+                egui::RichText::new(self.language.text("Advanced migration settings")).strong(),
+            )
+            .id_salt("advanced_migration_settings")
+            .show(ui, |ui| {
+                crate::ui::form_row(ui, self.language.text("Engine"), |ui| {
+                    for (engine, label) in [
+                        (core::Engine::ImapSync, "imapsync"),
+                        (core::Engine::Dovecot, "Dovecot"),
+                    ] {
+                        let selected = self.form.engine() == engine;
+                        if ui
+                            .add(
+                                egui::Button::selectable(selected, label).frame_when_inactive(true),
+                            )
+                            .clicked()
+                        {
+                            self.form.profile.engine = engine;
+                        }
+                    }
+                });
+                crate::ui::form_row(ui, self.language.text("Tools"), |ui| {
                     if ui
-                        .add(egui::Button::selectable(selected, label).frame_when_inactive(true))
+                        .button(format!("{}…", self.language.text("OS keyring credentials")))
                         .clicked()
                     {
-                        self.form.profile.engine = engine;
+                        self.keyring_open = true;
                     }
-                }
-                ui.add_space(16.0);
-                ui.checkbox(
-                    &mut self.form.dry_run,
-                    self.language.text("Dry run / preflight"),
-                );
-            });
-            crate::ui::form_row(ui, self.language.text("Tools"), |ui| {
-                if ui
-                    .button(format!("{}…", self.language.text("OS keyring credentials")))
-                    .clicked()
-                {
-                    self.keyring_open = true;
-                }
-                if ui
-                    .button(format!(
-                        "{}…",
-                        self.language.text("Choose migration engine")
-                    ))
-                    .clicked()
-                {
-                    self.engine_open = true;
-                }
+                    if ui
+                        .button(format!(
+                            "{}…",
+                            self.language.text("Choose migration engine")
+                        ))
+                        .clicked()
+                    {
+                        self.engine_open = true;
+                    }
+                });
             });
         });
         ui.add_space(16.0);
         let dovecot = self.form.engine() == core::Engine::Dovecot;
-        ui.columns(2, |columns| {
-            {
-                let ui = &mut columns[0];
-                self.provider_field(ui, true);
-                let password_required = !auth_method_is_oauth(&self.form.profile.source_auth);
-                super::account::render_account(
-                    ui,
-                    self.language,
-                    self.language.text("Source account"),
-                    &mut self.form.profile.source_host,
-                    &mut self.form.profile.source_user,
-                    &mut self.form.profile.source_auth,
-                    &mut self.form.source_password,
-                    password_required,
-                    !self.form.profile.source_credential_id.trim().is_empty(),
-                    colors.info,
-                );
-                ui.add_space(10.0);
-                crate::ui::card(ui, |ui| {
-                    crate::ui::section_label(ui, self.language.text("Connection details"));
-                    Self::text_field(
-                        ui,
-                        self.language.text("Port"),
-                        &mut self.form.profile.source_port,
-                    );
-                    Self::text_field(
-                        ui,
-                        self.language.text("Credential ID"),
-                        &mut self.form.profile.source_credential_id,
-                    );
-                    Self::text_field(
-                        ui,
-                        self.language.text("CA bundle"),
-                        &mut self.form.profile.source_ca_bundle,
-                    );
-                    if !dovecot {
-                        Self::text_field(
-                            ui,
-                            self.language.text("Certificate pin (SHA-256)"),
-                            &mut self.form.profile.source_certificate_pin_sha256,
-                        );
-                    }
-                    Self::tls_field(
-                        ui,
-                        self.language.text("TLS"),
-                        &mut self.form.profile.source_tls,
-                        "source_tls",
-                    );
-                    ui.checkbox(
-                        &mut self.form.profile.allow_insecure_source_transport,
-                        self.language
-                            .text("Allow insecure source transport (review carefully)"),
-                    );
-                });
-            }
-            {
-                let ui = &mut columns[1];
-                self.provider_field(ui, false);
-                // Dovecot writes to local storage: no destination password,
-                // port, TLS, or certificate pin applies.
-                let password_required =
-                    !dovecot && !auth_method_is_oauth(&self.form.profile.destination_auth);
-                super::account::render_account(
-                    ui,
-                    self.language,
-                    self.language.text(if dovecot {
-                        "Local Dovecot destination"
-                    } else {
-                        "Destination account"
-                    }),
-                    &mut self.form.profile.destination_host,
-                    &mut self.form.profile.destination_user,
-                    &mut self.form.profile.destination_auth,
-                    &mut self.form.destination_password,
-                    password_required,
-                    !self
-                        .form
-                        .profile
-                        .destination_credential_id
-                        .trim()
-                        .is_empty(),
-                    colors.success,
-                );
-                ui.add_space(10.0);
-                crate::ui::card(ui, |ui| {
-                    crate::ui::section_label(ui, self.language.text("Connection details"));
-                    if dovecot {
-                        ui.label(
-                            egui::RichText::new(
-                                self.language.text("Destination: local Dovecot storage"),
-                            )
-                            .color(colors.text_secondary),
-                        );
-                        Self::text_field(
-                            ui,
-                            self.language.text("Credential ID"),
-                            &mut self.form.profile.destination_credential_id,
-                        );
-                    } else {
-                        Self::text_field(
-                            ui,
-                            self.language.text("Port"),
-                            &mut self.form.profile.destination_port,
-                        );
-                        Self::text_field(
-                            ui,
-                            self.language.text("Credential ID"),
-                            &mut self.form.profile.destination_credential_id,
-                        );
-                        Self::text_field(
-                            ui,
-                            self.language.text("CA bundle"),
-                            &mut self.form.profile.destination_ca_bundle,
-                        );
-                        Self::text_field(
-                            ui,
-                            self.language.text("Certificate pin (SHA-256)"),
-                            &mut self.form.profile.destination_certificate_pin_sha256,
-                        );
-                        Self::tls_field(
-                            ui,
-                            self.language.text("TLS"),
-                            &mut self.form.profile.destination_tls,
-                            "destination_tls",
-                        );
-                    }
-                });
-            }
-        });
+        if ui.available_width() < 900.0 {
+            self.endpoint_plan_panel(ui, true, dovecot, colors.info);
+            self.endpoint_plan_panel(ui, false, dovecot, colors.success);
+        } else {
+            ui.columns(2, |columns| {
+                self.endpoint_plan_panel(&mut columns[0], true, dovecot, colors.info);
+                self.endpoint_plan_panel(&mut columns[1], false, dovecot, colors.success);
+            });
+        }
         if !dovecot {
             ui.add_space(16.0);
-            crate::ui::card(ui, |ui| {
-                crate::ui::section_label(ui, self.language.text("imapsync options"));
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(
-                        &mut self.form.profile.automap,
-                        self.language.text("Map standard folders automatically"),
-                    );
-                    ui.checkbox(
-                        &mut self.form.profile.justfolders,
-                        self.language.text("Folders only"),
-                    );
-                    ui.checkbox(
-                        &mut self.form.profile.addheader,
-                        self.language.text("Add Message-ID header when needed"),
-                    );
+            egui::CollapsingHeader::new(self.language.text("Advanced engine options"))
+                .id_salt("advanced_engine_options")
+                .show(ui, |ui| {
+                    crate::ui::card(ui, |ui| {
+                        crate::ui::section_label(ui, self.language.text("imapsync options"));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.checkbox(
+                                &mut self.form.profile.automap,
+                                self.language.text("Map standard folders automatically"),
+                            );
+                            ui.checkbox(
+                                &mut self.form.profile.justfolders,
+                                self.language.text("Folders only"),
+                            );
+                            ui.checkbox(
+                                &mut self.form.profile.addheader,
+                                self.language.text("Add Message-ID header when needed"),
+                            );
+                        });
+                        Self::text_field(
+                            ui,
+                            self.language.text("Extra imapsync options"),
+                            &mut self.form.profile.extra_options,
+                        );
+                        crate::ui::form_row(ui, self.language.text("imapsync executable"), |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.form.profile.imapsync_path)
+                                    .hint_text(
+                                        self.language
+                                            .text("Leave empty to use imapsync from PATH."),
+                                    )
+                                    .desired_width(f32::INFINITY),
+                            )
+                        });
+                    })
                 });
-                Self::text_field(
-                    ui,
-                    self.language.text("Extra imapsync options"),
-                    &mut self.form.profile.extra_options,
-                );
-                crate::ui::form_row(ui, self.language.text("imapsync executable"), |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.form.profile.imapsync_path)
-                            .hint_text(self.language.text("Leave empty to use imapsync from PATH."))
-                            .desired_width(f32::INFINITY),
-                    )
-                });
-            });
         }
         // Both engines: Dovecot backup mirrors, imapsync --delete2 deletes.
         let policy = self.form.profile.destination_mutation_policy();
@@ -483,7 +403,9 @@ impl App {
                 if ui
                     .add_enabled(
                         !dovecot && !self.running(),
-                        egui::Button::new(self.language.text("Run authenticated readiness probe")),
+                        egui::Button::new(
+                            self.language.text("Test accounts and inspect namespaces"),
+                        ),
                     )
                     .clicked()
                 {
@@ -528,6 +450,150 @@ impl App {
         });
     }
 
+    fn endpoint_plan_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        source: bool,
+        dovecot: bool,
+        color: egui::Color32,
+    ) {
+        self.provider_field(ui, source);
+        let language = self.language;
+        let password_required = if source {
+            !auth_method_is_oauth(&self.form.profile.source_auth)
+        } else {
+            !dovecot && !auth_method_is_oauth(&self.form.profile.destination_auth)
+        };
+        let saved_credential = if source {
+            !self.form.profile.source_credential_id.trim().is_empty()
+        } else {
+            !self
+                .form
+                .profile
+                .destination_credential_id
+                .trim()
+                .is_empty()
+        };
+        if source {
+            super::account::render_account(
+                ui,
+                language,
+                language.text("Source account"),
+                &mut self.form.profile.source_host,
+                &mut self.form.profile.source_user,
+                &mut self.form.profile.source_auth,
+                &mut self.form.source_password,
+                password_required,
+                saved_credential,
+                color,
+            );
+        } else {
+            // Native Dovecot writes to local storage; destination IMAP
+            // authentication controls do not apply in that mode.
+            super::account::render_account(
+                ui,
+                language,
+                language.text(if dovecot {
+                    "Local Dovecot destination"
+                } else {
+                    "Destination account"
+                }),
+                &mut self.form.profile.destination_host,
+                &mut self.form.profile.destination_user,
+                &mut self.form.profile.destination_auth,
+                &mut self.form.destination_password,
+                password_required,
+                saved_credential,
+                color,
+            );
+        }
+        ui.add_space(10.0);
+        let id_salt = if source {
+            "source_connection_settings"
+        } else {
+            "destination_connection_settings"
+        };
+        egui::CollapsingHeader::new(language.text("Advanced connection settings"))
+            .id_salt(id_salt)
+            .show(ui, |ui| {
+                crate::ui::card(ui, |ui| {
+                    if source {
+                        Self::text_field(
+                            ui,
+                            language.text("Port"),
+                            &mut self.form.profile.source_port,
+                        );
+                        Self::text_field(
+                            ui,
+                            language.text("Credential ID"),
+                            &mut self.form.profile.source_credential_id,
+                        );
+                        Self::text_field(
+                            ui,
+                            language.text("CA bundle"),
+                            &mut self.form.profile.source_ca_bundle,
+                        );
+                        if !dovecot {
+                            Self::text_field(
+                                ui,
+                                language.text("Certificate pin (SHA-256)"),
+                                &mut self.form.profile.source_certificate_pin_sha256,
+                            );
+                        }
+                        Self::tls_field(
+                            ui,
+                            language.text("TLS"),
+                            &mut self.form.profile.source_tls,
+                            "source_tls",
+                        );
+                        ui.checkbox(
+                            &mut self.form.profile.allow_insecure_source_transport,
+                            language.text("Allow insecure source transport (review carefully)"),
+                        );
+                    } else if dovecot {
+                        ui.label(
+                            egui::RichText::new(
+                                language.text("Destination: local Dovecot storage"),
+                            )
+                            .color(self.theme_colors().text_secondary),
+                        );
+                        Self::text_field(
+                            ui,
+                            language.text("Credential ID"),
+                            &mut self.form.profile.destination_credential_id,
+                        );
+                    } else {
+                        Self::text_field(
+                            ui,
+                            language.text("Port"),
+                            &mut self.form.profile.destination_port,
+                        );
+                        Self::text_field(
+                            ui,
+                            language.text("Credential ID"),
+                            &mut self.form.profile.destination_credential_id,
+                        );
+                        Self::text_field(
+                            ui,
+                            language.text("CA bundle"),
+                            &mut self.form.profile.destination_ca_bundle,
+                        );
+                        Self::text_field(
+                            ui,
+                            language.text("Certificate pin (SHA-256)"),
+                            &mut self.form.profile.destination_certificate_pin_sha256,
+                        );
+                        Self::tls_field(
+                            ui,
+                            language.text("TLS"),
+                            &mut self.form.profile.destination_tls,
+                            "destination_tls",
+                        );
+                    }
+                });
+            });
+    }
+
     fn text_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
         crate::ui::form_row(ui, label, |ui| {
             ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY))
@@ -554,9 +620,9 @@ impl App {
         };
         let mut selected = current;
         let label = if source {
-            self.language.text("Source preset")
+            self.language.text("Where are you migrating from?")
         } else {
-            self.language.text("Destination preset")
+            self.language.text("Where are you migrating to?")
         };
         crate::ui::form_row(ui, label, |ui| {
             egui::ComboBox::from_id_salt(("provider_preset", source))

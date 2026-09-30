@@ -72,6 +72,7 @@ pub(crate) fn render_account(
             )
         });
         inline_error(ui, language.text("User"), user, true);
+        ui.collapsing(language.text("Account authorization"), |ui| {
         crate::ui::form_row(ui, language.text("Authentication"), |ui| {
             egui::ComboBox::from_id_salt(("auth_method", title))
                 .selected_text(if auth_method_is_oauth(auth_method) {
@@ -85,13 +86,15 @@ pub(crate) fn render_account(
                 });
         });
         if auth_method_is_oauth(auth_method) {
-            ui.label(
-                RichText::new(
-                    language.text("Use a currently valid provider-issued access token with IMAP scope. Tokens are session-only unless stored in the OS keyring. To avoid manual tokens, run `mailswiftsync oauth-authorize` once and enter its keyring ID in the OS keyring dialog's Automatic OAuth refresh section."),
-                )
-                .size(11.0)
-                .color(ui.visuals().weak_text_color()),
-            );
+            ui.collapsing(language.text("OAuth setup guidance"), |ui| {
+                ui.label(
+                    RichText::new(
+                        language.text("Use a provider-issued access token with IMAP scope. Tokens stay in this session unless stored in the OS keyring. For automatic refresh, run `mailswiftsync oauth-authorize` and add its keyring ID in Advanced migration settings."),
+                    )
+                    .size(11.0)
+                    .color(ui.visuals().weak_text_color()),
+                );
+            });
         }
         let secret_label = if auth_method_is_oauth(auth_method) {
             language.text("Access token")
@@ -148,6 +151,16 @@ pub(crate) fn render_account(
                 }),
                 password.as_str(),
                 password_required && !saved_credential,
+            );
+        }
+        });
+        if !saved_credential && password.is_empty() {
+            ui.label(
+                RichText::new(
+                    language.text("Expand account authorization to add a password or OAuth token."),
+                )
+                .small()
+                .color(ui.visuals().weak_text_color()),
             );
         }
     });

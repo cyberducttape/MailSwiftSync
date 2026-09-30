@@ -3,11 +3,8 @@
 use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
-use crate::ui::{StatusSeverity, WorkspaceView, format_phase_name};
-use crate::ui::{
-    customer_proof_ready, recommended_batch_next_action, recommended_next_action,
-    workflow_step_index,
-};
+use crate::ui::{StatusSeverity, WorkspaceView};
+use crate::ui::{customer_proof_ready, recommended_batch_next_action, recommended_next_action};
 use eframe::egui::{self, RichText};
 
 impl App {
@@ -58,29 +55,10 @@ impl App {
                 );
                 ui.label(RichText::new(self.language.text("MailSwiftSync guides every migration through a reviewable preflight before any destination changes are allowed.")).color(colors.text_secondary));
                 ui.add_space(10.0);
-                ui.columns(3, |columns| {
-                    for (column, (number, title, detail)) in columns.iter_mut().zip([
-                        ("1", "Connect", "Enter source and destination endpoints."),
-                        ("2", "Assess", "Run a dry preflight and review the plan."),
-                        (
-                            "3",
-                            "Prove",
-                            "Migrate, verify, and export customer evidence.",
-                        ),
-                    ]) {
-                        column.horizontal(|ui| {
-                            ui.label(RichText::new(number).size(20.0).strong().color(colors.info));
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(self.language.text(title)).strong());
-                                ui.label(
-                                    RichText::new(self.language.text(detail))
-                                        .small()
-                                        .color(colors.text_secondary),
-                                );
-                            });
-                        });
-                    }
-                });
+                ui.label(
+                    RichText::new(self.language.text("Begin in Prepare: choose the source and destination, then test both accounts before preflight."))
+                        .color(colors.text_secondary),
+                );
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if crate::ui::primary_button(
@@ -99,7 +77,7 @@ impl App {
                     }
                 });
                 ui.add_space(4.0);
-                ui.label(RichText::new(self.language.text("For multiple mailboxes, use Batch after reviewing one representative pilot.")).small().color(colors.text_secondary));
+                ui.label(RichText::new(self.language.text("For a batch, import the mailbox list and begin with a small pilot during the Pilot stage.")).small().color(colors.text_secondary));
             });
             ui.add_space(16.0);
         }
@@ -209,39 +187,8 @@ impl App {
         });
         ui.add_space(16.0);
 
-        let workflow_index = workflow_step_index(phase, !self.preflight.is_empty(), has_mailboxes);
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            crate::ui::section_label(ui, self.language.text("MIGRATION WORKFLOW"));
-            ui.add_space(6.0);
-            let steps = [
-                ("Connect", "endpoints"),
-                ("Assess", "readiness"),
-                ("Preflight", "review"),
-                ("Migrate", "execute"),
-                ("Verify", "evidence"),
-                ("Deliver", "customer proof"),
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(index, (title, detail))| {
-                (
-                    self.language.text(title),
-                    Some(self.language.text(detail)),
-                    step_state(index, workflow_index),
-                )
-            })
-            .collect::<Vec<_>>();
-            crate::ui::stepper(ui, &steps, colors.success, colors.info);
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new(self.language.text("The highlighted step is the current operator focus. A completed-looking step never bypasses the durable execution gates."))
-                    .small()
-                    .color(colors.text_secondary),
-            );
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
             self.lifecycle_stepper(ui);
             if attention_count > 0 {
                 ui.label(
@@ -412,26 +359,12 @@ impl App {
                 ui.heading(self.language.text("Start a safe migration"));
                 ui.label(RichText::new(self.language.text("MailSwiftSync guides every migration through a reviewed preflight before any destination changes are allowed.")).color(colors.text_secondary));
                 ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    for (number, title, detail) in [
-                        ("1", "Connect", "Configure source and destination"),
-                        ("2", "Preflight", "Authenticate and review blockers"),
-                        ("3", "Pilot", "Start with a small mailbox set"),
-                    ] {
-                        crate::ui::card(ui, |ui| {
-                            ui.label(
-                                RichText::new(format!("{number}  {}", self.language.text(title)))
-                                    .strong()
-                                    .color(colors.info),
-                            );
-                            ui.label(
-                                RichText::new(self.language.text(detail))
-                                    .size(11.0)
-                                    .color(colors.text_secondary),
-                            );
-                        });
-                    }
-                });
+                ui.label(
+                    RichText::new(self.language.text(
+                        "Begin in Prepare by choosing the source, destination, and account access.",
+                    ))
+                    .color(colors.text_secondary),
+                );
                 ui.horizontal(|ui| {
                     if ui
                         .button(self.language.text("Import mailbox list"))
@@ -554,7 +487,9 @@ impl App {
                 if ui
                     .add_enabled(
                         probe_enabled,
-                        egui::Button::new(self.language.text("Run authenticated readiness probe")),
+                        egui::Button::new(
+                            self.language.text("Test accounts and inspect namespaces"),
+                        ),
                     )
                     .clicked()
                 {
@@ -654,14 +589,14 @@ impl App {
 
     pub(crate) fn lifecycle_stepper(&self, ui: &mut egui::Ui) {
         let phases = [
-            core::Phase::Discovery,
-            core::Phase::Preflight,
-            core::Phase::Pilot,
-            core::Phase::Seed,
-            core::Phase::CatchUp,
-            core::Phase::FinalDelta,
-            core::Phase::Verification,
-            core::Phase::Complete,
+            (core::Phase::Discovery, "Prepare"),
+            (core::Phase::Preflight, "Preflight"),
+            (core::Phase::Pilot, "Pilot"),
+            (core::Phase::Seed, "Seed"),
+            (core::Phase::CatchUp, "Catch-up"),
+            (core::Phase::FinalDelta, "Cutover"),
+            (core::Phase::Verification, "Verify"),
+            (core::Phase::Complete, "Complete"),
         ];
         let current = match self.active_project_id() {
             None => core::Phase::Discovery,
@@ -674,7 +609,7 @@ impl App {
         };
         let current_index = phases
             .iter()
-            .position(|phase| *phase == current)
+            .position(|(phase, _)| *phase == current)
             .unwrap_or(usize::MAX);
         ui.horizontal(|ui| {
             crate::ui::section_label(ui, self.language.text("MIGRATION LIFECYCLE"));
@@ -690,9 +625,9 @@ impl App {
         let steps = phases
             .iter()
             .enumerate()
-            .map(|(index, phase)| {
+            .map(|(index, (_, label))| {
                 (
-                    self.language.text(format_phase_name(*phase)),
+                    self.language.text(label),
                     None,
                     step_state(index, current_index),
                 )

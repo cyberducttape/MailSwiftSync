@@ -9,6 +9,7 @@
 pub(crate) enum ProviderPreset {
     #[default]
     GenericImap,
+    CpanelDovecot,
     GoogleWorkspace,
     Microsoft365,
     Fastmail,
@@ -25,8 +26,9 @@ pub(crate) struct ProviderDefaults {
 }
 
 impl ProviderPreset {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::GenericImap,
+        Self::CpanelDovecot,
         Self::GoogleWorkspace,
         Self::Microsoft365,
         Self::Fastmail,
@@ -36,6 +38,7 @@ impl ProviderPreset {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::GenericImap => "Generic IMAP preset",
+            Self::CpanelDovecot => "cPanel / Dovecot preset",
             Self::GoogleWorkspace => "Google Workspace preset",
             Self::Microsoft365 => "Microsoft 365 preset",
             Self::Fastmail => "Fastmail preset",
@@ -46,6 +49,7 @@ impl ProviderPreset {
     pub(crate) fn runbook_name(self) -> &'static str {
         match self {
             Self::GenericImap => "generic",
+            Self::CpanelDovecot => "generic",
             Self::GoogleWorkspace => "gmail",
             Self::Microsoft365 => "microsoft365",
             Self::Fastmail => "fastmail",
@@ -61,6 +65,13 @@ impl ProviderPreset {
                 tls: "imaps",
                 auth: "password",
                 note: "Enter the provider's documented IMAP endpoint and authentication policy.",
+            },
+            Self::CpanelDovecot => ProviderDefaults {
+                host: "",
+                port: "993",
+                tls: "imaps",
+                auth: "password",
+                note: "Enter the cPanel mail server for this domain. cPanel endpoints vary by hosting provider; confirm the hostname in the hosting account.",
             },
             Self::GoogleWorkspace => ProviderDefaults {
                 host: "imap.gmail.com",
@@ -110,7 +121,8 @@ mod tests {
             "outlook.office365.com"
         );
         assert_eq!(ProviderPreset::Fastmail.defaults().port, "993");
-        assert_eq!(ProviderPreset::ALL.len(), 5);
+        assert_eq!(ProviderPreset::CpanelDovecot.defaults().port, "993");
+        assert_eq!(ProviderPreset::ALL.len(), 6);
         assert!(ProviderPreset::GoogleWorkspace.label().ends_with(" preset"));
         assert!(ProviderPreset::Microsoft365.label().ends_with(" preset"));
         assert_eq!(ProviderPreset::GoogleWorkspace.runbook_name(), "gmail");

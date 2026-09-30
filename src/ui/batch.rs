@@ -367,6 +367,15 @@ impl App {
                 );
             }
             let has_selection = !self.bulk_selected_ids.is_empty();
+            if has_selection && ui.available_width() < 1120.0 {
+                egui::CollapsingHeader::new(
+                    self.language
+                        .text("Review selected ({})")
+                        .replace("{}", &self.bulk_selected_ids.len().to_string()),
+                )
+                .id_salt("narrow_selection_inspector")
+                .show(ui, |ui| self.selection_review_drawer(ui));
+            }
             let selected_count = self.bulk_selected_ids.len();
             let live_count = self.bulk_selection_view.live_eligible;
             let delta_count = self.bulk_selection_view.delta_eligible;
@@ -465,25 +474,35 @@ impl App {
                 self.active_view = WorkspaceView::Verification;
             }
             ui.add_space(8.0);
-            TableBuilder::new(ui)
+            let table_width = ui.available_width();
+            let show_endpoints = table_width >= 760.0;
+            let show_operator_action = table_width >= 1100.0;
+            let mut table = TableBuilder::new(ui)
                 .striped(true)
                 .resizable(true)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .column(Column::auto())
-                .column(Column::remainder().at_least(80.0).clip(true))
-                .column(Column::remainder().at_least(110.0).clip(true))
-                .column(Column::remainder().at_least(110.0).clip(true))
-                .column(Column::auto().at_least(96.0).clip(true))
-                .column(Column::remainder().at_least(90.0).clip(true))
+                .column(Column::remainder().at_least(120.0).clip(true));
+            if show_endpoints {
+                table = table
+                    .column(Column::remainder().at_least(110.0).clip(true))
+                    .column(Column::remainder().at_least(110.0).clip(true));
+            }
+            table = table.column(Column::auto().at_least(96.0).clip(true));
+            if show_operator_action {
+                table = table.column(Column::remainder().at_least(90.0).clip(true));
+            }
+            table
                 .header(32.0, |mut header| {
-                    for label in [
-                        "",
-                        "Mailbox",
-                        "Source",
-                        "Destination",
-                        "State",
-                        "Operator action",
-                    ] {
+                    let mut labels = vec!["", "Mailbox"];
+                    if show_endpoints {
+                        labels.extend(["Source", "Destination"]);
+                    }
+                    labels.push("State");
+                    if show_operator_action {
+                        labels.push("Operator action");
+                    }
+                    for label in labels {
                         header.col(|ui| {
                             ui.strong(self.language.text(label));
                         });
@@ -525,42 +544,46 @@ impl App {
                         row.col(|ui| {
                             ui.label(&job.label);
                         });
-                        row.col(|ui| {
-                            crate::ui::endpoint_cell(ui, &job.source_host, &job.source_user);
-                        });
-                        row.col(|ui| {
-                            crate::ui::endpoint_cell(
-                                ui,
-                                &job.destination_host,
-                                &job.destination_user,
-                            );
-                        });
+                        if show_endpoints {
+                            row.col(|ui| {
+                                crate::ui::endpoint_cell(ui, &job.source_host, &job.source_user);
+                            });
+                            row.col(|ui| {
+                                crate::ui::endpoint_cell(
+                                    ui,
+                                    &job.destination_host,
+                                    &job.destination_user,
+                                );
+                            });
+                        }
                         row.col(|ui| {
                             let (badge, color) = job_state_badge(&job.state, colors);
                             ui.label(RichText::new(self.language.text(badge)).color(color));
                         });
-                        row.col(|ui| {
-                            if job.state == "attention" {
-                                if let Some(reason) = self
-                                    .cached_report_mailbox(job_id)
-                                    .and_then(|mailbox| mailbox.attention_reason.as_ref())
-                                {
-                                    ui.label(
-                                        RichText::new(
-                                            self.language.text(reason.recommended_action()),
-                                        )
-                                        .color(self.theme_colors().text_secondary),
-                                    );
-                                } else {
-                                    ui.label(
-                                        RichText::new(
-                                            self.language.text("Inspect durable run detail"),
-                                        )
-                                        .color(self.theme_colors().text_secondary),
-                                    );
+                        if show_operator_action {
+                            row.col(|ui| {
+                                if job.state == "attention" {
+                                    if let Some(reason) = self
+                                        .cached_report_mailbox(job_id)
+                                        .and_then(|mailbox| mailbox.attention_reason.as_ref())
+                                    {
+                                        ui.label(
+                                            RichText::new(
+                                                self.language.text(reason.recommended_action()),
+                                            )
+                                            .color(self.theme_colors().text_secondary),
+                                        );
+                                    } else {
+                                        ui.label(
+                                            RichText::new(
+                                                self.language.text("Inspect durable run detail"),
+                                            )
+                                            .color(self.theme_colors().text_secondary),
+                                        );
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
                     });
                 });
             self.bulk_visible_indices = visible_indices;

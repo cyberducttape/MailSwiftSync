@@ -38,7 +38,7 @@ pub(crate) use status::{
     StatusMessage, StatusSeverity, customer_proof_ready, display_job_state, display_state_key,
     format_elapsed, format_phase_name, job_state_badge, needs_operator_review,
     project_health_state_counts, recommended_batch_next_action, recommended_next_action,
-    status_color, successful_run_severity, successful_run_status, workflow_step_index,
+    status_color, successful_run_severity, successful_run_status,
 };
 #[cfg(test)]
 pub(crate) use theme::contrast_ratio;
@@ -161,6 +161,57 @@ pub(crate) fn nav_item(
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
     });
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Compact navigation row for narrow windows. The tooltip retains the full
+/// accessible name while the icon stays centered in the reduced rail.
+pub(crate) fn nav_icon_item(
+    ui: &mut egui::Ui,
+    selected: bool,
+    icon: &str,
+    label: &str,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        if selected {
+            ui.painter().rect_filled(
+                rect,
+                visuals.widgets.inactive.corner_radius,
+                visuals.selection.bg_fill,
+            );
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+                visuals.widgets.inactive.corner_radius,
+                visuals.widgets.active.bg_fill,
+            );
+        } else if response.hovered() {
+            ui.painter().rect_filled(
+                rect,
+                visuals.widgets.inactive.corner_radius,
+                visuals.widgets.hovered.weak_bg_fill,
+            );
+        }
+        let color = if selected {
+            visuals.selection.stroke.color
+        } else {
+            visuals.weak_text_color()
+        };
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(16.0),
+            color,
+        );
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
+    });
+    response
+        .on_hover_text(label)
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Compact rounded status tag. Drawn as one atomic widget so wrapped rows

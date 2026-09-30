@@ -355,7 +355,7 @@ impl UiLanguage {
             "Preflight" => "Vorabprüfung",
             "Pilot" => "Pilot",
             "Seed" => "Erstkopie",
-            "Catch-up" => "Nachlauf",
+            "Catch-up" => "Nachziehen",
             "Final delta" => "Finales Delta",
             "Complete" => "Abgeschlossen",
             "Attention" => "Prüfung erforderlich",
@@ -597,6 +597,39 @@ impl UiLanguage {
             "Source preset" => "Quellvorgabe",
             "Destination preset" => "Zielvorgabe",
             "Generic IMAP preset" => "Allgemeine IMAP-Vorgabe",
+            "cPanel / Dovecot preset" => "cPanel- / Dovecot-Vorgabe",
+            "Where are you migrating from?" => "Von welchem System migrieren Sie?",
+            "Where are you migrating to?" => "Zu welchem System migrieren Sie?",
+            "Advanced migration settings" => "Erweiterte Migrationseinstellungen",
+            "Advanced connection settings" => "Erweiterte Verbindungseinstellungen",
+            "Advanced engine options" => "Erweiterte Engine-Optionen",
+            "OAuth setup guidance" => "OAuth-Einrichtungshinweise",
+            "Account authorization" => "Kontozugriff",
+            "Expand account authorization to add a password or OAuth token." => {
+                "Öffnen Sie den Kontozugriff, um ein Passwort oder OAuth-Token hinzuzufügen."
+            }
+            "Test accounts and inspect namespaces" => "Konten testen und Namespaces prüfen",
+            "Choose the systems and accounts involved in this migration." => {
+                "Wählen Sie die Quell- und Zielsysteme sowie die zugehörigen Konten aus."
+            }
+            "Use a provider-issued access token with IMAP scope. Tokens stay in this session unless stored in the OS keyring. For automatic refresh, run `mailswiftsync oauth-authorize` and add its keyring ID in Advanced migration settings." => {
+                "Verwenden Sie ein vom Anbieter ausgestelltes Zugriffstoken mit IMAP-Berechtigung. Token bleiben in dieser Sitzung, sofern sie nicht im OS-Schlüsselbund gespeichert werden. Für automatische Erneuerung führen Sie `mailswiftsync oauth-authorize` aus und fügen die Schlüsselbund-ID unter den erweiterten Migrationseinstellungen hinzu."
+            }
+            "Enter the cPanel mail server for this domain. cPanel endpoints vary by hosting provider; confirm the hostname in the hosting account." => {
+                "Geben Sie den cPanel-Mailserver dieser Domain ein. cPanel-Endpunkte unterscheiden sich je nach Hosting-Anbieter; prüfen Sie den Hostnamen im Hosting-Konto."
+            }
+            "Prepare" => "Vorbereiten",
+            "Cutover" => "Umschaltung",
+            "Verify" => "Prüfen",
+            "Begin in Prepare: choose the source and destination, then test both accounts before preflight." => {
+                "Beginnen Sie unter Vorbereiten: Wählen Sie Quelle und Ziel und testen Sie beide Konten vor der Vorabprüfung."
+            }
+            "For a batch, import the mailbox list and begin with a small pilot during the Pilot stage." => {
+                "Importieren Sie für einen Stapel die Postfachliste und beginnen Sie in der Pilotphase mit einem kleinen Pilotlauf."
+            }
+            "Begin in Prepare by choosing the source, destination, and account access." => {
+                "Beginnen Sie unter Vorbereiten mit der Auswahl von Quelle, Ziel und Kontozugriff."
+            }
             "Google Workspace preset" => "Google-Workspace-Vorgabe",
             "Microsoft 365 preset" => "Microsoft-365-Vorgabe",
             "Fastmail preset" => "Fastmail-Vorgabe",
