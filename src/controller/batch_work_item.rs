@@ -89,6 +89,52 @@ pub(crate) fn send_job_finished(
         .map_err(|error| format!("durable JobFinished acknowledgement was lost: {error}"))?
 }
 
+struct BatchTerminalTransition<'a> {
+    tx: &'a mpsc::SyncSender<Event>,
+    terminal_jobs: &'a Arc<Mutex<HashSet<usize>>>,
+    index: usize,
+    job_id: String,
+    child_run_id: String,
+    job_state: &'a str,
+    run_state: &'a str,
+    detail: String,
+    credential_fingerprint: Option<String>,
+}
+
+fn persist_batch_terminal_state(transition: BatchTerminalTransition<'_>) {
+    let BatchTerminalTransition {
+        tx,
+        terminal_jobs,
+        index,
+        job_id,
+        child_run_id,
+        job_state,
+        run_state,
+        detail,
+        credential_fingerprint,
+    } = transition;
+    let _ = send_reliable_event(
+        tx,
+        Event::JobState {
+            job_id: job_id.clone(),
+            child_run_id: child_run_id.clone(),
+            state: job_state.to_owned(),
+        },
+    );
+    if let Err(error) = send_job_finished(
+        tx,
+        job_id,
+        child_run_id,
+        run_state.to_owned(),
+        detail,
+        credential_fingerprint,
+    ) {
+        eprintln!("durable batch terminal event delivery failed: {error}");
+    } else if let Ok(mut terminal) = terminal_jobs.lock() {
+        terminal.insert(index);
+    }
+}
+
 pub(crate) struct BatchWorkerContext {
     pub(crate) concurrency: usize,
     pub(crate) mode: BatchExecutionMode,
@@ -146,6 +192,269 @@ fn refresh_live_credentials(
     Ok(())
 }
 
+enum BatchClaimError {
+    Rejected(String),
+    ControllerUnavailable,
+}
+
+/// Wait for the reducer's durable claim decision before starting a process.
+/// A disconnected event channel is distinct from an operator rejection: the
+/// worker can no longer report a terminal transition in that case.
+fn claim_batch_job(
+    tx: &mpsc::SyncSender<Event>,
+    project_id: &str,
+    job_id: &str,
+    parent_run_id: &str,
+    child_run_id: &str,
+    cancel: &AtomicBool,
+) -> Result<(), BatchClaimError> {
+    let (reply, response) = mpsc::sync_channel(1);
+    tx.send(Event::ClaimBatch {
+        project_id: project_id.to_owned(),
+        job_id: job_id.to_owned(),
+        parent_run_id: parent_run_id.to_owned(),
+        child_run_id: child_run_id.to_owned(),
+        reply,
+    })
+    .map_err(|_| BatchClaimError::ControllerUnavailable)?;
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BatchClaimError::Rejected(
+                "cancelled by operator before durable claim".to_owned(),
+            ));
+        }
+        match response.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(error)) => return Err(BatchClaimError::Rejected(error)),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(BatchClaimError::Rejected(
+                    "durable claim response was lost".to_owned(),
+                ));
+            }
+        }
+    }
+}
+
+struct BatchAttemptContext<'a> {
+    form: &'a crate::Form,
+    checkpoint: Option<String>,
+    concurrency: usize,
+    live: bool,
+    index: usize,
+    job_id: String,
+    child_run_id: String,
+    project_id: String,
+    tx: mpsc::SyncSender<Event>,
+    cancel: Arc<AtomicBool>,
+    imapsync_output_profile: ImapsyncOutputProfile,
+    verification_state_path: Option<std::path::PathBuf>,
+    transfer_attempt_number: &'a mut u32,
+    verification_failure: &'a mut Option<String>,
+}
+
+/// Prepare and execute a single engine attempt, then collect engine-specific
+/// evidence. Retry policy and durable job transitions deliberately stay with
+/// the outer mailbox coordinator.
+fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<StreamOutcome, String> {
+    let BatchAttemptContext {
+        form,
+        checkpoint,
+        concurrency,
+        live,
+        index,
+        job_id,
+        child_run_id,
+        project_id,
+        tx,
+        cancel,
+        imapsync_output_profile,
+        verification_state_path,
+        transfer_attempt_number,
+        verification_failure,
+    } = context;
+    let prepared = form
+        .prepared_command_with_throttle_divisor_and_checkpoint(concurrency, checkpoint.as_deref());
+    match prepared {
+        Ok(command) => {
+            let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
+            let verification = command.verification.clone();
+            let prefix = format!("[{}] ", index + 1);
+            let secrets = [
+                form.source_password.clone(),
+                form.destination_password.clone(),
+            ];
+            let checkpoint_validation = if !form.dry_run
+                && form.engine() == core::Engine::Dovecot
+                && let Some(saved_checkpoint) = checkpoint.as_deref()
+            {
+                match core::dovecot_checkpoint_context(saved_checkpoint) {
+                    Some(context) => validate_dovecot_checkpoint_context(
+                        &verification,
+                        &[],
+                        &form.source_password,
+                        context,
+                        &tx,
+                        &cancel,
+                        Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
+                        &prefix,
+                        &child_run_id,
+                        &job_id,
+                    ),
+                    None => Err(
+                        "saved Dovecot checkpoint has no UIDVALIDITY context; refusing resume"
+                            .into(),
+                    ),
+                }
+            } else {
+                Ok(())
+            };
+            let result = checkpoint_validation.and_then(|()| {
+                *transfer_attempt_number = transfer_attempt_number.saturating_add(1);
+                run_streaming(RunContext {
+                    executable: &command.executable,
+                    args: &command.args,
+                    env: &command.env,
+                    tx: &tx,
+                    run_id: &child_run_id,
+                    job_id: &job_id,
+                    project_id: &project_id,
+                    prefix: &prefix,
+                    cancel: &cancel,
+                    secrets: &secrets,
+                    timeout: Duration::from_secs(
+                        form.profile.migration_timeout_hours * 60 * 60,
+                    ),
+                    dovecot_exit_two_is_delta: form.engine() == core::Engine::Dovecot
+                        && !form.dry_run,
+                    imapsync_output_profile,
+                    diagnostic_logger: None,
+                    attempt_number: *transfer_attempt_number,
+                    live_transfer: live,
+                })
+            })
+            .and_then(|stream| {
+                if !form.dry_run
+                    && form.engine() == core::Engine::ImapSync
+                    && message_verification_enabled(form)
+                {
+                    match run_imap_message_verification(
+                        form,
+                        &job_id,
+                        &child_run_id,
+                        &cancel,
+                        verification_state_path.as_deref().map(|path| {
+                            core::durable_stage_path(path, &job_id)
+                        }).as_deref(),
+                    ) {
+                        Ok((evidence, mismatches)) => {
+                            send_reliable_event(&tx, Event::BatchEvidence {
+                                job_id: job_id.clone(),
+                                child_run_id: child_run_id.clone(),
+                                evidence,
+                                mismatches,
+                            })
+                            .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
+                        }
+                        Err(error) => {
+                            let safe = redact_child_text(form, &error);
+                            eprintln!(
+                                "[{}] message-level IMAP verification failed: {safe}",
+                                index + 1
+                            );
+                            *verification_failure = Some(
+                                safe.chars().take(2048).collect::<String>(),
+                            );
+                            send_run_line(&tx, form, &child_run_id, &job_id, format!(
+                                    "[{}] message-level verification unavailable; transfer succeeded and requires review: {safe}",
+                                    index + 1
+                                ));
+                        }
+                    }
+                } else if !form.dry_run
+                    && terminal_evidence_source(
+                        form,
+                        false,
+                        stream.imapsync_evidence.is_some(),
+                    ) == TerminalEvidenceSource::Engine
+                    && let Some(evidence) = stream.imapsync_evidence
+                {
+                    send_reliable_event(&tx, Event::BatchEvidence {
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        evidence,
+                        mismatches: Vec::new(),
+                    })
+                    .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
+                }
+                if !form.dry_run && form.engine() == core::Engine::Dovecot {
+                    let verification_secret = form.source_password.clone();
+                    let verification_env = Vec::new();
+                    let verification_result = run_dovecot_verification(
+                        &verification,
+                        &verification_env,
+                        std::slice::from_ref(&verification_secret),
+                        &tx,
+                        &cancel,
+                        Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
+                        &prefix,
+                        &child_run_id,
+                        &job_id,
+                    )?;
+                    if let (Some(state), Some(context)) = (
+                        stream.dovecot_checkpoint.as_deref(),
+                        verification_result.checkpoint_context.as_deref(),
+                    ) {
+                        let value = core::encode_dovecot_checkpoint(state, context)
+                            .ok_or_else(|| {
+                                "Dovecot produced an invalid checkpoint context".to_owned()
+                            })?;
+                        send_reliable_event(
+                            &tx,
+                            Event::Checkpoint {
+                                run_id: child_run_id.clone(),
+                                job_id: job_id.clone(),
+                                value,
+                            },
+                        )?;
+                    }
+                    send_reliable_event(
+                        &tx,
+                        Event::BatchEvidence {
+                            job_id: job_id.clone(),
+                            child_run_id: child_run_id.clone(),
+                            evidence: verification_result.evidence,
+                            mismatches: Vec::new(),
+                        },
+                    )?;
+                }
+                Ok(stream.outcome)
+            });
+            let result = if result.is_ok() && form.dry_run && form.engine() == core::Engine::Dovecot
+            {
+                result.and_then(|stream| {
+                    run_dovecot_destination_preflight(
+                        &form.dovecot_destination_preflight_commands(),
+                        &tx,
+                        &cancel,
+                        Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
+                        &format!("[{}] ", index + 1),
+                        &child_run_id,
+                        &job_id,
+                    )
+                    .map(|_| stream)
+                })
+            } else {
+                result
+            };
+            drop(cleanup_guard);
+            result
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Execute mailbox work items for one batch worker. All output is emitted as
 /// typed controller events; durable state remains owned by the poll reducer.
 pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
@@ -170,26 +479,17 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
     while let Ok((index, job_id, child_run_id, checkpoint, job)) = job_rx.recv() {
         let mut form = job.form();
         if cancel.load(Ordering::Relaxed) {
-            let _ = send_reliable_event(
-                &tx,
-                Event::JobState {
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    state: "Cancelled".into(),
-                },
-            );
-            if let Err(error) = send_job_finished(
-                &tx,
-                job_id.clone(),
-                child_run_id.clone(),
-                "cancelled".into(),
-                "cancelled before worker claim".into(),
-                None,
-            ) {
-                eprintln!("durable batch terminal event delivery failed: {error}");
-            } else if let Ok(mut terminal) = terminal_jobs.lock() {
-                terminal.insert(index);
-            }
+            persist_batch_terminal_state(BatchTerminalTransition {
+                tx: &tx,
+                terminal_jobs: &terminal_jobs,
+                index,
+                job_id: job_id.clone(),
+                child_run_id: child_run_id.clone(),
+                job_state: "Cancelled",
+                run_state: "cancelled",
+                detail: "cancelled before worker claim".into(),
+                credential_fingerprint: None,
+            });
             continue;
         }
         send_run_line(
@@ -275,26 +575,17 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             index + 1
                         ),
                     );
-                    let _ = send_reliable_event(
-                        &tx,
-                        Event::JobState {
-                            job_id: job_id.clone(),
-                            child_run_id: child_run_id.clone(),
-                            state: "Failed".into(),
-                        },
-                    );
-                    if let Err(delivery_error) = send_job_finished(
-                        &tx,
-                        job_id.clone(),
-                        child_run_id.clone(),
-                        "failed".into(),
-                        classified_failure_detail(&redact_child_text(&form, &error)),
-                        None,
-                    ) {
-                        eprintln!("durable batch terminal event delivery failed: {delivery_error}");
-                    } else if let Ok(mut terminal) = terminal_jobs.lock() {
-                        terminal.insert(index);
-                    }
+                    persist_batch_terminal_state(BatchTerminalTransition {
+                        tx: &tx,
+                        terminal_jobs: &terminal_jobs,
+                        index,
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        job_state: "Failed",
+                        run_state: "failed",
+                        detail: classified_failure_detail(&redact_child_text(&form, &error)),
+                        credential_fingerprint: None,
+                    });
                     break;
                 }
             }
@@ -344,93 +635,62 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         index + 1
                     ),
                 );
-                let _ = send_reliable_event(
-                    &tx,
-                    Event::JobState {
-                        job_id: job_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        state: "Failed".into(),
-                    },
-                );
                 // Classify the raw probe result. Prefixing it with
                 // "authentication failed" would incorrectly mask a DNS,
                 // TCP, TLS-disconnect, or provider-capacity failure.
-                if let Err(delivery_error) = send_job_finished(
-                    &tx,
-                    job_id.clone(),
-                    child_run_id.clone(),
-                    "failed".into(),
-                    classified_failure_detail(&redact_child_text(&form, &error)),
-                    None,
-                ) {
-                    eprintln!("durable batch terminal event delivery failed: {delivery_error}");
-                } else if let Ok(mut terminal) = terminal_jobs.lock() {
-                    terminal.insert(index);
-                }
+                persist_batch_terminal_state(BatchTerminalTransition {
+                    tx: &tx,
+                    terminal_jobs: &terminal_jobs,
+                    index,
+                    job_id: job_id.clone(),
+                    child_run_id: child_run_id.clone(),
+                    job_state: "Failed",
+                    run_state: "failed",
+                    detail: classified_failure_detail(&redact_child_text(&form, &error)),
+                    credential_fingerprint: None,
+                });
                 break;
             }
             if !claimed {
-                let (claim_tx, claim_rx) = mpsc::sync_channel(1);
-                if tx
-                    .send(Event::ClaimBatch {
-                        project_id: batch_project_id.clone(),
-                        job_id: job_id.clone(),
-                        parent_run_id: batch_run_id.clone(),
-                        child_run_id: child_run_id.clone(),
-                        reply: claim_tx,
-                    })
-                    .is_err()
-                {
-                    failed.store(true, Ordering::Relaxed);
-                    break;
-                }
-                let claim_result = loop {
-                    if cancel.load(Ordering::Relaxed) {
-                        break Err("cancelled by operator before durable claim".to_owned());
-                    }
-                    match claim_rx.recv_timeout(Duration::from_millis(100)) {
-                        Ok(result) => break result,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            break Err("durable claim response was lost".to_owned());
-                        }
-                    }
-                };
-                if let Err(error) = claim_result {
-                    let cancelled = classify_failure(&error) == FailureClass::Cancellation;
-                    if !cancelled {
+                match claim_batch_job(
+                    &tx,
+                    &batch_project_id,
+                    &job_id,
+                    &batch_run_id,
+                    &child_run_id,
+                    &cancel,
+                ) {
+                    Ok(()) => claimed = true,
+                    Err(BatchClaimError::ControllerUnavailable) => {
                         failed.store(true, Ordering::Relaxed);
+                        break;
                     }
-                    send_run_line(
-                        &tx,
-                        &form,
-                        &child_run_id,
-                        &job_id,
-                        format!("[{}] {}", index + 1, error),
-                    );
-                    let _ = send_reliable_event(
-                        &tx,
-                        Event::JobState {
+                    Err(BatchClaimError::Rejected(error)) => {
+                        let cancelled = classify_failure(&error) == FailureClass::Cancellation;
+                        if !cancelled {
+                            failed.store(true, Ordering::Relaxed);
+                        }
+                        send_run_line(
+                            &tx,
+                            &form,
+                            &child_run_id,
+                            &job_id,
+                            format!("[{}] {}", index + 1, error),
+                        );
+                        persist_batch_terminal_state(BatchTerminalTransition {
+                            tx: &tx,
+                            terminal_jobs: &terminal_jobs,
+                            index,
                             job_id: job_id.clone(),
                             child_run_id: child_run_id.clone(),
-                            state: if cancelled { "Cancelled" } else { "Failed" }.into(),
-                        },
-                    );
-                    if let Err(delivery_error) = send_job_finished(
-                        &tx,
-                        job_id.clone(),
-                        child_run_id.clone(),
-                        if cancelled { "cancelled" } else { "failed" }.into(),
-                        classified_failure_detail(&redact_child_text(&form, &error)),
-                        None,
-                    ) {
-                        eprintln!("durable batch terminal event delivery failed: {delivery_error}");
-                    } else if let Ok(mut terminal) = terminal_jobs.lock() {
-                        terminal.insert(index);
+                            job_state: if cancelled { "Cancelled" } else { "Failed" },
+                            run_state: if cancelled { "cancelled" } else { "failed" },
+                            detail: classified_failure_detail(&redact_child_text(&form, &error)),
+                            credential_fingerprint: None,
+                        });
+                        break;
                     }
-                    break;
                 }
-                claimed = true;
             }
             let _ = send_reliable_event(
                 &tx,
@@ -457,189 +717,22 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     },
                 );
             }
-            let prepared = form.prepared_command_with_throttle_divisor_and_checkpoint(
+            let result = run_prepared_batch_attempt(BatchAttemptContext {
+                form: &form,
+                checkpoint: checkpoint.clone(),
                 concurrency,
-                checkpoint.as_deref(),
-            );
-            let result = match prepared {
-                Ok(command) => {
-                    let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
-                    let verification = command.verification.clone();
-                    let prefix = format!("[{}] ", index + 1);
-                    let secrets = [
-                        form.source_password.clone(),
-                        form.destination_password.clone(),
-                    ];
-                    let checkpoint_validation = if !form.dry_run
-                        && form.engine() == core::Engine::Dovecot
-                        && let Some(saved_checkpoint) = checkpoint.as_deref()
-                    {
-                        match core::dovecot_checkpoint_context(saved_checkpoint) {
-                            Some(context) => validate_dovecot_checkpoint_context(
-                                &verification,
-                                &[],
-                                &form.source_password,
-                                context,
-                                &tx,
-                                &cancel,
-                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
-                                &prefix,
-                                &child_run_id,
-                                &job_id,
-                            ),
-                            None => Err(
-                                "saved Dovecot checkpoint has no UIDVALIDITY context; refusing resume"
-                                    .into(),
-                            ),
-                        }
-                    } else {
-                        Ok(())
-                    };
-                    let result = checkpoint_validation.and_then(|()| {
-                        transfer_attempt_number = transfer_attempt_number.saturating_add(1);
-                        run_streaming(RunContext {
-                            executable: &command.executable,
-                            args: &command.args,
-                            env: &command.env,
-                            tx: &tx,
-                            run_id: &child_run_id,
-                            job_id: &job_id,
-                            project_id: &batch_project_id,
-                            prefix: &prefix,
-                            cancel: &cancel,
-                            secrets: &secrets,
-                            timeout: Duration::from_secs(
-                                form.profile.migration_timeout_hours * 60 * 60,
-                            ),
-                            dovecot_exit_two_is_delta: form.engine() == core::Engine::Dovecot
-                                && !form.dry_run,
-                            imapsync_output_profile,
-                            diagnostic_logger: None,
-                            attempt_number: transfer_attempt_number,
-                            live_transfer: live,
-                        })
-                    })
-                    .and_then(|stream| {
-                        if !form.dry_run
-                            && form.engine() == core::Engine::ImapSync
-                            && message_verification_enabled(&form)
-                        {
-                            match run_imap_message_verification(
-                                &form,
-                                &job_id,
-                                &child_run_id,
-                                &cancel,
-                                verification_state_path.as_deref().map(|path| {
-                                    core::durable_stage_path(path, &job_id)
-                                }).as_deref(),
-                            ) {
-                                Ok((evidence, mismatches)) => {
-                                    send_reliable_event(&tx, Event::BatchEvidence {
-                                        job_id: job_id.clone(),
-                                        child_run_id: child_run_id.clone(),
-                                        evidence,
-                                        mismatches,
-                                    })
-                                    .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
-                                }
-                                Err(error) => {
-                                    let safe = redact_child_text(&form, &error);
-                                    eprintln!(
-                                        "[{}] message-level IMAP verification failed: {safe}",
-                                        index + 1
-                                    );
-                                    verification_failure = Some(
-                                        safe.chars().take(2048).collect::<String>(),
-                                    );
-                                    send_run_line(&tx, &form, &child_run_id, &job_id, format!(
-                                            "[{}] message-level verification unavailable; transfer succeeded and requires review: {safe}",
-                                            index + 1
-                                        ));
-                                }
-                            }
-                        } else if !form.dry_run
-                            && terminal_evidence_source(
-                                &form,
-                                false,
-                                stream.imapsync_evidence.is_some(),
-                            ) == TerminalEvidenceSource::Engine
-                            && let Some(evidence) = stream.imapsync_evidence
-                        {
-                            send_reliable_event(&tx, Event::BatchEvidence {
-                                job_id: job_id.clone(),
-                                child_run_id: child_run_id.clone(),
-                                evidence,
-                                mismatches: Vec::new(),
-                            })
-                            .map_err(|error| format!("batch evidence delivery failed: {error}"))?;
-                        }
-                        if !form.dry_run && form.engine() == core::Engine::Dovecot {
-                            let verification_secret = form.source_password.clone();
-                            let verification_env = Vec::new();
-                            let verification_result = run_dovecot_verification(
-                                &verification,
-                                &verification_env,
-                                std::slice::from_ref(&verification_secret),
-                                &tx,
-                                &cancel,
-                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
-                                &prefix,
-                                &child_run_id,
-                                &job_id,
-                            )?;
-                            if let (Some(state), Some(context)) = (
-                                stream.dovecot_checkpoint.as_deref(),
-                                verification_result.checkpoint_context.as_deref(),
-                            ) {
-                                let value = core::encode_dovecot_checkpoint(state, context)
-                                    .ok_or_else(|| {
-                                        "Dovecot produced an invalid checkpoint context".to_owned()
-                                    })?;
-                                send_reliable_event(
-                                    &tx,
-                                    Event::Checkpoint {
-                                        run_id: child_run_id.clone(),
-                                        job_id: job_id.clone(),
-                                        value,
-                                    },
-                                )?;
-                            }
-                            send_reliable_event(
-                                &tx,
-                                Event::BatchEvidence {
-                                    job_id: job_id.clone(),
-                                    child_run_id: child_run_id.clone(),
-                                    evidence: verification_result.evidence,
-                                    mismatches: Vec::new(),
-                                },
-                            )?;
-                        }
-                        Ok(stream.outcome)
-                    });
-                    let result = if result.is_ok()
-                        && form.dry_run
-                        && form.engine() == core::Engine::Dovecot
-                    {
-                        result.and_then(|stream| {
-                            run_dovecot_destination_preflight(
-                                &form.dovecot_destination_preflight_commands(),
-                                &tx,
-                                &cancel,
-                                Duration::from_secs(form.profile.migration_timeout_hours * 60 * 60),
-                                &format!("[{}] ", index + 1),
-                                &child_run_id,
-                                &job_id,
-                            )
-                            .map(|_| stream)
-                        })
-                    } else {
-                        result
-                    };
-                    drop(cleanup_guard);
-                    result
-                }
-                Err(error) => Err(error),
-            };
+                live,
+                index,
+                job_id: job_id.clone(),
+                child_run_id: child_run_id.clone(),
+                project_id: batch_project_id.clone(),
+                tx: tx.clone(),
+                cancel: cancel.clone(),
+                imapsync_output_profile,
+                verification_state_path: verification_state_path.clone(),
+                transfer_attempt_number: &mut transfer_attempt_number,
+                verification_failure: &mut verification_failure,
+            });
             match result {
                 Ok(outcome) => {
                     if outcome == StreamOutcome::DeltaRequired {
@@ -707,26 +800,17 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                             classify_failure(&error).label()
                         ),
                     );
-                    let _ = send_reliable_event(
-                        &tx,
-                        Event::JobState {
-                            job_id: job_id.clone(),
-                            child_run_id: child_run_id.clone(),
-                            state: if cancelled { "Cancelled" } else { "Failed" }.into(),
-                        },
-                    );
-                    if let Err(delivery_error) = send_job_finished(
-                        &tx,
-                        job_id.clone(),
-                        child_run_id.clone(),
-                        if cancelled { "cancelled" } else { "failed" }.into(),
-                        classified_failure_detail(&redact_child_text(&form, &error)),
-                        None,
-                    ) {
-                        eprintln!("durable batch terminal event delivery failed: {delivery_error}");
-                    } else if let Ok(mut terminal) = terminal_jobs.lock() {
-                        terminal.insert(index);
-                    }
+                    persist_batch_terminal_state(BatchTerminalTransition {
+                        tx: &tx,
+                        terminal_jobs: &terminal_jobs,
+                        index,
+                        job_id: job_id.clone(),
+                        child_run_id: child_run_id.clone(),
+                        job_state: if cancelled { "Cancelled" } else { "Failed" },
+                        run_state: if cancelled { "cancelled" } else { "failed" },
+                        detail: classified_failure_detail(&redact_child_text(&form, &error)),
+                        credential_fingerprint: None,
+                    });
                     break;
                 }
             }
@@ -739,25 +823,19 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             } else {
                 "completed"
             };
-            let _ = send_reliable_event(
-                &tx,
-                Event::JobState {
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    state: if delta_required {
-                        "DeltaRequired"
-                    } else {
-                        "Completed"
-                    }
-                    .into(),
+            persist_batch_terminal_state(BatchTerminalTransition {
+                tx: &tx,
+                terminal_jobs: &terminal_jobs,
+                index,
+                job_id: job_id.clone(),
+                child_run_id: child_run_id.clone(),
+                job_state: if delta_required {
+                    "DeltaRequired"
+                } else {
+                    "Completed"
                 },
-            );
-            if let Err(error) = send_job_finished(
-                &tx,
-                job_id.clone(),
-                child_run_id.clone(),
-                terminal_state.into(),
-                if delta_required {
+                run_state: terminal_state,
+                detail: if delta_required {
                     "Dovecot reports that another delta pass is required".into()
                 } else {
                     verification_failure.map_or_else(
@@ -769,37 +847,24 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         },
                     )
                 },
-                if form.dry_run {
+                credential_fingerprint: if form.dry_run {
                     Some(form.credential_binding_fingerprint())
                 } else {
                     None
                 },
-            ) {
-                eprintln!("durable batch terminal event delivery failed: {error}");
-            } else if let Ok(mut terminal) = terminal_jobs.lock() {
-                terminal.insert(index);
-            }
+            });
         } else if cancel.load(Ordering::Relaxed) {
-            let _ = send_reliable_event(
-                &tx,
-                Event::JobState {
-                    job_id: job_id.clone(),
-                    child_run_id: child_run_id.clone(),
-                    state: "Cancelled".into(),
-                },
-            );
-            if let Err(error) = send_job_finished(
-                &tx,
-                job_id.clone(),
-                child_run_id.clone(),
-                "cancelled".into(),
-                "cancelled by operator".into(),
-                None,
-            ) {
-                eprintln!("durable batch terminal event delivery failed: {error}");
-            } else if let Ok(mut terminal) = terminal_jobs.lock() {
-                terminal.insert(index);
-            }
+            persist_batch_terminal_state(BatchTerminalTransition {
+                tx: &tx,
+                terminal_jobs: &terminal_jobs,
+                index,
+                job_id: job_id.clone(),
+                child_run_id: child_run_id.clone(),
+                job_state: "Cancelled",
+                run_state: "cancelled",
+                detail: "cancelled by operator".into(),
+                credential_fingerprint: None,
+            });
         }
     }
 }
@@ -831,5 +896,76 @@ mod tests {
             "destination-secret-value was refused",
         ));
         assert!(!detail.contains("destination-secret-value"), "{detail}");
+    }
+
+    #[test]
+    fn durable_batch_claim_waits_for_reducer_acknowledgement() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let cancel = AtomicBool::new(false);
+        let worker = thread::spawn(move || {
+            claim_batch_job(&tx, "project", "job", "parent", "child", &cancel)
+        });
+        let Ok(Event::ClaimBatch {
+            project_id,
+            job_id,
+            parent_run_id,
+            child_run_id,
+            reply,
+        }) = rx.recv()
+        else {
+            panic!("expected a durable batch claim request");
+        };
+        assert_eq!(project_id, "project");
+        assert_eq!(job_id, "job");
+        assert_eq!(parent_run_id, "parent");
+        assert_eq!(child_run_id, "child");
+        reply.send(Ok(())).unwrap();
+        assert!(worker.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn durable_batch_claim_preserves_reducer_rejection() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let cancel = AtomicBool::new(false);
+        let worker = thread::spawn(move || {
+            claim_batch_job(&tx, "project", "job", "parent", "child", &cancel)
+        });
+        let Ok(Event::ClaimBatch { reply, .. }) = rx.recv() else {
+            panic!("expected a durable batch claim request");
+        };
+        reply.send(Err("stale plan".to_owned())).unwrap();
+        assert!(matches!(
+            worker.join().unwrap(),
+            Err(BatchClaimError::Rejected(error)) if error == "stale plan"
+        ));
+    }
+
+    #[test]
+    fn batch_job_becomes_terminal_only_after_durable_acknowledgement() {
+        let (tx, rx) = mpsc::sync_channel(2);
+        let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
+        let worker_terminal_jobs = Arc::clone(&terminal_jobs);
+        let worker = thread::spawn(move || {
+            persist_batch_terminal_state(BatchTerminalTransition {
+                tx: &tx,
+                terminal_jobs: &worker_terminal_jobs,
+                index: 7,
+                job_id: "job".to_owned(),
+                child_run_id: "run".to_owned(),
+                job_state: "Completed",
+                run_state: "completed",
+                detail: "done".to_owned(),
+                credential_fingerprint: None,
+            });
+        });
+        assert!(matches!(rx.recv(), Ok(Event::JobState { state, .. }) if state == "Completed"));
+        let Ok(Event::JobFinished { reply, state, .. }) = rx.recv() else {
+            panic!("expected a durable JobFinished event");
+        };
+        assert_eq!(state, "completed");
+        assert!(!terminal_jobs.lock().unwrap().contains(&7));
+        reply.send(Ok(())).unwrap();
+        worker.join().unwrap();
+        assert!(terminal_jobs.lock().unwrap().contains(&7));
     }
 }
