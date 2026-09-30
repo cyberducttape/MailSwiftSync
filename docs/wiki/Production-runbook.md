@@ -21,6 +21,11 @@ capture. Batch commands require a complete queue already imported and
 validated in the GUI. These commands are not yet a persistent scheduler or
 independent supervisor.
 
+Exit status: `0` success; `2` usage error. When a single-mailbox `live` run
+finishes without a verified terminal state, the status says why: `3` delta
+required (repeat the final pass), `4` verification difference, `5` operator
+attention. Every other failure, including all batch-mode failures, exits `1`.
+
 ## Before the window
 
 - Use one operator session on a locked-down host. Do not run a second MailSwiftSync instance against the same workspace; if the instance-lock message appears, close the existing owner and do not delete the lock file.

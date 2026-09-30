@@ -994,9 +994,11 @@ pub(crate) fn run() -> eframe::Result<()> {
             ),
             HeadlessMode::BatchPreflight => {
                 headless_batch_execute_selected(&state, false, mailbox_ids.as_ref())
+                    .map_err(crate::headless::HeadlessFailure::from)
             }
             HeadlessMode::BatchLive => {
                 headless_batch_execute_selected(&state, true, mailbox_ids.as_ref())
+                    .map_err(crate::headless::HeadlessFailure::from)
             }
         };
         match result {
@@ -1004,9 +1006,10 @@ pub(crate) fn run() -> eframe::Result<()> {
                 println!("{message}");
                 return Ok(());
             }
-            Err(error) => {
-                eprintln!("Headless migration failed: {error}");
-                std::process::exit(1);
+            Err(failure) => {
+                eprintln!("Headless migration failed: {}", failure.message);
+                // 3 delta required, 4 verification difference, 5 attention.
+                std::process::exit(failure.code);
             }
         }
     }
