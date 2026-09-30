@@ -344,6 +344,8 @@ impl MessageMetadataStage {
              CREATE INDEX IF NOT EXISTS staged_messages_id ON staged_messages(side,message_id,mailbox,uidvalidity,uid);
              CREATE INDEX IF NOT EXISTS staged_messages_metadata ON staged_messages(side,date_key,size_bytes,mailbox,uidvalidity,uid);
              CREATE INDEX IF NOT EXISTS staged_messages_match_metadata ON staged_messages(side,match_mailbox,date_key,size_bytes,uidvalidity,uid);
+             CREATE INDEX IF NOT EXISTS staged_messages_exact_source ON staged_messages(message_id,match_mailbox,date_key,size_bytes) WHERE side=0 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS staged_messages_exact_destination ON staged_messages(message_id,mailbox,date_key,size_bytes,uidvalidity,uid) WHERE side=1 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL;
              CREATE TABLE IF NOT EXISTS stage_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS stage_fingerprints(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uid TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(side,mailbox,uidvalidity,uid));
              CREATE TABLE IF NOT EXISTS stage_cursors(side INTEGER NOT NULL, mailbox TEXT NOT NULL, uidvalidity INTEGER NOT NULL, uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), last_uid INTEGER NOT NULL CHECK(last_uid >= 0), completed INTEGER NOT NULL CHECK(completed IN (0,1)), PRIMARY KEY(side,mailbox));",
@@ -810,36 +812,49 @@ impl MessageMetadataStage {
 }
 
 pub(crate) fn staged_message_from_row(row: &Row<'_>) -> rusqlite::Result<StagedMessage> {
-    let uidvalidity: i64 = row.get(2)?;
-    let uid: String = row.get(3)?;
+    staged_message_from_row_at(row, 0)
+}
+
+pub(crate) fn staged_message_pair_from_row(
+    row: &Row<'_>,
+) -> rusqlite::Result<(StagedMessage, StagedMessage)> {
+    Ok((
+        staged_message_from_row_at(row, 0)?,
+        staged_message_from_row_at(row, 8)?,
+    ))
+}
+
+fn staged_message_from_row_at(row: &Row<'_>, offset: usize) -> rusqlite::Result<StagedMessage> {
+    let uidvalidity: i64 = row.get(offset + 2)?;
+    let uid: String = row.get(offset + 3)?;
     let uidvalidity = if uidvalidity >= 0 {
-        Some(
-            u64::try_from(uidvalidity)
-                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, uidvalidity))?,
-        )
+        Some(u64::try_from(uidvalidity).map_err(|_| {
+            rusqlite::Error::IntegralValueOutOfRange((offset + 2) as _, uidvalidity)
+        })?)
     } else {
         None
     };
     let size_bytes = row
-        .get::<_, Option<i64>>(7)?
+        .get::<_, Option<i64>>(offset + 7)?
         .map(|value| {
-            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(7, value))
+            u64::try_from(value)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange((offset + 7) as _, value))
         })
         .transpose()?;
     Ok(StagedMessage {
-        rowid: row.get(0)?,
+        rowid: row.get(offset)?,
         key: MailboxMessageKey::with_shared_mailbox(
-            std::sync::Arc::from(row.get::<_, String>(1)?),
+            std::sync::Arc::from(row.get::<_, String>(offset + 1)?),
             uidvalidity,
             uid.clone(),
         ),
         message: ExtractedMessage {
-            message_id: row.get(4)?,
+            message_id: row.get(offset + 4)?,
             uid: Some(uid),
             size_bytes,
-            internal_date: row.get(5)?,
+            internal_date: row.get(offset + 5)?,
         },
-        date_key: row.get(6)?,
+        date_key: row.get(offset + 6)?,
     })
 }
 

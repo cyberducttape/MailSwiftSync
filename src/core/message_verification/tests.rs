@@ -1099,6 +1099,35 @@ fn staged_fingerprint_lookups_seek_on_mapped_folder_date_and_size() {
 }
 
 #[test]
+fn staged_exact_pair_ranking_uses_compound_side_indexes() {
+    let stage = MessageMetadataStage::open_in_memory().unwrap();
+    for (sql, expected_index) in [
+        (
+            "EXPLAIN QUERY PLAN SELECT rowid,message_id,match_mailbox,date_key,size_bytes FROM staged_messages INDEXED BY staged_messages_exact_source WHERE side=0 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL ORDER BY message_id,match_mailbox,date_key,size_bytes,rowid",
+            "staged_messages_exact_source",
+        ),
+        (
+            "EXPLAIN QUERY PLAN SELECT rowid,message_id,mailbox,date_key,size_bytes,uidvalidity,uid FROM staged_messages INDEXED BY staged_messages_exact_destination WHERE side=1 AND message_id IS NOT NULL AND date_key IS NOT NULL AND size_bytes IS NOT NULL ORDER BY message_id,mailbox,date_key,size_bytes,uidvalidity,uid",
+            "staged_messages_exact_destination",
+        ),
+    ] {
+        let plan = stage
+            .connection()
+            .prepare(sql)
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+            .join(" ");
+        assert!(
+            plan.contains(expected_index),
+            "exact-pair ranking did not use {expected_index}: {plan}"
+        );
+    }
+}
+
+#[test]
 fn staged_reconciliation_matches_duplicate_and_mapping_cases() {
     let message = |id: Option<&str>, uid: &str, size: u64, date: &str| ExtractedMessage {
         message_id: id.map(str::to_owned),
@@ -1422,10 +1451,15 @@ fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
 
 /// Reconciliation on a durable (FULL-synchronous) stage, as live
 /// verification uses. Opt-in: `cargo test --release durable_stage_reconciliation_benchmark -- --ignored --nocapture`.
+/// Set `MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES` to scale the per-side row count.
 #[test]
 #[ignore = "opt-in durable-stage reconciliation benchmark"]
 fn durable_stage_reconciliation_benchmark() {
-    let messages = 20_000_usize;
+    let messages = std::env::var("MAILSWIFTSYNC_RECONCILIATION_BENCH_MESSAGES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(20_000);
+    assert!(messages > 0, "benchmark size must be positive");
     let build = |side: &str| {
         (0..messages)
             .map(|index| {
