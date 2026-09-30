@@ -2,6 +2,8 @@
 
 > A local-first mailbox migration control plane: plan, execute, verify, and audit bulk migrations with the best available engine.
 
+> **Current status: Technical Preview for experienced mail administrators.** Hosted-provider qualification and large-mailbox recovery evidence are incomplete; this is not a generally supported production migration service. The durable ledger, plan-binding safety gate, bounded execution, and customer-proof integrity checks are implemented, but their component-level availability does not imply provider-pair qualification.
+
 [![CI](https://github.com/cyberducttape/MailSwiftSync/actions/workflows/ci.yml/badge.svg)](https://github.com/cyberducttape/MailSwiftSync/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org/)
@@ -71,7 +73,7 @@ counts, exception counts, and aggregate missing/extra/modified message totals.
 
 MailSwiftSync is an early, usable 0.1 development release aimed at technical operators. The durable project ledger, dry-run safety gate, Dovecot/imapsync engine selection, streaming execution, aggregate evidence, bounded metadata-level reconciliation, and explicitly opt-in bounded body-content proof for encrypted imapsync runs are available today. Treat credential delivery, provider qualification, packaged installers, and unattended production operation as experimental or planned until the relevant release criteria are published. Portable release archives are signed/notarized when the release signing environment is configured. Linux releases also include a signed Debian package; RPM and native Windows/macOS installers are not currently shipped.
 
-Stable today:
+Stable components (implementation status; not a production-support claim):
 
 The default live imapsync result is labeled `Metadata reconciled — message bodies not compared`; only an explicitly enabled forensic profile can produce `body_hash` evidence.
 

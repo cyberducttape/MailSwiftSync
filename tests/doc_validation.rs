@@ -34,6 +34,26 @@ fn readme_mentions_production_status() {
 }
 
 #[test]
+fn readme_front_matter_identifies_technical_preview_without_implying_ga() {
+    let readme = fs::read_to_string("README.md").expect("Could not read README.md");
+    let preview = readme
+        .find("Current status: Technical Preview for experienced mail administrators")
+        .expect("README front matter must label the product as a technical preview");
+    let component_status = readme
+        .find("Stable components (implementation status; not a production-support claim)")
+        .expect("README must distinguish stable implementation from product support");
+    assert!(
+        preview < component_status,
+        "status must precede the feature list"
+    );
+    assert!(
+        readme[..component_status]
+            .contains("not a generally supported production migration service"),
+        "README front matter must state the production-support boundary explicitly"
+    );
+}
+
+#[test]
 fn production_readiness_surfaces_have_one_conservative_source() {
     assert!(
         !Path::new("docs/PRODUCTION_READINESS_REPORT_2026_09_25.md").exists(),

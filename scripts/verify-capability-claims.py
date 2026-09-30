@@ -57,11 +57,12 @@ def contains_affirmative_claim(line: str) -> bool:
 
 
 def find_status_section_violations(content: str, manifest: dict) -> list[str]:
-    """Reject manifest-marked experimental terms duplicated in stable status."""
+    """Reject manifest-marked experimental terms duplicated in component status."""
     sections = re.split(r"(?m)^Experimental or planned:\s*$", content, maxsplit=1)
-    if len(sections) != 2 or "Stable today:" not in sections[0]:
+    status_heading = "Stable components (implementation status; not a production-support claim):"
+    if len(sections) != 2 or status_heading not in sections[0]:
         return []
-    stable = sections[0].split("Stable today:", 1)[1].casefold()
+    stable = sections[0].split(status_heading, 1)[1].casefold()
     experimental = sections[1].casefold()
     violations = []
     for term in manifest.get("documentation", {}).get("experimental_only_terms", []):
@@ -69,7 +70,7 @@ def find_status_section_violations(content: str, manifest: dict) -> list[str]:
         if normalized in stable and normalized in experimental:
             violations.append(
                 "README status contradiction: manifest-marked experimental term "
-                f"{term!r} appears in both Stable today and Experimental or planned"
+                f"{term!r} appears in both stable components and Experimental or planned"
             )
     return violations
 
