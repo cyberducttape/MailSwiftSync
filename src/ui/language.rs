@@ -923,6 +923,26 @@ impl UiLanguage {
                 "⚠ {} Postfach/er sind ausgewählt, aber durch den aktuellen Filter verborgen. Sie bleiben in Stapelvorgängen enthalten."
             }
             "Review selected ({})" => "Auswahl prüfen ({})",
+            "{} selected" => "{} ausgewählt",
+            "{} ready for pilot" => "{} bereit für den Pilotlauf",
+            "{} require operator review" => "{} erfordern eine Betreiberprüfung",
+            "{} in other states; not classified as ready or review-blocked" => {
+                "{} in anderen Status; weder als bereit noch als prüfblockiert eingestuft"
+            }
+            "{} selected rows are unavailable in the loaded queue." => {
+                "{} ausgewählte Zeilen sind in der geladenen Warteschlange nicht verfügbar."
+            }
+            "Size and completion-time estimates require inventory and throughput data not recorded for these queue rows." => {
+                "Größen- und Zeitprognosen benötigen Bestands- und Durchsatzdaten, die für diese Warteschlangen nicht vorliegen."
+            }
+            "The selected mailbox is not present in the current queue." => {
+                "Das ausgewählte Postfach ist nicht in der aktuellen Warteschlange vorhanden."
+            }
+            "Migration behavior" => "Migrationsverhalten",
+            "Recorded verification inventory" => "Aufgezeichneter Verifizierungsbestand",
+            "{} folders · {} messages · {}" => "{} Ordner · {} Nachrichten · {}",
+            "Recorded plan snapshot digest: {}" => "Prüfsumme des gespeicherten Plans: {}",
+            "View complete assessment" => "Vollständige Bewertung anzeigen",
             "Selected mailbox scope remains explicit while this drawer is open." => {
                 "Der ausgewählte Postfachumfang bleibt ausdrücklich, solange diese Leiste geöffnet ist."
             }
@@ -1371,6 +1391,15 @@ mod tests {
             "Each mailbox must already have a matching successful preflight. Source mail is not deleted by default.",
             "Confirmation stale: concurrency, scope, or settings changed while dialog was open. Review the queue and try again.",
             "Review selected ({})",
+            "{} selected",
+            "{} ready for pilot",
+            "{} require operator review",
+            "{} selected rows are unavailable in the loaded queue.",
+            "Migration behavior",
+            "Recorded verification inventory",
+            "{} folders · {} messages · {}",
+            "Recorded plan snapshot digest: {}",
+            "View complete assessment",
             "No mailboxes selected.",
             "DESTRUCTIVE: destination deletion enabled",
             "Select one or more rows to enable actions.",

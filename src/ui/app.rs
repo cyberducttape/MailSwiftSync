@@ -82,13 +82,19 @@ impl eframe::App for App {
                             .language
                             .lookup(&self.status.text)
                             .unwrap_or(&self.status.text);
-                        ui.add(
+                        let status_response = ui.add(
                             egui::Label::new(
                                 egui::RichText::new(status_text)
                                     .color(status_color(self.status.severity, colors)),
                             )
-                            .truncate(),
+                            .truncate()
+                            .sense(egui::Sense::click()),
                         );
+                        status_response.clone().on_hover_text(status_text);
+                        if status_response.clicked() {
+                            self.activity_search = self.run_id.clone().unwrap_or_default();
+                            self.active_view = WorkspaceView::Activity;
+                        }
                     });
                 });
             });
@@ -201,7 +207,12 @@ impl eframe::App for App {
             egui::Panel::right("selection_review_drawer")
                 .resizable(true)
                 .default_size(320.0)
-                .show(ui, |ui| self.selection_review_drawer(ui));
+                .show(ui, |ui| {
+                    if let Some(job_id) = self.selection_review_drawer(ui) {
+                        self.job_id = Some(job_id);
+                        self.active_view = WorkspaceView::Verification;
+                    }
+                });
         }
 
         let content_frame = egui::Frame::central_panel(ui.style())

@@ -367,14 +367,16 @@ impl App {
                 );
             }
             let has_selection = !self.bulk_selected_ids.is_empty();
+            let mut open_assessment = None;
             if has_selection && ui.available_width() < 1120.0 {
-                egui::CollapsingHeader::new(
+                let inspector = egui::CollapsingHeader::new(
                     self.language
                         .text("Review selected ({})")
                         .replace("{}", &self.bulk_selected_ids.len().to_string()),
                 )
                 .id_salt("narrow_selection_inspector")
                 .show(ui, |ui| self.selection_review_drawer(ui));
+                open_assessment = inspector.body_returned.flatten();
             }
             let selected_count = self.bulk_selected_ids.len();
             let live_count = self.bulk_selection_view.live_eligible;
@@ -488,6 +490,10 @@ impl App {
                     .find(|id| self.bulk_selected_ids.contains(*id))
             {
                 self.job_id = Some(job_id.clone());
+                self.active_view = WorkspaceView::Verification;
+            }
+            if let Some(job_id) = open_assessment {
+                self.job_id = Some(job_id);
                 self.active_view = WorkspaceView::Verification;
             }
             ui.add_space(8.0);
@@ -695,7 +701,7 @@ impl App {
         }
     }
 
-    pub(crate) fn selection_review_drawer(&self, ui: &mut egui::Ui) {
+    pub(crate) fn selection_review_drawer(&self, ui: &mut egui::Ui) -> Option<String> {
         ui.heading(
             self.language
                 .text("Review selected ({})")
@@ -715,8 +721,93 @@ impl App {
                 RichText::new(self.language.text("No mailboxes selected."))
                     .color(self.theme_colors().text_secondary),
             );
-            return;
+            return None;
         }
+        let mut open_assessment = None;
+        if self.bulk_selected_ids.len() == 1 {
+            if let Some(&index) = self.bulk_selection_view.rows.first() {
+                open_assessment = self.review_card(ui, index);
+            } else {
+                ui.label(
+                    self.language
+                        .text("The selected mailbox is not present in the current queue."),
+                );
+            }
+            return open_assessment;
+        }
+
+        let ready_count = self
+            .bulk_selection_view
+            .rows
+            .iter()
+            .filter(|&&index| self.bulk_jobs[index].state == "ready")
+            .count();
+        let review_count = self
+            .bulk_selection_view
+            .rows
+            .iter()
+            .filter(|&&index| crate::ui::needs_operator_review(&self.bulk_jobs[index].state))
+            .count();
+        crate::ui::card(ui, |ui| {
+            ui.heading(
+                self.language
+                    .text("{} selected")
+                    .replace("{}", &self.bulk_selected_ids.len().to_string()),
+            );
+            ui.label(
+                RichText::new(
+                    self.language
+                        .text("{} ready for pilot")
+                        .replace("{}", &ready_count.to_string()),
+                )
+                .color(self.theme_colors().success),
+            );
+            if review_count > 0 {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("{} require operator review")
+                            .replace("{}", &review_count.to_string()),
+                    )
+                    .color(self.theme_colors().warning),
+                );
+            }
+            let other_count = self
+                .bulk_selection_view
+                .rows
+                .len()
+                .saturating_sub(ready_count + review_count);
+            if other_count > 0 {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("{} in other states; not classified as ready or review-blocked")
+                            .replace("{}", &other_count.to_string()),
+                    )
+                    .color(self.theme_colors().text_secondary),
+                );
+            }
+            let unavailable_count = self
+                .bulk_selected_ids
+                .len()
+                .saturating_sub(self.bulk_selection_view.rows.len());
+            if unavailable_count > 0 {
+                ui.label(
+                    RichText::new(
+                        self.language
+                            .text("{} selected rows are unavailable in the loaded queue.")
+                            .replace("{}", &unavailable_count.to_string()),
+                    )
+                    .color(self.theme_colors().danger),
+                );
+            }
+            ui.label(
+                RichText::new(self.language.text("Size and completion-time estimates require inventory and throughput data not recorded for these queue rows."))
+                    .small()
+                    .color(self.theme_colors().text_secondary),
+            );
+        });
+        ui.add_space(8.0);
         // Selections can cover the whole 100k-row queue, so lay out only the
         // cards in view. Every card has the same six single-line rows, which
         // gives `show_rows` a uniform height; long values truncate and show
@@ -731,20 +822,14 @@ impl App {
             .auto_shrink([false, false])
             .show_rows(ui, card_height, selected.len(), |ui, rows| {
                 for &index in &selected[rows] {
-                    self.review_card(ui, &self.bulk_jobs[index]);
+                    self.review_summary_card(ui, &self.bulk_jobs[index]);
                 }
             });
+        open_assessment
     }
 
-    fn review_card(&self, ui: &mut egui::Ui, job: &crate::bulk_import::BulkJob) {
-        // The same derived policy the batch plan counts and confirms.
+    fn review_summary_card(&self, ui: &mut egui::Ui, job: &crate::bulk_import::BulkJob) {
         let policy = job.defaults.profile.destination_mutation_policy();
-        let removes = policy.may_remove_destination_state();
-        let summary = review_state_summary(
-            self.language.text("State: {} · {}"),
-            self.language.text(crate::ui::display_job_state(&job.state)),
-            self.language.text(policy.label()),
-        );
         let line = |ui: &mut egui::Ui, text: RichText| {
             let full = text.text().to_owned();
             ui.add(egui::Label::new(text).truncate())
@@ -756,17 +841,132 @@ impl App {
             line(ui, RichText::new(&job.destination_user));
             line(ui, RichText::new(format!("{} →", job.source_host)));
             line(ui, RichText::new(&job.destination_host));
+            let (badge, color) = job_state_badge(&job.state, self.theme_colors());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(self.language.text(badge)).color(color));
+                ui.separator();
+                ui.add(
+                    egui::Label::new(RichText::new(self.language.text(policy.label())).color(
+                        if policy.may_remove_destination_state() {
+                            self.theme_colors().danger
+                        } else {
+                            self.theme_colors().text_primary
+                        },
+                    ))
+                    .truncate(),
+                )
+                .on_hover_text(self.language.text(policy.warning()));
+            });
+        });
+    }
+
+    fn review_card(&self, ui: &mut egui::Ui, index: usize) -> Option<String> {
+        let job = &self.bulk_jobs[index];
+        let job_id = self.bulk_job_ids.get(index)?;
+        // The same derived policy the batch plan counts and confirms.
+        let policy = job.defaults.profile.destination_mutation_policy();
+        let removes = policy.may_remove_destination_state();
+        let line = |ui: &mut egui::Ui, text: RichText| {
+            let full = text.text().to_owned();
+            ui.add(egui::Label::new(text).truncate())
+                .on_hover_text(full);
+        };
+        let evidence = self
+            .ui_snapshot
+            .verification_rows
+            .iter()
+            .find(|row| row.job.id == *job_id);
+        let show_assessment = evidence.is_some();
+        let mut open_assessment = false;
+        crate::ui::card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading(&job.label);
+                let (badge, color) = job_state_badge(&job.state, self.theme_colors());
+                crate::ui::pill(ui, self.language.text(badge), color);
+            });
+            ui.separator();
+            ui.strong(self.language.text("Source"));
+            line(ui, RichText::new(&job.source_user).strong());
+            line(ui, RichText::new(&job.source_host).small());
+            ui.add_space(4.0);
+            ui.strong(self.language.text("Destination"));
+            line(ui, RichText::new(&job.destination_user).strong());
+            line(ui, RichText::new(&job.destination_host).small());
+            ui.add_space(4.0);
+            ui.strong(self.language.text("Migration behavior"));
             line(
                 ui,
-                if removes {
-                    RichText::new(summary)
-                        .strong()
-                        .color(self.theme_colors().danger)
-                } else {
-                    RichText::new(summary)
-                },
+                RichText::new(self.language.text(policy.label()))
+                    .strong()
+                    .color(if removes {
+                        self.theme_colors().danger
+                    } else {
+                        self.theme_colors().text_primary
+                    }),
             );
+            line(
+                ui,
+                RichText::new(self.language.text(policy.warning()))
+                    .small()
+                    .color(if removes {
+                        self.theme_colors().danger
+                    } else {
+                        self.theme_colors().text_secondary
+                    }),
+            );
+            if let Some((_, inventory, snapshot)) = evidence.and_then(|row| row.evidence.as_ref()) {
+                ui.add_space(4.0);
+                ui.strong(self.language.text("Recorded verification inventory"));
+                line(
+                    ui,
+                    RichText::new(
+                        self.language
+                            .text("{} folders · {} messages · {}")
+                            .replacen("{}", &inventory.source_folders.to_string(), 1)
+                            .replacen("{}", &inventory.source_messages.to_string(), 1)
+                            .replacen("{}", &format_data_size(inventory.source_bytes), 1),
+                    ),
+                );
+                if let Some(snapshot) = snapshot {
+                    let digest = crate::plan_identity::fingerprint_digest(snapshot);
+                    line(
+                        ui,
+                        RichText::new(
+                            self.language
+                                .text("Recorded plan snapshot digest: {}")
+                                .replace("{}", &digest[..12]),
+                        )
+                        .small(),
+                    );
+                }
+            }
+            if show_assessment
+                && ui
+                    .button(self.language.text("View complete assessment"))
+                    .clicked()
+            {
+                open_assessment = true;
+            }
         });
+        if open_assessment {
+            return Some(job_id.clone());
+        }
+        None
+    }
+}
+
+fn format_data_size(bytes: u64) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    const KIB: f64 = 1024.0;
+    if bytes >= GIB as u64 {
+        format!("{:.1} GiB", bytes as f64 / GIB)
+    } else if bytes >= MIB as u64 {
+        format!("{:.1} MiB", bytes as f64 / MIB)
+    } else if bytes >= KIB as u64 {
+        format!("{:.1} KiB", bytes as f64 / KIB)
+    } else {
+        format!("{bytes} B")
     }
 }
 
@@ -783,29 +983,15 @@ pub(crate) struct SelectionView {
     pub(crate) delta_eligible: usize,
 }
 
-/// Fill the review drawer's "State: {} · {}" template. Each placeholder is
-/// replaced once, in order, so the destination-deletion status is never
-/// overwritten by the state.
-fn review_state_summary(template: &str, state: &str, deletion: &str) -> String {
-    template
-        .replacen("{}", state, 1)
-        .replacen("{}", deletion, 1)
-}
-
 #[cfg(test)]
-mod review_drawer_tests {
-    use super::review_state_summary;
+mod selection_inspector_tests {
+    use super::format_data_size;
 
     #[test]
-    fn review_summary_shows_state_and_destination_deletion_status() {
-        let summary = review_state_summary(
-            "State: {} · {}",
-            "Ready",
-            "DESTRUCTIVE: destination deletion enabled",
-        );
-        assert_eq!(
-            summary,
-            "State: Ready · DESTRUCTIVE: destination deletion enabled"
-        );
+    fn recorded_data_size_uses_readable_binary_units_without_rounding_small_values_to_zero() {
+        assert_eq!(format_data_size(0), "0 B");
+        assert_eq!(format_data_size(1536), "1.5 KiB");
+        assert_eq!(format_data_size(2 * 1024 * 1024), "2.0 MiB");
+        assert_eq!(format_data_size(3 * 1024 * 1024 * 1024), "3.0 GiB");
     }
 }

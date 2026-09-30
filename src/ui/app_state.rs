@@ -263,7 +263,10 @@ impl App {
                 verification_offset: self.verification_offset,
                 load_report: matches!(
                     self.active_view,
-                    WorkspaceView::Overview | WorkspaceView::Activity | WorkspaceView::Verification
+                    WorkspaceView::Overview
+                        | WorkspaceView::Mailboxes
+                        | WorkspaceView::Activity
+                        | WorkspaceView::Verification
                 ),
                 load_runs: self.active_view == WorkspaceView::Activity,
             },
