@@ -269,11 +269,16 @@ const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
 const MESSAGE_UID_SEARCH_WINDOW_SIZE: u64 = 10_000;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
+pub(crate) const MAX_BODY_HASH_MESSAGES_PER_ENDPOINT: usize = 100_000;
 // This is a fail-closed bound for one fetched page's transient Rust state. Live
 // metadata is staged into SQLite immediately after parsing, so the bound is
 // released after each staged page rather than accumulating with account size.
 const MAX_ESTIMATED_FETCHED_STATE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_MAILBOX_STABILITY_ATTEMPTS: usize = 2;
+
+fn body_hash_message_limit_exceeded(existing: usize, incoming: usize) -> bool {
+    existing.saturating_add(incoming) > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
+}
 
 pub(crate) struct MessageFetchBudget<'a> {
     deadline: Instant,
@@ -492,7 +497,12 @@ impl MessageSink for StageMessageSink<'_> {
         mailbox: &str,
         snapshot: crate::core::FolderSnapshot,
     ) -> Result<Option<u64>, String> {
-        self.stage.resume_mailbox(self.side, mailbox, snapshot)
+        let cursor = self.stage.resume_mailbox(self.side, mailbox, snapshot)?;
+        self.count = self
+            .stage
+            .count(self.side)
+            .map_err(|error| error.to_string())? as usize;
+        Ok(cursor)
     }
 
     fn checkpoint_page(
@@ -1536,6 +1546,11 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         resume_after_uid,
         |stream, buffer, uid_page| {
             budget.check()?;
+            if body_hash.is_some() && body_hash_message_limit_exceeded(sink.len(), uid_page.len()) {
+                return Err(format!(
+                    "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
+                ));
+            }
             let tag = format!("v{:03}", page_number + 3);
             page_number = page_number.saturating_add(1);
             let uid_set = uid_page
@@ -2037,6 +2052,11 @@ pub(crate) fn fetch_tls_account_messages_to_stage_with_body_hashes(
     side: crate::core::StagedMessageSide,
 ) -> Result<FetchedAccountSummary, String> {
     let count = stage.count(side).map_err(|error| error.to_string())? as usize;
+    if body_hash.is_some() && count > MAX_BODY_HASH_MESSAGES_PER_ENDPOINT {
+        return Err(format!(
+            "{host}: body-hash proof is limited to {MAX_BODY_HASH_MESSAGES_PER_ENDPOINT} messages per endpoint; use metadata-only verification above that envelope"
+        ));
+    }
     let mut sink = StageMessageSink { stage, side, count };
     fetch_tls_account_messages_with_sink(
         host,
@@ -2597,6 +2617,19 @@ mod tests {
         let with_fingerprint =
             super::estimated_message_record_bytes(&key, &message, Some(&"a".repeat(64)));
         assert_eq!(with_fingerprint - without_fingerprint, 64);
+    }
+
+    #[test]
+    fn body_hash_message_envelope_is_enforced_before_the_next_fetch_page() {
+        assert!(!super::body_hash_message_limit_exceeded(
+            super::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT - 32,
+            32
+        ));
+        assert!(super::body_hash_message_limit_exceeded(
+            super::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT - 31,
+            32
+        ));
+        assert!(super::body_hash_message_limit_exceeded(usize::MAX, 1));
     }
 
     #[test]

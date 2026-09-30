@@ -584,9 +584,30 @@ impl MessageMetadataStage {
         if let Some((stored_validity, stored_next, stored_exists, last_uid)) = cursor
             && (stored_validity, stored_next, stored_exists) == (uidvalidity, uidnext, exists)
         {
-            return u64::try_from(last_uid)
-                .map(Some)
-                .map_err(|_| "verification stage cursor is corrupt".to_owned());
+            let last_uid = u64::try_from(last_uid)
+                .map_err(|_| "verification stage cursor is corrupt".to_owned())?;
+            // A crash may occur after inserting a page but before committing
+            // its cursor. Discard that uncheckpointed tail so it is fetched
+            // exactly once after restart (including its body fingerprints).
+            let tx = self
+                .connection_ref()
+                .unchecked_transaction()
+                .map_err(|e| e.to_string())?;
+            for table in ["staged_messages", "stage_fingerprints"] {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE side=?1 AND mailbox=?2 AND CAST(uid AS INTEGER)>?3"),
+                    params![side.as_i64(), mailbox, last_uid as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            self.content_fingerprints
+                .retain(|(fingerprint_side, key), _| {
+                    *fingerprint_side != side
+                        || key.mailbox.as_ref() != mailbox
+                        || key.uid.parse::<u64>().is_ok_and(|uid| uid <= last_uid)
+                });
+            return Ok(Some(last_uid));
         }
         let tx = self
             .connection_ref()
@@ -1089,6 +1110,54 @@ mod tests {
         let stage = MessageMetadataStage::open_durable(path, "plan").unwrap();
         assert!(stage.content_fingerprints(side).is_empty());
         drop(stage);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn resume_discards_rows_and_fingerprints_after_last_checkpoint() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let side = StagedMessageSide::Source;
+        let folder = snapshot(42, 33, 32);
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+        stage.resume_mailbox(side, "INBOX", folder).unwrap();
+        let checkpointed = page(42, 1..=16);
+        let checkpointed_fingerprints = checkpointed
+            .keys()
+            .map(|key| (key.clone(), format!("fingerprint-{}", key.uid)))
+            .collect::<HashMap<_, _>>();
+        stage
+            .insert_messages_with_fingerprints(side, &checkpointed, &checkpointed_fingerprints)
+            .unwrap();
+        stage.checkpoint_page(side, "INBOX", folder, 16).unwrap();
+
+        // Simulate a crash after the next page's rows are committed but before
+        // its cursor checkpoint reaches disk.
+        let uncheckpointed = page(42, 17..=32);
+        let uncheckpointed_fingerprints = uncheckpointed
+            .keys()
+            .map(|key| (key.clone(), format!("fingerprint-{}", key.uid)))
+            .collect::<HashMap<_, _>>();
+        stage
+            .insert_messages_with_fingerprints(side, &uncheckpointed, &uncheckpointed_fingerprints)
+            .unwrap();
+        assert_eq!(stage.count(side).unwrap(), 32);
+        assert_eq!(stage.content_fingerprints(side).len(), 32);
+        drop(stage);
+
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+        assert_eq!(
+            stage.resume_mailbox(side, "INBOX", folder).unwrap(),
+            Some(16)
+        );
+        assert_eq!(stage.count(side).unwrap(), 16);
+        assert_eq!(stage.content_fingerprints(side).len(), 16);
+        stage
+            .insert_messages_with_fingerprints(side, &uncheckpointed, &uncheckpointed_fingerprints)
+            .unwrap();
+        assert_eq!(stage.count(side).unwrap(), 32);
+        assert_eq!(stage.content_fingerprints(side).len(), 32);
+        stage.finish().unwrap();
         let _ = std::fs::remove_dir_all(directory);
     }
 

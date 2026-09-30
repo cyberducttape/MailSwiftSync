@@ -12,6 +12,7 @@ fn doc_files_exist() {
 
     let expected_files = vec![
         "architecture.md",
+        "verification-envelope.md",
         "history/message-level-verification-design.md",
         "history/scheduler-design.md",
         "provider-testing-guide.md",

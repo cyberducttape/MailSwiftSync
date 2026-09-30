@@ -189,7 +189,7 @@ new metadata verifier against real accounts.
 - ⏳ Successful live pilots with real data
 - ⏳ Recovery/interruption testing with production accounts
 - ⏳ Provider-specific edge case validation
-- ⏳ Load testing with large migrations (100k+ messages)
+- ⚠️ Synthetic durable SQLite reconciliation benchmark measured 100k messages per endpoint; end-to-end large-mailbox/provider load qualification (100k+ messages) remains outstanding. See [verification envelope](docs/verification-envelope.md).
 
 ---
 

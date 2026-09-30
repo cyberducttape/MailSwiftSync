@@ -15,6 +15,14 @@ pub(crate) fn password_visibility_id(title: &str) -> egui::Id {
     egui::Id::new(("password_visibility", title))
 }
 
+fn authorization_missing(
+    local_dovecot: bool,
+    saved_credential: bool,
+    has_session_credential: bool,
+) -> bool {
+    !local_dovecot && !saved_credential && !has_session_credential
+}
+
 /// Render one source or destination account editor. The form controller owns
 /// the values; this module owns only their presentation and validation hints.
 #[allow(clippy::too_many_arguments)]
@@ -26,7 +34,6 @@ pub(crate) fn render_account(
     user: &mut String,
     auth_method: &mut String,
     password: &mut SecretString,
-    password_required: bool,
     saved_credential: bool,
     color: Color32,
 ) {
@@ -76,7 +83,21 @@ pub(crate) fn render_account(
             )
         });
         inline_error(ui, language.text("User"), user, true);
-        ui.collapsing(language.text("Account authorization"), |ui| {
+        let local_dovecot = title.to_lowercase().contains("dovecot");
+        let authorization_missing =
+            authorization_missing(local_dovecot, saved_credential, !password.is_empty());
+        let authorization_heading = if authorization_missing {
+            RichText::new(format!("⚠ {}", language.text("Account authorization")))
+                .strong()
+                .color(danger)
+        } else {
+            RichText::new(language.text("Account authorization"))
+        };
+        egui::CollapsingHeader::new(authorization_heading)
+            .id_salt(("account_authorization", title))
+            .default_open(authorization_missing)
+            .open(authorization_missing.then_some(true))
+            .show(ui, |ui| {
         crate::ui::form_row(ui, language.text("Authentication"), |ui| {
             egui::ComboBox::from_id_salt(("auth_method", title))
                 .selected_text(if auth_method_is_oauth(auth_method) {
@@ -154,19 +175,10 @@ pub(crate) fn render_account(
                     "Password"
                 }),
                 password.as_str(),
-                password_required && !saved_credential,
+                authorization_missing,
             );
         }
-        });
-        if !saved_credential && password.is_empty() {
-            ui.label(
-                RichText::new(
-                    language.text("Expand account authorization to add a password or OAuth token."),
-                )
-                .small()
-                .color(ui.visuals().weak_text_color()),
-            );
-        }
+            });
     });
 }
 
@@ -652,8 +664,18 @@ fn manual_oauth_refresh_marker(form: &crate::migration_plan::Form, source: bool)
 
 #[cfg(test)]
 mod tests {
-    use super::{manual_oauth_refresh_marker, store_oauth_refresh_editor_values};
+    use super::{
+        authorization_missing, manual_oauth_refresh_marker, store_oauth_refresh_editor_values,
+    };
     use crate::migration_plan::Form;
+
+    #[test]
+    fn missing_account_authorization_expands_but_saved_or_local_auth_does_not() {
+        assert!(authorization_missing(false, false, false));
+        assert!(!authorization_missing(false, true, false));
+        assert!(!authorization_missing(false, false, true));
+        assert!(!authorization_missing(true, false, false));
+    }
 
     #[test]
     fn manual_refresh_marker_is_side_scoped_and_never_contains_token_material() {

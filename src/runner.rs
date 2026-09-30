@@ -78,7 +78,6 @@ pub(crate) fn message_verification_enabled(form: &crate::Form) -> bool {
 
 const MAX_BODY_HASH_BYTES_PER_MESSAGE: u64 = 64 * 1024 * 1024;
 const MAX_BODY_HASH_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const MAX_BODY_HASH_MESSAGES_IN_MEMORY: u64 = 100_000;
 
 pub(crate) fn validate_body_hash_limits(form: &crate::Form) -> Result<(), String> {
     if !form.profile.body_hash_verification {
@@ -272,9 +271,10 @@ pub(crate) fn run_imap_message_verification(
             core::StagedMessageSide::Destination,
         ] {
             let count = stage.count(side).map_err(|error| error.to_string())?;
-            if count > MAX_BODY_HASH_MESSAGES_IN_MEMORY {
+            if count > crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT as u64 {
                 return Err(format!(
-                    "body-hash verification refuses to load more than {MAX_BODY_HASH_MESSAGES_IN_MEMORY} messages per side into the forensic reconciler (requested {count})"
+                    "body-hash verification refuses to load more than {} messages per endpoint into the forensic reconciler (requested {count})",
+                    crate::imap_probe::MAX_BODY_HASH_MESSAGES_PER_ENDPOINT
                 ));
             }
         }

@@ -2,6 +2,31 @@ use crate::ui::format_phase_name;
 use crate::ui::status_color;
 use crate::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanWorkflowStep {
+    Assess,
+    TestAccounts,
+    DryPreflight,
+    StartLive,
+}
+
+fn plan_workflow_step(
+    assessment_complete: bool,
+    dovecot: bool,
+    account_test_current: bool,
+    live_preflight_current: bool,
+) -> PlanWorkflowStep {
+    if !assessment_complete {
+        PlanWorkflowStep::Assess
+    } else if !dovecot && !account_test_current {
+        PlanWorkflowStep::TestAccounts
+    } else if live_preflight_current {
+        PlanWorkflowStep::StartLive
+    } else {
+        PlanWorkflowStep::DryPreflight
+    }
+}
+
 impl eframe::App for App {
     /// Runs before every frame and, unlike `ui`, also while the window is
     /// minimized or hidden, so a running migration keeps draining events.
@@ -253,6 +278,43 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn current_dry_preflight_ready(&self) -> bool {
+        let Some(job_id) = self.job_id.as_deref() else {
+            return false;
+        };
+        let current_credentials = self.form.credential_binding_fingerprint();
+        if self.preflight_credential_fingerprint.as_deref() != Some(current_credentials.as_str()) {
+            return false;
+        }
+        let current_plan = crate::plan_identity::fingerprint_digest(&self.form.plan_fingerprint());
+        let durable_plan_matches = matches!(
+            self.store.preflight_plan(job_id),
+            Ok(Some(ref fingerprint)) if fingerprint == &current_plan
+        );
+        let mailbox_ready = matches!(
+            self.store.mailbox_state(job_id),
+            Ok(Some(ref state)) if state == "ready" || state == "delta_required"
+        );
+        let project_ready = self.project_id.as_deref().is_some_and(|project_id| {
+            self.store
+                .project(project_id)
+                .ok()
+                .flatten()
+                .is_some_and(|project| {
+                    matches!(
+                        project.phase,
+                        core::Phase::Preflight
+                            | core::Phase::Pilot
+                            | core::Phase::Seed
+                            | core::Phase::CatchUp
+                            | core::Phase::FinalDelta
+                            | core::Phase::Verification
+                    )
+                })
+        });
+        durable_plan_matches && mailbox_ready && project_ready
+    }
+
     fn plan_view(&mut self, ui: &mut egui::Ui) {
         let colors = self.theme_colors();
         crate::ui::page_header(
@@ -262,6 +324,29 @@ impl App {
                 .text("Choose the systems and accounts involved in this migration."),
         );
         crate::ui::card(ui, |ui| {
+            crate::ui::section_label(ui, self.language.text("Migration method"));
+            ui.horizontal_wrapped(|ui| {
+                ui.radio_value(
+                    &mut self.form.profile.engine,
+                    core::Engine::ImapSync,
+                    self.language.text("Standard IMAP migration (imapsync)"),
+                );
+                ui.radio_value(
+                    &mut self.form.profile.engine,
+                    core::Engine::Dovecot,
+                    self.language.text("Local Dovecot migration (doveadm)"),
+                );
+            });
+            ui.label(
+                egui::RichText::new(self.language.text(if self.form.engine() == core::Engine::Dovecot {
+                    "Advanced method: runs local Dovecot tools and follows Dovecot-specific destination semantics."
+                } else {
+                    "Recommended for provider-to-provider moves; runs the imapsync engine."
+                }))
+                .small()
+                .color(colors.text_secondary),
+            );
+            ui.add_space(8.0);
             crate::ui::form_row(ui, self.language.text("Plan name"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.name).desired_width(360.0))
             });
@@ -276,22 +361,6 @@ impl App {
             )
             .id_salt("advanced_migration_settings")
             .show(ui, |ui| {
-                crate::ui::form_row(ui, self.language.text("Engine"), |ui| {
-                    for (engine, label) in [
-                        (core::Engine::ImapSync, "imapsync"),
-                        (core::Engine::Dovecot, "Dovecot"),
-                    ] {
-                        let selected = self.form.engine() == engine;
-                        if ui
-                            .add(
-                                egui::Button::selectable(selected, label).frame_when_inactive(true),
-                            )
-                            .clicked()
-                        {
-                            self.form.profile.engine = engine;
-                        }
-                    }
-                });
                 crate::ui::form_row(ui, self.language.text("Tools"), |ui| {
                     if ui
                         .button(format!("{}…", self.language.text("OS keyring credentials")))
@@ -386,84 +455,117 @@ impl App {
         ui.add_space(16.0);
         crate::ui::card(ui, |ui| self.provider_runbook_panel(ui));
         ui.add_space(16.0);
+        let current_plan = crate::plan_identity::fingerprint_digest(&self.form.plan_fingerprint());
+        let account_test_current = crate::controller::capability_observation_matches(
+            self.capability_observation_fingerprint.as_deref(),
+            &current_plan,
+        ) && self.source_capabilities.is_some()
+            && self.destination_capabilities.is_some();
+        let workflow_step = plan_workflow_step(
+            !self.preflight.is_empty(),
+            dovecot,
+            account_test_current,
+            self.current_dry_preflight_ready(),
+        );
         crate::ui::card(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .button(self.language.text("Save / create project"))
-                    .clicked()
-                {
-                    self.create_project();
+            crate::ui::section_label(ui, self.language.text("MIGRATION WORKFLOW"));
+            if self.running() {
+                if ui.button(self.language.text("Stop migration")).clicked() {
+                    self.stop_confirm_open = true;
+                    self.stop_confirm_focus_requested = false;
                 }
-                if ui.button(self.language.text("Save profile")).clicked() {
-                    match self.form.save() {
-                        Ok(()) => self.set_status(
-                            self.language
-                                .text("Profile saved without credential material."),
-                            StatusSeverity::Success,
-                        ),
-                        Err(error) => self.set_status(
-                            format!("{}: {error}", self.language.text("Could not save profile")),
-                            StatusSeverity::Error,
-                        ),
+            } else {
+                let label = match workflow_step {
+                    PlanWorkflowStep::Assess => self.language.text("Assess configuration"),
+                    PlanWorkflowStep::TestAccounts => {
+                        if self.capability_receiver.is_some() {
+                            self.language.text("Testing accounts…")
+                        } else {
+                            self.language.text("Test accounts and inspect namespaces")
+                        }
                     }
-                }
-                if ui.button(self.language.text("Assess plan")).clicked() {
-                    self.assess_plan();
-                }
-                if ui.button(self.language.text("Preview command")).clicked() {
-                    self.preview = true;
-                }
-                if ui.button(self.language.text("Advanced")).clicked() {
-                    self.advanced_open = true;
-                }
-                if ui
-                    .add_enabled(
-                        !dovecot && !self.running(),
-                        egui::Button::new(
-                            self.language.text("Test accounts and inspect namespaces"),
-                        ),
-                    )
-                    .clicked()
-                {
-                    self.start_capability_probe();
-                }
-                ui.separator();
-                if self.running() {
-                    if ui.button(self.language.text("Stop migration")).clicked() {
-                        self.stop_confirm_open = true;
-                        self.stop_confirm_focus_requested = false;
-                    }
-                } else if self.form.dry_run {
-                    // Engine dry run: validates access and folder mapping
-                    // without changing the destination.
-                    if crate::ui::primary_button(ui, self.language.text("Run preflight")).clicked()
-                    {
-                        self.start();
-                    }
+                    PlanWorkflowStep::DryPreflight => self.language.text("Run preflight"),
+                    PlanWorkflowStep::StartLive => self.language.text("Start live migration"),
+                };
+                let in_flight = workflow_step == PlanWorkflowStep::TestAccounts
+                    && self.capability_receiver.is_some();
+                let clicked = if in_flight {
+                    ui.add_enabled(false, egui::Button::new(label)).clicked()
                 } else {
-                    let live = egui::Button::new(
-                        egui::RichText::new(self.language.text("Start live migration"))
-                            .strong()
-                            .color(egui::Color32::WHITE),
-                    )
-                    .fill(colors.danger.gamma_multiply(0.85));
-                    // `start` opens the live confirmation before anything runs.
-                    if ui.add(live).clicked() {
-                        self.start();
+                    crate::ui::primary_button(ui, label).clicked()
+                };
+                if clicked {
+                    match workflow_step {
+                        PlanWorkflowStep::Assess => self.assess_plan(),
+                        PlanWorkflowStep::TestAccounts => self.start_capability_probe(),
+                        PlanWorkflowStep::DryPreflight => {
+                            self.form.dry_run = true;
+                            self.start();
+                        }
+                        PlanWorkflowStep::StartLive => {
+                            self.form.dry_run = false;
+                            self.start();
+                        }
                     }
                 }
-            });
-            if self.form.dry_run {
-                ui.label(
-                    egui::RichText::new(
-                        self.language
-                            .text("Preflight runs the engine without changing the destination. Clear Dry run / preflight to start a live migration."),
-                    )
+            }
+            let workflow_hint = match workflow_step {
+                PlanWorkflowStep::Assess => {
+                    "Review the proposed plan before testing either account."
+                }
+                PlanWorkflowStep::TestAccounts => {
+                    "Authenticate both IMAP accounts and inspect folder namespaces."
+                }
+                PlanWorkflowStep::DryPreflight => {
+                    "Run the engine's non-writing preflight after account testing."
+                }
+                PlanWorkflowStep::StartLive => {
+                    "The exact plan passed dry preflight; live execution still requires explicit confirmation."
+                }
+            };
+            ui.label(
+                egui::RichText::new(self.language.text(workflow_hint))
                     .small()
                     .color(colors.text_secondary),
-                );
-            }
+            );
         });
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new(self.language.text("Plan tools"))
+            .id_salt("plan_tools")
+            .show(ui, |ui| {
+                crate::ui::card(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .button(self.language.text("Save / create project"))
+                            .clicked()
+                        {
+                            self.create_project();
+                        }
+                        if ui.button(self.language.text("Save profile")).clicked() {
+                            match self.form.save() {
+                                Ok(()) => self.set_status(
+                                    self.language
+                                        .text("Profile saved without credential material."),
+                                    StatusSeverity::Success,
+                                ),
+                                Err(error) => self.set_status(
+                                    format!(
+                                        "{}: {error}",
+                                        self.language.text("Could not save profile")
+                                    ),
+                                    StatusSeverity::Error,
+                                ),
+                            }
+                        }
+                        if ui.button(self.language.text("Preview command")).clicked() {
+                            self.preview = true;
+                        }
+                        if ui.button(self.language.text("Advanced")).clicked() {
+                            self.advanced_open = true;
+                        }
+                    });
+                });
+            });
     }
 
     fn endpoint_plan_panel(
@@ -475,11 +577,6 @@ impl App {
     ) {
         self.provider_field(ui, source);
         let language = self.language;
-        let password_required = if source {
-            !auth_method_is_oauth(&self.form.profile.source_auth)
-        } else {
-            !dovecot && !auth_method_is_oauth(&self.form.profile.destination_auth)
-        };
         let saved_credential = if source {
             !self.form.profile.source_credential_id.trim().is_empty()
         } else {
@@ -499,7 +596,6 @@ impl App {
                 &mut self.form.profile.source_user,
                 &mut self.form.profile.source_auth,
                 &mut self.form.source_password,
-                password_required,
                 saved_credential,
                 color,
             );
@@ -518,7 +614,6 @@ impl App {
                 &mut self.form.profile.destination_user,
                 &mut self.form.profile.destination_auth,
                 &mut self.form.destination_password,
-                password_required,
                 saved_credential,
                 color,
             );
@@ -729,6 +824,39 @@ impl App {
                         }
                     });
             },
+        );
+    }
+}
+
+#[cfg(test)]
+mod workflow_tests {
+    use super::{PlanWorkflowStep, plan_workflow_step};
+
+    #[test]
+    fn plan_actions_follow_assess_test_preflight_live_sequence() {
+        assert_eq!(
+            plan_workflow_step(false, false, false, false),
+            PlanWorkflowStep::Assess
+        );
+        assert_eq!(
+            plan_workflow_step(true, false, false, false),
+            PlanWorkflowStep::TestAccounts
+        );
+        assert_eq!(
+            plan_workflow_step(true, false, true, false),
+            PlanWorkflowStep::DryPreflight
+        );
+        assert_eq!(
+            plan_workflow_step(true, false, true, true),
+            PlanWorkflowStep::StartLive
+        );
+    }
+
+    #[test]
+    fn local_dovecot_skips_unsupported_imap_probe_step() {
+        assert_eq!(
+            plan_workflow_step(true, true, false, false),
+            PlanWorkflowStep::DryPreflight
         );
     }
 }

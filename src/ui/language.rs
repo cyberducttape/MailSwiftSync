@@ -497,6 +497,30 @@ impl UiLanguage {
                 "Konfigurieren Sie Endpunkte und Zugangsdaten, bevor Sie eine Vorabprüfung ausführen."
             }
             "Plan name" => "Planname",
+            "Plan tools" => "Planwerkzeuge",
+            "Assess configuration" => "Konfiguration bewerten",
+            "Testing accounts…" => "Konten werden getestet…",
+            "Review the proposed plan before testing either account." => {
+                "Prüfen Sie den vorgeschlagenen Plan, bevor Sie eines der Konten testen."
+            }
+            "Authenticate both IMAP accounts and inspect folder namespaces." => {
+                "Authentifizieren Sie beide IMAP-Konten und prüfen Sie die Ordner-Namespaces."
+            }
+            "Run the engine's non-writing preflight after account testing." => {
+                "Führen Sie nach dem Kontentest die schreibgeschützte Engine-Vorabprüfung aus."
+            }
+            "The exact plan passed dry preflight; live execution still requires explicit confirmation." => {
+                "Der genaue Plan hat die Probelauf-Vorabprüfung bestanden; die Live-Ausführung erfordert weiterhin eine ausdrückliche Bestätigung."
+            }
+            "Migration method" => "Migrationsmethode",
+            "Standard IMAP migration (imapsync)" => "Standard-IMAP-Migration (imapsync)",
+            "Local Dovecot migration (doveadm)" => "Lokale Dovecot-Migration (doveadm)",
+            "Advanced method: runs local Dovecot tools and follows Dovecot-specific destination semantics." => {
+                "Erweiterte Methode: Führt lokale Dovecot-Werkzeuge aus und folgt der Dovecot-spezifischen Zielsemantik."
+            }
+            "Recommended for provider-to-provider moves; runs the imapsync engine." => {
+                "Für Migrationen zwischen Anbietern empfohlen; verwendet die imapsync-Engine."
+            }
             "Source" => "Quelle",
             "Destination" => "Ziel",
             "Source account" => "Quellkonto",

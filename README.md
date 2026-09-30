@@ -233,7 +233,12 @@ bounded UID-window enumeration; it no longer materializes a mailbox-wide
 database and reconciled in bounded batches, so the live path does not retain
 both account-wide message maps in Rust. Mismatch detail remains bounded; the
 opt-in body path deliberately loads only bounded metadata maps after hashing,
-and live large-provider qualification remains outstanding.
+and live large-provider qualification remains outstanding. The current
+implementation ceilings are 1,000,000 messages per endpoint for metadata
+reconciliation and 100,000 messages per endpoint plus 8 GiB of combined
+source/destination body bytes for body proof (512 MiB default). These are not
+provider-qualified capacity claims; benchmark scope and limitations are in the
+[verification envelope](docs/verification-envelope.md).
 
 The structured project report is a portable Migration Proof: it contains a deterministic `proof_digest` covering the report's semantic JSON content. Verify an archived or customer-shared report independently with:
 
