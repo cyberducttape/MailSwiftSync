@@ -73,6 +73,13 @@ pub(crate) enum Event {
         job_id: String,
         count: u64,
     },
+    TransferAttempt {
+        run_id: String,
+        job_id: String,
+        attempt: u32,
+        status: TransferAttemptStatus,
+        reply: mpsc::SyncSender<Result<(), String>>,
+    },
     RunLine {
         run_id: String,
         job_id: String,
@@ -139,6 +146,36 @@ pub(crate) enum Event {
     Finished(Result<StreamOutcome, String>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransferAttemptStatus {
+    Started,
+    Completed,
+    DeltaRequired,
+    Failed { failure_class: &'static str },
+}
+
+impl TransferAttemptStatus {
+    pub(crate) fn durable_outcome(self) -> Option<&'static str> {
+        Some(match self {
+            Self::Started => return None,
+            Self::Completed => "completed",
+            Self::DeltaRequired => "delta_required",
+            Self::Failed { failure_class } => match failure_class {
+                "authentication" => "failed:authentication",
+                "capacity" => "failed:capacity",
+                "transport" => "failed:transport",
+                "quota" => "failed:quota",
+                "message" => "failed:message",
+                "verification" => "failed:verification",
+                "cancelled" => "failed:cancelled",
+                "configuration" => "failed:configuration",
+                "unknown" => "failed:unknown",
+                _ => "failed:other",
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StreamOutcome {
     Completed,
@@ -147,7 +184,7 @@ pub(crate) enum StreamOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{process_event_is_current, run_line_is_current};
+    use super::{TransferAttemptStatus, process_event_is_current, run_line_is_current};
     use crate::controller::run::{ActiveRunContext, RunKind};
     use std::collections::{HashMap, HashSet};
 
@@ -198,5 +235,24 @@ mod tests {
             "run-other",
             "job-a"
         ));
+    }
+
+    #[test]
+    fn transfer_attempt_status_is_bounded_and_excludes_engine_output() {
+        assert_eq!(TransferAttemptStatus::Started.durable_outcome(), None);
+        assert_eq!(
+            TransferAttemptStatus::Failed {
+                failure_class: "capacity",
+            }
+            .durable_outcome(),
+            Some("failed:capacity")
+        );
+        assert_eq!(
+            TransferAttemptStatus::Failed {
+                failure_class: "arbitrary raw engine output",
+            }
+            .durable_outcome(),
+            Some("failed:other")
+        );
     }
 }

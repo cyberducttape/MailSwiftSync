@@ -182,6 +182,8 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "finished_at": value.finished_at,
                 "diagnostic_stream_complete": run.diagnostic_lines_dropped.map(|count| count == 0),
                 "dropped_presentation_lines": run.diagnostic_lines_dropped,
+                "transfer_attempt_count": run.transfer_attempt_count,
+                "unfinished_transfer_attempt_count": run.unfinished_transfer_attempt_count,
             }))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -400,6 +402,9 @@ mod tests {
             .record_events_for_runs_batch(&[("diagnostic-run", "diagnostic_lines_dropped", "3284")])
             .unwrap();
         store
+            .record_transfer_attempt_started("diagnostic-run", 1)
+            .unwrap();
+        store
             .finish_run("diagnostic-run", "completed", "ok")
             .unwrap();
 
@@ -424,6 +429,8 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(proof["runs"][0]["diagnostic_stream_complete"], false);
         assert_eq!(proof["runs"][0]["dropped_presentation_lines"], 3284);
+        assert_eq!(proof["runs"][0]["transfer_attempt_count"], 1);
+        assert_eq!(proof["runs"][0]["unfinished_transfer_attempt_count"], 1);
         assert!(!proof.to_string().contains("raw engine output"));
         let _ = std::fs::remove_dir_all(directory);
     }

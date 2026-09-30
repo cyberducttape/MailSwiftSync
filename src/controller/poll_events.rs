@@ -182,6 +182,37 @@ impl App {
                             ));
                         }
                     }
+                    Event::TransferAttempt {
+                        run_id,
+                        job_id,
+                        attempt,
+                        status,
+                        reply,
+                    } => {
+                        let result = if attempt == 0
+                            || !process_event_is_current(active_run.as_ref(), &run_id, &job_id)
+                        {
+                            Err(format!(
+                                "ignored transfer-attempt record for unknown process {run_id}"
+                            ))
+                        } else {
+                            match status.durable_outcome() {
+                                Some(outcome) => self
+                                    .store
+                                    .record_transfer_attempt_finished(&run_id, attempt, outcome),
+                                None => {
+                                    self.store.record_transfer_attempt_started(&run_id, attempt)
+                                }
+                            }
+                            .map_err(|error| {
+                                format!("could not persist transfer attempt {attempt}: {error}")
+                            })
+                        };
+                        if let Err(error) = &result {
+                            durability_errors.push(error.clone());
+                        }
+                        let _ = reply.send(result);
+                    }
                     Event::EngineVersion {
                         run_id,
                         job_id,

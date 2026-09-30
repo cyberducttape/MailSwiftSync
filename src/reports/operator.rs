@@ -94,7 +94,7 @@ pub(crate) fn build_project_report(
             ));
         }
     }
-    report.push_str("\n## Recent runs\n\n| Run | Engine | Engine version | Phase at start | Destination policy | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---|---|---|---|---|---|---|\n");
+    report.push_str("\n## Recent runs\n\n| Run | Engine | Engine version | Attempts | Unfinished attempts | Phase at start | Destination policy | Status | Plan reference | Started | Finished | Detail |\n|---|---|---|---:|---:|---|---|---|---|---|---|---|\n");
     for report_run in snapshot.runs.iter().rev().take(20) {
         let run = &report_run.run;
         let engine_version = report_run
@@ -102,10 +102,14 @@ pub(crate) fn build_project_report(
             .clone()
             .unwrap_or_else(|| "unavailable".into());
         report.push_str(&format!(
-            "| `{}` | {} | {} | `{}` | `{}` | `{}` | `{}` | {} | {} | {} |\n",
+            "| `{}` | {} | {} | {} | {} | `{}` | `{}` | `{}` | `{}` | {} | {} | {} |\n",
             markdown_escape(&run.id),
             markdown_escape(&run.engine),
             markdown_escape(&engine_version),
+            report_run
+                .transfer_attempt_count
+                .map_or_else(|| "unknown".to_owned(), |count| count.to_string()),
+            report_run.unfinished_transfer_attempt_count,
             markdown_escape(&run.phase_at_start),
             run_destination_policy(&run.plan_snapshot),
             markdown_escape(&run.status),
@@ -204,6 +208,8 @@ pub(crate) fn build_project_json(
                 "parent_run_id": run.parent_run_id,
                 "engine": run.engine,
                 "engine_version": report_run.engine_version,
+                "transfer_attempt_count": report_run.transfer_attempt_count,
+                "unfinished_transfer_attempt_count": report_run.unfinished_transfer_attempt_count,
                 "phase_at_start": run.phase_at_start,
                 "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
                 "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),

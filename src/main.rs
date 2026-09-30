@@ -1864,6 +1864,8 @@ mod tests {
             while let Ok(event) = rx.recv() {
                 if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
                     let _ = reply.send(Ok(()));
+                } else if let Event::TransferAttempt { reply, .. } = event {
+                    let _ = reply.send(Ok(()));
                 }
             }
         });
@@ -1884,6 +1886,8 @@ mod tests {
             dovecot_exit_two_is_delta: true,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
+            attempt_number: 1,
+            live_transfer: true,
         })
         .unwrap();
         drop(tx);
@@ -1896,11 +1900,25 @@ mod tests {
     fn streaming_captures_bounded_imapsync_evidence_without_full_log() {
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let acknowledger = thread::spawn(move || {
+            let mut attempts = Vec::new();
             while let Ok(event) = rx.recv() {
-                if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
-                    let _ = reply.send(Ok(()));
+                match event {
+                    Event::ProcessStarted(_, _, _, _, _, _, _, reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    Event::TransferAttempt {
+                        attempt,
+                        status,
+                        reply,
+                        ..
+                    } => {
+                        attempts.push((attempt, status));
+                        let _ = reply.send(Ok(()));
+                    }
+                    _ => {}
                 }
             }
+            attempts
         });
         let cancel = AtomicBool::new(false);
         let args = vec![
@@ -1922,10 +1940,18 @@ mod tests {
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Packaged2314,
             diagnostic_logger: None,
+            attempt_number: 1,
+            live_transfer: true,
         })
         .unwrap();
         drop(tx);
-        acknowledger.join().unwrap();
+        assert_eq!(
+            acknowledger.join().unwrap(),
+            vec![
+                (1, controller::TransferAttemptStatus::Started),
+                (1, controller::TransferAttemptStatus::Completed),
+            ]
+        );
         assert_eq!(result.outcome, StreamOutcome::Completed);
         let evidence = result.imapsync_evidence.unwrap();
         assert_eq!(evidence.source_messages, 7);
@@ -1940,6 +1966,8 @@ mod tests {
         let acknowledger = thread::spawn(move || {
             while let Ok(event) = rx.recv() {
                 if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
+                    let _ = reply.send(Ok(()));
+                } else if let Event::TransferAttempt { reply, .. } = event {
                     let _ = reply.send(Ok(()));
                 }
             }
@@ -1964,6 +1992,8 @@ mod tests {
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
+            attempt_number: 1,
+            live_transfer: true,
         })
         .unwrap();
         drop(tx);
@@ -1977,11 +2007,20 @@ mod tests {
     fn dry_dovecot_exit_code_two_is_not_a_delta_outcome() {
         let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
         let acknowledger = thread::spawn(move || {
+            let mut saw_transfer_attempt = false;
             while let Ok(event) = rx.recv() {
-                if let Event::ProcessStarted(_, _, _, _, _, _, _, reply) = event {
-                    let _ = reply.send(Ok(()));
+                match event {
+                    Event::ProcessStarted(_, _, _, _, _, _, _, reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    Event::TransferAttempt { reply, .. } => {
+                        saw_transfer_attempt = true;
+                        let _ = reply.send(Ok(()));
+                    }
+                    _ => {}
                 }
             }
+            saw_transfer_attempt
         });
         let cancel = AtomicBool::new(false);
         let args = vec!["-c".into(), "exit 2".into()];
@@ -2000,9 +2039,11 @@ mod tests {
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
+            attempt_number: 1,
+            live_transfer: false,
         });
         drop(tx);
-        acknowledger.join().unwrap();
+        assert!(!acknowledger.join().unwrap());
         assert!(outcome.is_err());
     }
 
@@ -2028,6 +2069,8 @@ mod tests {
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
+            attempt_number: 1,
+            live_transfer: true,
         });
 
         let error = outcome.unwrap_err();
@@ -2061,6 +2104,8 @@ mod tests {
             dovecot_exit_two_is_delta: false,
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
+            attempt_number: 1,
+            live_transfer: true,
         });
         drop(tx);
         acknowledger.join().unwrap();

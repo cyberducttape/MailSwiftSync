@@ -249,6 +249,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         let mut delta_required = false;
         let mut claimed = false;
         let mut verification_failure: Option<String> = None;
+        let mut transfer_attempt_number = 0_u32;
         let provider_key = provider_scope_key(&form);
         for attempt in 0..=retry_count {
             if !launch_limiter.acquire(&cancel) {
@@ -494,25 +495,30 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     } else {
                         Ok(())
                     };
-                    let result = checkpoint_validation.and_then(|()| run_streaming(RunContext {
-                        executable: &command.executable,
-                        args: &command.args,
-                        env: &command.env,
-                        tx: &tx,
-                        run_id: &child_run_id,
-                        job_id: &job_id,
-                        project_id: &batch_project_id,
-                        prefix: &prefix,
-                        cancel: &cancel,
-                        secrets: &secrets,
-                        timeout: Duration::from_secs(
-                            form.profile.migration_timeout_hours * 60 * 60,
-                        ),
-                        dovecot_exit_two_is_delta: form.engine() == core::Engine::Dovecot
-                            && !form.dry_run,
-                        imapsync_output_profile,
-                        diagnostic_logger: None,
-                    }))
+                    let result = checkpoint_validation.and_then(|()| {
+                        transfer_attempt_number = transfer_attempt_number.saturating_add(1);
+                        run_streaming(RunContext {
+                            executable: &command.executable,
+                            args: &command.args,
+                            env: &command.env,
+                            tx: &tx,
+                            run_id: &child_run_id,
+                            job_id: &job_id,
+                            project_id: &batch_project_id,
+                            prefix: &prefix,
+                            cancel: &cancel,
+                            secrets: &secrets,
+                            timeout: Duration::from_secs(
+                                form.profile.migration_timeout_hours * 60 * 60,
+                            ),
+                            dovecot_exit_two_is_delta: form.engine() == core::Engine::Dovecot
+                                && !form.dry_run,
+                            imapsync_output_profile,
+                            diagnostic_logger: None,
+                            attempt_number: transfer_attempt_number,
+                            live_transfer: live,
+                        })
+                    })
                     .and_then(|stream| {
                         if !form.dry_run
                             && form.engine() == core::Engine::ImapSync

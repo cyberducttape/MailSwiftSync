@@ -480,6 +480,8 @@ pub(crate) struct RunContext<'a> {
     pub(crate) dovecot_exit_two_is_delta: bool,
     pub(crate) imapsync_output_profile: verification::ImapsyncOutputProfile,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
+    pub(crate) attempt_number: u32,
+    pub(crate) live_transfer: bool,
 }
 
 pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, String> {
@@ -498,6 +500,8 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         dovecot_exit_two_is_delta,
         imapsync_output_profile,
         diagnostic_logger,
+        attempt_number,
+        live_transfer,
     } = context;
     let mut command = execution_command(executable, args, env)?;
     let mut child = command
@@ -663,6 +667,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             Err(mpsc::TrySendError::Disconnected(_)) => break false,
         }
     };
+    let mut transfer_attempt_started = false;
     let result = if process_started {
         let registration = loop {
             if cancel.load(Ordering::Relaxed) {
@@ -687,31 +692,48 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             Err(format!(
                 "process registration failed; child cancelled: {error}"
             ))
-        } else if let Err(error) = release_engine(&mut release_stdin) {
+        } else if live_transfer
+            && let Err(error) = record_transfer_attempt(
+                tx,
+                run_id,
+                job_id,
+                attempt_number,
+                crate::controller::TransferAttemptStatus::Started,
+            )
+        {
             cancel.store(true, Ordering::Relaxed);
             let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
-            Err(format!("engine release failed; child cancelled: {error}"))
+            Err(format!(
+                "transfer attempt could not be durably recorded: {error}"
+            ))
         } else {
-            let debug_supervision = process_supervision_debug_enabled();
-            if debug_supervision {
-                eprintln!("[process-debug] streaming wait for child {}", child.id());
-            }
-            match wait_with_timeout(&mut child, timeout, cancel) {
-                Err(error) => Err(error.to_string()),
-                Ok(ProcessOutcome {
-                    cancelled: true, ..
-                }) => Err("cancelled by operator".into()),
-                Ok(ProcessOutcome {
-                    timed_out: true, ..
-                }) => Err("migration exceeded its configured execution timeout".into()),
-                Ok(ProcessOutcome {
-                    exit_code: Some(0), ..
-                }) => Ok(StreamOutcome::Completed),
-                Ok(ProcessOutcome {
-                    exit_code: Some(2), ..
-                }) if dovecot_exit_two_is_delta => Ok(StreamOutcome::DeltaRequired),
-                Ok(ProcessOutcome { exit_code, .. }) => {
-                    Err(format!("process exited with code {:?}", exit_code))
+            transfer_attempt_started = live_transfer;
+            if let Err(error) = release_engine(&mut release_stdin) {
+                cancel.store(true, Ordering::Relaxed);
+                let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
+                Err(format!("engine release failed; child cancelled: {error}"))
+            } else {
+                let debug_supervision = process_supervision_debug_enabled();
+                if debug_supervision {
+                    eprintln!("[process-debug] streaming wait for child {}", child.id());
+                }
+                match wait_with_timeout(&mut child, timeout, cancel) {
+                    Err(error) => Err(error.to_string()),
+                    Ok(ProcessOutcome {
+                        cancelled: true, ..
+                    }) => Err("cancelled by operator".into()),
+                    Ok(ProcessOutcome {
+                        timed_out: true, ..
+                    }) => Err("migration exceeded its configured execution timeout".into()),
+                    Ok(ProcessOutcome {
+                        exit_code: Some(0), ..
+                    }) => Ok(StreamOutcome::Completed),
+                    Ok(ProcessOutcome {
+                        exit_code: Some(2), ..
+                    }) if dovecot_exit_two_is_delta => Ok(StreamOutcome::DeltaRequired),
+                    Ok(ProcessOutcome { exit_code, .. }) => {
+                        Err(format!("process exited with code {:?}", exit_code))
+                    }
                 }
             }
         }
@@ -783,6 +805,26 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             },
         );
     }
+    let attempt_status = if let Some(error) = reader_error.as_deref() {
+        crate::controller::TransferAttemptStatus::Failed {
+            failure_class: crate::controller::failure::classify_failure(error).label(),
+        }
+    } else {
+        match &result {
+            Ok(StreamOutcome::Completed) => crate::controller::TransferAttemptStatus::Completed,
+            Ok(StreamOutcome::DeltaRequired) => {
+                crate::controller::TransferAttemptStatus::DeltaRequired
+            }
+            Err(error) => crate::controller::TransferAttemptStatus::Failed {
+                failure_class: crate::controller::failure::classify_failure(error).label(),
+            },
+        }
+    };
+    let attempt_record_error = if transfer_attempt_started {
+        record_transfer_attempt(tx, run_id, job_id, attempt_number, attempt_status).err()
+    } else {
+        None
+    };
     // The process identity is only valid for this attempt. Clear it before
     // returning so a transient retry (or a crash during its backoff) cannot
     // leave an exited PID looking like an active orphan.
@@ -795,6 +837,15 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     )
     .err()
     .map(|error| format!("could not clear durable process identity: {error}"));
+    let result = match attempt_record_error {
+        Some(error) => Err(match result {
+            Ok(_) => format!("transfer attempt result was not durably recorded: {error}"),
+            Err(prior) => {
+                format!("{prior}; transfer attempt result was not durably recorded: {error}")
+            }
+        }),
+        None => result,
+    };
     match result {
         Ok(outcome) if reader_error.is_none() => {
             if let Some(error) = process_end_error {
@@ -837,6 +888,32 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             }
         }
     }
+}
+
+fn record_transfer_attempt(
+    tx: &mpsc::SyncSender<crate::Event>,
+    run_id: &str,
+    job_id: &str,
+    attempt: u32,
+    status: crate::controller::TransferAttemptStatus,
+) -> Result<(), String> {
+    if attempt == 0 {
+        return Err("transfer attempt number must be positive".into());
+    }
+    let (reply, acknowledgement) = mpsc::sync_channel(1);
+    send_reliable_event(
+        tx,
+        crate::Event::TransferAttempt {
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+            attempt,
+            status,
+            reply,
+        },
+    )?;
+    acknowledgement
+        .recv_timeout(PROCESS_REGISTRATION_ACK_TIMEOUT)
+        .map_err(|_| "durable transfer-attempt acknowledgement timed out".to_owned())?
 }
 
 /// Dovecot emits the stateful-sync resume value as a compact, single-line

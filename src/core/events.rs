@@ -1,6 +1,82 @@
 use super::*;
 
 impl StateStore {
+    pub fn record_transfer_attempt_started(
+        &self,
+        run_id: &str,
+        attempt: u32,
+    ) -> rusqlite::Result<()> {
+        self.record_transfer_attempt(run_id, attempt, None)
+    }
+
+    pub fn record_transfer_attempt_finished(
+        &self,
+        run_id: &str,
+        attempt: u32,
+        outcome: &str,
+    ) -> rusqlite::Result<()> {
+        self.record_transfer_attempt(run_id, attempt, Some(outcome))
+    }
+
+    fn record_transfer_attempt(
+        &self,
+        run_id: &str,
+        attempt: u32,
+        outcome: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        if attempt == 0
+            || outcome.is_some_and(|value| {
+                !matches!(
+                    value,
+                    "completed"
+                        | "delta_required"
+                        | "failed:authentication"
+                        | "failed:capacity"
+                        | "failed:transport"
+                        | "failed:quota"
+                        | "failed:message"
+                        | "failed:verification"
+                        | "failed:cancelled"
+                        | "failed:configuration"
+                        | "failed:unknown"
+                        | "failed:other"
+                )
+            })
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let project_id: String = tx.query_row(
+            "SELECT project_id FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))) ",
+            [run_id],
+            |row| row.get(0),
+        )?;
+        let start_detail = format!("attempt={attempt}");
+        let started: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1 AND kind='transfer_attempt_started' AND detail=?2)",
+            rusqlite::params![run_id, start_detail],
+            |row| row.get(0),
+        )?;
+        let finished: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE run_id=?1 AND kind='transfer_attempt_finished' AND detail LIKE ?2)",
+            rusqlite::params![run_id, format!("attempt={attempt};outcome=%")],
+            |row| row.get(0),
+        )?;
+        let (kind, detail) = match outcome {
+            None if !started && !finished => ("transfer_attempt_started", start_detail),
+            Some(outcome) if started && !finished => (
+                "transfer_attempt_finished",
+                format!("attempt={attempt};outcome={outcome}"),
+            ),
+            _ => return Err(rusqlite::Error::InvalidQuery),
+        };
+        tx.execute(
+            "INSERT INTO events(project_id,run_id,kind,detail) VALUES(?1,?2,?3,?4)",
+            rusqlite::params![project_id, run_id, kind, detail],
+        )?;
+        tx.commit()
+    }
+
     pub fn record_event(&self, project_id: &str, kind: &str, detail: &str) -> rusqlite::Result<()> {
         if kind == "run_output" {
             return Ok(());

@@ -2927,6 +2927,12 @@ fn diagnostic_drop_accounting_survives_database_reopen_and_enters_report_snapsho
             .unwrap();
         db.record_events_for_runs_batch(&[("run-accounting", "diagnostic_lines_dropped", "3284")])
             .unwrap();
+        db.record_transfer_attempt_started("run-accounting", 1)
+            .unwrap();
+        db.record_transfer_attempt_finished("run-accounting", 1, "completed")
+            .unwrap();
+        db.record_transfer_attempt_started("run-accounting", 2)
+            .unwrap();
         db.finish_run("run-accounting", "completed", "ok").unwrap();
         (project.id, job)
     };
@@ -2934,9 +2940,49 @@ fn diagnostic_drop_accounting_survives_database_reopen_and_enters_report_snapsho
     let snapshot = db.project_report_snapshot(&project_id).unwrap().unwrap();
     assert_eq!(snapshot.runs[0].run.id, "run-accounting");
     assert_eq!(snapshot.runs[0].diagnostic_lines_dropped, Some(3284));
+    assert_eq!(snapshot.runs[0].transfer_attempt_count, Some(2));
+    assert_eq!(snapshot.runs[0].unfinished_transfer_attempt_count, 1);
     assert_eq!(snapshot.mailboxes[0].job.id, job_id);
     drop(db);
     let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
+fn transfer_attempt_ledger_rejects_duplicates_and_unmatched_completions() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("attempts", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.insert_run_for_test(&project.id, Some(&job), "run-attempts", "imapsync")
+        .unwrap();
+
+    assert!(
+        db.record_transfer_attempt_finished("run-attempts", 1, "completed")
+            .is_err()
+    );
+    assert!(
+        db.record_transfer_attempt_started("run-attempts", 0)
+            .is_err()
+    );
+    db.record_transfer_attempt_started("run-attempts", 1)
+        .unwrap();
+    assert!(
+        db.record_transfer_attempt_started("run-attempts", 1)
+            .is_err()
+    );
+    assert!(
+        db.record_transfer_attempt_finished("run-attempts", 1, "arbitrary output")
+            .is_err()
+    );
+    db.record_transfer_attempt_finished("run-attempts", 1, "failed:capacity")
+        .unwrap();
+    assert!(
+        db.record_transfer_attempt_finished("run-attempts", 1, "completed")
+            .is_err()
+    );
 }
 
 #[test]

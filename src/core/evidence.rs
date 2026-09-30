@@ -219,6 +219,12 @@ pub struct ReportRunSnapshot {
     /// `Some(n)` means n presentation lines were dropped. `None` means no
     /// durable drop accounting exists (including runs predating this marker).
     pub diagnostic_lines_dropped: Option<u64>,
+    /// Number of engine transfer attempts durably started for this run.
+    /// `None` means the run predates attempt accounting or no attempt started.
+    pub transfer_attempt_count: Option<u64>,
+    /// Starts without a matching durable finish record, including an
+    /// interruption before the engine result was durably recorded.
+    pub unfinished_transfer_attempt_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
