@@ -104,6 +104,16 @@ pub(crate) fn canonical_destination_identity(
     tls: &str,
     configured_port: &str,
 ) -> Result<String, String> {
+    destination_identity(mailbox, host, tls, configured_port, false)
+}
+
+fn destination_identity(
+    mailbox: &str,
+    host: &str,
+    tls: &str,
+    configured_port: &str,
+    force_casefold: bool,
+) -> Result<String, String> {
     let mailbox = mailbox.trim();
     if mailbox.is_empty() {
         return Err("destination mailbox is empty".into());
@@ -125,16 +135,40 @@ pub(crate) fn canonical_destination_identity(
         Ok(address) => address.to_string(),
         Err(_) => host.trim_end_matches('.').to_ascii_lowercase(),
     };
+    let mailbox = if force_casefold || mailbox_case_insensitive_for_host(&host) {
+        mailbox.to_lowercase()
+    } else {
+        mailbox.to_owned()
+    };
     Ok(format!("endpoint:{host}:{port}:{mailbox}"))
 }
 
+/// Return a comparison identity that deliberately folds account case. This
+/// is used only to detect ambiguous near-duplicates for endpoints whose
+/// mailbox-name case policy is not known.
+pub(crate) fn casefolded_destination_identity(
+    mailbox: &str,
+    host: &str,
+    tls: &str,
+    configured_port: &str,
+) -> Result<String, String> {
+    destination_identity(mailbox, host, tls, configured_port, true)
+}
+
+fn mailbox_case_insensitive_for_host(host: &str) -> bool {
+    matches!(
+        host.trim_end_matches('.').to_ascii_lowercase().as_str(),
+        "imap.gmail.com" | "outlook.office365.com"
+    )
+}
+
 pub(crate) fn mailbox_identity(mailbox: &str) -> String {
-    format!("mailbox:{}", mailbox.trim().to_ascii_lowercase())
+    format!("mailbox:{}", mailbox.trim().to_lowercase())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_destination_identity, parts};
+    use super::{canonical_destination_identity, casefolded_destination_identity, parts};
 
     #[test]
     fn parses_common_endpoint_forms() {
@@ -239,6 +273,68 @@ mod tests {
             canonical_destination_identity("User@example.test", "[2001:db8::1]", "starttls", "143")
                 .unwrap(),
             "endpoint:2001:db8::1:143:User@example.test"
+        );
+    }
+
+    #[test]
+    fn destination_identity_uses_known_google_and_exchange_case_policy() {
+        let google_upper =
+            canonical_destination_identity("User@example.test", "imap.gmail.com", "imaps", "")
+                .unwrap();
+        let google_lower =
+            canonical_destination_identity("user@example.test", "imap.gmail.com", "imaps", "")
+                .unwrap();
+        assert_eq!(google_upper, google_lower);
+
+        let exchange_upper = canonical_destination_identity(
+            "User@example.test",
+            "outlook.office365.com",
+            "imaps",
+            "",
+        )
+        .unwrap();
+        let exchange_lower = canonical_destination_identity(
+            "user@example.test",
+            "outlook.office365.com",
+            "imaps",
+            "",
+        )
+        .unwrap();
+        assert_eq!(exchange_upper, exchange_lower);
+    }
+
+    #[test]
+    fn unknown_provider_keeps_exact_identity_and_exposes_casefold_collision_key() {
+        let upper = canonical_destination_identity(
+            "User@example.test",
+            "imap.customer.example",
+            "imaps",
+            "",
+        )
+        .unwrap();
+        let lower = canonical_destination_identity(
+            "user@example.test",
+            "imap.customer.example",
+            "imaps",
+            "",
+        )
+        .unwrap();
+        assert_ne!(upper, lower);
+        assert_eq!(
+            casefolded_destination_identity(
+                "User@example.test",
+                "imap.customer.example",
+                "imaps",
+                ""
+            )
+            .unwrap(),
+            casefolded_destination_identity(
+                "user@example.test",
+                "imap.customer.example",
+                "imaps",
+                ""
+            )
+            .unwrap()
         );
     }
 }

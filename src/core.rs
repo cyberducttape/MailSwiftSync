@@ -68,7 +68,8 @@ pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 pub(crate) use policy::{
     MAX_PERSISTED_PROFILE_BYTES, MAX_TOTAL_PERSISTED_PROFILE_BYTES, attention_reason_for,
     dovecot_checkpoint_context, dovecot_checkpoint_state, encode_dovecot_checkpoint,
-    normalized_destination_identity, valid_dovecot_checkpoint, valid_mailbox_transition,
+    normalized_destination_identity, normalized_destination_lock_identity,
+    valid_dovecot_checkpoint, valid_mailbox_transition,
 };
 
 pub(crate) fn sqlite_i64(value: u64) -> rusqlite::Result<i64> {

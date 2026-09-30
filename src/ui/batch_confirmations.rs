@@ -131,6 +131,21 @@ impl App {
             .cloned()
             .expect("confirmation summary is initialized above");
         let selected_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
+        let selected_jobs = selected_ids
+            .iter()
+            .filter_map(|id| {
+                self.bulk_job_ids
+                    .iter()
+                    .position(|job_id| job_id == id)
+                    .and_then(|index| self.bulk_jobs.get(index))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let ambiguous_case_collision =
+            crate::controller::batch_admission::has_ambiguous_destination_casefold_collision(
+                &selected_jobs,
+            )
+            .unwrap_or(false);
 
         let stored_identity = self.bulk_confirmation_identity.clone();
         let mut close = false;
@@ -225,6 +240,23 @@ impl App {
                         .color(self.theme_colors().text_secondary),
                     );
                 }
+                if ambiguous_case_collision {
+                    ui.label(
+                        RichText::new(self.language.text(
+                            "⚠ Selected destination names differ only by case on a provider whose account-name case rules are unknown. They may be the same mailbox; verify the provider identities before proceeding. Acknowledged case-only aliases must run at concurrency 1.",
+                        ))
+                        .strong()
+                        .color(self.theme_colors().warning),
+                    );
+                    ui.checkbox(
+                        &mut self.bulk_destination_case_acknowledged,
+                        self.language.text(
+                            "I reviewed these destination accounts and acknowledge the possible identity collision",
+                        ),
+                    );
+                } else {
+                    self.bulk_destination_case_acknowledged = false;
+                }
                 ui.label(
                     self.language
                         .text("Scope: {}.")
@@ -260,7 +292,10 @@ impl App {
                             summary.blocked_count == 0
                                 && summary.eligible_count > 0
                                 && (summary.destructive_count == 0
-                                    || self.bulk_destination_loss_acknowledged),
+                                    || self.bulk_destination_loss_acknowledged)
+                                && (!ambiguous_case_collision
+                                    || (self.bulk_destination_case_acknowledged
+                                        && summary.concurrency == 1)),
                             egui::Button::new(
                                 RichText::new(self.language.text("I understand — start batch")).color(Color32::WHITE),
                             )
@@ -298,6 +333,7 @@ impl App {
             self.bulk_confirmation_summary = None;
             self.bulk_confirmation_identity = None;
             self.bulk_destination_loss_acknowledged = false;
+            self.bulk_destination_case_acknowledged = false;
         }
     }
 

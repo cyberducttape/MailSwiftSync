@@ -46,6 +46,10 @@ pub(crate) struct BatchLaunchRequest<'a> {
     /// Hash of the live confirmation plan, when confirmation was required.
     /// Admission recomputes it from the same durable rows before execution.
     pub(crate) expected_action_plan_hash: Option<&'a str>,
+    /// Explicit acknowledgement shown in the live confirmation when
+    /// case-folded destination names collide on an endpoint with unknown
+    /// account-name case semantics.
+    pub(crate) acknowledge_ambiguous_destination_case: bool,
     pub(crate) run_id: &'a str,
 }
 
@@ -84,6 +88,7 @@ pub(crate) fn admit_batch_launch(
         fallback_profile,
         expected_credential_fingerprints,
         expected_action_plan_hash,
+        acknowledge_ambiguous_destination_case,
         run_id,
     } = request;
     let durable_admissions = if let Some(project_id) =
@@ -160,6 +165,15 @@ pub(crate) fn admit_batch_launch(
         &durable_admissions,
         mode,
         expected_credential_fingerprints,
+    )?;
+    validate_destination_case_acknowledgement(
+        mode,
+        &selected_jobs
+            .iter()
+            .map(|selected| selected.job.clone())
+            .collect::<Vec<_>>(),
+        acknowledge_ambiguous_destination_case,
+        fallback_profile.batch_concurrency.clamp(1, 16),
     )?;
     for selected in &selected_jobs {
         crate::runner::validate_body_hash_limits(&selected.job.form())?;
@@ -360,6 +374,52 @@ pub(crate) fn duplicate_destination(jobs: &[BulkJob]) -> Result<Option<String>, 
         }
     }
     Ok(None)
+}
+
+/// An unknown provider may treat mailbox names as case-insensitive, so a pair
+/// that differs only by case must be surfaced even though its exact identity
+/// remains distinct. Known Gmail and Exchange Online endpoints already use a
+/// case-insensitive canonical identity and are handled as exact duplicates.
+pub(crate) fn has_ambiguous_destination_casefold_collision(
+    jobs: &[BulkJob],
+) -> Result<bool, String> {
+    let mut by_folded = std::collections::HashMap::<String, String>::new();
+    for job in jobs {
+        let profile = job.profile();
+        let exact = canonical_destination_identity(&profile)?;
+        let folded = endpoint::casefolded_destination_identity(
+            &profile.destination_user,
+            &profile.destination_host,
+            effective_destination_tls(&profile.destination_tls),
+            &profile.destination_port,
+        )
+        .map_err(|error| format!("Invalid destination endpoint: {error}"))?;
+        if by_folded
+            .get(&folded)
+            .is_some_and(|previous| previous != &exact)
+        {
+            return Ok(true);
+        }
+        by_folded.insert(folded, exact);
+    }
+    Ok(false)
+}
+
+fn validate_destination_case_acknowledgement(
+    mode: BatchExecutionMode,
+    jobs: &[BulkJob],
+    acknowledged: bool,
+    concurrency: usize,
+) -> Result<(), String> {
+    if mode.is_live() && has_ambiguous_destination_casefold_collision(jobs)? {
+        if !acknowledged {
+            return Err("Live batch blocked: destination mailbox names differ only by case on an endpoint with unknown case semantics. Review the accounts and explicitly acknowledge the possible identity collision in the live confirmation.".into());
+        }
+        if concurrency != 1 {
+            return Err("Live batch blocked: case-ambiguous destination accounts must run with concurrency set to 1 so possible aliases are never written simultaneously.".into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -723,8 +783,9 @@ pub(crate) fn apply_keyring_id(jobs: &mut [BulkJob], id: &str, source: bool) -> 
 mod tests {
     use super::{
         BatchExecutionMode, BatchLaunchRequest, SelectedBatchJob, admit_batch_launch,
-        batch_project_identity, decode_persisted_batch_profile, prepare_batch_run,
-        prepare_selected_batch_jobs,
+        batch_project_identity, decode_persisted_batch_profile, duplicate_destination,
+        has_ambiguous_destination_casefold_collision, prepare_batch_run,
+        prepare_selected_batch_jobs, validate_destination_case_acknowledgement,
     };
     use crate::controller::SelectionScope;
     use crate::core::MAX_PERSISTED_PROFILE_BYTES;
@@ -797,6 +858,56 @@ mod tests {
     }
 
     #[test]
+    fn casefolded_destination_collisions_are_flagged_only_when_provider_semantics_are_unknown() {
+        let mut first = Form::default();
+        first.profile.destination_host = "imap.customer.example".into();
+        first.profile.destination_user = "User@example.test".into();
+        let mut second = first.clone();
+        second.profile.destination_user = "user@example.test".into();
+        let generic = vec![
+            BulkJob::from_form("first".into(), first.clone(), "Ready".into()),
+            BulkJob::from_form("second".into(), second.clone(), "Ready".into()),
+        ];
+        assert!(has_ambiguous_destination_casefold_collision(&generic).unwrap());
+
+        first.profile.destination_host = "imap.gmail.com".into();
+        second.profile.destination_host = "imap.gmail.com".into();
+        let known_case_insensitive = vec![
+            BulkJob::from_form("first".into(), first, "Ready".into()),
+            BulkJob::from_form("second".into(), second, "Ready".into()),
+        ];
+        assert!(!has_ambiguous_destination_casefold_collision(&known_case_insensitive).unwrap());
+        assert!(
+            duplicate_destination(&known_case_insensitive)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            validate_destination_case_acknowledgement(
+                BatchExecutionMode::Live,
+                &generic,
+                false,
+                1,
+            )
+            .unwrap_err()
+                .contains("explicitly acknowledge")
+        );
+        validate_destination_case_acknowledgement(BatchExecutionMode::Live, &generic, true, 1)
+            .unwrap();
+        assert!(
+            validate_destination_case_acknowledgement(BatchExecutionMode::Live, &generic, true, 4,)
+                .is_err()
+        );
+        validate_destination_case_acknowledgement(
+            BatchExecutionMode::Preflight,
+            &generic,
+            false,
+            4,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn batch_launch_admission_rejects_an_empty_queue_before_persistence() {
         let store = crate::core::StateStore::in_memory().unwrap();
         let profile = Form::default().profile;
@@ -811,6 +922,7 @@ mod tests {
             fallback_profile: &profile,
             expected_credential_fingerprints: &[],
             expected_action_plan_hash: None,
+            acknowledge_ambiguous_destination_case: false,
             run_id: "run-empty",
         })
         .err()
@@ -883,6 +995,7 @@ mod tests {
                 fallback_profile: &jobs[0].profile(),
                 expected_credential_fingerprints: &[None, None, None, None],
                 expected_action_plan_hash: None,
+                acknowledge_ambiguous_destination_case: false,
                 run_id: "targeted-selection-test",
             })
             .unwrap();
@@ -945,6 +1058,7 @@ mod tests {
             fallback_profile: &jobs[0].profile(),
             expected_credential_fingerprints: &[],
             expected_action_plan_hash: None,
+            acknowledge_ambiguous_destination_case: false,
             run_id: "first-batch-admission-test",
         })
         .unwrap();
@@ -995,6 +1109,7 @@ mod tests {
             fallback_profile: &jobs[0].profile(),
             expected_credential_fingerprints: &[None, None, None],
             expected_action_plan_hash: None,
+            acknowledge_ambiguous_destination_case: false,
             run_id: "first-explicit-admission-test",
         })
         .unwrap();

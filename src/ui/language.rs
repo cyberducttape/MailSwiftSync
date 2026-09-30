@@ -1199,6 +1199,15 @@ impl UiLanguage {
             "Destination-only messages and mailboxes are kept for every selected mailbox." => {
                 "Nur im Ziel vorhandene Nachrichten und Postfächer bleiben für jedes ausgewählte Postfach erhalten."
             }
+            "⚠ Selected destination names differ only by case on a provider whose account-name case rules are unknown. They may be the same mailbox; verify the provider identities before proceeding." => {
+                "⚠ Ausgewählte Zielnamen unterscheiden sich nur durch Groß-/Kleinschreibung; die Regeln des Anbieters sind unbekannt. Es könnte dasselbe Postfach sein. Prüfen Sie die Konten vor dem Fortfahren."
+            }
+            "⚠ Selected destination names differ only by case on a provider whose account-name case rules are unknown. They may be the same mailbox; verify the provider identities before proceeding. Acknowledged case-only aliases must run at concurrency 1." => {
+                "⚠ Ausgewählte Zielnamen unterscheiden sich nur durch Groß-/Kleinschreibung; die Regeln des Anbieters sind unbekannt. Es könnte dasselbe Postfach sein. Prüfen Sie die Konten vor dem Fortfahren. Bestätigte Namensvarianten müssen mit Parallelität 1 ausgeführt werden."
+            }
+            "I reviewed these destination accounts and acknowledge the possible identity collision" => {
+                "Ich habe diese Zielkonten geprüft und bestätige die mögliche Identitätskollision"
+            }
             "I confirm destination-only mail may be removed for these mailboxes" => {
                 "Ich bestätige, dass nur im Ziel vorhandene E-Mails für diese Postfächer entfernt werden können"
             }

@@ -32,10 +32,18 @@ these shared controller/plan boundaries rather than reimplementing them.
 Batch validation and migration use a bounded worker pool (1–16 workers) over an immutable in-memory job list. Imported queue rows retain only mailbox identity/credential deltas and share immutable non-identity plan defaults through an `Arc`; admission and workers hydrate full forms only for the selected execution working set. Admission creates a parent wave run plus one mailbox-specific child run and snapshot per row in one transaction. Mailbox rows remain `queued` until a worker claims them; process identity and terminal results are then attributed to the child run. Worker output is redacted and retained only in bounded process-local UI memory; raw `run_output` transcripts are not persisted, preventing subjects, folder names, and message metadata from becoming durable ledger data. Structured lifecycle, run, phase, and evidence events remain durable.
 
 Batch destination collision checks use a canonical endpoint/port/mailbox identity
-when a restored row contains secret-free profile configuration. This permits the
-same mailbox name on separate destination hosts while still rejecting concurrent
-writes to one actual endpoint. Legacy rows without that identity remain
-conservative and are checked by normalized mailbox name.
+when a restored row contains secret-free profile configuration. Gmail and
+Exchange Online's recognized IMAP endpoints apply case-insensitive account
+identity; generic endpoints preserve exact account spelling. A live batch with
+case-folded collisions on an unknown endpoint is visibly warned and requires
+operator acknowledgement and concurrency 1 before admission. Durable run
+admission also uses a conservative case-folded destination lock across active
+projects, so two differently cased names cannot write simultaneously. This is
+an ambiguity warning, not provider qualification: operators must verify those
+accounts, and provider-specific case policies beyond the recognized endpoints
+remain unqualified.
+Legacy rows without endpoint identity remain conservative and are checked by
+normalized mailbox name.
 
 The Project Cockpit performs an authenticated endpoint readiness probe in imapsync mode over certificate-verified TLS. Implicit IMAPS begins inside TLS; STARTTLS first verifies the server's advertised upgrade capability, negotiates TLS, then follows the same greeting/authentication/`CAPABILITY`/`NAMESPACE`/`LIST` sequence. The probe requires at least one untagged `* LIST` record and reports the discovered folder count and observed SPECIAL-USE annotations; a tagged `LIST` completion alone is not accepted as an inventory. Operators may add a PEM enterprise CA bundle and/or a SHA-256 leaf-certificate pin; these settings are included in the plan identity and are rechecked before live admission. imapsync receives the additional CA file through its typed TLS arguments, while certificate pinning remains an application-level fail-closed check. Live admission uses this transport-specific probe for every encrypted imapsync endpoint; plain sources remain engine-preflight-only after explicit acknowledgement. Dovecot dry preflight checks the destination-side userdb with `doveadm user` and lists source mailboxes through remote `imapc`; it deliberately does not enumerate the target mailbox store before its first sync because Dovecot warns that early target access can cause GUID/UIDVALIDITY conflicts or synchronization failure. A source CA bundle can configure that TLS connection, but Dovecot certificate pins are rejected because the native engine does not enforce application-level leaf pins. Quota capacity remains an operator responsibility where it cannot be queried reliably. Credentials are held only by the probe thread and are never written to the project ledger or command-line arguments; control characters are rejected before they can enter the IMAP command stream. The probe does not claim that these extensions replace Dovecot's server-side dsync behavior. A failed certificate, authentication, or folder-inventory check blocks discovery rather than being silently ignored.
 

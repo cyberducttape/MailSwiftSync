@@ -1,5 +1,36 @@
 use super::*;
 
+fn ensure_no_active_destination_lock_conflict(
+    tx: &rusqlite::Transaction<'_>,
+    candidates: &[String],
+    excluded_job_ids: &BTreeSet<String>,
+) -> rusqlite::Result<()> {
+    let mut statement = tx.prepare(
+        "SELECT j.id,j.destination_mailbox,j.config FROM mailbox_jobs j
+         WHERE EXISTS(SELECT 1 FROM runs r WHERE r.project_id=j.project_id AND r.job_id=j.id AND r.status IN ('queued','running'))",
+    )?;
+    for row in statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })? {
+        let (job_id, destination, config) = row?;
+        if excluded_job_ids.contains(&job_id) {
+            continue;
+        }
+        let active_identity = normalized_destination_lock_identity(&destination, config.as_deref());
+        if candidates
+            .iter()
+            .any(|candidate| candidate == &active_identity)
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+    }
+    Ok(())
+}
+
 impl StateStore {
     /// Atomically records a run and moves its mailbox into `running`.
     /// Keeping these writes together prevents restart recovery from seeing a
@@ -28,10 +59,11 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let tx = self.connection.unchecked_transaction()?;
-        let (current, phase_at_start): (String, String) = tx.query_row(
-            "SELECT j.state,p.phase FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
+        let (current, phase_at_start, destination, config):
+            (String, String, String, Option<String>) = tx.query_row(
+            "SELECT j.state,p.phase,j.destination_mailbox,j.config FROM mailbox_jobs j JOIN projects p ON p.id=j.project_id WHERE j.id=?1 AND j.project_id=?2",
             params![job_id, project_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         if phase_at_start == Phase::Complete.as_str() {
             return Err(rusqlite::Error::InvalidQuery);
@@ -49,6 +81,14 @@ impl StateStore {
         if active_run_exists {
             return Err(rusqlite::Error::InvalidQuery);
         }
+        ensure_no_active_destination_lock_conflict(
+            &tx,
+            &[normalized_destination_lock_identity(
+                &destination,
+                config.as_deref(),
+            )],
+            &BTreeSet::from([job_id.to_owned()]),
+        )?;
         tx.execute(
             "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,?3,?4,?5,?6,'running')",
             params![run_id, project_id, job_id, engine, phase_at_start, plan_snapshot],
@@ -141,6 +181,7 @@ impl StateStore {
             return Err(rusqlite::Error::InvalidQuery);
         }
         let mut destinations = BTreeSet::new();
+        let mut destination_locks = Vec::with_capacity(job_ids.len());
         for (index, job_id) in job_ids.iter().enumerate() {
             let (
                 current,
@@ -180,6 +221,10 @@ impl StateStore {
             if !destinations.insert(identity) {
                 return Err(rusqlite::Error::InvalidQuery);
             }
+            destination_locks.push(normalized_destination_lock_identity(
+                &destination,
+                config.as_deref(),
+            ));
             // Reject an already-running child rather than treating it as a
             // harmless retry. This keeps one durable execution owner per
             // mailbox even when two callers race.
@@ -195,6 +240,11 @@ impl StateStore {
                 return Err(rusqlite::Error::InvalidQuery);
             }
         }
+        ensure_no_active_destination_lock_conflict(
+            &tx,
+            &destination_locks,
+            &job_ids.iter().cloned().collect(),
+        )?;
         tx.execute(
             "INSERT INTO runs(id,project_id,job_id,engine,phase_at_start,plan_snapshot,status) VALUES(?1,?2,NULL,?3,?4,?5,'running')",
             params![run_id, project_id, engine, phase_at_start, plan_snapshot],

@@ -194,6 +194,9 @@ pub(crate) struct App {
     /// Explicit acknowledgement, inside the open confirmation, that the
     /// plan may remove destination-only state. Reset whenever it closes.
     pub(crate) bulk_destination_loss_acknowledged: bool,
+    /// Case-folded destination collisions are ambiguous for generic IMAP
+    /// endpoints and require acknowledgement inside the live confirmation.
+    pub(crate) bulk_destination_case_acknowledged: bool,
     pub(crate) live_destination_loss_acknowledged: bool,
     pub(crate) bulk_confirmation_summary: Option<BatchActionPlan>,
     /// Proof of what the operator saw when they opened the confirmation dialog.

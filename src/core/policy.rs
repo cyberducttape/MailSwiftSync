@@ -41,6 +41,50 @@ pub(crate) fn normalized_destination_identity(
     crate::endpoint::mailbox_identity(destination_mailbox)
 }
 
+/// Conservative cross-project lock identity. Exact durable identities retain
+/// mailbox spelling for providers with unknown rules; active-run exclusion
+/// additionally case-folds it so uncertain aliases cannot write in parallel.
+pub(crate) fn normalized_destination_lock_identity(
+    destination_mailbox: &str,
+    config: Option<&str>,
+) -> String {
+    if let Some(config) = config
+        && config.len() <= MAX_PERSISTED_PROFILE_BYTES
+        && let Ok(value) = toml::from_str::<toml::Value>(config)
+    {
+        let host = value
+            .get("destination_host")
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|host| !host.is_empty());
+        let user = value
+            .get("destination_user")
+            .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|user| !user.is_empty());
+        if let (Some(host), Some(user)) = (host, user) {
+            let tls = value
+                .get("destination_tls")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("imaps");
+            let port = value
+                .get("destination_port")
+                .and_then(toml::Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default();
+            if let Ok(identity) = crate::endpoint::casefolded_destination_identity(
+                user,
+                host,
+                crate::effective_destination_tls(tls),
+                port,
+            ) {
+                return identity;
+            }
+        }
+    }
+    crate::endpoint::mailbox_identity(destination_mailbox)
+}
+
 const MAX_DOVECOT_CHECKPOINT_BYTES: usize = 4096;
 const DOVECOT_CHECKPOINT_CONTEXT_BYTES: usize = 64;
 

@@ -1165,6 +1165,45 @@ fn active_process_rejects_run_and_mailbox_from_different_projects() {
 }
 
 #[test]
+fn active_destination_lock_blocks_case_variant_account_in_another_project() {
+    let db = StateStore::in_memory().unwrap();
+    let first = db
+        .create_project("first-case-lock", "source-a", "destination")
+        .unwrap();
+    let first_job = db
+        .add_mailbox(&first.id, "source-a", "User@example.test")
+        .unwrap();
+    let second = db
+        .create_project("second-case-lock", "source-b", "destination")
+        .unwrap();
+    let second_job = db
+        .add_mailbox(&second.id, "source-b", "user@example.test")
+        .unwrap();
+    for (job_id, mailbox) in [
+        (&first_job, "User@example.test"),
+        (&second_job, "user@example.test"),
+    ] {
+        db.connection
+            .execute(
+                "UPDATE mailbox_jobs SET config=?1 WHERE id=?2",
+                params![
+                    format!(
+                        "destination_host = \"mail.customer.example\"\ndestination_user = \"{mailbox}\"\ndestination_tls = \"imaps\"\ndestination_port = \"993\""
+                    ),
+                    job_id
+                ],
+            )
+            .unwrap();
+    }
+    db.begin_run(&first.id, &first_job, "run-case-lock-one", "test")
+        .unwrap();
+    assert!(
+        db.begin_run(&second.id, &second_job, "run-case-lock-two", "test")
+            .is_err()
+    );
+}
+
+#[test]
 fn active_process_rejects_wrong_mailbox_for_single_mailbox_run() {
     let db = StateStore::in_memory().unwrap();
     let project = db

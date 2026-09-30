@@ -68,6 +68,7 @@ impl App {
                 .bulk_confirmation_summary
                 .as_ref()
                 .map(|plan| plan.identity_hash.as_str()),
+            acknowledge_ambiguous_destination_case: self.bulk_destination_case_acknowledged,
             run_id: &run_id,
         }) {
             Ok(value) => value,

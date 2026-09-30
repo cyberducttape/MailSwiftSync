@@ -458,6 +458,7 @@ impl App {
             bulk_live_confirm_focus_requested: false,
             bulk_live_confirmed: false,
             bulk_destination_loss_acknowledged: false,
+            bulk_destination_case_acknowledged: false,
             live_destination_loss_acknowledged: false,
             bulk_confirmation_summary: None,
             bulk_confirmation_identity: None,
