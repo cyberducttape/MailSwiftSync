@@ -60,7 +60,7 @@ jobs:
           rustup toolchain install nightly --profile minimal
           cargo +stable install cargo-fuzz --version 0.13.2 --locked
       - name: Fuzz ${{ matrix.target }}
-        run: cargo fuzz run --release "${{ matrix.target }}" -- -max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=4096 -max_len=1048576
+        run: cargo +nightly fuzz run --release "${{ matrix.target }}" -- -max_total_time="${FUZZ_SECONDS}" -timeout=10 -rss_limit_mb=4096 -max_len=1048576
       - name: Retain evolved corpus
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

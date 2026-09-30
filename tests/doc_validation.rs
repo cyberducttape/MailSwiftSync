@@ -174,6 +174,24 @@ fn stable_release_requires_privileged_self_hosted_windows_qualification() {
 }
 
 #[test]
+fn imap_fuzz_workflow_runs_targets_with_nightly() {
+    let workflow = std::fs::read_to_string(".github/workflows/imap-fuzz.yml")
+        .expect("IMAP parser fuzz workflow must be checked in");
+    assert!(
+        workflow.contains("rustup toolchain install nightly"),
+        "the workflow must install the unstable compiler required by libFuzzer"
+    );
+    assert!(
+        workflow.contains("cargo +nightly fuzz run"),
+        "the fuzz build must select nightly explicitly instead of the repository's stable override"
+    );
+    assert!(
+        !workflow.contains("run: cargo fuzz run"),
+        "a plain cargo fuzz command inherits the stable repository toolchain"
+    );
+}
+
+#[test]
 fn capability_manifest_is_current() {
     let capabilities = fs::read_to_string("capabilities.toml")
         .expect("machine-readable capability status should exist");
