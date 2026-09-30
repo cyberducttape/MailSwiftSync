@@ -523,6 +523,38 @@ pub(crate) fn headless_recover(
     })
 }
 
+/// A failed headless run and the process exit status that reports it.
+/// Automation distinguishes a pass that needs another delta (3), a
+/// verification difference (4), and operator attention (5) from other
+/// failures (1).
+#[derive(Debug)]
+pub(crate) struct HeadlessFailure {
+    pub(crate) code: i32,
+    pub(crate) message: String,
+}
+
+impl From<String> for HeadlessFailure {
+    fn from(message: String) -> Self {
+        Self { code: 1, message }
+    }
+}
+
+impl From<&str> for HeadlessFailure {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
+/// Exit status and description for a live run that ended unverified.
+fn unverified_exit_status(state: Option<&str>) -> (i32, &'static str) {
+    match state {
+        Some("delta_required") => (3, "delta required (exit status 3)"),
+        Some("verification_difference") => (4, "verification difference (exit status 4)"),
+        Some("attention") => (5, "operator attention (exit status 5)"),
+        _ => (1, "unresolved (exit status 1)"),
+    }
+}
+
 /// Run the existing durable controller without constructing an egui window.
 /// A live invocation always performs a fresh dry preflight first, so this
 /// path cannot promote credentials or a plan left over from another process.
@@ -532,7 +564,7 @@ pub(crate) fn headless_execute_with_credentials(
     credentials: Option<HeadlessCredentials>,
     diagnostic_log: Option<&std::path::Path>,
     reopen_reason: Option<&str>,
-) -> Result<String, String> {
+) -> Result<String, HeadlessFailure> {
     // Use the same startup recovery as the GUI, but pass the ledger path as
     // data instead of mutating process-global environment state.
     let mut app = App::from_state_path(Some(state_path));
@@ -587,9 +619,9 @@ pub(crate) fn headless_execute_with_credentials(
                 .map_err(|error| error.to_string())?
                 .total;
             if mailbox_count != 1 {
-                return Err(format!(
+                return Err(HeadlessFailure::from(format!(
                     "headless incremental reopen requires exactly one mailbox; durable project contains {mailbox_count}"
-                ));
+                )));
             }
             let reason = reopen_reason.ok_or_else(|| {
                 "completed projects require --reopen-reason before another headless live pass"
@@ -637,19 +669,19 @@ pub(crate) fn headless_execute_with_credentials(
         .map_err(|error| error.to_string())?
         .total;
     if mailbox_count != 1 {
-        return Err(format!(
+        return Err(HeadlessFailure::from(format!(
             "headless execution requires exactly one mailbox; durable project contains {mailbox_count}"
-        ));
+        )));
     }
     let preflight_state = app
         .store
         .mailbox_state(&job_id)
         .map_err(|error| error.to_string())?;
     if preflight_state.as_deref() != Some("ready") {
-        return Err(format!(
+        return Err(HeadlessFailure::from(format!(
             "preflight did not produce a runnable mailbox (state={:?}, status={})",
             preflight_state, app.status.text
-        ));
+        )));
     }
     if !live {
         return Ok(format!(
@@ -673,16 +705,14 @@ pub(crate) fn headless_execute_with_credentials(
         final_state.as_deref(),
         Some("verified") | Some("verified_with_exceptions")
     ) {
-        let exit_hint = match final_state.as_deref() {
-            Some("delta_required") => "delta required (exit status 3)",
-            Some("verification_difference") => "verification difference (exit status 4)",
-            Some("attention") => "operator attention (exit status 5)",
-            _ => "unresolved (exit status 1)",
-        };
-        return Err(format!(
-            "live migration did not reach a verified terminal state: {exit_hint}; state={:?}, status={}",
-            final_state, app.status.text
-        ));
+        let (code, exit_hint) = unverified_exit_status(final_state.as_deref());
+        return Err(HeadlessFailure {
+            code,
+            message: format!(
+                "live migration did not reach a verified terminal state: {exit_hint}; state={:?}, status={}",
+                final_state, app.status.text
+            ),
+        });
     }
     Ok(format!(
         "Headless live migration completed for project {project_id}, mailbox {job_id}; state={}.",
@@ -736,7 +766,7 @@ pub(crate) fn headless_batch_execute_selected(
     if let Some(requested_ids) = requested_ids {
         let unknown = requested_ids
             .iter()
-            .filter(|job_id| !app.bulk_job_ids.contains(*job_id))
+            .filter(|job_id| !app.bulk_job_index_by_id.contains_key(*job_id))
             .cloned()
             .collect::<Vec<_>>();
         if !unknown.is_empty() {
@@ -797,19 +827,6 @@ pub(crate) fn headless_batch_execute_selected(
         }
     }
     app.bulk_selected_ids = eligible_ids;
-    if let Some(requested_ids) = requested_ids {
-        let unknown = requested_ids
-            .iter()
-            .filter(|job_id| !app.bulk_job_ids.contains(*job_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !unknown.is_empty() {
-            return Err(format!(
-                "selective remediation includes mailbox ID(s) outside the durable batch: {}",
-                unknown.join(", ")
-            ));
-        }
-    }
     if app.bulk_selected_ids.is_empty() {
         return Err(
             "no automation-safe batch work is queued; operator-review and verification-difference rows were not retried"
@@ -1005,7 +1022,10 @@ pub(crate) fn headless_supervise(
 pub(crate) fn wait_for_headless_controller(app: &mut App) -> Result<(), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
     let mut last_debug = std::time::Instant::now();
-    while app.running() || app.capability_receiver.is_some() || app.live_auth_receiver.is_some() {
+    // Include every background channel, notably asynchronous keyring
+    // loading: `start()` returns while credentials load, and exiting then
+    // would report a failed preflight that never ran.
+    while app.background_work_pending() {
         app.poll();
         if crate::runner::process_supervision_debug_enabled()
             && last_debug.elapsed() >= Duration::from_secs(15)
@@ -1069,6 +1089,50 @@ fn last_durability_detail(output: &crate::BoundedLineBuffer) -> Option<&str> {
 mod tests {
     use super::{last_durability_detail, last_verification_detail};
     use crate::BoundedLineBuffer;
+
+    #[test]
+    fn unverified_live_states_map_to_documented_exit_codes() {
+        for (state, code) in [
+            (Some("delta_required"), 3),
+            (Some("verification_difference"), 4),
+            (Some("attention"), 5),
+            (Some("failed"), 1),
+            (None, 1),
+        ] {
+            let (actual, hint) = super::unverified_exit_status(state);
+            assert_eq!(actual, code);
+            assert!(hint.contains(&format!("exit status {code}")));
+        }
+        let failure = super::HeadlessFailure::from("plain error");
+        assert_eq!(failure.code, 1);
+    }
+
+    /// `start()` returns while keyring credentials load on another thread.
+    /// The headless wait must keep polling until that result is applied.
+    #[test]
+    fn headless_wait_covers_asynchronous_credential_loading() {
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-headless-wait-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.start_credentials_receiver = Some(receiver);
+        let loader = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let _ = sender.send(Err("keyring unavailable".to_owned()));
+        });
+        let _ = super::wait_for_headless_controller(&mut app);
+        loader.join().unwrap();
+        assert!(
+            app.start_credentials_receiver.is_none(),
+            "the wait returned before the credential result was applied"
+        );
+        assert_eq!(app.status.text, "keyring unavailable");
+        drop(app);
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_file(state_path.with_extension("lock"));
+    }
 
     #[test]
     fn headless_failure_keeps_the_latest_verification_detail() {

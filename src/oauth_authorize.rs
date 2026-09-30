@@ -372,9 +372,22 @@ fn read_request_head(stream: &mut TcpStream) -> Result<Zeroizing<String>, String
     let mut head = Zeroizing::new(Vec::new());
     let mut buffer = [0_u8; 1024];
     while !head.windows(4).any(|window| window == b"\r\n\r\n") {
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| format!("could not read the authorization redirect: {error}"))?;
+        let count = match stream.read(&mut buffer) {
+            Ok(count) => count,
+            // Browsers open speculative preconnect sockets that may never
+            // send a request. An idle connection is not a failed redirect.
+            Err(error)
+                if head.is_empty()
+                    && matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+            {
+                break;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "could not read the authorization redirect: {error}"
+                ));
+            }
+        };
         if count == 0 {
             break;
         }
@@ -389,8 +402,10 @@ fn read_request_head(stream: &mut TcpStream) -> Result<Zeroizing<String>, String
 }
 
 fn parse_redirect_request(head: &str, expected_state: &str) -> RedirectOutcome {
+    // An empty head is a connection that closed or idled without a request
+    // (for example a browser preconnect); keep waiting for the redirect.
     let Some(request_line) = head.lines().next() else {
-        return RedirectOutcome::Rejected("the authorization redirect request was empty".into());
+        return RedirectOutcome::Unrelated;
     };
     let mut parts = request_line.split(' ');
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
@@ -751,6 +766,27 @@ mod tests {
                 let mut response = String::new();
                 let _ = stream.read_to_string(&mut response);
             }
+        });
+        let code = listener
+            .wait_for_code("expected", Duration::from_secs(5))
+            .unwrap();
+        client.join().unwrap();
+        assert_eq!(code.as_str(), "good");
+    }
+
+    #[test]
+    fn idle_preconnect_does_not_abort_the_flow() {
+        let listener = RedirectListener::bind(RedirectHost::Ipv4Loopback).unwrap();
+        let port = listener.port();
+        let client = thread::spawn(move || {
+            // A preconnect that closes without sending a request.
+            drop(TcpStream::connect(("127.0.0.1", port)).unwrap());
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream
+                .write_all(b"GET /?state=expected&code=good HTTP/1.1\r\n\r\n")
+                .unwrap();
+            let mut response = String::new();
+            let _ = stream.read_to_string(&mut response);
         });
         let code = listener
             .wait_for_code("expected", Duration::from_secs(5))
