@@ -47,15 +47,23 @@ seen = set()
 for entry in providers:
     required = entry.get("required_phases")
     scenario_requirements = entry.get("scenario_requirements")
-    values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version"), entry.get("minimum_mailboxes"), entry.get("minimum_messages"), entry.get("minimum_folders"), entry.get("minimum_bytes")]
-    if not all(isinstance(value, str) and value for value in values[:5]) or not all(
-        isinstance(value, int) and value > 0 for value in values[5:]
-    ):
+    scenarios_by_phase = entry.get("required_scenarios_by_phase")
+    values = [entry.get("pair"), entry.get("source_provider"), entry.get("destination_provider"), entry.get("engine"), entry.get("engine_version")]
+    auth_methods = [entry.get("source_auth_method"), entry.get("destination_auth_method")]
+    thresholds = [entry.get("minimum_mailboxes"), entry.get("minimum_messages"), entry.get("minimum_folders"), entry.get("minimum_bytes")]
+    if not all(isinstance(value, str) and value for value in values) or any(
+        value not in {"password", "oauth2"} for value in auth_methods
+    ) or not all(isinstance(value, int) and value > 0 for value in thresholds):
         raise SystemExit("each provider policy entry needs pair, source_provider, destination_provider, engine, and engine_version")
     if not isinstance(required, list) or not required or not all(isinstance(value, str) and value for value in required):
         raise SystemExit(f"{entry.get('pair', '<unknown>')}: required_phases must be non-empty strings")
     if not isinstance(scenario_requirements, dict):
         raise SystemExit(f"{entry.get('pair', '<unknown>')}: scenario_requirements must be an object")
+    if not isinstance(scenarios_by_phase, dict) or set(scenarios_by_phase) != set(required) or any(
+        not isinstance(values, list) or not values or not all(isinstance(value, str) and value for value in values)
+        for values in scenarios_by_phase.values()
+    ):
+        raise SystemExit(f"{entry.get('pair', '<unknown>')}: required_scenarios_by_phase must map each required phase to a non-empty string array")
     if entry["pair"] in seen:
         raise SystemExit(f"duplicate provider-pair policy entry: {entry['pair']}")
     seen.add(entry["pair"])
@@ -66,11 +74,13 @@ for entry in providers:
         "true" if entry.get("release_required") is True else "false",
         entry["engine"],
         entry["engine_version"],
+        entry["source_auth_method"],
+        entry["destination_auth_method"],
         str(entry["minimum_mailboxes"]),
         str(entry["minimum_messages"]),
         str(entry["minimum_folders"]),
         str(entry["minimum_bytes"]),
-        ",".join(entry["required_scenarios"]),
+        json.dumps(scenarios_by_phase, separators=(",", ":")),
         json.dumps(scenario_requirements, separators=(",", ":")),
         ",".join(required),
     ]))
@@ -86,7 +96,7 @@ mapfile -t EVIDENCE_FILES < <(find "$EVIDENCE_DIR" -maxdepth 1 -type f -name '*.
 declare -a FAILURES=()
 
 for row in "${POLICY_ROWS[@]}"; do
-  IFS=$'\t' read -r pair source_provider destination_provider release_required expected_engine expected_version minimum_mailboxes minimum_messages minimum_folders minimum_bytes required_scenarios scenario_requirements_json required_phases <<< "$row"
+  IFS=$'\t' read -r pair source_provider destination_provider release_required expected_engine expected_version expected_source_auth expected_destination_auth minimum_mailboxes minimum_messages minimum_folders minimum_bytes required_scenarios_by_phase_json scenario_requirements_json required_phases <<< "$row"
   if [[ "$MODE" == "release" && "$release_required" != "true" ]]; then
     echo "Skipped non-release provider pair: $pair"
     continue
@@ -116,7 +126,7 @@ PY
     continue
   fi
 
-policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios" "$scenario_requirements_json" "$required_phases" "${provider_files[@]}" <<'PY'
+policy_result=$(python3 - "$SCHEMA_FILE" "$pair" "$source_provider" "$destination_provider" "$expected_engine" "$expected_version" "$expected_source_auth" "$expected_destination_auth" "$minimum_mailboxes" "$minimum_messages" "$minimum_folders" "$minimum_bytes" "$required_scenarios_by_phase_json" "$scenario_requirements_json" "$required_phases" "${provider_files[@]}" <<'PY'
 import json
 import hashlib
 import os
@@ -130,8 +140,8 @@ try:
 except ImportError:
     raise SystemExit("jsonschema is required; install requirements-provider-evidence.txt")
 
-schema_file, pair, source_provider, destination_provider, expected_engine, expected_version, minimum_mailboxes, minimum_messages, minimum_folders, minimum_bytes, scenarios_csv, scenario_requirements_json, phases_csv, *files = sys.argv[1:]
-required_scenarios = set(scenarios_csv.split(","))
+schema_file, pair, source_provider, destination_provider, expected_engine, expected_version, expected_source_auth, expected_destination_auth, minimum_mailboxes, minimum_messages, minimum_folders, minimum_bytes, scenarios_by_phase_json, scenario_requirements_json, phases_csv, *files = sys.argv[1:]
+required_scenarios_by_phase = json.loads(scenarios_by_phase_json)
 scenario_requirements = json.loads(scenario_requirements_json)
 required_phases = set(phases_csv.split(","))
 seen_phases = set()
@@ -179,6 +189,8 @@ for filename in files:
         continue
     if evidence.get("source_provider") != source_provider or evidence.get("destination_provider") != destination_provider:
         errors.append(f"{filename}: source/destination provider pair does not match policy pair {pair}")
+    phase = evidence.get("testing_phase")
+    required_scenarios = set(required_scenarios_by_phase.get(phase, []))
     if not isinstance(evidence.get("scenario_ids"), list) or not required_scenarios.issubset(set(evidence.get("scenario_ids", []))):
         errors.append(f"{filename}: required qualification scenarios are missing")
     summary = evidence.get("test_summary")
@@ -194,14 +206,31 @@ for filename in files:
         for scenario, requirement in scenario_requirements.items():
             if scenario not in evidence.get("scenario_ids", []):
                 continue
-            if scenario == "large-mailbox-10k" and (observations.get("large_mailbox_10k", {}).get("messages", 0) < requirement.get("minimum_messages", 0) or summary.get("messages_total", 0) < requirement.get("minimum_messages", 0)):
-                errors.append(f"{filename}: large-mailbox-10k does not contain 10,000 messages")
-            if scenario == "large-messages" and (observations.get("large_messages", {}).get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0) or summary.get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0)):
+            if scenario == "large-mailbox-100k" and (observations.get("large_mailbox_100k", {}).get("messages", 0) < requirement.get("minimum_messages", 0) or (phase != "dry_pilot" and summary.get("messages_total", 0) < requirement.get("minimum_messages", 0))):
+                errors.append(f"{filename}: large-mailbox-100k does not contain 100,000 messages")
+            if scenario == "large-mailbox-20gb" and (observations.get("large_mailbox_20gb", {}).get("bytes", 0) < requirement.get("minimum_bytes", 0) or (phase != "dry_pilot" and summary.get("bytes_total", 0) < requirement.get("minimum_bytes", 0))):
+                errors.append(f"{filename}: large-mailbox-20gb does not contain at least 20 GiB")
+            if scenario == "large-messages" and (observations.get("large_messages", {}).get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0) or (phase != "dry_pilot" and summary.get("maximum_message_bytes", 0) < requirement.get("minimum_message_bytes", 0))):
                 errors.append(f"{filename}: large-messages does not contain a message at least 10 MiB")
             if scenario == "unicode-folders" and (observations.get("unicode_folders", {}).get("observed") is not True or summary.get("unicode_folders_observed") is not True):
                 errors.append(f"{filename}: Unicode folder scenario was not observed")
             if scenario == "special-use-folders" and (observations.get("special_use_folders", {}).get("observed") is not True or summary.get("special_use_folders_observed") is not True):
                 errors.append(f"{filename}: SPECIAL-USE folder scenario was not observed")
+            scenario_observation_keys = {
+                "gmail-labels": ("gmail_labels", {"mapped": True}),
+                "duplicate-message-id": ("duplicate_message_id", {"planted": True, "preserved": True}),
+                "source-changed-during-seed": ("source_changed_during_seed", {"source_change_injected": True, "caught_up": True}),
+                "destination-active-final-delta": ("destination_active_final_delta", {"destination_change_injected": True, "preserved": True}),
+                "throttling-recovery": ("throttling_recovery", {"throttling_observed": True, "recovered": True}),
+                "quota-folder-edge-cases": ("quota_folder_edge_cases", {"quota_limit_classified": True, "folder_limit_classified": True}),
+            }
+            if scenario in scenario_observation_keys:
+                observation_key, required_values = scenario_observation_keys[scenario]
+                scenario_observation = observations.get(observation_key, {})
+                if any(scenario_observation.get(key) is not expected for key, expected in required_values.items()):
+                    errors.append(f"{filename}: {scenario} was not successfully observed")
+                if scenario == "gmail-labels" and scenario_observation.get("labels_observed", 0) < requirement.get("minimum_labels", 0):
+                    errors.append(f"{filename}: Gmail label scenario observed too few labels")
             if scenario == "mismatch-detection":
                 mismatch = observations.get("mismatch_detection", {})
                 if mismatch.get("planted") is not True or mismatch.get("detected") is not True or summary.get("mismatch_planted") is not True or summary.get("mismatch_detected") is not True:
@@ -212,6 +241,10 @@ for filename in files:
         errors.append(f"{filename}: engine must be {expected_engine}")
     if evidence.get("engine_version") != expected_version:
         errors.append(f"{filename}: engine_version must be {expected_version}")
+    if evidence.get("source_auth_method") != expected_source_auth:
+        errors.append(f"{filename}: source_auth_method must be {expected_source_auth}")
+    if evidence.get("destination_auth_method") != expected_destination_auth:
+        errors.append(f"{filename}: destination_auth_method must be {expected_destination_auth}")
     release_commit = os.environ.get("MAILSWIFTSYNC_RELEASE_COMMIT")
     if os.environ.get("MAILSWIFTSYNC_GATE_MODE") == "release" and release_commit and evidence.get("mailswiftsync_commit") != release_commit:
         errors.append(f"{filename}: evidence commit does not match the release commit")
@@ -296,7 +329,6 @@ for filename in files:
                     errors.append(f"{filename}: recovery proof lacks an abandoned predecessor for the selected job")
     if summary.get("mailboxes_tested", 0) < int(minimum_mailboxes):
         errors.append(f"{filename}: too few mailboxes for qualification")
-    phase = evidence.get("testing_phase")
     expected_run_type = {"dry_pilot": "preflight", "live_pilot": "live", "recovery_test": "recovery"}.get(phase)
     if expected_run_type is None:
         errors.append(f"{filename}: unsupported phase cannot qualify")

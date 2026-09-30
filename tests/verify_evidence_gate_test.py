@@ -16,6 +16,30 @@ SOURCE_EVIDENCE = ROOT / "tests" / "provider-evidence"
 
 
 class EvidenceGateTests(unittest.TestCase):
+    def test_release_policy_covers_customer_migration_directions_and_auth_modes(self):
+        policy = json.loads((SOURCE_EVIDENCE / "policy.json").read_text(encoding="utf-8"))
+        routes = {
+            entry["pair"]: (entry["source_auth_method"], entry["destination_auth_method"])
+            for entry in policy["providers"]
+        }
+        self.assertEqual(
+            routes,
+            {
+                "gmail->microsoft365": ("oauth2", "oauth2"),
+                "microsoft365->gmail": ("oauth2", "oauth2"),
+                "fastmail->microsoft365": ("password", "oauth2"),
+            },
+        )
+        for entry in policy["providers"]:
+            self.assertEqual(
+                set(entry["required_scenarios_by_phase"]),
+                set(entry["required_phases"]),
+            )
+            self.assertEqual(
+                entry["required_scenarios_by_phase"]["dry_pilot"],
+                ["basic-small", "quota-folder-edge-cases"],
+            )
+
     def test_populated_evidence_path_reports_validation_errors_not_tracebacks(self):
         try:
             import jsonschema  # noqa: F401
@@ -31,8 +55,8 @@ class EvidenceGateTests(unittest.TestCase):
                 "provider": entry["pair"],
                 "source_provider": entry["source_provider"],
                 "destination_provider": entry["destination_provider"],
-                "source_auth_method": "password",
-                "destination_auth_method": "password",
+                "source_auth_method": entry["source_auth_method"],
+                "destination_auth_method": entry["destination_auth_method"],
                 "tested_at": "2026-09-20T00:00:00Z",
                 "testing_phase": "live_pilot",
                 "source_version": "fixture",
@@ -67,12 +91,19 @@ class EvidenceGateTests(unittest.TestCase):
                 "run_started_at": "2026-09-20T00:00:00Z",
                 "run_finished_at": "2026-09-20T00:01:00Z",
                 "fixture_id": "fixture",
-                "scenario_ids": entry["required_scenarios"],
+                "scenario_ids": entry["required_scenarios_by_phase"]["live_pilot"],
                 "scenario_observations": {
-                    "large_mailbox_10k": {"messages": 10000},
+                    "large_mailbox_100k": {"messages": 100000},
+                    "large_mailbox_20gb": {"bytes": 20 * 1024**3},
                     "large_messages": {"maximum_message_bytes": 10485760},
                     "unicode_folders": {"observed": True},
                     "special_use_folders": {"observed": True},
+                    "gmail_labels": {"labels_observed": 3, "mapped": True},
+                    "duplicate_message_id": {"planted": True, "preserved": True},
+                    "source_changed_during_seed": {"source_change_injected": True, "caught_up": True},
+                    "destination_active_final_delta": {"destination_change_injected": True, "preserved": True},
+                    "throttling_recovery": {"throttling_observed": True, "recovered": True},
+                    "quota_folder_edge_cases": {"quota_limit_classified": True, "folder_limit_classified": True},
                     "mismatch_detection": {"planted": True, "detected": True},
                 },
                 "test_dataset_digest": "d" * 64,
@@ -96,7 +127,41 @@ class EvidenceGateTests(unittest.TestCase):
             output = result.stdout + result.stderr
             self.assertNotIn("NameError", output)
             self.assertNotIn("Traceback", output)
+            self.assertNotIn("source_auth_method must be", output)
+            self.assertNotIn("destination_auth_method must be", output)
             self.assertIn("referenced customer proof is missing", output)
+
+            # Dry preflight evidence describes a no-transfer phase. It must
+            # not be rejected for lacking live transfer totals, while the
+            # live phase keeps its stricter large-dataset requirements.
+            dry = json.loads(json.dumps(evidence))
+            dry["provider"] = entry["pair"]
+            dry["testing_phase"] = "dry_pilot"
+            dry["scenario_ids"] = entry["required_scenarios_by_phase"]["dry_pilot"]
+            dry["run_type"] = "preflight"
+            dry["test_summary"].update({
+                "messages_total": 0,
+                "bytes_total": 0,
+                "destination_messages_total": 0,
+                "destination_bytes_total": 0,
+                "folders_total": 0,
+                "destination_folders_total": 0,
+            })
+            dry["results"]["verification_confidence"] = "not_applicable"
+            dry["results"]["overall_result"] = "pass"
+            (evidence_dir / "dry-pilot.json").write_text(json.dumps(dry), encoding="utf-8")
+            rerun = subprocess.run(
+                [str(GATE)],
+                cwd=ROOT,
+                env={**os.environ, "MAILSWIFTSYNC_EVIDENCE_DIR": str(evidence_dir)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            rerun_output = rerun.stdout + rerun.stderr
+            self.assertNotIn("dry-pilot.json: dry_pilot must not report transfer totals", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-100k", rerun_output)
+            self.assertNotIn("dry-pilot.json: large-mailbox-20gb", rerun_output)
 
 
 if __name__ == "__main__":

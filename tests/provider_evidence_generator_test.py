@@ -34,10 +34,17 @@ def proof(status="verified", messages=2, claim_status="durably_complete", run=No
         "fixture_id": "fixture-1",
         "dataset_digest": "d" * 64,
         "scenario_observations": {
-            "large_mailbox_10k": {"messages": 10000},
+            "large_mailbox_100k": {"messages": 100000},
+            "large_mailbox_20gb": {"bytes": 20 * 1024**3},
             "large_messages": {"maximum_message_bytes": 10 * 1024 * 1024},
             "unicode_folders": {"observed": True},
             "special_use_folders": {"observed": True},
+            "gmail_labels": {"labels_observed": 3, "mapped": True},
+            "duplicate_message_id": {"planted": True, "preserved": True},
+            "source_changed_during_seed": {"source_change_injected": True, "caught_up": True},
+            "destination_active_final_delta": {"destination_change_injected": True, "preserved": True},
+            "throttling_recovery": {"throttling_observed": True, "recovered": True},
+            "quota_folder_edge_cases": {"quota_limit_classified": True, "folder_limit_classified": True},
             "mismatch_detection": {"planted": True, "detected": True},
         },
     }

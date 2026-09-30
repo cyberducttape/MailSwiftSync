@@ -32,12 +32,34 @@ if [[ -z "$provider" ]]; then
   echo "Usage: $0 <provider> (gmail|m365|fastmail)" >&2
   exit 1
 fi
-source_provider="${MAILSWIFTSYNC_SOURCE_PROVIDER:-$provider}"
-destination_provider="${MAILSWIFTSYNC_DESTINATION_PROVIDER:-$provider}"
+case "$provider" in
+  gmail)
+    default_source_provider=gmail
+    default_destination_provider=microsoft365
+    ;;
+  m365|microsoft365)
+    default_source_provider=microsoft365
+    default_destination_provider=gmail
+    ;;
+  fastmail)
+    default_source_provider=fastmail
+    default_destination_provider=microsoft365
+    ;;
+  *)
+    default_source_provider="$provider"
+    default_destination_provider="$provider"
+    ;;
+esac
+source_provider="${MAILSWIFTSYNC_SOURCE_PROVIDER:-$default_source_provider}"
+destination_provider="${MAILSWIFTSYNC_DESTINATION_PROVIDER:-$default_destination_provider}"
 [[ "$source_provider" == "m365" ]] && source_provider="microsoft365"
 [[ "$destination_provider" == "m365" ]] && destination_provider="microsoft365"
-source_auth="${MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH:-password}"
-destination_auth="${MAILSWIFTSYNC_PROVIDER_DEST_AUTH:-password}"
+default_source_auth=password
+default_destination_auth=password
+[[ "$source_provider" == "gmail" || "$source_provider" == "microsoft365" ]] && default_source_auth=oauth2
+[[ "$destination_provider" == "gmail" || "$destination_provider" == "microsoft365" ]] && default_destination_auth=oauth2
+source_auth="${MAILSWIFTSYNC_PROVIDER_SOURCE_AUTH:-$default_source_auth}"
+destination_auth="${MAILSWIFTSYNC_PROVIDER_DEST_AUTH:-$default_destination_auth}"
 fixture_id="${MAILSWIFTSYNC_PROVIDER_FIXTURE_ID:-provider-${source_provider}-to-${destination_provider}}"
 qualification_bundle_id="${MAILSWIFTSYNC_PROVIDER_QUALIFICATION_BUNDLE_ID:-${source_provider}-to-${destination_provider}-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}}"
 recovery_dest_endpoint="${MAILSWIFTSYNC_PROVIDER_RECOVERY_DEST_ENDPOINT:-}"

@@ -3,30 +3,11 @@
   "description": "Machine-readable release policy for hosted-provider compatibility evidence.",
   "providers": [
     {
-      "pair": "gmail->gmail",
+      "pair": "gmail->microsoft365",
       "source_provider": "gmail",
-      "destination_provider": "gmail",
-      "release_required": true,
-      "engine": "imapsync",
-      "engine_version": "2.314",
-      "minimum_mailboxes": 1,
-      "minimum_messages": 100,
-      "minimum_folders": 3,
-      "minimum_bytes": 1024,
-      "scenario_requirements": {
-        "large-mailbox-10k": {"minimum_messages": 10000},
-        "large-messages": {"minimum_message_bytes": 10485760},
-        "unicode-folders": {"unicode_folders_observed": true},
-        "special-use-folders": {"special_use_folders_observed": true},
-        "mismatch-detection": {"mismatch_planted_and_detected": true}
-      },
-      "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
-      "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
-    },
-    {
-      "pair": "microsoft365->microsoft365",
-      "source_provider": "microsoft365",
       "destination_provider": "microsoft365",
+      "source_auth_method": "oauth2",
+      "destination_auth_method": "oauth2",
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",
@@ -35,19 +16,32 @@
       "minimum_folders": 3,
       "minimum_bytes": 1024,
       "scenario_requirements": {
-        "large-mailbox-10k": {"minimum_messages": 10000},
+        "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-messages": {"minimum_message_bytes": 10485760},
         "unicode-folders": {"unicode_folders_observed": true},
         "special-use-folders": {"special_use_folders_observed": true},
+        "gmail-labels": {"minimum_labels": 3, "mapped": true},
+        "duplicate-message-id": {"planted": true, "preserved": true},
+        "source-changed-during-seed": {"source_change_injected": true, "caught_up": true},
+        "destination-active-final-delta": {"destination_change_injected": true, "preserved": true},
+        "throttling-recovery": {"throttling_observed": true, "recovered": true},
+        "quota-folder-edge-cases": {"quota_limit_classified": true, "folder_limit_classified": true},
         "mismatch-detection": {"mismatch_planted_and_detected": true}
       },
-      "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
+      "required_scenarios_by_phase": {
+        "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
+      },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     },
     {
-      "pair": "fastmail->fastmail",
-      "source_provider": "fastmail",
-      "destination_provider": "fastmail",
+      "pair": "microsoft365->gmail",
+      "source_provider": "microsoft365",
+      "destination_provider": "gmail",
+      "source_auth_method": "oauth2",
+      "destination_auth_method": "oauth2",
       "release_required": true,
       "engine": "imapsync",
       "engine_version": "2.314",
@@ -56,13 +50,57 @@
       "minimum_folders": 3,
       "minimum_bytes": 1024,
       "scenario_requirements": {
-        "large-mailbox-10k": {"minimum_messages": 10000},
+        "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-20gb": {"minimum_bytes": 21474836480},
         "large-messages": {"minimum_message_bytes": 10485760},
         "unicode-folders": {"unicode_folders_observed": true},
         "special-use-folders": {"special_use_folders_observed": true},
+        "gmail-labels": {"minimum_labels": 3, "mapped": true},
+        "duplicate-message-id": {"planted": true, "preserved": true},
+        "source-changed-during-seed": {"source_change_injected": true, "caught_up": true},
+        "destination-active-final-delta": {"destination_change_injected": true, "preserved": true},
+        "throttling-recovery": {"throttling_observed": true, "recovered": true},
+        "quota-folder-edge-cases": {"quota_limit_classified": true, "folder_limit_classified": true},
         "mismatch-detection": {"mismatch_planted_and_detected": true}
       },
-      "required_scenarios": ["basic-small", "unicode-folders", "special-use-folders", "large-messages", "large-mailbox-10k", "forced-interruption", "retry-transient-failure", "idempotent-delta", "mismatch-detection"],
+      "required_scenarios_by_phase": {
+        "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "gmail-labels", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
+      },
+      "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
+    },
+    {
+      "pair": "fastmail->microsoft365",
+      "source_provider": "fastmail",
+      "destination_provider": "microsoft365",
+      "source_auth_method": "password",
+      "destination_auth_method": "oauth2",
+      "release_required": true,
+      "engine": "imapsync",
+      "engine_version": "2.314",
+      "minimum_mailboxes": 1,
+      "minimum_messages": 100,
+      "minimum_folders": 3,
+      "minimum_bytes": 1024,
+      "scenario_requirements": {
+        "large-mailbox-100k": {"minimum_messages": 100000},
+        "large-mailbox-20gb": {"minimum_bytes": 21474836480},
+        "large-messages": {"minimum_message_bytes": 10485760},
+        "unicode-folders": {"unicode_folders_observed": true},
+        "special-use-folders": {"special_use_folders_observed": true},
+        "duplicate-message-id": {"planted": true, "preserved": true},
+        "source-changed-during-seed": {"source_change_injected": true, "caught_up": true},
+        "destination-active-final-delta": {"destination_change_injected": true, "preserved": true},
+        "throttling-recovery": {"throttling_observed": true, "recovered": true},
+        "quota-folder-edge-cases": {"quota_limit_classified": true, "folder_limit_classified": true},
+        "mismatch-detection": {"mismatch_planted_and_detected": true}
+      },
+      "required_scenarios_by_phase": {
+        "dry_pilot": ["basic-small", "quota-folder-edge-cases"],
+        "live_pilot": ["basic-small", "unicode-folders", "special-use-folders", "duplicate-message-id", "large-messages", "large-mailbox-100k", "large-mailbox-20gb", "source-changed-during-seed", "destination-active-final-delta", "idempotent-delta", "mismatch-detection"],
+        "recovery_test": ["forced-interruption", "retry-transient-failure", "throttling-recovery", "idempotent-delta"]
+      },
       "required_phases": ["dry_pilot", "live_pilot", "recovery_test"]
     }
   ]

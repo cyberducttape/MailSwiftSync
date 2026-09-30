@@ -243,12 +243,17 @@
     "scenario_observations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["large_mailbox_10k", "large_messages", "unicode_folders", "special_use_folders", "mismatch_detection"],
+      "required": ["large_mailbox_100k", "large_mailbox_20gb", "large_messages", "unicode_folders", "special_use_folders", "gmail_labels", "duplicate_message_id", "source_changed_during_seed", "destination_active_final_delta", "throttling_recovery", "quota_folder_edge_cases", "mismatch_detection"],
       "properties": {
-        "large_mailbox_10k": {
+        "large_mailbox_100k": {
           "type": "object", "additionalProperties": false,
           "required": ["messages"],
           "properties": {"messages": {"type": "integer", "minimum": 0}}
+        },
+        "large_mailbox_20gb": {
+          "type": "object", "additionalProperties": false,
+          "required": ["bytes"],
+          "properties": {"bytes": {"type": "integer", "minimum": 0}}
         },
         "large_messages": {
           "type": "object", "additionalProperties": false,
@@ -264,6 +269,39 @@
           "type": "object", "additionalProperties": false,
           "required": ["observed"],
           "properties": {"observed": {"type": "boolean"}}
+        },
+        "gmail_labels": {
+          "type": "object", "additionalProperties": false,
+          "required": ["labels_observed", "mapped"],
+          "properties": {
+            "labels_observed": {"type": "integer", "minimum": 0},
+            "mapped": {"type": "boolean"}
+          }
+        },
+        "duplicate_message_id": {
+          "type": "object", "additionalProperties": false,
+          "required": ["planted", "preserved"],
+          "properties": {"planted": {"type": "boolean"}, "preserved": {"type": "boolean"}}
+        },
+        "source_changed_during_seed": {
+          "type": "object", "additionalProperties": false,
+          "required": ["source_change_injected", "caught_up"],
+          "properties": {"source_change_injected": {"type": "boolean"}, "caught_up": {"type": "boolean"}}
+        },
+        "destination_active_final_delta": {
+          "type": "object", "additionalProperties": false,
+          "required": ["destination_change_injected", "preserved"],
+          "properties": {"destination_change_injected": {"type": "boolean"}, "preserved": {"type": "boolean"}}
+        },
+        "throttling_recovery": {
+          "type": "object", "additionalProperties": false,
+          "required": ["throttling_observed", "recovered"],
+          "properties": {"throttling_observed": {"type": "boolean"}, "recovered": {"type": "boolean"}}
+        },
+        "quota_folder_edge_cases": {
+          "type": "object", "additionalProperties": false,
+          "required": ["quota_limit_classified", "folder_limit_classified"],
+          "properties": {"quota_limit_classified": {"type": "boolean"}, "folder_limit_classified": {"type": "boolean"}}
         },
         "mismatch_detection": {
           "type": "object", "additionalProperties": false,

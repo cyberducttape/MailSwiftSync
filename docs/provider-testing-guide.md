@@ -15,7 +15,16 @@ authoritative list of providers, required phases, and supported engine
 version; changing prose in the compatibility matrix cannot weaken the gate.
 Each phase must be recorded in its own JSON evidence file with
 `results.overall_result: "pass"`. A single file cannot stand in for multiple
-phases.
+phases. Required scenarios are phase-specific, so a dry preflight does not
+claim live-transfer totals. The release routes are Gmail/Workspace → Microsoft
+365 (OAuth/OAuth), Microsoft 365 → Gmail/Workspace (OAuth/OAuth), and Fastmail
+→ Microsoft 365 (app-specific password/OAuth).
+
+The checked-in `provider-integration-test.sh` is currently a small-run harness,
+not a provider qualification run: it exercises a basic mailbox and forced
+interruption only. It does not create or measure the full release dataset and
+does not satisfy the release scenario policy. Do not submit its output as
+qualification evidence until the remaining scenarios are run and recorded.
 
 ## Setup Requirements
 
@@ -35,7 +44,7 @@ phases.
 3. **Mailbox test data**
    - Empty mailboxes (to test folder creation)
    - Small mailboxes (< 100 messages)
-   - Large mailboxes (> 10k messages if provider supports)
+   - At least 100,000 messages and 20 GiB for the large-mailbox qualification
    - Special-use folders (if exposed by provider)
    - Unicode folder names (to test encoding)
    - Message-size variety (plain text, HTML, attachments)
@@ -43,6 +52,15 @@ phases.
 4. **Engine version**
    - Pinned `imapsync` version tested against
    - Provider-specific version string if applicable
+
+5. **Qualification edge fixtures**
+   - Unicode/SPECIAL-USE folders, Gmail label mapping where applicable,
+     large messages, and duplicate Message-ID cases
+   - A source message added during seed and caught up by a later delta
+   - Destination-side activity during final delta, checked against the
+     configured destination mutation policy
+   - Observed throttling followed by recovery, plus quota/folder-limit errors
+     classified without data loss
 
 ## Testing Procedure
 
