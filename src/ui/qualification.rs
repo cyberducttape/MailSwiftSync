@@ -187,7 +187,7 @@ impl App {
         } else {
             self.language
                 .text("{} selected of {} queued mailbox(es)")
-                .replacen("{}", &self.bulk_selected_ids.len().to_string(), 1)
+                .replacen("{}", &self.bulk_selection_count().to_string(), 1)
                 .replacen("{}", &self.bulk_jobs.len().to_string(), 1)
         };
 

@@ -40,6 +40,9 @@ pub(crate) struct App {
     pub(crate) bulk_search: String,
     pub(crate) bulk_state_filter: String,
     pub(crate) bulk_selected_ids: HashSet<String>,
+    /// Compact representation for selecting the entire loaded queue. In this
+    /// mode `bulk_selected_ids` is not populated; it stores only exclusions.
+    pub(crate) bulk_all_selected: bool,
     /// Reused filtered-row index storage. Large batch views must not allocate
     /// a fresh index vector on every repaint.
     pub(crate) bulk_visible_indices: Vec<usize>,
@@ -245,6 +248,50 @@ impl Default for App {
 /// Pre-live readiness and quota checks remain in `imap_probe`; this root module
 /// only wires the shared result into the application controller.
 impl App {
+    pub(crate) fn bulk_selection_count(&self) -> usize {
+        if self.bulk_all_selected {
+            self.bulk_jobs
+                .len()
+                .saturating_sub(self.bulk_selected_ids.len())
+        } else {
+            self.bulk_selected_ids.len()
+        }
+    }
+
+    pub(crate) fn bulk_selection_is_empty(&self) -> bool {
+        self.bulk_selection_count() == 0
+    }
+
+    pub(crate) fn bulk_is_selected(&self, job_id: &str) -> bool {
+        if self.bulk_all_selected {
+            !self.bulk_selected_ids.contains(job_id)
+        } else {
+            self.bulk_selected_ids.contains(job_id)
+        }
+    }
+
+    pub(crate) fn clear_bulk_selection(&mut self) {
+        self.bulk_selected_ids.clear();
+        self.bulk_all_selected = false;
+    }
+
+    pub(crate) fn select_all_bulk_rows(&mut self) {
+        self.bulk_selected_ids.clear();
+        self.bulk_all_selected = true;
+    }
+
+    pub(crate) fn bulk_selection_scope(&self) -> crate::controller::SelectionScope {
+        if self.bulk_all_selected {
+            crate::controller::SelectionScope::AllMatching {
+                filter: String::new(),
+                state: "all".to_owned(),
+                excluded_ids: self.bulk_selected_ids.clone(),
+            }
+        } else {
+            crate::controller::SelectionScope::Explicit(self.bulk_selected_ids.clone())
+        }
+    }
+
     pub(crate) fn set_status(&mut self, message: impl Into<String>, severity: StatusSeverity) {
         self.status = StatusMessage::new(message, severity);
     }

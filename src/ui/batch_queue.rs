@@ -16,6 +16,7 @@ impl App {
     }
 
     pub(crate) fn select_bulk_state_set(&mut self, set: BulkStateSet) {
+        self.bulk_all_selected = false;
         self.bulk_selected_ids = self
             .bulk_jobs
             .iter()
@@ -27,7 +28,7 @@ impl App {
         self.bulk_message = self
             .language
             .text("Selected {} mailbox row(s) for focused review.")
-            .replace("{}", &self.bulk_selected_ids.len().to_string());
+            .replace("{}", &self.bulk_selection_count().to_string());
     }
 
     pub(crate) fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {
@@ -117,7 +118,7 @@ impl App {
     pub(crate) fn clear_bulk_queue(&mut self) {
         self.bulk_jobs.clear();
         self.mark_bulk_jobs_changed();
-        self.bulk_selected_ids.clear();
+        self.clear_bulk_selection();
         if self.selected_project_id == self.bulk_project_id {
             self.selected_project_id = None;
         }
@@ -149,7 +150,7 @@ impl App {
     /// them together with the selection.
     pub(crate) fn detach_bulk_queue_identity(&mut self) {
         self.bulk_project_id = None;
-        self.bulk_selected_ids.clear();
+        self.clear_bulk_selection();
         self.bulk_job_ids = (0..self.bulk_jobs.len())
             .map(|_| format!("unadmitted-{}", uuid::Uuid::new_v4()))
             .collect();

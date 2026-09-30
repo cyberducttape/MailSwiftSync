@@ -231,7 +231,7 @@ impl eframe::App for App {
 
         let wide_mailbox_layout = ui.available_width() >= 1120.0;
         if self.active_view == WorkspaceView::Mailboxes
-            && !self.bulk_selected_ids.is_empty()
+            && !self.bulk_selection_is_empty()
             && wide_mailbox_layout
         {
             // Once per frame, before the drawer that renders it.

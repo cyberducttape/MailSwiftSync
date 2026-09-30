@@ -325,7 +325,7 @@ impl App {
         self.bulk_project_id = None;
         self.bulk_job_ids.clear();
         self.bulk_job_index_by_id.clear();
-        self.bulk_selected_ids.clear();
+        self.clear_bulk_selection();
         self.bulk_preflight_credential_fingerprints.clear();
         self.bulk_jobs.clear();
         self.mark_bulk_jobs_changed();

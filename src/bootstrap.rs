@@ -355,6 +355,7 @@ impl App {
             bulk_search: String::new(),
             bulk_state_filter: "all".into(),
             bulk_selected_ids: HashSet::new(),
+            bulk_all_selected: false,
             bulk_source_keyring_apply: String::new(),
             bulk_destination_keyring_apply: String::new(),
             bulk_visible_indices: Vec::new(),

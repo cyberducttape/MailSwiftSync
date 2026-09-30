@@ -130,10 +130,9 @@ pub(crate) fn admit_batch_launch(
                     .profile
                     .destination_mutation_policy()
                     .may_remove_destination_state(),
-            })
-            .collect::<Vec<_>>();
+            });
         let plan =
-            build_batch_action_plan(&rows, retry_scope, fallback_profile.batch_concurrency, mode);
+            build_batch_action_plan(rows, retry_scope, fallback_profile.batch_concurrency, mode);
         if plan.identity_hash != expected_hash {
             return Err(
                 "The confirmed batch action plan is stale; durable mailbox state or destructive settings changed. Review the selection and confirm again.".into(),
@@ -166,12 +165,12 @@ pub(crate) fn admit_batch_launch(
         mode,
         expected_credential_fingerprints,
     )?;
+    let ambiguous_case_collision = has_ambiguous_destination_casefold_collision(
+        selected_jobs.iter().map(|selected| &selected.job),
+    )?;
     validate_destination_case_acknowledgement(
         mode,
-        &selected_jobs
-            .iter()
-            .map(|selected| selected.job.clone())
-            .collect::<Vec<_>>(),
+        ambiguous_case_collision,
         acknowledge_ambiguous_destination_case,
         fallback_profile.batch_concurrency.clamp(1, 16),
     )?;
@@ -380,8 +379,8 @@ pub(crate) fn duplicate_destination(jobs: &[BulkJob]) -> Result<Option<String>, 
 /// that differs only by case must be surfaced even though its exact identity
 /// remains distinct. Known Gmail and Exchange Online endpoints already use a
 /// case-insensitive canonical identity and are handled as exact duplicates.
-pub(crate) fn has_ambiguous_destination_casefold_collision(
-    jobs: &[BulkJob],
+pub(crate) fn has_ambiguous_destination_casefold_collision<'a>(
+    jobs: impl Iterator<Item = &'a BulkJob>,
 ) -> Result<bool, String> {
     let mut by_folded = std::collections::HashMap::<String, String>::new();
     for job in jobs {
@@ -407,11 +406,11 @@ pub(crate) fn has_ambiguous_destination_casefold_collision(
 
 fn validate_destination_case_acknowledgement(
     mode: BatchExecutionMode,
-    jobs: &[BulkJob],
+    has_collision: bool,
     acknowledged: bool,
     concurrency: usize,
 ) -> Result<(), String> {
-    if mode.is_live() && has_ambiguous_destination_casefold_collision(jobs)? {
+    if mode.is_live() && has_collision {
         if !acknowledged {
             return Err("Live batch blocked: destination mailbox names differ only by case on an endpoint with unknown case semantics. Review the accounts and explicitly acknowledge the possible identity collision in the live confirmation.".into());
         }
@@ -864,11 +863,11 @@ mod tests {
         first.profile.destination_user = "User@example.test".into();
         let mut second = first.clone();
         second.profile.destination_user = "user@example.test".into();
-        let generic = vec![
+        let generic = [
             BulkJob::from_form("first".into(), first.clone(), "Ready".into()),
             BulkJob::from_form("second".into(), second.clone(), "Ready".into()),
         ];
-        assert!(has_ambiguous_destination_casefold_collision(&generic).unwrap());
+        assert!(has_ambiguous_destination_casefold_collision(generic.iter()).unwrap());
 
         first.profile.destination_host = "imap.gmail.com".into();
         second.profile.destination_host = "imap.gmail.com".into();
@@ -876,35 +875,26 @@ mod tests {
             BulkJob::from_form("first".into(), first, "Ready".into()),
             BulkJob::from_form("second".into(), second, "Ready".into()),
         ];
-        assert!(!has_ambiguous_destination_casefold_collision(&known_case_insensitive).unwrap());
+        assert!(
+            !has_ambiguous_destination_casefold_collision(known_case_insensitive.iter()).unwrap()
+        );
         assert!(
             duplicate_destination(&known_case_insensitive)
                 .unwrap()
                 .is_some()
         );
         assert!(
-            validate_destination_case_acknowledgement(
-                BatchExecutionMode::Live,
-                &generic,
-                false,
-                1,
-            )
-            .unwrap_err()
+            validate_destination_case_acknowledgement(BatchExecutionMode::Live, true, false, 1,)
+                .unwrap_err()
                 .contains("explicitly acknowledge")
         );
-        validate_destination_case_acknowledgement(BatchExecutionMode::Live, &generic, true, 1)
-            .unwrap();
+        validate_destination_case_acknowledgement(BatchExecutionMode::Live, true, true, 1).unwrap();
         assert!(
-            validate_destination_case_acknowledgement(BatchExecutionMode::Live, &generic, true, 4,)
+            validate_destination_case_acknowledgement(BatchExecutionMode::Live, true, true, 4,)
                 .is_err()
         );
-        validate_destination_case_acknowledgement(
-            BatchExecutionMode::Preflight,
-            &generic,
-            false,
-            4,
-        )
-        .unwrap();
+        validate_destination_case_acknowledgement(BatchExecutionMode::Preflight, true, false, 4)
+            .unwrap();
     }
 
     #[test]

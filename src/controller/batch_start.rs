@@ -2,7 +2,7 @@
 
 use crate::controller::{
     BatchExecutionContext, BatchLaunchRequest, BatchStartContext, BatchStartDecision,
-    SelectionScope, admit_batch_launch, launch_batch_worker,
+    admit_batch_launch, launch_batch_worker,
 };
 use crate::{App, StatusSeverity};
 use std::time::Instant;
@@ -53,7 +53,7 @@ impl App {
         self.pending_batch_mismatches.clear();
         self.pending_batch_checkpoints.clear();
         let run_id = uuid::Uuid::new_v4().to_string();
-        let selection_scope = SelectionScope::Explicit(self.bulk_selected_ids.clone());
+        let selection_scope = self.bulk_selection_scope();
         let admission = match admit_batch_launch(BatchLaunchRequest {
             store: &self.store,
             requested_project_id: self.bulk_project_id.as_deref(),
@@ -110,7 +110,15 @@ impl App {
         // in-memory selection in the same durable ID space as the admitted
         // run; otherwise headless completion filtering can turn a real run
         // into an empty, apparently successful result.
-        self.bulk_selected_ids = selected_job_ids.iter().cloned().collect();
+        if self.bulk_all_selected
+            && self.bulk_selected_ids.is_empty()
+            && selected_job_ids.len() == self.bulk_jobs.len()
+        {
+            self.select_all_bulk_rows();
+        } else {
+            self.bulk_all_selected = false;
+            self.bulk_selected_ids = selected_job_ids.iter().cloned().collect();
+        }
         self.rebuild_bulk_job_index();
         self.bulk_live_run = live;
         self.run_id = Some(run_id.clone());

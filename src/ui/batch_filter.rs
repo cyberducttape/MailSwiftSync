@@ -215,6 +215,16 @@ mod tests {
         assert_eq!(view.delta_eligible, 4); // rows 0, 10, 20, 30
         assert_eq!(view.live_eligible, 37);
 
+        app.select_all_bulk_rows();
+        app.refresh_bulk_selection_view();
+        assert!(app.bulk_selected_ids.is_empty());
+        assert_eq!(app.bulk_selection_count(), 100);
+        assert!(app.bulk_selection_view.rows.is_empty());
+        assert_eq!(app.bulk_selection_view.selected_loaded, 100);
+        app.bulk_selected_ids.insert("job-5".into());
+        assert_eq!(app.bulk_selection_count(), 99);
+        assert!(!app.bulk_is_selected("job-5"));
+
         drop(app);
         remove_benchmark_state_files(state_path);
     }
@@ -344,9 +354,9 @@ mod tests {
             started.elapsed().as_millis()
         };
         let first_frame_ms = timed_frame(&mut app);
-        // Steady-state repaint with every row selected: selection counts and
-        // the review drawer must not scale with a per-frame queue walk.
-        app.bulk_selected_ids = app.bulk_job_ids.iter().cloned().collect();
+        // Steady-state repaint with every row selected uses compact
+        // all-matching state rather than retaining 100k ID strings.
+        app.select_all_bulk_rows();
         timed_frame(&mut app);
         let selected_frame_ms = timed_frame(&mut app);
         // One search keystroke: rebuilds the filter cache inside the frame.

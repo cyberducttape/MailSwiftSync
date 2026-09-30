@@ -24,32 +24,50 @@ impl App {
         // instead of the whole queue. Selected IDs missing from the queue
         // stay in the plan with no durable state so they cannot disappear
         // from a safety confirmation.
-        let rows = self
-            .bulk_selected_ids
-            .iter()
-            .map(|id| match self.bulk_job_index(id) {
-                Some(index) => BatchActionRow {
-                    id,
-                    selected: true,
-                    visible: self.bulk_visible_indices.binary_search(&index).is_ok(),
-                    durable_state: Some(self.bulk_jobs[index].state.as_str()),
-                    destructive: self.bulk_jobs[index]
-                        .defaults
-                        .profile
-                        .destination_mutation_policy()
-                        .may_remove_destination_state(),
-                },
-                None => BatchActionRow {
-                    id,
-                    selected: true,
-                    visible: false,
-                    durable_state: None,
-                    destructive: false,
-                },
-            })
-            .collect::<Vec<_>>();
+        let rows: Box<dyn Iterator<Item = BatchActionRow<'_>> + '_> = if self.bulk_all_selected {
+            Box::new(
+                self.bulk_job_ids
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, id)| self.bulk_is_selected(id))
+                    .map(|(index, id)| BatchActionRow {
+                        id,
+                        selected: true,
+                        visible: self.bulk_visible_indices.binary_search(&index).is_ok(),
+                        durable_state: Some(self.bulk_jobs[index].state.as_str()),
+                        destructive: self.bulk_jobs[index]
+                            .defaults
+                            .profile
+                            .destination_mutation_policy()
+                            .may_remove_destination_state(),
+                    }),
+            )
+        } else {
+            Box::new(self.bulk_selected_ids.iter().map(|id| {
+                match self.bulk_job_index(id) {
+                    Some(index) => BatchActionRow {
+                        id,
+                        selected: true,
+                        visible: self.bulk_visible_indices.binary_search(&index).is_ok(),
+                        durable_state: Some(self.bulk_jobs[index].state.as_str()),
+                        destructive: self.bulk_jobs[index]
+                            .defaults
+                            .profile
+                            .destination_mutation_policy()
+                            .may_remove_destination_state(),
+                    },
+                    None => BatchActionRow {
+                        id,
+                        selected: true,
+                        visible: false,
+                        durable_state: None,
+                        destructive: false,
+                    },
+                }
+            }))
+        };
         build_batch_action_plan(
-            &rows,
+            rows,
             retry_scope,
             self.form.profile.batch_concurrency,
             execution_mode,
@@ -74,19 +92,40 @@ impl App {
         view.visible = 0;
         view.live_eligible = 0;
         view.delta_eligible = 0;
-        for id in &self.bulk_selected_ids {
-            let Some(index) = self.bulk_job_index(id) else {
-                continue;
-            };
-            view.rows.push(index);
-            let state = self.bulk_jobs[index].state.as_str();
-            // Same eligibility rule as `build_batch_action_plan`.
-            view.live_eligible += usize::from(BulkRetryScope::All.includes(state));
-            view.delta_eligible += usize::from(BulkRetryScope::DeltaRequired.includes(state));
-            view.visible += usize::from(self.bulk_visible_indices.binary_search(&index).is_ok());
+        view.ready = 0;
+        view.review = 0;
+        view.selected_loaded = 0;
+        let compact_all = self.bulk_all_selected && self.bulk_selection_count() > 1;
+        if self.bulk_all_selected {
+            for (index, id) in self.bulk_job_ids.iter().enumerate() {
+                if self.bulk_is_selected(id) {
+                    self.accumulate_selection_row(&mut view, index, compact_all);
+                }
+            }
+        } else {
+            for id in &self.bulk_selected_ids {
+                if let Some(index) = self.bulk_job_index(id) {
+                    self.accumulate_selection_row(&mut view, index, false);
+                }
+            }
         }
         view.rows.sort_unstable();
         self.bulk_selection_view = view;
+    }
+
+    fn accumulate_selection_row(&self, view: &mut SelectionView, index: usize, omit_index: bool) {
+        if !omit_index {
+            view.rows.push(index);
+        }
+        view.selected_loaded += 1;
+        let job = &self.bulk_jobs[index];
+        view.ready += usize::from(job.state == "ready");
+        view.review += usize::from(crate::ui::needs_operator_review(&job.state));
+        let state = job.state.as_str();
+        // Same eligibility rule as `build_batch_action_plan`.
+        view.live_eligible += usize::from(BulkRetryScope::All.includes(state));
+        view.delta_eligible += usize::from(BulkRetryScope::DeltaRequired.includes(state));
+        view.visible += usize::from(self.bulk_visible_indices.binary_search(&index).is_ok());
     }
 
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
@@ -174,7 +213,7 @@ impl App {
                 }
                 if ui
                     .add_enabled(
-                        !self.bulk_selected_ids.is_empty(),
+                        !self.bulk_selection_is_empty(),
                         egui::Button::new(self.language.text("Export selected set…")),
                     )
                     .on_hover_text(self.language.text(
@@ -309,11 +348,16 @@ impl App {
                     // Use the same cached filter the table renders, so the
                     // selection is exactly the rows on screen.
                     self.refresh_bulk_filter_cache();
-                    self.bulk_selected_ids = self
-                        .bulk_visible_indices
-                        .iter()
-                        .filter_map(|&index| self.bulk_job_ids.get(index).cloned())
-                        .collect();
+                    if self.bulk_visible_indices.len() == self.bulk_jobs.len() {
+                        self.select_all_bulk_rows();
+                    } else {
+                        self.bulk_all_selected = false;
+                        self.bulk_selected_ids = self
+                            .bulk_visible_indices
+                            .iter()
+                            .filter_map(|&index| self.bulk_job_ids.get(index).cloned())
+                            .collect();
+                    }
                     selection_changed = true;
                 }
                 if ui.button(self.language.text("Select unresolved")).clicked() {
@@ -325,7 +369,7 @@ impl App {
                     selection_changed = true;
                 }
                 if ui.button(self.language.text("Clear selection")).clicked() {
-                    self.bulk_selected_ids.clear();
+                    self.clear_bulk_selection();
                     selection_changed = true;
                 }
             });
@@ -344,14 +388,13 @@ impl App {
             let visible_and_selected = self.bulk_selection_view.visible;
             // Selected IDs no longer in the queue count as hidden too.
             let hidden_selected = self
-                .bulk_selected_ids
-                .len()
+                .bulk_selection_count()
                 .saturating_sub(visible_and_selected);
 
             let status_text = self
                 .language
                 .text("{} selected · {} visible · {} hidden by current filter")
-                .replacen("{}", &self.bulk_selected_ids.len().to_string(), 1)
+                .replacen("{}", &self.bulk_selection_count().to_string(), 1)
                 .replacen("{}", &visible_and_selected.to_string(), 1)
                 .replacen("{}", &hidden_selected.to_string(), 1);
 
@@ -366,19 +409,19 @@ impl App {
                     .color(self.theme_colors().warning),
                 );
             }
-            let has_selection = !self.bulk_selected_ids.is_empty();
+            let has_selection = !self.bulk_selection_is_empty();
             let mut open_assessment = None;
             if has_selection && ui.available_width() < 1120.0 {
                 let inspector = egui::CollapsingHeader::new(
                     self.language
                         .text("Review selected ({})")
-                        .replace("{}", &self.bulk_selected_ids.len().to_string()),
+                        .replace("{}", &self.bulk_selection_count().to_string()),
                 )
                 .id_salt("narrow_selection_inspector")
                 .show(ui, |ui| self.selection_review_drawer(ui));
                 open_assessment = inspector.body_returned.flatten();
             }
-            let selected_count = self.bulk_selected_ids.len();
+            let selected_count = self.bulk_selection_count();
             let live_count = self.bulk_selection_view.live_eligible;
             let delta_count = self.bulk_selection_view.delta_eligible;
             let mut run_preflight = false;
@@ -432,7 +475,7 @@ impl App {
                     .add_enabled(
                         // Rows only have durable verification records once a
                         // preflight has admitted the queue into a project.
-                        self.bulk_selected_ids.len() == 1 && self.bulk_project_id.is_some(),
+                        self.bulk_selection_count() == 1 && self.bulk_project_id.is_some(),
                         egui::Button::new(self.language.text("Review verification")),
                     )
                     .clicked()
@@ -487,7 +530,7 @@ impl App {
                 && let Some(job_id) = self
                     .bulk_job_ids
                     .iter()
-                    .find(|id| self.bulk_selected_ids.contains(*id))
+                    .find(|id| self.bulk_is_selected(id))
             {
                 self.job_id = Some(job_id.clone());
                 self.active_view = WorkspaceView::Verification;
@@ -538,8 +581,9 @@ impl App {
                         let Some(job_id) = self.bulk_job_ids.get(index) else {
                             return;
                         };
+                        let mut selected = self.bulk_is_selected(job_id);
+                        let all_selected = self.bulk_all_selected;
                         row.col(|ui| {
-                            let mut selected = self.bulk_selected_ids.contains(job_id);
                             let accessible_name = self
                                 .language
                                 .text("Select {} → {}")
@@ -555,7 +599,13 @@ impl App {
                                 )
                             });
                             if response.changed() {
-                                if selected {
+                                if all_selected {
+                                    if selected {
+                                        self.bulk_selected_ids.remove(job_id);
+                                    } else {
+                                        self.bulk_selected_ids.insert(job_id.clone());
+                                    }
+                                } else if selected {
                                     self.bulk_selected_ids.insert(job_id.clone());
                                 } else {
                                     self.bulk_selected_ids.remove(job_id);
@@ -705,7 +755,7 @@ impl App {
         ui.heading(
             self.language
                 .text("Review selected ({})")
-                .replace("{}", &self.bulk_selected_ids.len().to_string()),
+                .replace("{}", &self.bulk_selection_count().to_string()),
         );
         ui.label(
             RichText::new(
@@ -716,7 +766,7 @@ impl App {
             .color(self.theme_colors().text_secondary),
         );
         ui.separator();
-        if self.bulk_selected_ids.is_empty() {
+        if self.bulk_selection_is_empty() {
             ui.label(
                 RichText::new(self.language.text("No mailboxes selected."))
                     .color(self.theme_colors().text_secondary),
@@ -724,7 +774,7 @@ impl App {
             return None;
         }
         let mut open_assessment = None;
-        if self.bulk_selected_ids.len() == 1 {
+        if self.bulk_selection_count() == 1 {
             if let Some(&index) = self.bulk_selection_view.rows.first() {
                 open_assessment = self.review_card(ui, index);
             } else {
@@ -736,23 +786,13 @@ impl App {
             return open_assessment;
         }
 
-        let ready_count = self
-            .bulk_selection_view
-            .rows
-            .iter()
-            .filter(|&&index| self.bulk_jobs[index].state == "ready")
-            .count();
-        let review_count = self
-            .bulk_selection_view
-            .rows
-            .iter()
-            .filter(|&&index| crate::ui::needs_operator_review(&self.bulk_jobs[index].state))
-            .count();
+        let ready_count = self.bulk_selection_view.ready;
+        let review_count = self.bulk_selection_view.review;
         crate::ui::card(ui, |ui| {
             ui.heading(
                 self.language
                     .text("{} selected")
-                    .replace("{}", &self.bulk_selected_ids.len().to_string()),
+                    .replace("{}", &self.bulk_selection_count().to_string()),
             );
             ui.label(
                 RichText::new(
@@ -774,8 +814,7 @@ impl App {
             }
             let other_count = self
                 .bulk_selection_view
-                .rows
-                .len()
+                .selected_loaded
                 .saturating_sub(ready_count + review_count);
             if other_count > 0 {
                 ui.label(
@@ -788,9 +827,8 @@ impl App {
                 );
             }
             let unavailable_count = self
-                .bulk_selected_ids
-                .len()
-                .saturating_sub(self.bulk_selection_view.rows.len());
+                .bulk_selection_count()
+                .saturating_sub(self.bulk_selection_view.selected_loaded);
             if unavailable_count > 0 {
                 ui.label(
                     RichText::new(
@@ -973,7 +1011,8 @@ fn format_data_size(bytes: u64) -> String {
 /// One frame's projection of the explicit selection onto the queue.
 #[derive(Default)]
 pub(crate) struct SelectionView {
-    /// Queue indices of selected rows, ascending.
+    /// Queue indices of selected rows, ascending. Compact select-all keeps
+    /// only the one-row inspection index rather than materializing the set.
     pub(crate) rows: Vec<usize>,
     /// Selected rows that the current filter shows.
     pub(crate) visible: usize,
@@ -981,6 +1020,9 @@ pub(crate) struct SelectionView {
     pub(crate) live_eligible: usize,
     /// Selected rows a final-delta run would include.
     pub(crate) delta_eligible: usize,
+    pub(crate) selected_loaded: usize,
+    pub(crate) ready: usize,
+    pub(crate) review: usize,
 }
 
 #[cfg(test)]

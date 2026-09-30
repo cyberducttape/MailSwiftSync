@@ -112,12 +112,9 @@ impl App {
             // queue remain visible to the planner as blocked/missing rather
             // than disappearing from the confirmation scope.
             let plan = self.current_batch_action_plan(self.bulk_mode, self.bulk_retry_scope);
-            let selected_job_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
-
             self.bulk_confirmation_summary = Some(plan.clone());
 
             self.bulk_confirmation_identity = Some(crate::controller::BatchConfirmationIdentity {
-                selected_job_ids,
                 retry_scope: self.bulk_retry_scope,
                 execution_mode: self.bulk_mode,
                 concurrency: plan.concurrency,
@@ -130,20 +127,28 @@ impl App {
             .as_ref()
             .cloned()
             .expect("confirmation summary is initialized above");
-        let selected_ids = self.bulk_selected_ids.iter().cloned().collect::<Vec<_>>();
-        let selected_jobs = selected_ids
+        let selected_count = self.bulk_selection_count();
+        let selected_samples = self
+            .bulk_jobs
             .iter()
-            .filter_map(|id| {
-                self.bulk_job_ids
-                    .iter()
-                    .position(|job_id| job_id == id)
-                    .and_then(|index| self.bulk_jobs.get(index))
+            .zip(&self.bulk_job_ids)
+            .filter(|(_, id)| self.bulk_is_selected(id))
+            .take(5)
+            .map(|(job, _)| {
+                (
+                    job.label.clone(),
+                    job.source_user.clone(),
+                    job.destination_user.clone(),
+                )
             })
-            .cloned()
             .collect::<Vec<_>>();
         let ambiguous_case_collision =
             crate::controller::batch_admission::has_ambiguous_destination_casefold_collision(
-                &selected_jobs,
+                self.bulk_jobs
+                    .iter()
+                    .zip(&self.bulk_job_ids)
+                    .filter(|(_, id)| self.bulk_is_selected(id))
+                    .map(|(job, _)| job),
             )
             .unwrap_or(false);
 
@@ -179,23 +184,20 @@ impl App {
                 ui.label(
                     RichText::new(self.language.text("Sample of selected mailboxes:")).strong(),
                 );
-                for job_id in selected_ids.iter().take(5) {
-                    if let Some(index) = self.bulk_job_ids.iter().position(|id| id == job_id) {
-                        let job = &self.bulk_jobs[index];
-                        ui.label(
-                            self.language
-                                .text("• {}: {} → {}")
-                                .replace("{}", &job.label)
-                                .replacen("{}", &job.source_user, 1)
-                                .replacen("{}", &job.destination_user, 1),
-                        );
-                    }
+                for (label, source, destination) in &selected_samples {
+                    ui.label(
+                        self.language
+                            .text("• {}: {} → {}")
+                            .replace("{}", label)
+                            .replacen("{}", source, 1)
+                            .replacen("{}", destination, 1),
+                    );
                 }
-                if selected_ids.len() > 5 {
+                if selected_count > 5 {
                     ui.label(
                         self.language
                             .text("… plus {} more selected")
-                            .replace("{}", &(selected_ids.len() - 5).to_string()),
+                            .replace("{}", &(selected_count - 5).to_string()),
                     );
                 }
                 if summary.hidden_selection_count > 0
@@ -340,13 +342,13 @@ impl App {
     /// Write the explicit selection as secret-free JSON for review outside
     /// the application. An empty selection exports nothing, never "all".
     pub(crate) fn export_bulk_selection(&self) -> Result<(), String> {
-        if self.bulk_selected_ids.is_empty() {
+        if self.bulk_selection_is_empty() {
             return Err(self
                 .language
                 .text("Select one or more rows to export.")
                 .into());
         }
-        let scope = crate::controller::SelectionScope::Explicit(self.bulk_selected_ids.clone());
+        let scope = self.bulk_selection_scope();
         let value = selection_value(&self.bulk_jobs, &scope, &self.bulk_job_ids);
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-batch-selection.json")
