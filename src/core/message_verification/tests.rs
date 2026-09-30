@@ -1419,3 +1419,56 @@ fn generated_staged_reconciliation_matches_every_semantic_mismatch_field() {
         );
     }
 }
+
+/// Reconciliation on a durable (FULL-synchronous) stage, as live
+/// verification uses. Opt-in: `cargo test --release durable_stage_reconciliation_benchmark -- --ignored --nocapture`.
+#[test]
+#[ignore = "opt-in durable-stage reconciliation benchmark"]
+fn durable_stage_reconciliation_benchmark() {
+    let messages = 20_000_usize;
+    let build = |side: &str| {
+        (0..messages)
+            .map(|index| {
+                let size = if side == "d" && index % 50 == 0 { 2 } else { 1 };
+                (
+                    MailboxMessageKey::new("INBOX", format!("{index}")),
+                    ExtractedMessage {
+                        message_id: Some(format!("<m{index}@example>")),
+                        uid: Some(format!("{index}")),
+                        size_bytes: Some(1_000 + index as u64 * size),
+                        internal_date: Some("01-Jan-2024 00:00:00 +0000".to_owned()),
+                    },
+                )
+            })
+            .collect::<ExtractedMessages>()
+    };
+    let directory = std::env::temp_dir().join(format!("mss-stage-bench-{}", uuid::Uuid::new_v4()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(&directory).unwrap();
+    let mut stage =
+        MessageMetadataStage::open_durable(directory.join("stage.sqlite"), "bench").unwrap();
+    stage
+        .insert_messages(StagedMessageSide::Source, &build("s"))
+        .unwrap();
+    stage
+        .insert_messages(StagedMessageSide::Destination, &build("d"))
+        .unwrap();
+    let started = std::time::Instant::now();
+    let (_, summary) = MessageVerification::detect_mismatches_from_stage(
+        "job-bench",
+        "run-bench",
+        &stage,
+        &HashMap::new(),
+    )
+    .unwrap();
+    let elapsed = started.elapsed().as_millis();
+    assert_eq!(summary.total_source, messages as u64);
+    eprintln!(
+        "durable-stage reconciliation messages={messages} elapsed_ms={elapsed} changed={}",
+        summary.changed_count
+    );
+    drop(stage);
+    let _ = std::fs::remove_dir_all(directory);
+}

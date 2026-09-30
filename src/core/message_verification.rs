@@ -985,6 +985,13 @@ impl MessageVerification {
         folder_mapping: &HashMap<String, String>,
     ) -> Result<(Vec<MessageMismatch>, VerificationSummary), String> {
         let connection = stage.connection();
+        // One transaction for the whole pass. A durable stage runs with FULL
+        // synchronization, so autocommitting each matched-row insert costs a
+        // disk sync per message. Reconciliation is reset and recomputed on
+        // every run, so rolling back an interrupted pass loses nothing.
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| format!("could not begin staged reconciliation: {error}"))?;
         connection
             .execute_batch(
                 // Keep reconciliation intermediates in the private stage
@@ -1175,28 +1182,29 @@ impl MessageVerification {
             after_rowid = batch.last().map_or(after_rowid, |row| row.rowid);
             for source in batch {
                 let expected = expected_destination_folder(&source.key, folder_mapping);
+                let size = sqlite_stage_size(&source)?;
                 let inserted = connection
-                    .execute(
+                    .prepare_cached(
                         "INSERT OR IGNORE INTO staged_fingerprint_buckets(folder,date_key,size_bytes) VALUES(?1,?2,?3)",
-                        params![expected, source.date_key, sqlite_stage_size(&source)?],
                     )
+                    .and_then(|mut statement| {
+                        statement.execute(params![expected, source.date_key, size])
+                    })
                     .map_err(|error| format!("could not stage fingerprint bucket: {error}"))?;
                 if inserted == 0 {
                     continue;
                 }
                 let source_count: i64 = connection
-                    .query_row(
+                    .prepare_cached(
                         "SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.match_mailbox=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid)",
-                        params![expected, source.date_key, sqlite_stage_size(&source)?],
-                        |row| row.get(0),
                     )
+                    .and_then(|mut statement| statement.query_row(params![expected, source.date_key, size], |row| row.get(0)))
                     .map_err(|error| format!("could not count staged source bucket: {error}"))?;
                 let destination_count: i64 = connection
-                    .query_row(
+                    .prepare_cached(
                         "SELECT COUNT(*) FROM staged_messages d WHERE d.side=1 AND d.match_mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid)",
-                        params![expected, source.date_key, sqlite_stage_size(&source)?],
-                        |row| row.get(0),
                     )
+                    .and_then(|mut statement| statement.query_row(params![expected, source.date_key, size], |row| row.get(0)))
                     .map_err(|error| format!("could not count staged destination bucket: {error}"))?;
                 if source_count != 1 || destination_count != 1 {
                     continue;
@@ -1204,12 +1212,12 @@ impl MessageVerification {
                 let source_row = stage_candidate(
                     connection,
                     "SELECT s.rowid,s.mailbox,s.uidvalidity,s.uid,s.message_id,s.internal_date,s.date_key,s.size_bytes FROM staged_messages s WHERE s.side=0 AND s.match_mailbox=?1 AND s.date_key=?2 AND s.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=s.side AND m.mailbox=s.mailbox AND m.uidvalidity=s.uidvalidity AND m.uid=s.uid) LIMIT 1",
-                    params![expected, source.date_key, sqlite_stage_size(&source)?],
+                    params![expected, source.date_key, size],
                 )?;
                 let destination_row = stage_candidate(
                     connection,
                     "SELECT rowid,mailbox,uidvalidity,uid,message_id,internal_date,date_key,size_bytes FROM staged_messages d WHERE d.side=1 AND d.match_mailbox=?1 AND d.date_key=?2 AND d.size_bytes=?3 AND NOT EXISTS(SELECT 1 FROM staged_matched m WHERE m.side=d.side AND m.mailbox=d.mailbox AND m.uidvalidity=d.uidvalidity AND m.uid=d.uid) LIMIT 1",
-                    params![expected, source.date_key, sqlite_stage_size(&source)?],
+                    params![expected, source.date_key, size],
                 )?;
                 if let (Some(source_row), Some(destination_row)) = (source_row, destination_row) {
                     mark_stage_matched(connection, StagedMessageSide::Source, &source_row)?;
@@ -1250,7 +1258,7 @@ impl MessageVerification {
                 missing_count = missing_count.saturating_add(1);
             }
         }
-        connection.execute_batch("CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0;").map_err(|error| error.to_string())?;
+        connection.execute_batch("CREATE TABLE staged_duplicate_ids AS SELECT d.message_id FROM staged_messages d WHERE d.side=1 AND d.message_id IS NOT NULL GROUP BY d.message_id HAVING COUNT(*) > (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) AND (SELECT COUNT(*) FROM staged_messages s WHERE s.side=0 AND s.message_id=d.message_id) > 0; CREATE INDEX staged_duplicate_ids_message_id ON staged_duplicate_ids(message_id);").map_err(|error| error.to_string())?;
         after_rowid = 0;
         loop {
             let batch = stage
@@ -1263,11 +1271,12 @@ impl MessageVerification {
             for destination in batch {
                 let duplicated = match destination.message.message_id.as_deref() {
                     Some(id) => connection
-                        .query_row(
+                        .prepare_cached(
                             "SELECT EXISTS(SELECT 1 FROM staged_duplicate_ids WHERE message_id=?1)",
-                            [id],
-                            |row| row.get::<_, bool>(0),
                         )
+                        .and_then(|mut statement| {
+                            statement.query_row([id], |row| row.get::<_, bool>(0))
+                        })
                         .map_err(|error| {
                             format!("could not classify staged duplicate message: {error}")
                         })?,
@@ -1322,6 +1331,9 @@ impl MessageVerification {
                     .into(),
             );
         }
+        transaction
+            .commit()
+            .map_err(|error| format!("could not finish staged reconciliation: {error}"))?;
         Ok((
             mismatches,
             VerificationSummary {
@@ -1353,8 +1365,10 @@ fn stage_candidate<P: rusqlite::Params>(
     sql: &str,
     parameters: P,
 ) -> Result<Option<StagedMessage>, String> {
+    // Cached: reconciliation runs these few statements once per message.
     connection
-        .query_row(sql, parameters, staged_message_from_row)
+        .prepare_cached(sql)
+        .and_then(|mut statement| statement.query_row(parameters, staged_message_from_row))
         .optional()
         .map_err(|error| format!("could not query staged reconciliation candidate: {error}"))
 }
@@ -1364,24 +1378,26 @@ fn mark_stage_matched(
     side: StagedMessageSide,
     message: &StagedMessage,
 ) -> Result<(), String> {
+    let uidvalidity = message
+        .key
+        .uidvalidity
+        .map(|value| {
+            i64::try_from(value).map_err(|_| "staged UIDVALIDITY exceeds SQLite range".to_owned())
+        })
+        .transpose()?
+        .unwrap_or(-1);
     connection
-        .execute(
+        .prepare_cached(
             "INSERT INTO staged_matched(side,mailbox,uidvalidity,uid) VALUES(?1,?2,?3,?4)",
-            params![
+        )
+        .and_then(|mut statement| {
+            statement.execute(params![
                 side.as_i64(),
                 message.key.mailbox.as_ref(),
-                message
-                    .key
-                    .uidvalidity
-                    .map(|value| {
-                        i64::try_from(value)
-                            .map_err(|_| "staged UIDVALIDITY exceeds SQLite range".to_owned())
-                    })
-                    .transpose()?
-                    .unwrap_or(-1),
+                uidvalidity,
                 message.key.uid,
-            ],
-        )
+            ])
+        })
         .map(|_| ())
         .map_err(|error| format!("could not mark staged message as matched: {error}"))
 }

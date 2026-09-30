@@ -1142,9 +1142,9 @@ fn oauth_authorize_command(
     })
     .map_err(failure)?;
     crate::oauth_authorize::store_refresh_config(&keyring_id, &config).map_err(failure)?;
-    Ok(format!(
-        "Stored the OAuth refresh configuration under keyring ID `{keyring_id}`. Enter this ID as the source or destination OAuth refresh keyring ID in the migration profile; live launches will refresh the access token automatically."
-    ))
+    // The operator supplied the keyring ID; not echoing it keeps credential
+    // lookup names out of terminal logs.
+    Ok("Stored the OAuth refresh configuration in the OS keyring under the ID you supplied. Enter that ID as the source or destination OAuth refresh keyring ID in the migration profile; live launches will refresh the access token automatically.".to_owned())
 }
 
 #[cfg(test)]
