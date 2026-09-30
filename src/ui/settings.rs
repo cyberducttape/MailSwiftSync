@@ -52,7 +52,7 @@ pub(crate) fn show(
                     egui::ComboBox::from_id_salt("appearance_theme")
                         .selected_text(theme.label())
                         .show_ui(ui, |ui| {
-                            for option in crate::ui::ThemeKind::all() {
+                            for option in crate::ui::ThemeKind::recommended() {
                                 if ui.selectable_value(theme, *option, option.label()).clicked()
                                     && let Err(value) = (crate::ui::AppearancePreferences {
                                         theme: *theme,
@@ -65,6 +65,24 @@ pub(crate) fn show(
                                 }
                             }
                         });
+                });
+                ui.collapsing(language.message("ui.additional-themes"), |ui| {
+                    for option in crate::ui::ThemeKind::additional() {
+                        if ui.selectable_value(theme, *option, option.label()).clicked()
+                            && let Err(value) = (crate::ui::AppearancePreferences {
+                                theme: *theme,
+                                language: *language,
+                                dark_mode: *dark_mode,
+                                ui_scale: *ui_scale,
+                            })
+                            .save()
+                        {
+                            error = Some(format!(
+                                "{}: {value}",
+                                language.message("ui.could-not-save-appearance-preference")
+                            ));
+                        }
+                    }
                 });
                 let theme_is_variable = matches!(theme, crate::ui::ThemeKind::Default);
                 if theme_is_variable {
@@ -94,11 +112,26 @@ pub(crate) fn show(
                 }
                 ui.horizontal(|ui| {
                     ui.label(format!("{}: {:.0}%", language.message("ui.interface-size"), *ui_scale * 100.0));
+                    let scale_before = *ui_scale;
                     if ui.button(language.message("ui.decrease")).clicked() {
                         *ui_scale = (*ui_scale - 0.10).max(0.90);
                     }
                     if ui.button(language.message("ui.increase")).clicked() {
                         *ui_scale = (*ui_scale + 0.10).min(1.50);
+                    }
+                    if *ui_scale != scale_before
+                        && let Err(value) = (crate::ui::AppearancePreferences {
+                            theme: *theme,
+                            language: *language,
+                            dark_mode: *dark_mode,
+                            ui_scale: *ui_scale,
+                        })
+                        .save()
+                    {
+                        error = Some(format!(
+                            "{}: {value}",
+                            language.message("ui.could-not-save-appearance-preference")
+                        ));
                     }
                 });
                 ui.horizontal(|ui| {
@@ -120,17 +153,6 @@ pub(crate) fn show(
                             }
                         });
                 });
-                if ui.button(language.message("ui.save-appearance-preferences")).clicked()
-                    && let Err(value) = (crate::ui::AppearancePreferences {
-                        theme: *theme,
-                        language: *language,
-                        dark_mode: *dark_mode,
-                        ui_scale: *ui_scale,
-                    })
-                    .save()
-                {
-                    error = Some(format!("{}: {value}", language.message("ui.could-not-save-appearance-preference")));
-                }
             });
             ui.add_space(8.0);
             crate::ui::card(ui, |ui| {

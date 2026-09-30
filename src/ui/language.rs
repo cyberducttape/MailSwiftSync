@@ -526,6 +526,7 @@ mod tests {
             "ui.provider-qualification-and-detailed-simulation",
             "ui.actions-toggle-inspector",
             "ui.close-inspector",
+            "ui.additional-themes",
         ] {
             assert_ne!(
                 UiLanguage::German.message(key),

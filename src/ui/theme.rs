@@ -20,6 +20,27 @@ pub(crate) enum ThemeKind {
 }
 
 impl ThemeKind {
+    /// Conservative themes shown in the primary appearance selector.
+    pub(crate) fn recommended() -> &'static [Self] {
+        &[Self::Default, Self::HighContrast]
+    }
+
+    /// Optional novelty and legacy palettes, kept available without making
+    /// them the first impression for a production migration operator.
+    pub(crate) fn additional() -> &'static [Self] {
+        &[
+            Self::ClassicGreen,
+            Self::ClassicAmber,
+            Self::ClassicWhite,
+            Self::Retro80sNeon,
+            Self::TerminalBlue,
+            Self::Commodore64,
+            Self::Windows95,
+            Self::Windows31,
+        ]
+    }
+
+    #[cfg(test)]
     pub(crate) fn all() -> &'static [Self] {
         &[
             Self::Default,
@@ -549,6 +570,24 @@ mod tests {
         assert_eq!(ThemeKind::all().len(), 10);
         assert_eq!(ThemeKind::Windows95.label(), "Windows 95");
         assert_eq!(ThemeKind::Windows31.label(), "Windows 3.1");
+    }
+
+    #[test]
+    fn recommended_themes_are_conservative_and_additional_themes_remain_available() {
+        assert_eq!(
+            ThemeKind::recommended(),
+            &[ThemeKind::Default, ThemeKind::HighContrast]
+        );
+        assert_eq!(
+            ThemeKind::recommended().len() + ThemeKind::additional().len(),
+            ThemeKind::all().len()
+        );
+        for theme in ThemeKind::recommended()
+            .iter()
+            .chain(ThemeKind::additional())
+        {
+            assert!(ThemeKind::all().contains(theme));
+        }
     }
 
     #[test]
