@@ -222,7 +222,12 @@ pub struct ReportRunSnapshot {
 pub struct ProjectReportSnapshot {
     pub project: Project,
     pub mailboxes: Vec<ReportMailboxSnapshot>,
+    /// The most recent runs, for presentation. Bounded; do not use it to
+    /// decide whether work is still active.
     pub runs: Vec<ReportRunSnapshot>,
+    /// Whether any run of the project, not only a recent one, is queued or
+    /// running. A batch parent can be older than its newest children.
+    pub has_active_runs: bool,
 }
 
 /// The strongest claim supported by the current verifier adapter.

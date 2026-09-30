@@ -243,6 +243,9 @@ fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), Strin
                 .into(),
         );
     }
+    if snapshot.mailboxes.is_empty() {
+        return Err("Customer proof is blocked: the project has no mailbox results.".into());
+    }
     if let Some(mailbox) = snapshot.mailboxes.iter().find(|mailbox| {
         !matches!(
             mailbox.job.state.as_str(),
@@ -254,11 +257,7 @@ fn ensure_exportable(snapshot: &core::ProjectReportSnapshot) -> Result<(), Strin
             mailbox.job.id
         ));
     }
-    if snapshot
-        .runs
-        .iter()
-        .any(|run| matches!(run.run.status.as_str(), "queued" | "running"))
-    {
+    if snapshot.has_active_runs {
         return Err("Customer proof is blocked while migration work is still running.".into());
     }
     Ok(())
@@ -273,10 +272,7 @@ fn is_durably_complete(snapshot: &core::ProjectReportSnapshot) -> bool {
                 "verified" | "verified_with_exceptions"
             ) && mailbox.evidence.is_some()
         })
-        && snapshot
-            .runs
-            .iter()
-            .all(|run| !matches!(run.run.status.as_str(), "queued" | "running"))
+        && !snapshot.has_active_runs
 }
 
 #[cfg(test)]
@@ -327,6 +323,7 @@ mod tests {
                 }),
             }],
             runs: Vec::new(),
+            has_active_runs: false,
         }
     }
 
@@ -335,6 +332,12 @@ mod tests {
         assert!(ensure_exportable(&snapshot(core::Phase::Verification, "verified", true)).is_err());
         assert!(ensure_exportable(&snapshot(core::Phase::Complete, "verified", false)).is_err());
         assert!(ensure_exportable(&snapshot(core::Phase::Complete, "verified", true)).is_ok());
+        let mut active = snapshot(core::Phase::Complete, "verified", true);
+        active.has_active_runs = true;
+        assert!(ensure_exportable(&active).is_err());
+        let mut empty = snapshot(core::Phase::Complete, "verified", true);
+        empty.mailboxes.clear();
+        assert!(ensure_exportable(&empty).is_err());
     }
 
     #[test]

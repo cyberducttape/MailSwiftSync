@@ -174,10 +174,16 @@ impl StateStore {
                 }
             })
             .collect();
+        let has_active_runs: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs WHERE project_id=?1 AND status IN ('queued','running'))",
+            [project_id],
+            |row| row.get(0),
+        )?;
         let snapshot = ProjectReportSnapshot {
             project,
             mailboxes,
             runs,
+            has_active_runs,
         };
         drop(run_statement);
         drop(evidence_statement);
