@@ -497,6 +497,14 @@ impl UiLanguage {
                 "Konfigurieren Sie Endpunkte und Zugangsdaten, bevor Sie eine Vorabprüfung ausführen."
             }
             "Plan name" => "Planname",
+            "DURABLE WORKSPACE UNAVAILABLE" => "DAUERHAFTER ARBEITSBEREICH NICHT VERFÜGBAR",
+            "MailSwiftSync cannot open its durable workspace. This session is temporary; live migrations are disabled to protect recovery history." => {
+                "MailSwiftSync kann den dauerhaften Arbeitsbereich nicht öffnen. Diese Sitzung ist temporär; Live-Migrationen sind zum Schutz des Wiederherstellungsverlaufs deaktiviert."
+            }
+            "State file:" => "Statusdatei:",
+            "Copy state path" => "Statuspfad kopieren",
+            "Open Activity diagnostics" => "Aktivitätsdiagnose öffnen",
+            "Unavailable" => "Nicht verfügbar",
             "Plan tools" => "Planwerkzeuge",
             "Assess configuration" => "Konfiguration bewerten",
             "Testing accounts…" => "Konten werden getestet…",
@@ -537,6 +545,7 @@ impl UiLanguage {
             "Advanced" => "Erweitert",
             "Start live migration" => "Live-Migration starten",
             "Confirm live migration" => "Live-Migration bestätigen",
+            "Destination policy: {}" => "Zielrichtlinie: {}",
             "Destination changes require confirmation" => {
                 "Änderungen am Ziel erfordern eine Bestätigung"
             }

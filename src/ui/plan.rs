@@ -18,12 +18,14 @@ impl App {
         let mut close_requested = false;
         let response =
             egui::Modal::new(egui::Id::new("live_migration_confirmation")).show(ctx, |ui| {
+                let policy = self.form.profile.destination_mutation_policy();
+                let removes = policy.may_remove_destination_state();
                 ui.heading(
-                    RichText::new(
-                        self.language
-                            .text("Destination changes require confirmation"),
-                    )
-                    .color(self.theme_colors().danger),
+                    RichText::new(self.language.text("Confirm live migration")).color(if removes {
+                        self.theme_colors().danger
+                    } else {
+                        self.theme_colors().info
+                    }),
                 );
                 ui.label(
                     self.language
@@ -68,8 +70,6 @@ impl App {
                 // One derived policy covers both engines: Dovecot backup
                 // mirrors, imapsync --delete2 deletes, everything else keeps
                 // destination-only state.
-                let policy = self.form.profile.destination_mutation_policy();
-                let removes = policy.may_remove_destination_state();
                 ui.label(
                     RichText::new(self.language.text(policy.warning()))
                         .strong()
@@ -103,8 +103,8 @@ impl App {
                         .destination_mutation_policy()
                         .may_remove_destination_state()
                         || self.live_destination_loss_acknowledged;
-                    if ui
-                        .add_enabled(
+                    let start_clicked = if removes {
+                        ui.add_enabled(
                             acknowledged,
                             egui::Button::new(
                                 RichText::new(self.language.text("I understand — start migration"))
@@ -113,7 +113,17 @@ impl App {
                             .fill(self.theme_colors().danger),
                         )
                         .clicked()
-                    {
+                    } else {
+                        ui.add_enabled_ui(acknowledged, |ui| {
+                            crate::ui::primary_button(
+                                ui,
+                                self.language.text("I understand — start migration"),
+                            )
+                        })
+                        .inner
+                        .clicked()
+                    };
+                    if start_clicked {
                         close_requested = true;
                         self.live_confirmed = true;
                         self.live_confirmation_plan =

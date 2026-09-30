@@ -16,6 +16,35 @@ impl App {
             self.language
                 .text("A calm, evidence-led workspace for moving mailboxes safely."),
         );
+        if !self.persistence_available {
+            let state_path = self
+                .state_path
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| self.language.text("Unavailable").to_owned());
+            crate::ui::card(ui, |ui| {
+                ui.label(
+                    RichText::new(self.language.text("DURABLE WORKSPACE UNAVAILABLE"))
+                        .strong()
+                        .color(colors.danger),
+                );
+                ui.label(self.language.text("MailSwiftSync cannot open its durable workspace. This session is temporary; live migrations are disabled to protect recovery history."));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(self.language.text("State file:"));
+                    ui.monospace(&state_path);
+                    if ui.button(self.language.text("Copy state path")).clicked() {
+                        ui.ctx().copy_text(state_path.clone());
+                    }
+                    if ui
+                        .button(self.language.text("Open Activity diagnostics"))
+                        .clicked()
+                    {
+                        self.active_view = WorkspaceView::Activity;
+                    }
+                });
+            });
+            ui.add_space(8.0);
+        }
         let project = self.ui_snapshot.project.clone();
         let phase = project
             .as_ref()
@@ -348,6 +377,7 @@ impl App {
     }
 
     pub(crate) fn project_summary(&mut self, ui: &mut egui::Ui) {
+        let destination_policy = self.form.profile.destination_mutation_policy();
         if self.active_view != WorkspaceView::Overview
             && self.active_project_id().is_none()
             && self.bulk_jobs.is_empty()
@@ -446,7 +476,7 @@ impl App {
                     if self.form.dry_run {
                         self.theme_colors().success
                     } else {
-                        self.theme_colors().danger
+                        self.theme_colors().info
                     },
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -461,13 +491,36 @@ impl App {
                         .color(if passed == total {
                             self.theme_colors().success
                         } else {
-                            self.theme_colors().danger
+                            self.theme_colors().warning
                         }),
                     );
                 });
             });
             ui.add_space(5.0);
             ui.label(RichText::new(self.language.text("Recommended next step: run preflight, review blockers, then select a small pilot mailbox.")).color(self.theme_colors().text_secondary));
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    self.language
+                        .text("Destination policy: {}")
+                        .replace("{}", self.language.text(destination_policy.label())),
+                )
+                .strong()
+                .color(if destination_policy.may_remove_destination_state() {
+                    self.theme_colors().danger
+                } else {
+                    self.theme_colors().success
+                }),
+            );
+            ui.label(
+                RichText::new(self.language.text(destination_policy.warning()))
+                    .small()
+                    .color(if destination_policy.may_remove_destination_state() {
+                        self.theme_colors().danger
+                    } else {
+                        self.theme_colors().text_secondary
+                    }),
+            );
         });
     }
 
