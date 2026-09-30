@@ -216,9 +216,9 @@ fn compatibility_matrix_references_tested_providers() {
         "Compatibility matrix must not be empty"
     );
     for provider in [
-        "| Gmail | Gmail |",
-        "| Microsoft 365 | Microsoft 365 |",
-        "| Fastmail | Fastmail |",
+        "| Gmail / Workspace | Microsoft 365 |",
+        "| Microsoft 365 | Gmail / Workspace |",
+        "| Fastmail | Microsoft 365 |",
     ] {
         assert!(
             matrix.contains(provider),

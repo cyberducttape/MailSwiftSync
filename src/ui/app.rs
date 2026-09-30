@@ -321,6 +321,10 @@ impl App {
                 self.endpoint_plan_panel(&mut columns[1], false, dovecot, colors.success);
             });
         }
+        ui.add_space(12.0);
+        self.provider_qualification_card(ui);
+        ui.add_space(12.0);
+        self.migration_simulation_card(ui);
         if !dovecot {
             ui.add_space(16.0);
             egui::CollapsingHeader::new(self.language.text("Advanced engine options"))

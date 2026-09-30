@@ -85,6 +85,7 @@ The default live imapsync result is labeled `Metadata reconciled — message bod
 - Metadata-level message mismatch reports with durable missing, extra, and modified counts; optional encrypted-imapsync forensic mode can additionally hash every fetched RFC822 body within explicit per-message and total-byte bounds.
 - Optional OS-keyring password references; keyring IDs are saved, while password material remains outside the profile and SQLite ledger.
 - Dry-run default, explicit live confirmation, timeout, cancellation, and destructive-option warnings.
+- The Plan page shows provider-pair qualification state and a pre-migration simulation of scope, destination mutation behavior, engine, mapping, authentication, observed readiness risks, and known inventory. Hosted-provider pairs remain visibly unqualified until live qualification evidence exists; unknown message counts and data volume are not estimated.
 - Running jobs show elapsed time and can be stopped through an explicit confirmation; Advanced options include contextual guidance for per-process throttles.
 
 Experimental or planned:

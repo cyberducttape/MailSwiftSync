@@ -409,6 +409,90 @@ impl UiLanguage {
             "Stop" => "Anhalten",
             "Durable view is stale" => "Dauerhafte Ansicht ist nicht aktuell",
             "Migration plan" => "Migrationsplan",
+            "PROVIDER QUALIFICATION" => "ANBIETERQUALIFIZIERUNG",
+            "UNQUALIFIED" => "NICHT QUALIFIZIERT",
+            "COMMUNITY / UNQUALIFIED PATH" => "COMMUNITY-PFAD / NICHT QUALIFIZIERT",
+            "The generic IMAP migration path is available, but this provider pair has not passed the MailSwiftSync production qualification suite." => {
+                "Der allgemeine IMAP-Migrationspfad ist verfügbar, aber diese Anbieterpaarung hat die MailSwiftSync-Produktionsqualifizierung nicht bestanden."
+            }
+            "Last qualification: none · no live provider evidence is currently bundled." => {
+                "Letzte Qualifizierung: keine · derzeit sind keine Live-Anbieternachweise enthalten."
+            }
+            "Qualification requires tested authentication, folder inventory and mapping, independent verification, interruption recovery, throttling recovery, and large-mailbox coverage." => {
+                "Die Qualifizierung erfordert getestete Authentifizierung, Ordnerinventar und -zuordnung, unabhängige Verifizierung, Wiederherstellung nach Unterbrechung und Drosselung sowie Tests mit großen Postfächern."
+            }
+            "PRE-MIGRATION SIMULATION" => "MIGRATIONSSIMULATION",
+            "SCOPE" => "UMFANG",
+            "RISKS" => "RISIKEN",
+            "Plan preview only — estimates are shown only when supported by observed data." => {
+                "Nur Planvorschau — Schätzungen werden nur bei ausreichenden Messdaten angezeigt."
+            }
+            "SOURCE" => "QUELLE",
+            "DESTINATION" => "ZIEL",
+            "ENGINE" => "MIGRATIONSPROGRAMM",
+            "MAPPING" => "ZUORDNUNG",
+            "AUTH" => "AUTHENTIFIZIERUNG",
+            "ESTIMATED SCALE" => "GESCHÄTZTER UMFANG",
+            "PROPOSED EXECUTION" => "VORGESCHLAGENER ABLAUF",
+            "Read-only; source messages are not deleted by default" => {
+                "Schreibgeschützt; Quellnachrichten werden standardmäßig nicht gelöscht."
+            }
+            "No destination writes are intended during preflight" => {
+                "Während der Vorabprüfung sind keine Schreibvorgänge im Ziel vorgesehen."
+            }
+            "resolved from PATH" => "über PATH aufgelöst",
+            "Folder inventory: {} source · {} destination" => {
+                "Ordnerinventar: {} Quelle · {} Ziel"
+            }
+            "Message count and data volume are not known yet" => {
+                "Nachrichtenanzahl und Datenvolumen sind noch unbekannt."
+            }
+            "Authenticated in the latest readiness check" => {
+                "Bei der letzten Bereitschaftsprüfung authentifiziert"
+            }
+            "Not yet verified" => "Noch nicht geprüft",
+            "standard-folder automapping enabled" => {
+                "Automatische Standardordnerzuordnung aktiviert"
+            }
+            "standard-folder automapping disabled" => {
+                "Automatische Standardordnerzuordnung deaktiviert"
+            }
+            "namespace prefix/delimiter warning" => "Warnung zu Namespace-Präfix oder Trennzeichen",
+            "namespace mapping not yet assessed" => "Namespace-Zuordnung noch nicht bewertet",
+            "personal namespaces match" => "Persönliche Namespaces stimmen überein",
+            "shared or other-user namespaces detected" => {
+                "Gemeinsame Namespaces oder Namespaces anderer Benutzer erkannt"
+            }
+            "version checked at readiness" => "Version bei Bereitschaftsprüfung ermittelt",
+            "engine version not yet checked" => "Engine-Version noch nicht geprüft",
+            "One mailbox plan template" => "Planvorlage für ein Postfach",
+            "{} selected of {} queued mailbox(es)" => {
+                "{} von {} eingereihten Postfächern ausgewählt"
+            }
+            "High: destination quota is currently exhausted" => {
+                "Hoch: Das Zielkontingent ist derzeit ausgeschöpft."
+            }
+            "Medium: personal namespace prefixes or delimiters differ" => {
+                "Mittel: Namespace- oder Verhalten gemeinsamer Ordner muss geprüft werden."
+            }
+            "Medium: namespace or shared-folder behavior needs review" => {
+                "Mittel: Namespace- oder Verhalten gemeinsamer Ordner muss geprüft werden."
+            }
+            "Readiness pending: authenticate both endpoints" => {
+                "Bereitschaft ausstehend: Beide Endpunkte authentifizieren."
+            }
+            "Inventory pending: mailbox scale is unknown" => {
+                "Inventar ausstehend: Der Postfachumfang ist unbekannt."
+            }
+            "No risk is established yet; provider-specific review is still required" => {
+                "Es wurde noch kein Risiko festgestellt; eine anbieterspezifische Prüfung ist weiterhin erforderlich."
+            }
+            "OAuth 2.0" => "OAuth-2.0-Verfahren",
+            "Password / app password" => "Passwort / App-Passwort",
+            "Configured authentication" => "Konfigurierte Authentifizierung",
+            "Preflight → small pilot → seed → catch-up → final delta → independent verification" => {
+                "Vorabprüfung → kleiner Pilot → Erstübertragung → Nachlauf → finales Delta → unabhängige Verifizierung"
+            }
             "Configure endpoints and credentials before running a dry preflight." => {
                 "Konfigurieren Sie Endpunkte und Zugangsdaten, bevor Sie eine Vorabprüfung ausführen."
             }
@@ -1408,6 +1492,49 @@ mod tests {
             "Clear mailbox queue?",
             "Advanced migration options",
             "Review verification",
+            "PROVIDER QUALIFICATION",
+            "UNQUALIFIED",
+            "COMMUNITY / UNQUALIFIED PATH",
+            "The generic IMAP migration path is available, but this provider pair has not passed the MailSwiftSync production qualification suite.",
+            "Last qualification: none · no live provider evidence is currently bundled.",
+            "Qualification requires tested authentication, folder inventory and mapping, independent verification, interruption recovery, throttling recovery, and large-mailbox coverage.",
+            "PRE-MIGRATION SIMULATION",
+            "SCOPE",
+            "RISKS",
+            "Plan preview only — estimates are shown only when supported by observed data.",
+            "SOURCE",
+            "DESTINATION",
+            "ENGINE",
+            "MAPPING",
+            "AUTH",
+            "ESTIMATED SCALE",
+            "PROPOSED EXECUTION",
+            "Read-only; source messages are not deleted by default",
+            "No destination writes are intended during preflight",
+            "resolved from PATH",
+            "Folder inventory: {} source · {} destination",
+            "Message count and data volume are not known yet",
+            "Authenticated in the latest readiness check",
+            "Not yet verified",
+            "standard-folder automapping enabled",
+            "standard-folder automapping disabled",
+            "namespace prefix/delimiter warning",
+            "namespace mapping not yet assessed",
+            "personal namespaces match",
+            "shared or other-user namespaces detected",
+            "version checked at readiness",
+            "engine version not yet checked",
+            "One mailbox plan template",
+            "{} selected of {} queued mailbox(es)",
+            "High: destination quota is currently exhausted",
+            "Medium: namespace or shared-folder behavior needs review",
+            "Readiness pending: authenticate both endpoints",
+            "Inventory pending: mailbox scale is unknown",
+            "No risk is established yet; provider-specific review is still required",
+            "OAuth 2.0",
+            "Password / app password",
+            "Configured authentication",
+            "Preflight → small pilot → seed → catch-up → final delta → independent verification",
             "Provider readiness runbook",
             "Read-only operational guidance. Preflight and live admission remain authoritative.",
             "Guidance version: {}",

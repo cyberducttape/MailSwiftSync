@@ -18,6 +18,7 @@ mod language;
 mod output;
 mod overview;
 mod plan;
+mod qualification;
 mod reports;
 mod settings;
 mod status;
