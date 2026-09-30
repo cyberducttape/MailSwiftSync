@@ -75,6 +75,14 @@ impl StateStore {
             "INSERT INTO events(project_id,run_id,kind,detail) SELECT project_id,?1,?2,?3 FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))) ",
         )?;
         for (run_id, kind, detail) in events {
+            if *kind == "diagnostic_lines_dropped" {
+                let count = detail.parse::<u64>().ok();
+                if !detail.bytes().all(|byte| byte.is_ascii_digit())
+                    || count.is_none_or(|count| count == 0)
+                {
+                    return Err(rusqlite::Error::InvalidQuery);
+                }
+            }
             if *kind == "run_output" {
                 let valid: bool = tx.query_row(
                     "SELECT EXISTS(SELECT 1 FROM runs WHERE id=?1 AND (status='running' OR (status='queued' AND parent_run_id IN (SELECT id FROM runs WHERE status='running'))))",

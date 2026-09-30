@@ -216,6 +216,9 @@ impl ReportMailboxSnapshot {
 pub struct ReportRunSnapshot {
     pub run: RunSummary,
     pub engine_version: Option<String>,
+    /// `Some(n)` means n presentation lines were dropped. `None` means no
+    /// durable drop accounting exists (including runs predating this marker).
+    pub diagnostic_lines_dropped: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

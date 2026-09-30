@@ -97,7 +97,7 @@ pub struct StateStore {
 
 impl StateStore {
     #[cfg(test)]
-    fn insert_run_for_test(
+    pub(crate) fn insert_run_for_test(
         &self,
         project_id: &str,
         job_id: Option<&str>,

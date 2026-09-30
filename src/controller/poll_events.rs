@@ -156,6 +156,32 @@ impl App {
                             push_visible_output(&mut self.output, safe);
                         }
                     }
+                    Event::DiagnosticLinesDropped {
+                        run_id,
+                        job_id,
+                        count,
+                    } => {
+                        if count == 0
+                            || !process_event_is_current(active_run.as_ref(), &run_id, &job_id)
+                        {
+                            durability_errors.push(format!(
+                                "ignored diagnostic-drop accounting for unknown process {run_id}"
+                            ));
+                        } else {
+                            push_visible_output(
+                                &mut self.output,
+                                format!(
+                                    "[diagnostics] {count} output line(s) omitted because the operator event queue was full"
+                                ),
+                            );
+                            // Persist only the bounded count, never engine text.
+                            pending_db_events.push(PendingDbEvent::new(
+                                run_id,
+                                "diagnostic_lines_dropped".into(),
+                                count.to_string(),
+                            ));
+                        }
+                    }
                     Event::EngineVersion {
                         run_id,
                         job_id,

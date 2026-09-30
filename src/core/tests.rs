@@ -2908,6 +2908,38 @@ fn project_report_snapshot_loads_related_rows_as_one_read_model() {
 }
 
 #[test]
+fn diagnostic_drop_accounting_survives_database_reopen_and_enters_report_snapshot() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-diagnostic-accounting-{}",
+        uuid::Uuid::new_v4()
+    ));
+    create_private_test_directory(&directory);
+    let path = directory.join("state.db");
+    let (project_id, job_id) = {
+        let db = StateStore::open(&path).unwrap();
+        let project = db
+            .create_project("accounting", "source", "destination")
+            .unwrap();
+        let job = db
+            .add_mailbox(&project.id, "source", "destination")
+            .unwrap();
+        db.insert_run_for_test(&project.id, Some(&job), "run-accounting", "imapsync")
+            .unwrap();
+        db.record_events_for_runs_batch(&[("run-accounting", "diagnostic_lines_dropped", "3284")])
+            .unwrap();
+        db.finish_run("run-accounting", "completed", "ok").unwrap();
+        (project.id, job)
+    };
+    let db = StateStore::open(&path).unwrap();
+    let snapshot = db.project_report_snapshot(&project_id).unwrap().unwrap();
+    assert_eq!(snapshot.runs[0].run.id, "run-accounting");
+    assert_eq!(snapshot.runs[0].diagnostic_lines_dropped, Some(3284));
+    assert_eq!(snapshot.mailboxes[0].job.id, job_id);
+    drop(db);
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[test]
 fn project_report_snapshot_rejects_unbounded_mailbox_exports() {
     let db = StateStore::in_memory().unwrap();
     let project = db

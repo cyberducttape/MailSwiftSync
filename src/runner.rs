@@ -759,18 +759,14 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         });
     let dropped = dropped_diagnostics.load(Ordering::Relaxed);
     if dropped > 0 {
-        // This is the durable accounting marker for lossy UI streaming. The
-        // reader threads have already joined, so waiting here cannot block a
-        // child pipe; it ensures a saturated event queue cannot silently
-        // erase the fact that diagnostics were omitted.
+        // The reader threads have joined, so the content-free accounting
+        // event can be sent reliably without blocking a child pipe.
         let _ = send_reliable_event(
             tx,
-            Event::RunLine {
+            Event::DiagnosticLinesDropped {
                 run_id: run_id.to_owned(),
                 job_id: job_id.to_owned(),
-                text: format!(
-                    "{prefix}[diagnostics] {dropped} output line(s) omitted because the operator event queue was full"
-                ),
+                count: dropped as u64,
             },
         );
     }

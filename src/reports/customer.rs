@@ -180,6 +180,8 @@ pub(crate) fn export_from_store_with_options_and_identity(
                 "status": value.status,
                 "started_at": value.started_at,
                 "finished_at": value.finished_at,
+                "diagnostic_stream_complete": run.diagnostic_lines_dropped.map(|count| count == 0),
+                "dropped_presentation_lines": run.diagnostic_lines_dropped,
             }))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -379,6 +381,50 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["completion_claim"]["status"], "incomplete");
         assert_eq!(value["completion_claim"]["independent_certificate"], false);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn customer_proof_reports_durable_diagnostic_drop_count_without_content() {
+        let store = core::StateStore::in_memory().unwrap();
+        let project = store
+            .create_project("diagnostics", "source", "destination")
+            .unwrap();
+        let job = store
+            .add_mailbox(&project.id, "source@example.com", "destination@example.com")
+            .unwrap();
+        store
+            .insert_run_for_test(&project.id, Some(&job), "diagnostic-run", "imapsync")
+            .unwrap();
+        store
+            .record_events_for_runs_batch(&[("diagnostic-run", "diagnostic_lines_dropped", "3284")])
+            .unwrap();
+        store
+            .finish_run("diagnostic-run", "completed", "ok")
+            .unwrap();
+
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!(
+                "mailswiftsync-diagnostic-proof-{}",
+                uuid::Uuid::new_v4()
+            ));
+        crate::credentials::ensure_private_directory(&directory).unwrap();
+        let path = directory.join("proof.json");
+        export_from_store_with_options(
+            &store,
+            &project.id,
+            &path,
+            true,
+            &OperatorBranding::default(),
+        )
+        .unwrap();
+        let proof: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(proof["runs"][0]["diagnostic_stream_complete"], false);
+        assert_eq!(proof["runs"][0]["dropped_presentation_lines"], 3284);
+        assert!(!proof.to_string().contains("raw engine output"));
         let _ = std::fs::remove_dir_all(directory);
     }
 

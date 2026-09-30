@@ -137,7 +137,7 @@ impl StateStore {
 
         let mut runs = Vec::new();
         let mut run_statement = tx.prepare(
-            "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at DESC,r.rowid DESC LIMIT 20",
+            "SELECT r.id,r.job_id,r.parent_run_id,r.engine,r.phase_at_start,r.plan_snapshot,r.status,r.started_at,r.finished_at,r.detail,ev.version,(SELECT SUM(CAST(e.detail AS INTEGER)) FROM events e WHERE e.run_id=r.id AND e.kind='diagnostic_lines_dropped') FROM runs r LEFT JOIN engine_versions ev ON ev.run_id=r.id WHERE r.project_id=?1 ORDER BY r.started_at DESC,r.rowid DESC LIMIT 20",
         )?;
         for row in run_statement.query_map([project_id], |row| {
             Ok(ReportRunSnapshot {
@@ -154,6 +154,7 @@ impl StateStore {
                     detail: row.get(9)?,
                 },
                 engine_version: row.get(10)?,
+                diagnostic_lines_dropped: row.get::<_, Option<i64>>(11)?.map(|count| count as u64),
             })
         })? {
             runs.push(row?);

@@ -68,6 +68,11 @@ pub(crate) fn process_event_is_current(
 
 pub(crate) enum Event {
     Line(String),
+    DiagnosticLinesDropped {
+        run_id: String,
+        job_id: String,
+        count: u64,
+    },
     RunLine {
         run_id: String,
         job_id: String,
