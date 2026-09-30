@@ -925,6 +925,9 @@ fn execution_command(
     let current_executable = std::env::current_exe()
         .map_err(|error| format!("could not locate MailSwiftSync launcher: {error}"))?;
     let mut command = Command::new(current_executable);
+    // The launcher becomes the engine, so it starts from the same minimal
+    // environment the engine may see.
+    crate::process::apply_engine_environment(&mut command);
     command
         .arg("--internal-launcher")
         .arg(executable)
@@ -947,6 +950,7 @@ fn execution_command(
     env: &[(String, SecretString)],
 ) -> Result<Command, String> {
     let mut command = Command::new(executable);
+    crate::process::apply_engine_environment(&mut command);
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value.as_str())))
@@ -981,6 +985,9 @@ pub(crate) fn run_internal_launcher(arguments: Vec<std::ffi::OsString>) -> i32 {
         return 125;
     }
     let mut command = Command::new(executable);
+    // Re-apply the allowlist even though the controller already cleared the
+    // launcher's environment, so the engine never depends on the caller.
+    crate::process::apply_engine_environment(&mut command);
     command
         .args(&remainder[separator + 1..])
         .stdin(Stdio::null())

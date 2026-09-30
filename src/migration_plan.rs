@@ -1247,8 +1247,10 @@ impl Form {
         let (source_host, endpoint_port) =
             command_endpoint_parts(&self.profile.source_host, source_default_port);
         let source_port = command_port(&self.profile.source_port, endpoint_port);
+        // No `-k`: doveadm keeps only its import_environment defaults. The
+        // source password reaches doveadm through the private runtime config,
+        // never through the environment.
         let mut args = Vec::new();
-        args.push("-k".into());
         if let Some(config) = runtime_config {
             args.extend(["-c".into(), config.to_owned()]);
         } else if !self.profile.dovecot_config.trim().is_empty() {
@@ -1331,7 +1333,6 @@ impl Form {
             command_endpoint_parts(&self.profile.source_host, source_default_port);
         let source_port = command_port(&self.profile.source_port, endpoint_port);
         let mut source = Vec::new();
-        source.push("-k".into());
         if let Some(config) = runtime_config {
             source.extend(["-c".into(), config.to_owned()]);
         } else if !self.profile.dovecot_config.trim().is_empty() {

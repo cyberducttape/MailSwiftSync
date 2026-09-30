@@ -678,6 +678,68 @@ fn wait_for_process_group_exit(process_group: u32, grace: Duration) -> bool {
     !process_group_exists(process_group)
 }
 
+/// Variables an external engine may inherit. Everything else in the
+/// MailSwiftSync environment (cloud keys, tokens, proxy credentials, shell
+/// secrets) is withheld; credentials reach engines only through the private
+/// passfiles and runtime configs each run creates.
+const ENGINE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
+    // Locating executables, locale, time zone, and temporary storage.
+    "PATH",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "TZ",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    // Some engines and Perl modules resolve the account's home directory.
+    "HOME",
+    "USER",
+    "LOGNAME",
+    // Operator-configured TLS trust stores used by OpenSSL and Perl.
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    // imapsync installed outside system Perl (local::lib, perlbrew).
+    "PERL5LIB",
+    "PERL_LOCAL_LIB_ROOT",
+    // Windows process essentials.
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+];
+
+/// Start an engine (or the launcher that becomes it) from an empty
+/// environment plus the allowlist above.
+pub(crate) fn apply_engine_environment(command: &mut Command) {
+    command.env_clear();
+    for (name, value) in std::env::vars_os() {
+        let Some(name_text) = name.to_str() else {
+            continue;
+        };
+        // Windows variable names are case-insensitive (`Path`, `SystemRoot`).
+        if ENGINE_ENVIRONMENT_ALLOWLIST
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(name_text))
+        {
+            command.env(name, value);
+        }
+    }
+}
+
 pub(crate) fn configure_process_group(command: &mut Command) {
     #[cfg(windows)]
     {

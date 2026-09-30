@@ -155,3 +155,39 @@ fn completions_reject_unknown_shells() {
     let output = run(&["completions", "powershell"]);
     assert_eq!(output.status.code(), Some(2));
 }
+
+/// Engines must not inherit the controller's environment. The launcher is
+/// the process that becomes the engine, so start it with a secret in its own
+/// environment and have a dummy engine report what it can see.
+#[cfg(unix)]
+#[test]
+fn engine_does_not_inherit_controller_environment_secrets() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mailswiftsync"))
+        .args([
+            "--internal-launcher",
+            "/bin/sh",
+            "--",
+            "-c",
+            "echo secret=${MAILSWIFTSYNC_TEST_SECRET:-absent} path=${PATH:+present}",
+        ])
+        .env("MAILSWIFTSYNC_TEST_SECRET", "DO_NOT_LEAK")
+        .env("AWS_SECRET_ACCESS_KEY", "DO_NOT_LEAK")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("mailswiftsync binary must launch");
+    child.stdin.take().unwrap().write_all(b"GO\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}");
+    assert!(
+        !stdout.contains("DO_NOT_LEAK"),
+        "engine saw a secret: {stdout}"
+    );
+    assert!(stdout.contains("secret=absent"), "{stdout}");
+    // Allowlisted variables still reach the engine.
+    assert!(stdout.contains("path=present"), "{stdout}");
+}

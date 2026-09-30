@@ -156,6 +156,7 @@ fn check_executable_version(
     qualification: Option<fn(&str) -> bool>,
 ) -> DoctorCheck {
     let mut command = Command::new(path);
+    crate::process::apply_engine_environment(&mut command);
     command
         .arg("--version")
         .stdin(Stdio::null())
