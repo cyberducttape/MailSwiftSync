@@ -41,10 +41,10 @@ impl App {
 
         crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
-                crate::ui::section_label(ui, self.language.text("PROVIDER QUALIFICATION"));
+                crate::ui::section_label(ui, self.language.message("ui.provider-qualification"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        RichText::new(self.language.text("UNQUALIFIED"))
+                        RichText::new(self.language.message("ui.unqualified"))
                             .strong()
                             .color(colors.warning),
                     );
@@ -59,7 +59,7 @@ impl App {
             };
             ui.label(RichText::new(pair).size(16.0).strong());
             ui.label(
-                RichText::new(self.language.text("COMMUNITY / UNQUALIFIED PATH"))
+                RichText::new(self.language.message("ui.community-unqualified-path"))
                     .strong()
                     .color(colors.warning),
             );
@@ -142,13 +142,13 @@ impl App {
             self.language
                 .text("Authenticated in the latest readiness check")
         } else {
-            self.language.text("Not yet verified")
+            self.language.message("ui.not-yet-verified")
         };
         let destination_auth = if destination_authenticated {
             self.language
                 .text("Authenticated in the latest readiness check")
         } else {
-            self.language.text("Not yet verified")
+            self.language.message("ui.not-yet-verified")
         };
         let source_auth_method = auth_method_label(&self.form.profile.source_auth);
         let destination_auth_method = auth_method_label(&self.form.profile.destination_auth);
@@ -167,7 +167,7 @@ impl App {
             _ => self.form.profile.imapsync_path.as_str(),
         };
         let engine_path = if engine_path.trim().is_empty() {
-            self.language.text("resolved from PATH").to_owned()
+            self.language.message("ui.resolved-from-path").to_owned()
         } else {
             engine_path.to_owned()
         };
@@ -183,7 +183,9 @@ impl App {
                 .to_owned()
         };
         let scope = if self.bulk_jobs.is_empty() {
-            self.language.text("One mailbox plan template").to_owned()
+            self.language
+                .message("ui.one-mailbox-plan-template")
+                .to_owned()
         } else {
             self.language
                 .text("{} selected of {} queued mailbox(es)")
@@ -192,7 +194,7 @@ impl App {
         };
 
         crate::ui::card(ui, |ui| {
-            crate::ui::section_label(ui, self.language.text("PRE-MIGRATION SIMULATION"));
+            crate::ui::section_label(ui, self.language.message("ui.pre-migration-simulation"));
             ui.label(
                 RichText::new(self.language.text(
                     "Plan preview only — estimates are shown only when supported by observed data.",
@@ -204,38 +206,44 @@ impl App {
                 .num_columns(2)
                 .spacing([18.0, 7.0])
                 .show(ui, |ui| {
-                    simulation_row(ui, self.language.text("SCOPE"), &scope);
+                    simulation_row(ui, self.language.message("ui.scope-f0350657"), &scope);
                     simulation_row(
                         ui,
-                        self.language.text("SOURCE"),
+                        self.language.message("ui.source-56ccd012"),
                         self.language
                             .text("Read-only; source messages are not deleted by default"),
                     );
-                    simulation_row(ui, self.language.text("DESTINATION"), destination_behavior);
                     simulation_row(
                         ui,
-                        self.language.text("ENGINE"),
+                        self.language.message("ui.destination-27a4be0d"),
+                        destination_behavior,
+                    );
+                    simulation_row(
+                        ui,
+                        self.language.message("ui.engine-8215b59c"),
                         &format!(
                             "{engine} · {engine_path} · {}",
-                            self.language.text("engine version not yet checked")
+                            self.language.message("ui.engine-version-not-yet-checked")
                         ),
                     );
                     simulation_row(
                         ui,
-                        self.language.text("MAPPING"),
+                        self.language.message("ui.mapping"),
                         &format!(
                             "{} · {}",
                             if self.form.profile.automap {
-                                self.language.text("standard-folder automapping enabled")
+                                self.language
+                                    .message("ui.standard-folder-automapping-enabled")
                             } else {
-                                self.language.text("standard-folder automapping disabled")
+                                self.language
+                                    .message("ui.standard-folder-automapping-disabled")
                             },
                             self.language.text(namespace_assessment)
                         ),
                     );
                     simulation_row(
                         ui,
-                        self.language.text("AUTH"),
+                        self.language.message("ui.auth"),
                         &format!(
                             "Source ({}): {} · Destination ({}): {}",
                             self.language.text(source_auth_method),
@@ -244,12 +252,12 @@ impl App {
                             destination_auth
                         ),
                     );
-                    simulation_row(ui, self.language.text("ESTIMATED SCALE"), &scale);
-                    simulation_row(ui, self.language.text("RISKS"), &risks);
+                    simulation_row(ui, self.language.message("ui.estimated-scale"), &scale);
+                    simulation_row(ui, self.language.message("ui.risks"), &risks);
                 });
             ui.add_space(5.0);
             ui.label(
-                RichText::new(self.language.text("PROPOSED EXECUTION"))
+                RichText::new(self.language.message("ui.proposed-execution"))
                     .small()
                     .strong(),
             );

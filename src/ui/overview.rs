@@ -12,7 +12,7 @@ impl App {
         let colors = self.theme_colors();
         crate::ui::page_header(
             ui,
-            self.language.text("Migration overview"),
+            self.language.message("ui.migration-overview"),
             self.language
                 .text("A calm, evidence-led workspace for moving mailboxes safely."),
         );
@@ -21,22 +21,25 @@ impl App {
                 .state_path
                 .as_deref()
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|| self.language.text("Unavailable").to_owned());
+                .unwrap_or_else(|| self.language.message("ui.unavailable").to_owned());
             crate::ui::card(ui, |ui| {
                 ui.label(
-                    RichText::new(self.language.text("DURABLE WORKSPACE UNAVAILABLE"))
+                    RichText::new(self.language.message("ui.durable-workspace-unavailable"))
                         .strong()
                         .color(colors.danger),
                 );
-                ui.label(self.language.text("MailSwiftSync cannot open its durable workspace. This session is temporary; live migrations are disabled to protect recovery history."));
+                ui.label(self.language.message("ui.mailswiftsync-cannot-open-its-durable-workspace-this-session-is-temporary-l-8737d30905"));
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(self.language.text("State file:"));
+                    ui.label(self.language.message("ui.state-file"));
                     ui.monospace(&state_path);
-                    if ui.button(self.language.text("Copy state path")).clicked() {
+                    if ui
+                        .button(self.language.message("ui.copy-state-path"))
+                        .clicked()
+                    {
                         ui.ctx().copy_text(state_path.clone());
                     }
                     if ui
-                        .button(self.language.text("Open Activity diagnostics"))
+                        .button(self.language.message("ui.open-activity-diagnostics"))
                         .clicked()
                     {
                         self.active_view = WorkspaceView::Activity;
@@ -76,35 +79,35 @@ impl App {
         if project.is_none() && self.bulk_jobs.is_empty() {
             crate::ui::card(ui, |ui| {
                 ui.label(
-                    RichText::new(self.language.text("Start your first migration"))
+                    RichText::new(self.language.message("ui.start-your-first-migration"))
                         .size(18.0)
                         .strong(),
                 );
-                ui.label(RichText::new(self.language.text("MailSwiftSync guides every migration through a reviewable preflight before any destination changes are allowed.")).color(colors.text_secondary));
+                ui.label(RichText::new(self.language.message("ui.mailswiftsync-guides-every-migration-through-a-reviewable-preflight-before-219ddd077f")).color(colors.text_secondary));
                 ui.add_space(10.0);
                 ui.label(
-                    RichText::new(self.language.text("Begin in Prepare: choose the source and destination, then test both accounts before preflight."))
+                    RichText::new(self.language.message("ui.begin-in-prepare-choose-the-source-and-destination-then-test-both-accounts-a8911f7278"))
                         .color(colors.text_secondary),
                 );
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if crate::ui::primary_button(
                         ui,
-                        self.language.text("Configure first mailbox  →"),
+                        self.language.message("ui.configure-first-mailbox"),
                     )
                     .clicked()
                     {
                         self.active_view = WorkspaceView::Plan;
                     }
                     if ui
-                        .button(self.language.text("Import mailbox list"))
+                        .button(self.language.message("ui.import-mailbox-list"))
                         .clicked()
                     {
                         self.active_view = WorkspaceView::Mailboxes;
                     }
                 });
                 ui.add_space(4.0);
-                ui.label(RichText::new(self.language.text("For a batch, import the mailbox list and begin with a small pilot during the Pilot stage.")).small().color(colors.text_secondary));
+                ui.label(RichText::new(self.language.message("ui.for-a-batch-import-the-mailbox-list-and-begin-with-a-small-pilot-during-the-pilot-stage")).small().color(colors.text_secondary));
             });
             ui.add_space(16.0);
         }
@@ -112,30 +115,30 @@ impl App {
         ui.columns(3, |columns| {
             crate::ui::card(&mut columns[0], |ui| {
                 ui.set_min_width(ui.available_width());
-                crate::ui::section_label(ui, self.language.text("PROJECT STATUS"));
+                crate::ui::section_label(ui, self.language.message("ui.project-status"));
                 ui.label(RichText::new(if project.is_some() {
-                    self.language.text("Project created")
+                    self.language.message("ui.project-created")
                 } else if has_bulk_jobs {
-                    self.language.text("Batch queue loaded")
+                    self.language.message("ui.batch-queue-loaded")
                 } else {
-                    self.language.text("No project yet")
+                    self.language.message("ui.no-project-yet")
                 }).size(17.0).strong());
                 ui.label(RichText::new(if project.is_some() {
-                    self.language.text("State is durable and ready for review.")
+                    self.language.message("ui.state-is-durable-and-ready-for-review")
                 } else if has_bulk_jobs {
-                    self.language.text("Review the imported rows, then run a durable preflight.")
+                    self.language.message("ui.review-the-imported-rows-then-run-a-durable-preflight")
                 } else {
-                    self.language.text("Start by configuring endpoints or importing a mailbox list.")
+                    self.language.message("ui.start-by-configuring-endpoints-or-importing-a-mailbox-list")
                 }).color(colors.text_secondary));
             });
             crate::ui::card(&mut columns[1], |ui| {
                 ui.set_min_width(ui.available_width());
-                crate::ui::section_label(ui, self.language.text("MAILBOXES"));
+                crate::ui::section_label(ui, self.language.message("ui.mailboxes-814bfa48"));
                 if !has_mailboxes {
-                    ui.label(RichText::new(self.language.text("None configured")).size(17.0).strong());
-                    ui.label(RichText::new(self.language.text("Use Mailboxes to review scope before running anything.")).color(colors.text_secondary));
+                    ui.label(RichText::new(self.language.message("ui.none-configured")).size(17.0).strong());
+                    ui.label(RichText::new(self.language.message("ui.use-mailboxes-to-review-scope-before-running-anything")).color(colors.text_secondary));
                 } else if !has_durable_jobs {
-                    ui.label(RichText::new(self.language.text("{} queued").replace("{}", &batch_summary.total.to_string())).size(17.0).strong());
+                    ui.label(RichText::new(self.language.message("ui.queued-fc10ab7d").replace("{}", &batch_summary.total.to_string())).size(17.0).strong());
                     ui.label(
                         RichText::new(self.language
                             .text("{} imported · {} queued · {} preflight · {} ready · {} attention · {} unresolved")
@@ -147,9 +150,9 @@ impl App {
                             .replacen("{}", &batch_summary.unresolved().to_string(), 1))
                         .color(colors.text_secondary),
                     );
-                    ui.label(RichText::new(self.language.text("Imported rows are not durable until preflight admission succeeds.")).small().color(colors.text_secondary));
+                    ui.label(RichText::new(self.language.message("ui.imported-rows-are-not-durable-until-preflight-admission-succeeds")).small().color(colors.text_secondary));
                 } else {
-                    ui.label(RichText::new(self.language.text("{} total").replace("{}", &mailbox_counts.total.to_string())).size(17.0).strong());
+                    ui.label(RichText::new(self.language.message("ui.total").replace("{}", &mailbox_counts.total.to_string())).size(17.0).strong());
                     ui.label(
                         RichText::new(self.language
                             .text("{} ready · {} running · {} verified")
@@ -160,7 +163,7 @@ impl App {
                     );
                     if attention_count > 0 {
                         ui.label(
-                            RichText::new(self.language.text("{} require operator attention").replace("{}", &attention_count.to_string()))
+                            RichText::new(self.language.message("ui.require-operator-attention").replace("{}", &attention_count.to_string()))
                                 .color(colors.danger),
                         );
                     }
@@ -168,18 +171,18 @@ impl App {
             });
             crate::ui::card(&mut columns[2], |ui| {
                 ui.set_min_width(ui.available_width());
-                crate::ui::section_label(ui, self.language.text("EVIDENCE"));
+                crate::ui::section_label(ui, self.language.message("ui.evidence-c0f115f0"));
                 ui.label(RichText::new(if proof_ready {
-                    self.language.text("Customer proof ready")
+                    self.language.message("ui.customer-proof-ready")
                 } else if project.is_some() {
-                    self.language.text("Review required")
+                    self.language.message("ui.review-required")
                 } else {
-                    self.language.text("Not available")
+                    self.language.message("ui.not-available")
                 }).size(17.0).strong().color(if proof_ready { colors.success } else { colors.text_primary }));
                 ui.label(RichText::new(if proof_ready {
-                    self.language.text("Open Verification to export the customer-safe evidence artifact.")
+                    self.language.message("ui.open-verification-to-export-the-customer-safe-evidence-artifact")
                 } else {
-                    self.language.text("Open Verification to review evidence; customer proof remains gated until the durable state is complete.")
+                    self.language.message("ui.open-verification-to-review-evidence-customer-proof-remains-gated-until-the-8e499fb7b4")
                 }).color(colors.text_secondary));
             });
         });
@@ -187,7 +190,7 @@ impl App {
 
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            crate::ui::section_label(ui, self.language.text("Recommended next step"));
+            crate::ui::section_label(ui, self.language.message("ui.recommended-next-step"));
             ui.label(RichText::new(self.language.text(next_action.text)).size(15.0));
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
@@ -198,13 +201,13 @@ impl App {
                         self.active_view = next_action.destination;
                     }
                     if ui
-                        .button(self.language.text("Refresh preflight assessment"))
+                        .button(self.language.message("ui.refresh-preflight-assessment"))
                         .clicked()
                     {
                         self.assess_plan();
                     }
                     if ui
-                        .button(self.language.text("Import mailbox list"))
+                        .button(self.language.message("ui.import-mailbox-list"))
                         .clicked()
                     {
                         self.active_view = WorkspaceView::Mailboxes;
@@ -236,7 +239,7 @@ impl App {
 
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            crate::ui::section_label(ui, self.language.text("Safety contract"));
+            crate::ui::section_label(ui, self.language.message("ui.safety-contract"));
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 18.0;
@@ -277,7 +280,7 @@ impl App {
         }
         crate::ui::card(ui, |ui| {
             ui.label(
-                RichText::new(self.language.text("INSECURE SOURCE TRANSPORT"))
+                RichText::new(self.language.message("ui.insecure-source-transport"))
                     .strong()
                     .color(self.theme_colors().danger),
             );
@@ -294,7 +297,7 @@ impl App {
                 ),
             );
             response.on_hover_text(
-                self.language.text("Use IMAPS or STARTTLS whenever possible. This acknowledgement is required before any authenticated operation, including dry preflight, and is included in the preflight fingerprint."),
+                self.language.message("ui.use-imaps-or-starttls-whenever-possible-this-acknowledgement-is-required-be-5eab98ee65"),
             );
         });
     }
@@ -313,7 +316,7 @@ impl App {
         crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(self.language.text("ATTENTION CENTER"))
+                    RichText::new(self.language.message("ui.attention-center"))
                         .strong()
                         .color(colors.warning),
                 );
@@ -330,7 +333,10 @@ impl App {
                     )
                     .color(colors.text_secondary),
                 );
-                if ui.button(self.language.text("Open verification")).clicked() {
+                if ui
+                    .button(self.language.message("ui.open-verification-08754c14"))
+                    .clicked()
+                {
                     self.active_view = WorkspaceView::Verification;
                 }
             });
@@ -384,8 +390,8 @@ impl App {
         {
             let colors = self.theme_colors();
             crate::ui::card(ui, |ui| {
-                ui.heading(self.language.text("Start a safe migration"));
-                ui.label(RichText::new(self.language.text("MailSwiftSync guides every migration through a reviewed preflight before any destination changes are allowed.")).color(colors.text_secondary));
+                ui.heading(self.language.message("ui.start-a-safe-migration"));
+                ui.label(RichText::new(self.language.message("ui.mailswiftsync-guides-every-migration-through-a-reviewed-preflight-before-an-48ba765ba1")).color(colors.text_secondary));
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(self.language.text(
@@ -395,7 +401,7 @@ impl App {
                 );
                 ui.horizontal(|ui| {
                     if ui
-                        .button(self.language.text("Import mailbox list"))
+                        .button(self.language.message("ui.import-mailbox-list"))
                         .clicked()
                     {
                         self.active_view = WorkspaceView::Mailboxes;
@@ -415,11 +421,14 @@ impl App {
         if self.process_review_required {
             crate::ui::card(ui, |ui| {
                 ui.label(
-                    RichText::new(self.language.text("PROCESS OWNERSHIP REVIEW REQUIRED"))
-                        .strong()
-                        .color(self.theme_colors().danger),
+                    RichText::new(
+                        self.language
+                            .message("ui.process-ownership-review-required"),
+                    )
+                    .strong()
+                    .color(self.theme_colors().danger),
                 );
-                ui.label(self.language.text("MailSwiftSync could not prove that a previously recorded migration process is gone. Do not start another migration until you have checked the host process list and confirmed no MailSwiftSync engine remains."));
+                ui.label(self.language.message("ui.mailswiftsync-could-not-prove-that-a-previously-recorded-migration-process-c8d2a03624"));
                 if ui
                     .button(
                         self.language
@@ -430,7 +439,7 @@ impl App {
                     match self.store.clear_active_processes_after_review() {
                         Ok(()) => {
                             self.process_review_required = false;
-                            self.set_status(self.language.text("Process review acknowledged; execution gates are available again."), StatusSeverity::Success);
+                            self.set_status(self.language.message("ui.process-review-acknowledged-execution-gates-are-available-again"), StatusSeverity::Success);
                         }
                         Err(error) => self.set_status(
                             self.language
@@ -448,13 +457,13 @@ impl App {
         if self.workspace_read_only {
             crate::ui::card(ui, |ui| {
                 ui.label(
-                    RichText::new(self.language.text("HISTORICAL PROJECT · READ ONLY"))
+                    RichText::new(self.language.message("ui.historical-project-read-only"))
                         .strong()
                         .color(self.theme_colors().info),
                 );
-                ui.label(self.language.text("You are viewing durable history for this project. The editable migration plan and execution controls are detached until you start a new migration."));
+                ui.label(self.language.message("ui.you-are-viewing-durable-history-for-this-project-the-editable-migration-pla-7ce9c8cb0f"));
                 if ui
-                    .button(self.language.text("Start a new migration"))
+                    .button(self.language.message("ui.start-a-new-migration"))
                     .clicked()
                 {
                     self.start_new_migration();
@@ -465,7 +474,7 @@ impl App {
         let (passed, total) = plan_completeness(&self.form.profile);
         crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(self.language.text("Migration workspace"));
+                ui.heading(self.language.message("ui.migration-workspace"));
                 crate::ui::pill(
                     ui,
                     self.language.text(if self.form.dry_run {
@@ -497,7 +506,7 @@ impl App {
                 });
             });
             ui.add_space(5.0);
-            ui.label(RichText::new(self.language.text("Recommended next step: run preflight, review blockers, then select a small pilot mailbox.")).color(self.theme_colors().text_secondary));
+            ui.label(RichText::new(self.language.message("ui.recommended-next-step-run-preflight-review-blockers-then-select-a-small-pilot-mailbox")).color(self.theme_colors().text_secondary));
             ui.add_space(4.0);
             ui.label(
                 RichText::new(
@@ -528,8 +537,8 @@ impl App {
         // Stale readiness observations are expired by `poll`, which runs
         // before every frame and immediately after navigation.
         crate::ui::card(ui, |ui| {
-            ui.heading(self.language.text("Preflight & readiness"));
-            ui.label(RichText::new(self.language.text("Plan completeness is separate from live network checks. Run the authenticated probe before live migration.")).color(self.theme_colors().text_secondary));
+            ui.heading(self.language.message("ui.preflight-readiness"));
+            ui.label(RichText::new(self.language.message("ui.plan-completeness-is-separate-from-live-network-checks-run-the-authenticate-f0804b8578")).color(self.theme_colors().text_secondary));
             ui.horizontal_wrapped(|ui| {
                 let probe_enabled = self.capability_receiver.is_none()
                     && self.form.engine() != core::Engine::Dovecot
@@ -539,7 +548,8 @@ impl App {
                     .add_enabled(
                         probe_enabled,
                         egui::Button::new(
-                            self.language.text("Test accounts and inspect namespaces"),
+                            self.language
+                                .message("ui.test-accounts-and-inspect-namespaces"),
                         ),
                     )
                     .clicked()
@@ -549,7 +559,7 @@ impl App {
                 if ui
                     .add_enabled(
                         !self.running() && !self.workspace_read_only,
-                        egui::Button::new(self.language.text("Refresh assessment")),
+                        egui::Button::new(self.language.message("ui.refresh-assessment")),
                     )
                     .clicked()
                 {
@@ -559,7 +569,7 @@ impl App {
                     && ui
                         .add_enabled(
                             !self.running() && !self.workspace_read_only,
-                            egui::Button::new(self.language.text("Create project from plan")),
+                            egui::Button::new(self.language.message("ui.create-project-from-plan")),
                         )
                         .clicked()
                 {
@@ -567,7 +577,7 @@ impl App {
                 }
             });
             if self.form.engine() == core::Engine::Dovecot {
-                ui.label(RichText::new(self.language.text("Dovecot preflight checks the configured imapc source; destination readiness still requires administrative review.")).color(self.theme_colors().text_secondary));
+                ui.label(RichText::new(self.language.message("ui.dovecot-preflight-checks-the-configured-imapc-source-destination-readiness-df2b2fa248")).color(self.theme_colors().text_secondary));
             }
             if self.preflight.is_empty() {
                 ui.label(
@@ -578,8 +588,8 @@ impl App {
                 egui::Grid::new("overview_preflight_controls")
                     .striped(true)
                     .show(ui, |ui| {
-                        ui.strong(self.language.text("Check"));
-                        ui.strong(self.language.text("Result"));
+                        ui.strong(self.language.message("ui.check"));
+                        ui.strong(self.language.message("ui.result"));
                         ui.end_row();
                         for (name, detail, passed) in &self.preflight {
                             ui.label(RichText::new(if *passed { "✓" } else { "!" }).color(
@@ -605,15 +615,15 @@ impl App {
             let project_id = project.id.clone();
             ui.add_space(10.0);
             crate::ui::card(ui, |ui| {
-                ui.heading(self.language.text("Project controls"));
-                ui.label(RichText::new(self.language.text("This project is complete and read-only. Reopening requires an audit reason and returns it to Attention.")).color(self.theme_colors().danger));
+                ui.heading(self.language.message("ui.project-controls"));
+                ui.label(RichText::new(self.language.message("ui.this-project-is-complete-and-read-only-reopening-requires-an-audit-reason-a-47a60c2fa0")).color(self.theme_colors().danger));
                 ui.horizontal(|ui| {
-                    ui.label(self.language.text("Reason"));
+                    ui.label(self.language.message("ui.reason"));
                     ui.text_edit_singleline(&mut self.reopen_reason);
                     if ui
                         .add_enabled(
                             !self.running() && !self.reopen_reason.trim().is_empty(),
-                            egui::Button::new(self.language.text("Reopen project")),
+                            egui::Button::new(self.language.message("ui.reopen-project")),
                         )
                         .clicked()
                     {
@@ -621,7 +631,8 @@ impl App {
                             Ok(()) => {
                                 self.reopen_reason.clear();
                                 self.set_status(
-                                    self.language.text("Project reopened for documented review"),
+                                    self.language
+                                        .message("ui.project-reopened-for-documented-review"),
                                     StatusSeverity::Warning,
                                 );
                             }
@@ -663,11 +674,11 @@ impl App {
             .position(|(phase, _)| *phase == current)
             .unwrap_or(usize::MAX);
         ui.horizontal(|ui| {
-            crate::ui::section_label(ui, self.language.text("MIGRATION LIFECYCLE"));
+            crate::ui::section_label(ui, self.language.message("ui.migration-lifecycle"));
             if current == core::Phase::Attention {
                 crate::ui::pill(
                     ui,
-                    self.language.text("ATTENTION REQUIRED"),
+                    self.language.message("ui.attention-required"),
                     self.theme_colors().danger,
                 );
             }
@@ -691,7 +702,7 @@ impl App {
             self.theme_colors().info,
         );
         if current == core::Phase::Attention {
-            ui.label(RichText::new(self.language.text("A mailbox or run needs operator review. Normal lifecycle progress is paused until it is resolved.")).small().color(self.theme_colors().danger));
+            ui.label(RichText::new(self.language.message("ui.a-mailbox-or-run-needs-operator-review-normal-lifecycle-progress-is-paused-46a8d56892")).small().color(self.theme_colors().danger));
         }
     }
 }

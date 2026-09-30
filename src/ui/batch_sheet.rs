@@ -19,12 +19,12 @@ impl App {
         let mut open = true;
         let mut cancel = false;
         let mut import = false;
-        egui::Window::new(self.language.text("Choose worksheet"))
+        egui::Window::new(self.language.message("ui.choose-worksheet"))
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.heading(self.language.text("Select the migration worksheet"));
+                ui.heading(self.language.message("ui.select-the-migration-worksheet"));
                 let worksheet_summary = self
                     .language
                     .text("{} contains {} worksheet(s). Choose the sheet with the mailbox headers.")
@@ -36,7 +36,7 @@ impl App {
                         sheets
                             .get(self.bulk_sheet_index)
                             .map(String::as_str)
-                            .unwrap_or(self.language.text("Select a worksheet")),
+                            .unwrap_or(self.language.message("ui.select-a-worksheet")),
                     )
                     .show_ui(ui, |ui| {
                         for (index, name) in sheets.iter().enumerate() {
@@ -46,16 +46,16 @@ impl App {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(
-                        self.language.text("The selected worksheet is parsed and validated in the background. Other worksheets are not imported."),
+                        self.language.message("ui.the-selected-worksheet-is-parsed-and-validated-in-the-background-other-work-ca54bcb325"),
                     )
                     .size(11.0)
                     .color(self.theme_colors().text_secondary),
                 );
                 ui.horizontal(|ui| {
-                    if ui.button(self.language.text("Cancel")).clicked() {
+                    if ui.button(self.language.message("ui.cancel")).clicked() {
                         cancel = true;
                     }
-                    if ui.button(self.language.text("Import selected worksheet")).clicked() {
+                    if ui.button(self.language.message("ui.import-selected-worksheet")).clicked() {
                         import = true;
                     }
                 });

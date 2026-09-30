@@ -17,7 +17,7 @@ impl App {
         // A true modal: it blocks the page behind it, starts on the safe
         // choice, and Escape or a click outside keeps the queue.
         let response = egui::Modal::new(modal_id).show(ctx, |ui| {
-            ui.heading(self.language.text("Clear mailbox queue?"));
+            ui.heading(self.language.message("ui.clear-mailbox-queue"));
             ui.label(
                 self.language
                     .text("This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.")
@@ -25,14 +25,14 @@ impl App {
             );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let keep = ui.button(self.language.text("Keep queue"));
+                let keep = ui.button(self.language.message("ui.keep-queue"));
                 crate::ui::focus_on_open(ui, &keep, modal_id);
                 if keep.clicked() {
                     close_requested = true;
                 }
                 if ui
                     .button(
-                        RichText::new(self.language.text("Clear queue"))
+                        RichText::new(self.language.message("ui.clear-queue"))
                             .color(self.theme_colors().danger),
                     )
                     .clicked()
@@ -67,7 +67,7 @@ impl App {
         let mut close_requested = false;
         let mut replace = false;
         let response = egui::Modal::new(modal_id).show(ctx, |ui| {
-            ui.heading(self.language.text("Replace mailbox queue?"));
+            ui.heading(self.language.message("ui.replace-mailbox-queue"));
             ui.label(
                 self.language
                     .text("Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.")
@@ -76,14 +76,14 @@ impl App {
             );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                let keep = ui.button(self.language.text("Keep current queue"));
+                let keep = ui.button(self.language.message("ui.keep-current-queue"));
                 crate::ui::focus_on_open(ui, &keep, modal_id);
                 if keep.clicked() {
                     close_requested = true;
                 }
                 if ui
                     .button(
-                        RichText::new(self.language.text("Replace queue"))
+                        RichText::new(self.language.message("ui.replace-queue"))
                             .color(self.theme_colors().danger),
                     )
                     .clicked()
@@ -157,7 +157,7 @@ impl App {
 
         let response = egui::Modal::new(egui::Id::new("live_batch_migration_confirmation")).show(ctx, |ui| {
                 ui.heading(
-                    RichText::new(self.language.text("This will change destination mailboxes"))
+                    RichText::new(self.language.message("ui.this-will-change-destination-mailboxes"))
                         .color(self.theme_colors().danger),
                 );
                 ui.label(
@@ -182,7 +182,7 @@ impl App {
                         .replacen("{}", &summary.hidden_selection_count.to_string(), 1),
                 );
                 ui.label(
-                    RichText::new(self.language.text("Sample of selected mailboxes:")).strong(),
+                    RichText::new(self.language.message("ui.sample-of-selected-mailboxes")).strong(),
                 );
                 for (label, source, destination) in &selected_samples {
                     ui.label(
@@ -202,7 +202,7 @@ impl App {
                 }
                 if summary.hidden_selection_count > 0
                     && ui
-                        .button(self.language.text("View all selected"))
+                        .button(self.language.message("ui.view-all-selected"))
                         .clicked()
                 {
                     self.bulk_search.clear();
@@ -281,7 +281,7 @@ impl App {
                     .color(self.theme_colors().text_secondary),
                 );
                 ui.horizontal(|ui| {
-                    let cancel = ui.button(self.language.text("Cancel"));
+                    let cancel = ui.button(self.language.message("ui.cancel"));
                     if !self.bulk_live_confirm_focus_requested {
                         cancel.request_focus();
                         self.bulk_live_confirm_focus_requested = true;
@@ -299,7 +299,7 @@ impl App {
                                     || (self.bulk_destination_case_acknowledged
                                         && summary.concurrency == 1)),
                             egui::Button::new(
-                                RichText::new(self.language.text("I understand — start batch")).color(Color32::WHITE),
+                                RichText::new(self.language.message("ui.i-understand-start-batch")).color(Color32::WHITE),
                             )
                             .fill(self.theme_colors().danger),
                         )

@@ -37,18 +37,18 @@ pub(crate) fn show(
     let mut close_requested = false;
     let mut action = None;
     let mut error = None;
-    egui::Window::new(language.text("Settings"))
+    egui::Window::new(language.message("ui.settings"))
         .open(&mut window_open)
         .collapsible(false)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.heading(language.text("Operator settings"));
-            ui.label(RichText::new(language.text("Appearance and workspace tools live here. Migration connection and engine choices belong on the Migration plan so the active plan stays visible while you configure it.")).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+            ui.heading(language.message("ui.operator-settings"));
+            ui.label(RichText::new(language.message("ui.appearance-and-workspace-tools-live-here-migration-connection-and-engine-ch-5f254b5b82")).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
             ui.add_space(8.0);
             crate::ui::card(ui, |ui| {
-                ui.heading(language.text("Appearance"));
+                ui.heading(language.message("ui.appearance"));
                 ui.horizontal(|ui| {
-                    ui.label(language.text("Color pack"));
+                    ui.label(language.message("ui.color-pack"));
                     egui::ComboBox::from_id_salt("appearance_theme")
                         .selected_text(theme.label())
                         .show_ui(ui, |ui| {
@@ -61,7 +61,7 @@ pub(crate) fn show(
                                         ui_scale: *ui_scale,
                                     }).save()
                                 {
-                                    error = Some(format!("{}: {value}", language.text("Could not save appearance preference")));
+                                    error = Some(format!("{}: {value}", language.message("ui.could-not-save-appearance-preference")));
                                 }
                             }
                         });
@@ -69,7 +69,7 @@ pub(crate) fn show(
                 let theme_is_variable = matches!(theme, crate::ui::ThemeKind::Default);
                 if theme_is_variable {
                     ui.horizontal(|ui| {
-                        ui.label(language.text("Theme"));
+                        ui.label(language.message("ui.theme"));
                         let label = language.text(if *dark_mode { "Dark" } else { "Light" });
                         if ui.button(label).clicked() {
                             *dark_mode = !*dark_mode;
@@ -81,28 +81,28 @@ pub(crate) fn show(
                             })
                             .save()
                             {
-                                error = Some(format!("{}: {value}", language.text("Could not save appearance preference")));
+                                error = Some(format!("{}: {value}", language.message("ui.could-not-save-appearance-preference")));
                             }
                         }
                     });
                 } else {
                     ui.horizontal(|ui| {
-                        ui.label(language.text("Theme"));
+                        ui.label(language.message("ui.theme"));
                         ui.label(RichText::new(theme.label()).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
-                        ui.label(RichText::new(language.text("(fixed palette)")).size(10.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                        ui.label(RichText::new(language.message("ui.fixed-palette")).size(10.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                     });
                 }
                 ui.horizontal(|ui| {
-                    ui.label(format!("{}: {:.0}%", language.text("Interface size"), *ui_scale * 100.0));
-                    if ui.button(language.text("Decrease")).clicked() {
+                    ui.label(format!("{}: {:.0}%", language.message("ui.interface-size"), *ui_scale * 100.0));
+                    if ui.button(language.message("ui.decrease")).clicked() {
                         *ui_scale = (*ui_scale - 0.10).max(0.90);
                     }
-                    if ui.button(language.text("Increase")).clicked() {
+                    if ui.button(language.message("ui.increase")).clicked() {
                         *ui_scale = (*ui_scale + 0.10).min(1.50);
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(language.text("Language"));
+                    ui.label(language.message("ui.language"));
                     egui::ComboBox::from_id_salt("appearance_language")
                         .selected_text(language.label())
                         .show_ui(ui, |ui| {
@@ -115,12 +115,12 @@ pub(crate) fn show(
                                         ui_scale: *ui_scale,
                                     }).save()
                                 {
-                                    error = Some(format!("{}: {value}", language.text("Could not save appearance preference")));
+                                    error = Some(format!("{}: {value}", language.message("ui.could-not-save-appearance-preference")));
                                 }
                             }
                         });
                 });
-                if ui.button(language.text("Save appearance preferences")).clicked()
+                if ui.button(language.message("ui.save-appearance-preferences")).clicked()
                     && let Err(value) = (crate::ui::AppearancePreferences {
                         theme: *theme,
                         language: *language,
@@ -129,39 +129,39 @@ pub(crate) fn show(
                     })
                     .save()
                 {
-                    error = Some(format!("{}: {value}", language.text("Could not save appearance preference")));
+                    error = Some(format!("{}: {value}", language.message("ui.could-not-save-appearance-preference")));
                 }
             });
             ui.add_space(8.0);
             crate::ui::card(ui, |ui| {
-                ui.heading(language.text("Report branding"));
-                ui.label(RichText::new(language.text("Optional. Applied to customer-proof exports as an \"issued by\" line; independent of the migration plan and never affects preflight/live execution. Leave blank to omit it entirely.")).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                ui.heading(language.message("ui.report-branding"));
+                ui.label(RichText::new(language.message("ui.optional-applied-to-customer-proof-exports-as-an-issued-by-line-independent-90154a5591")).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                 ui.horizontal(|ui| {
-                    ui.label(language.text("Agency/operator name"));
+                    ui.label(language.message("ui.agency-operator-name"));
                     ui.text_edit_singleline(&mut branding.name);
                 });
                 ui.horizontal(|ui| {
-                    ui.label(language.text("Contact"));
+                    ui.label(language.message("ui.contact"));
                     ui.text_edit_singleline(&mut branding.contact);
                 });
-                if ui.button(language.text("Save report branding")).clicked()
+                if ui.button(language.message("ui.save-report-branding")).clicked()
                     && let Err(value) = branding.save()
                 {
-                    error = Some(format!("{}: {value}", language.text("Could not save report branding")));
+                    error = Some(format!("{}: {value}", language.message("ui.could-not-save-report-branding")));
                 }
             });
             ui.add_space(8.0);
             crate::ui::card(ui, |ui| {
-                ui.heading(language.text("Workspace tools"));
-                if ui.button(language.text("Open Migration plan")).clicked() {
+                ui.heading(language.message("ui.workspace-tools"));
+                if ui.button(language.message("ui.open-migration-plan-856d9db3")).clicked() {
                     action = Some(SettingsAction::OpenMigrationPlan);
                     close_requested = true;
                 }
-                if ui.button(language.text("Project browser")).clicked() {
+                if ui.button(language.message("ui.project-browser")).clicked() {
                     action = Some(SettingsAction::OpenProjectBrowser);
                     close_requested = true;
                 }
-                ui.label(RichText::new(format!("{} {}. {}", language.text("Current engine:"), language.text(engine.label()), language.text("Connection, credentials, advanced options, and readiness are available from the Migration plan."))).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                ui.label(RichText::new(format!("{} {}. {}", language.message("ui.current-engine"), language.text(engine.label()), language.message("ui.connection-credentials-advanced-options-and-readiness-are-available-from-th-89dbcd1dd5"))).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
             });
         });
     *open = window_open && !close_requested;

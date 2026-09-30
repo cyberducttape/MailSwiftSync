@@ -15,11 +15,11 @@ impl App {
         }
         let mut close_requested = false;
         let response = egui::Modal::new(egui::Id::new("stop_migration_confirmation")).show(ctx, |ui| {
-                ui.heading(RichText::new(self.language.text("The migration will stop where it is")).color(self.theme_colors().danger));
-                ui.label(self.language.text("The destination may be partially migrated. A later preflight, delta, or verification pass may be required before continuing."));
+                ui.heading(RichText::new(self.language.message("ui.the-migration-will-stop-where-it-is")).color(self.theme_colors().danger));
+                ui.label(self.language.message("ui.the-destination-may-be-partially-migrated-a-later-preflight-delta-or-verifi-6f22cab9e0"));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    let keep_running = ui.button(self.language.text("Keep running"));
+                    let keep_running = ui.button(self.language.message("ui.keep-running"));
                     if !self.stop_confirm_focus_requested {
                         keep_running.request_focus();
                         self.stop_confirm_focus_requested = true;
@@ -27,12 +27,12 @@ impl App {
                     if keep_running.clicked() {
                         close_requested = true;
                     }
-                    if ui.add(egui::Button::new(RichText::new(self.language.text("Stop migration")).color(Color32::WHITE)).fill(self.theme_colors().danger)).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(self.language.message("ui.stop-migration")).color(Color32::WHITE)).fill(self.theme_colors().danger)).clicked() {
                         if let Some(cancel) = &self.cancel_requested {
                             cancel.store(true, Ordering::Relaxed);
                         }
                         self.set_status(
-                            self.language.text("Cancellation requested…"),
+                            self.language.message("ui.cancellation-requested"),
                             StatusSeverity::Warning,
                         );
                         close_requested = true;
@@ -48,8 +48,8 @@ impl App {
     pub(crate) fn activity_view(&mut self, ui: &mut egui::Ui) {
         crate::ui::page_header(
             ui,
-            self.language.text("Activity"),
-            self.language.text("Live output is retained here for operator review. Durable run history remains available after restart."),
+            self.language.message("ui.activity"),
+            self.language.message("ui.live-output-is-retained-here-for-operator-review-durable-run-history-remain-c0022b7aa7"),
         );
         let selected_recovery_guidance = self
             .job_id
@@ -72,7 +72,7 @@ impl App {
             });
         if let Some((reason_label, guidance)) = selected_recovery_guidance {
             crate::ui::card(ui, |ui| {
-                ui.heading(self.language.text("Recovery guidance"));
+                ui.heading(self.language.message("ui.recovery-guidance"));
                 ui.label(
                     RichText::new(self.language.text(reason_label))
                         .color(self.theme_colors().warning),
@@ -102,14 +102,14 @@ impl App {
             match state.as_deref() {
                 Some(state) if needs_operator_review(state) => {
                     if ui
-                        .button(self.language.text("Prepare safe retry  →"))
+                        .button(self.language.message("ui.prepare-safe-retry"))
                         .clicked()
                     {
                         self.form.dry_run = true;
                         self.live_confirmed = false;
                         self.active_view = WorkspaceView::Plan;
                         self.set_status(
-                    self.language.text("Retry prepared as a dry preflight. Review the exact plan before any live run."),
+                    self.language.message("ui.retry-prepared-as-a-dry-preflight-review-the-exact-plan-before-any-live-run"),
                             StatusSeverity::Info,
                         );
                     }
@@ -121,9 +121,9 @@ impl App {
             ui.horizontal(|ui| {
                 let running = self.running();
                 ui.heading(if running {
-                    self.language.text("Run in progress")
+                    self.language.message("ui.run-in-progress")
                 } else {
-                    self.language.text("No active run")
+                    self.language.message("ui.no-active-run")
                 });
                 if let Some(started_at) = self.run_started_at {
                     ui.label(
@@ -137,18 +137,18 @@ impl App {
                         .color(status_color(self.status.severity, self.theme_colors())),
                 );
                 if ui
-                    .button(self.language.text("Copy support summary"))
+                    .button(self.language.message("ui.copy-support-summary"))
                     .clicked()
                 {
                     ui.ctx().copy_text(self.support_summary());
                 }
-                ui.menu_button(self.language.text("Raw output…"), |ui| {
+                ui.menu_button(self.language.message("ui.raw-output"), |ui| {
                     ui.label(
-                        RichText::new(self.language.text("May contain mailbox metadata"))
+                        RichText::new(self.language.message("ui.may-contain-mailbox-metadata"))
                             .color(self.theme_colors().warning),
                     );
                     if ui
-                        .button(self.language.text("Copy redacted engine output"))
+                        .button(self.language.message("ui.copy-redacted-engine-output"))
                         .clicked()
                     {
                         ui.ctx()
@@ -156,7 +156,11 @@ impl App {
                         ui.close();
                     }
                 });
-                if running && ui.button(self.language.text("Stop migration")).clicked() {
+                if running
+                    && ui
+                        .button(self.language.message("ui.stop-migration"))
+                        .clicked()
+                {
                     self.stop_confirm_open = true;
                     self.stop_confirm_focus_requested = false;
                 }
@@ -187,11 +191,11 @@ impl App {
         });
         ui.add_space(14.0);
         ui.horizontal(|ui| {
-            ui.heading(self.language.text("Durable run history"));
+            ui.heading(self.language.message("ui.durable-run-history"));
             let history_label = if self.activity_show_all {
-                self.language.text("Show recent 20")
+                self.language.message("ui.show-recent-20")
             } else {
-                self.language.text("Show up to 250 runs")
+                self.language.message("ui.show-up-to-250-runs")
             };
             if ui.button(history_label).clicked() {
                 self.activity_show_all = !self.activity_show_all;
@@ -213,7 +217,7 @@ impl App {
             20
         };
         ui.horizontal_wrapped(|ui| {
-            ui.label(self.language.text("Filter history"));
+            ui.label(self.language.message("ui.filter-history"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.activity_search)
                     .hint_text(
@@ -224,17 +228,17 @@ impl App {
             );
             egui::ComboBox::from_id_salt("activity_status_filter")
                 .selected_text(match self.activity_status_filter.as_str() {
-                    "errors" => self.language.text("Errors and attention"),
-                    "running" => self.language.text("Running"),
-                    "completed" => self.language.text("Completed"),
-                    _ => self.language.text("All statuses"),
+                    "errors" => self.language.message("ui.errors-and-attention"),
+                    "running" => self.language.message("ui.running-f4ccae29"),
+                    "completed" => self.language.message("ui.completed-22a970d2"),
+                    _ => self.language.message("ui.all-statuses"),
                 })
                 .show_ui(ui, |ui| {
                     for (value, label) in [
-                        ("all", self.language.text("All statuses")),
-                        ("errors", self.language.text("Errors and attention")),
-                        ("running", self.language.text("Running")),
-                        ("completed", self.language.text("Completed")),
+                        ("all", self.language.message("ui.all-statuses")),
+                        ("errors", self.language.message("ui.errors-and-attention")),
+                        ("running", self.language.message("ui.running-f4ccae29")),
+                        ("completed", self.language.message("ui.completed-22a970d2")),
                     ] {
                         ui.selectable_value(&mut self.activity_status_filter, value.into(), label);
                     }
@@ -250,7 +254,7 @@ impl App {
         match runs {
             runs if runs.is_empty() => {
                 ui.label(
-                    RichText::new(self.language.text("No durable runs recorded yet."))
+                    RichText::new(self.language.message("ui.no-durable-runs-recorded-yet"))
                         .color(self.theme_colors().text_secondary),
                 );
             }
@@ -297,7 +301,7 @@ impl App {
                 );
                 if self.activity_show_all && runs.len() == MAX_ACTIVITY_HISTORY_ROWS as usize {
                     ui.label(
-                        RichText::new(self.language.text("Showing the newest 250 runs. Export the audit report for complete history."))
+                        RichText::new(self.language.message("ui.showing-the-newest-250-runs-export-the-audit-report-for-complete-history"))
                             .color(self.theme_colors().text_secondary),
                     );
                 }
@@ -347,7 +351,7 @@ impl App {
                                     ui.label(
                                         run.finished_at
                                             .as_deref()
-                                            .unwrap_or(self.language.text("in progress")),
+                                            .unwrap_or(self.language.message("ui.in-progress")),
                                     );
                                     ui.label(if run.detail.is_empty() {
                                         "—"

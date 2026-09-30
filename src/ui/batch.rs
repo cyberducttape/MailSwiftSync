@@ -132,7 +132,7 @@ impl App {
         let colors = self.theme_colors();
         crate::ui::page_header(
             ui,
-            self.language.text("Mailboxes"),
+            self.language.message("ui.mailboxes-b23105d5"),
             self.language
                 .text("Review, filter, select, and operate on customer mailboxes."),
         );
@@ -144,7 +144,10 @@ impl App {
             crate::ui::card(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(&self.bulk_message).color(colors.text_primary));
-                    if ui.small_button(self.language.text("Dismiss")).clicked() {
+                    if ui
+                        .small_button(self.language.message("ui.dismiss"))
+                        .clicked()
+                    {
                         self.bulk_message.clear();
                     }
                 });
@@ -161,7 +164,7 @@ impl App {
             );
             crate::ui::card(ui, |ui| {
                 ui.label(
-                    RichText::new(self.language.text("No bulk mailbox list loaded"))
+                    RichText::new(self.language.message("ui.no-bulk-mailbox-list-loaded"))
                         .size(17.0)
                         .strong(),
                 );
@@ -171,13 +174,13 @@ impl App {
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::ui::primary_button(ui, self.language.text("Import CSV / XLSX…"))
+                    if crate::ui::primary_button(ui, self.language.message("ui.import-csv-xlsx"))
                         .clicked()
                     {
                         self.choose_bulk_import();
                     }
                     if ui
-                        .button(self.language.text("Open migration plan"))
+                        .button(self.language.message("ui.open-migration-plan-0342a28e"))
                         .clicked()
                     {
                         self.active_view = WorkspaceView::Plan;
@@ -205,7 +208,7 @@ impl App {
                 if ui
                     .add_enabled(
                         !self.running(),
-                        egui::Button::new(self.language.text("Import CSV / XLSX…")),
+                        egui::Button::new(self.language.message("ui.import-csv-xlsx")),
                     )
                     .clicked()
                 {
@@ -214,7 +217,7 @@ impl App {
                 if ui
                     .add_enabled(
                         !self.bulk_selection_is_empty(),
-                        egui::Button::new(self.language.text("Export selected set…")),
+                        egui::Button::new(self.language.message("ui.export-selected-set")),
                     )
                     .on_hover_text(self.language.text(
                         "Writes the selected rows as JSON without credentials or engine options.",
@@ -232,7 +235,7 @@ impl App {
                 if ui
                     .add_enabled(
                         !self.running(),
-                        egui::Button::new(self.language.text("Clear queue")),
+                        egui::Button::new(self.language.message("ui.clear-queue")),
                     )
                     .clicked()
                 {
@@ -241,7 +244,7 @@ impl App {
             });
             let summary = self.bulk_queue_summary();
             crate::ui::card(ui, |ui| {
-                crate::ui::section_label(ui, self.language.text("QUEUE HEALTH"));
+                crate::ui::section_label(ui, self.language.message("ui.queue-health"));
                 ui.add_space(2.0);
                 ui.horizontal_wrapped(|ui| {
                     for (count, label, color) in [
@@ -303,17 +306,17 @@ impl App {
                     );
                 });
                 ui.add_space(2.0);
-                ui.label(RichText::new(self.language.text("Use the state filter and Select visible to act on a focused set; live execution still requires a matching preflight.")).small().color(colors.text_secondary));
+                ui.label(RichText::new(self.language.message("ui.use-the-state-filter-and-select-visible-to-act-on-a-focused-set-live-execut-0cd48b4754")).small().color(colors.text_secondary));
             });
             ui.add_space(12.0);
             self.queue_settings_card(ui);
             ui.add_space(12.0);
             let mut selection_changed = false;
             ui.horizontal_wrapped(|ui| {
-                ui.label(self.language.text("Search"));
+                ui.label(self.language.message("ui.search"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.bulk_search)
-                        .hint_text(self.language.text("mailbox, host, or user"))
+                        .hint_text(self.language.message("ui.mailbox-host-or-user"))
                         .desired_width(220.0),
                 );
                 egui::ComboBox::from_id_salt("mailbox_state_filter")
@@ -344,7 +347,10 @@ impl App {
                             );
                         }
                     });
-                if ui.button(self.language.text("Select visible")).clicked() {
+                if ui
+                    .button(self.language.message("ui.select-visible"))
+                    .clicked()
+                {
                     // Use the same cached filter the table renders, so the
                     // selection is exactly the rows on screen.
                     self.refresh_bulk_filter_cache();
@@ -360,15 +366,24 @@ impl App {
                     }
                     selection_changed = true;
                 }
-                if ui.button(self.language.text("Select unresolved")).clicked() {
+                if ui
+                    .button(self.language.message("ui.select-unresolved"))
+                    .clicked()
+                {
                     self.select_bulk_state_set(BulkStateSet::Unresolved);
                     selection_changed = true;
                 }
-                if ui.button(self.language.text("Select attention")).clicked() {
+                if ui
+                    .button(self.language.message("ui.select-attention"))
+                    .clicked()
+                {
                     self.select_bulk_state_set(BulkStateSet::Attention);
                     selection_changed = true;
                 }
-                if ui.button(self.language.text("Clear selection")).clicked() {
+                if ui
+                    .button(self.language.message("ui.clear-selection"))
+                    .clicked()
+                {
                     self.clear_bulk_selection();
                     selection_changed = true;
                 }
@@ -429,7 +444,9 @@ impl App {
             let mut run_delta = false;
             let mut review_selected = false;
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(self.language.text("Selected mailbox actions")).strong());
+                ui.label(
+                    RichText::new(self.language.message("ui.selected-mailbox-actions")).strong(),
+                );
                 if ui
                     .add_enabled(
                         has_selection && !self.running(),
@@ -476,7 +493,7 @@ impl App {
                         // Rows only have durable verification records once a
                         // preflight has admitted the queue into a project.
                         self.bulk_selection_count() == 1 && self.bulk_project_id.is_some(),
-                        egui::Button::new(self.language.text("Review verification")),
+                        egui::Button::new(self.language.message("ui.review-verification")),
                     )
                     .clicked()
                 {
@@ -649,7 +666,8 @@ impl App {
                                     } else {
                                         ui.label(
                                             RichText::new(
-                                                self.language.text("Inspect durable run detail"),
+                                                self.language
+                                                    .message("ui.inspect-durable-run-detail"),
                                             )
                                             .color(self.theme_colors().text_secondary),
                                         );
@@ -661,7 +679,7 @@ impl App {
                 });
             self.bulk_visible_indices = visible_indices;
             ui.label(
-                RichText::new(self.language.text("Batch actions apply only to explicitly selected rows. Use Select unresolved or Select visible to create a selection."))
+                RichText::new(self.language.message("ui.batch-actions-apply-only-to-explicitly-selected-rows-use-select-unresolved-a54ac35192"))
                     .color(self.theme_colors().text_secondary),
             );
         }
@@ -676,11 +694,11 @@ impl App {
         let mut apply_destination = false;
         crate::ui::card(ui, |ui| {
             egui::CollapsingHeader::new(
-                RichText::new(self.language.text("Queue settings")).strong(),
+                RichText::new(self.language.message("ui.queue-settings")).strong(),
             )
             .id_salt("queue_settings")
             .show(ui, |ui| {
-                crate::ui::form_row(ui, self.language.text("Concurrent workers"), |ui| {
+                crate::ui::form_row(ui, self.language.message("ui.concurrent-workers"), |ui| {
                     ui.add_enabled(
                         editable,
                         egui::DragValue::new(&mut self.form.profile.batch_concurrency).range(1..=16),
@@ -694,7 +712,7 @@ impl App {
                         .color(colors.text_secondary),
                     );
                 });
-                crate::ui::form_row(ui, self.language.text("Transient retries"), |ui| {
+                crate::ui::form_row(ui, self.language.message("ui.transient-retries"), |ui| {
                     ui.add_enabled(
                         editable,
                         egui::DragValue::new(&mut self.form.profile.batch_retry_count).range(0..=3),
@@ -708,9 +726,9 @@ impl App {
                     );
                 });
                 ui.add_space(8.0);
-                crate::ui::section_label(ui, self.language.text("Passwordless queue credentials"));
+                crate::ui::section_label(ui, self.language.message("ui.passwordless-queue-credentials"));
                 ui.label(
-                    RichText::new(self.language.text("Apply an existing OS-keyring reference to rows that do not already have a password or credential ID. The secret itself is never copied into the queue."))
+                    RichText::new(self.language.message("ui.apply-an-existing-os-keyring-reference-to-rows-that-do-not-already-have-a-p-9e461c8815"))
                         .small()
                         .color(colors.text_secondary),
                 );
@@ -768,7 +786,7 @@ impl App {
         ui.separator();
         if self.bulk_selection_is_empty() {
             ui.label(
-                RichText::new(self.language.text("No mailboxes selected."))
+                RichText::new(self.language.message("ui.no-mailboxes-selected"))
                     .color(self.theme_colors().text_secondary),
             );
             return None;
@@ -840,7 +858,7 @@ impl App {
                 );
             }
             ui.label(
-                RichText::new(self.language.text("Size and completion-time estimates require inventory and throughput data not recorded for these queue rows."))
+                RichText::new(self.language.message("ui.size-and-completion-time-estimates-require-inventory-and-throughput-data-no-aa15a03260"))
                     .small()
                     .color(self.theme_colors().text_secondary),
             );
@@ -923,15 +941,15 @@ impl App {
                 crate::ui::pill(ui, self.language.text(badge), color);
             });
             ui.separator();
-            ui.strong(self.language.text("Source"));
+            ui.strong(self.language.message("ui.source-0e570ca6"));
             line(ui, RichText::new(&job.source_user).strong());
             line(ui, RichText::new(&job.source_host).small());
             ui.add_space(4.0);
-            ui.strong(self.language.text("Destination"));
+            ui.strong(self.language.message("ui.destination-293d404a"));
             line(ui, RichText::new(&job.destination_user).strong());
             line(ui, RichText::new(&job.destination_host).small());
             ui.add_space(4.0);
-            ui.strong(self.language.text("Migration behavior"));
+            ui.strong(self.language.message("ui.migration-behavior"));
             line(
                 ui,
                 RichText::new(self.language.text(policy.label()))
@@ -954,7 +972,7 @@ impl App {
             );
             if let Some((_, inventory, snapshot)) = evidence.and_then(|row| row.evidence.as_ref()) {
                 ui.add_space(4.0);
-                ui.strong(self.language.text("Recorded verification inventory"));
+                ui.strong(self.language.message("ui.recorded-verification-inventory"));
                 line(
                     ui,
                     RichText::new(
@@ -980,7 +998,7 @@ impl App {
             }
             if show_assessment
                 && ui
-                    .button(self.language.text("View complete assessment"))
+                    .button(self.language.message("ui.view-complete-assessment"))
                     .clicked()
             {
                 open_assessment = true;
