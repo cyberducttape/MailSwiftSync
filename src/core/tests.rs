@@ -1628,6 +1628,74 @@ fn latest_evidence_resolves_to_its_own_run() {
     assert_eq!(run_id, "run-evidence-one");
     assert_eq!(latest, evidence);
     assert_eq!(db.run(&run_id).unwrap().unwrap().status, "completed");
+    let projected_run: String = db
+        .connection
+        .query_row(
+            "SELECT run_id FROM evidence WHERE job_id=?1",
+            [&job],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(projected_run, run_id);
+    let report = db.project_report_snapshot(&project.id).unwrap().unwrap();
+    assert_eq!(
+        report.mailboxes[0].evidence.as_ref().unwrap().0,
+        "run-evidence-one"
+    );
+}
+
+#[test]
+fn evidence_projection_migration_backfills_its_latest_history_run() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("projection-migration", "source", "dest")
+        .unwrap();
+    let job = db.add_mailbox(&project.id, "source", "dest").unwrap();
+    db.begin_run(&project.id, &job, "projection-run", "imapsync")
+        .unwrap();
+    let evidence = MailboxEvidence {
+        verification_method: VerificationMethod::MetadataReconciliation,
+        verification_outcome: Some(VerificationOutcome::ExactMetadataMatch),
+        source_messages: 1,
+        destination_messages: 1,
+        source_bytes: 42,
+        destination_bytes: 42,
+        unmatched_messages: Some(0),
+        failed_messages: 0,
+        source_folders: 1,
+        destination_folders: 1,
+        authoritative: false,
+        missing_messages: 0,
+        extra_messages: 0,
+        modified_messages: 0,
+        probable_messages: 0,
+    };
+    db.finish_run_for_mailbox_with_evidence(
+        &project.id,
+        &job,
+        "projection-run",
+        "completed",
+        "verified",
+        "",
+        &evidence,
+    )
+    .unwrap();
+    db.connection
+        .execute("ALTER TABLE evidence DROP COLUMN run_id", [])
+        .unwrap();
+    db.connection
+        .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION - 1)
+        .unwrap();
+    db.migrate().unwrap();
+    let migrated_run: String = db
+        .connection
+        .query_row(
+            "SELECT run_id FROM evidence WHERE job_id=?1",
+            [&job],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(migrated_run, "projection-run");
 }
 
 #[test]
@@ -1913,7 +1981,7 @@ fn writable_open_backups_and_repairs_current_schema_with_wrong_run_index_predica
             entry
                 .file_name()
                 .to_string_lossy()
-                .contains("state.db.pre-migrate-v13.")
+                .contains("state.db.pre-migrate-v14.")
         })
         .count();
     assert_eq!(migration_backups, 1);
@@ -2215,7 +2283,7 @@ fn writable_open_repairs_unconstrained_current_schema_with_backup() {
             entry
                 .file_name()
                 .to_string_lossy()
-                .contains("state.db.pre-migrate-v13.")
+                .contains("state.db.pre-migrate-v14.")
         })
         .count();
     assert_eq!(backup_count, 1);
@@ -3486,7 +3554,11 @@ destination_port = ""
     // Simulate a pre-v13 ledger. The v13 migration must recompute identity
     // policy v2 once before marking that invariant current.
     db.connection
-        .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION - 1)
+        .pragma_update(
+            None,
+            "user_version",
+            DESTINATION_IDENTITY_SCHEMA_VERSION - 1,
+        )
         .unwrap();
     db.connection
         .execute("DROP INDEX idx_mailbox_jobs_project_rowid", [])

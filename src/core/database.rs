@@ -257,7 +257,7 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v13 application schema, rather than treating
+    /// Validate the complete v14 application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
     /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
@@ -310,6 +310,7 @@ impl StateStore {
                     ("modified_messages", "INTEGER", true, 0),
                     ("probable_messages", "INTEGER", true, 0),
                     ("captured_at", "TEXT", true, 0),
+                    ("run_id", "TEXT", false, 0),
                 ],
             ),
             (
@@ -477,14 +478,17 @@ impl StateStore {
             ),
             (
                 "evidence",
-                &[(
-                    "mailbox_jobs",
-                    "job_id",
-                    "id",
-                    "NO ACTION",
-                    "NO ACTION",
-                    "NONE",
-                )],
+                &[
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                ],
             ),
             (
                 "evidence_history",
@@ -872,6 +876,7 @@ impl StateStore {
         }
         const OWNERSHIP_CHECKS: &[&str] = &[
             "SELECT EXISTS(SELECT 1 FROM runs r JOIN mailbox_jobs j ON j.id=r.job_id WHERE r.job_id IS NOT NULL AND r.project_id<>j.project_id)",
+            "SELECT EXISTS(SELECT 1 FROM evidence e JOIN runs r ON r.id=e.run_id WHERE r.job_id IS NULL OR r.job_id<>e.job_id)",
             "SELECT EXISTS(SELECT 1 FROM evidence_history h JOIN runs r ON r.id=h.run_id WHERE r.job_id IS NULL OR r.job_id<>h.job_id)",
             "SELECT EXISTS(SELECT 1 FROM message_mismatches m JOIN runs r ON r.id=m.run_id WHERE r.job_id IS NULL OR r.job_id<>m.job_id)",
             "SELECT EXISTS(SELECT 1 FROM active_processes p JOIN runs r ON r.id=p.run_id WHERE r.job_id IS NULL OR r.job_id<>p.job_id)",
@@ -1232,8 +1237,8 @@ impl StateStore {
         // version 4 adds a stable operator-review reason for attention rows;
         // version 5 adds durable verification-exception acceptance records;
         // version 6 records observed engine-version metadata per run; version
-        // 13 establishes destination identity policy v2 so clean startups can
-        // trust that versioned invariant without reparsing every config.
+        // 13 establishes destination identity policy v2; version 14 binds the
+        // current evidence projection directly to its run for report reads.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1258,7 +1263,7 @@ impl StateStore {
             let current_schema_is_clean = Self::current_schema_is_clean(&self.connection)
                 && Self::validate_schema_layout(&self.connection).is_ok();
             if current_schema_is_clean {
-                // A clean v13 ledger needs no launch-time data rewrite. The
+                // A clean v14 ledger needs no launch-time data rewrite. The
                 // identity is calculated when a mailbox is created or its
                 // configuration changes; raw output cleanup belongs to the
                 // compatibility-repair path below.
@@ -1556,6 +1561,24 @@ impl StateStore {
         }
         Self::ensure_evidence_counter_constraints(&tx)?;
         Self::ensure_evidence_history_run_foreign_key(&tx)?;
+
+        // Schema v14 turns the one-row-per-mailbox evidence projection into
+        // the fast-path source for current reports. Preserve the immutable
+        // evidence_history ledger and bind this projection to its owning run.
+        let evidence_columns = tx
+            .prepare("PRAGMA table_info(evidence)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if !evidence_columns.iter().any(|column| column == "run_id") {
+            tx.execute(
+                "ALTER TABLE evidence ADD COLUMN run_id TEXT REFERENCES runs(id)",
+                [],
+            )?;
+        }
+        tx.execute(
+            "UPDATE evidence SET run_id=(SELECT latest.run_id FROM evidence_history latest WHERE latest.job_id=evidence.job_id ORDER BY latest.captured_at DESC,latest.id DESC LIMIT 1) WHERE run_id IS NULL",
+            [],
+        )?;
 
         let mismatch_columns = tx
             .prepare("PRAGMA table_info(message_mismatches)")?

@@ -17,7 +17,7 @@ Preflight Scheduler Verify
  Durable SQLite state + evidence ledger
 ```
 
-The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, and verification evidence. It intentionally never persists passwords or mailbox content. Schema v13 establishes destination-identity policy v2 transactionally; normal opens trust that versioned invariant and avoid reparsing each mailbox's serialized config. Older ledgers recompute the identity once during migration. Deep integrity checks remain separate from the ordinary startup path.
+The `core` module owns the durable project model. It persists projects, phases, mailbox jobs, audit events, per-run evidence history, and verification evidence. It intentionally never persists passwords or mailbox content. Schema v13 establishes destination-identity policy v2 transactionally; normal opens trust that versioned invariant and avoid reparsing each mailbox's serialized config. Schema v14 binds the one-row-per-mailbox current evidence projection to its run; immutable evidence history remains the audit trail, while GUI/report reads use the projection instead of repeatedly finding the latest historical record. Older ledgers rebuild both invariants transactionally during migration. Deep integrity checks remain separate from the ordinary startup path.
 
 The implementation keeps the controller boundary explicit even while the
 desktop shell continues to evolve. `migration_plan` owns profile validation,

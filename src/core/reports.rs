@@ -101,7 +101,7 @@ impl StateStore {
 
         let mut evidence = HashMap::new();
         let mut evidence_statement = tx.prepare(
-            "SELECT eh.job_id,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages,r.plan_snapshot FROM evidence_history eh JOIN mailbox_jobs j ON j.id=eh.job_id LEFT JOIN runs r ON r.id=eh.run_id WHERE j.project_id=?1 AND eh.id=(SELECT latest.id FROM evidence_history latest WHERE latest.job_id=eh.job_id ORDER BY latest.captured_at DESC,latest.id DESC LIMIT 1)",
+            "SELECT e.job_id,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,r.plan_snapshot FROM evidence e JOIN mailbox_jobs j ON j.id=e.job_id JOIN runs r ON r.id=e.run_id WHERE j.project_id=?1",
         )?;
         for row in evidence_statement.query_map([project_id], |row| {
             Ok((
@@ -211,7 +211,7 @@ impl StateStore {
         let limit = limit.min(MAX_REPORT_PAGE_ROWS);
         let tx = self.connection.unchecked_transaction()?;
         let mut statement = tx.prepare(
-            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,eh.run_id,eh.verification_method,eh.verification_outcome,eh.source_messages,eh.destination_messages,eh.source_bytes,eh.destination_bytes,eh.unmatched_messages,eh.failed_messages,eh.source_folders,eh.destination_folders,eh.authoritative,eh.missing_messages,eh.extra_messages,eh.modified_messages,eh.probable_messages,j.rowid FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence_history eh ON eh.id=(SELECT MAX(latest.id) FROM evidence_history latest WHERE latest.job_id=j.id) WHERE j.project_id=?1 AND j.rowid>?2 ORDER BY j.rowid LIMIT ?3",
+            "SELECT j.id,j.source_mailbox,j.destination_mailbox,j.state,j.attention_reason,va.run_id,va.operator,va.reason,va.accepted_at,e.run_id,e.verification_method,e.verification_outcome,e.source_messages,e.destination_messages,e.source_bytes,e.destination_bytes,e.unmatched_messages,e.failed_messages,e.source_folders,e.destination_folders,e.authoritative,e.missing_messages,e.extra_messages,e.modified_messages,e.probable_messages,j.rowid FROM mailbox_jobs j LEFT JOIN verification_acceptances va ON va.id=(SELECT MAX(latest.id) FROM verification_acceptances latest WHERE latest.job_id=j.id) LEFT JOIN evidence e ON e.job_id=j.id WHERE j.project_id=?1 AND j.rowid>?2 ORDER BY j.rowid LIMIT ?3",
         )?;
         let rows = statement
             .query_map(

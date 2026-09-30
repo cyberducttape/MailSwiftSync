@@ -1,6 +1,39 @@
 use super::*;
 use std::sync::Arc;
 
+pub(super) fn upsert_evidence_projection(
+    tx: &rusqlite::Transaction<'_>,
+    job_id: &str,
+    run_id: &str,
+    value: &MailboxEvidence,
+    outcome: VerificationOutcome,
+    authoritative: bool,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages,captured_at,run_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,CURRENT_TIMESTAMP,?17) ON CONFLICT(job_id) DO UPDATE SET verification_method=excluded.verification_method,verification_outcome=excluded.verification_outcome,source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,probable_messages=excluded.probable_messages,captured_at=excluded.captured_at,run_id=excluded.run_id",
+        params![
+            job_id,
+            value.verification_method().as_str(),
+            outcome.as_str(),
+            sqlite_i64(value.source_messages)?,
+            sqlite_i64(value.destination_messages)?,
+            sqlite_i64(value.source_bytes)?,
+            sqlite_i64(value.destination_bytes)?,
+            sqlite_optional_i64(value.unmatched_messages)?,
+            sqlite_i64(value.failed_messages)?,
+            sqlite_i64(value.source_folders)?,
+            sqlite_i64(value.destination_folders)?,
+            authoritative,
+            sqlite_i64(value.missing_messages)?,
+            sqlite_i64(value.extra_messages)?,
+            sqlite_i64(value.modified_messages)?,
+            sqlite_i64(value.probable_messages)?,
+            run_id,
+        ],
+    )?;
+    Ok(())
+}
+
 impl StateStore {
     /// Load a bounded operator-facing mismatch page for one evidence run.
     /// The boolean indicates that additional durable rows exist beyond the
@@ -120,7 +153,14 @@ impl StateStore {
             run_id.to_owned()
         };
         tx.execute("INSERT INTO evidence_history(job_id,run_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)", params![job_id, persisted_run_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
-        tx.execute("INSERT INTO evidence(job_id,verification_method,verification_outcome,source_messages,destination_messages,source_bytes,destination_bytes,unmatched_messages,failed_messages,source_folders,destination_folders,authoritative,missing_messages,extra_messages,modified_messages,probable_messages) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16) ON CONFLICT(job_id) DO UPDATE SET verification_method=excluded.verification_method,verification_outcome=excluded.verification_outcome,source_messages=excluded.source_messages,destination_messages=excluded.destination_messages,source_bytes=excluded.source_bytes,destination_bytes=excluded.destination_bytes,unmatched_messages=excluded.unmatched_messages,failed_messages=excluded.failed_messages,source_folders=excluded.source_folders,destination_folders=excluded.destination_folders,authoritative=excluded.authoritative,missing_messages=excluded.missing_messages,extra_messages=excluded.extra_messages,modified_messages=excluded.modified_messages,probable_messages=excluded.probable_messages,captured_at=CURRENT_TIMESTAMP", params![job_id, value.verification_method().as_str(), value.verification_outcome().as_str(), source_messages, destination_messages, source_bytes, destination_bytes, unmatched_messages, failed_messages, source_folders, destination_folders, value.authoritative, missing_messages, extra_messages, modified_messages, probable_messages])?;
+        upsert_evidence_projection(
+            &tx,
+            job_id,
+            &persisted_run_id,
+            value,
+            value.verification_outcome(),
+            value.authoritative,
+        )?;
         tx.commit()?;
         Ok(())
     }
