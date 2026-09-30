@@ -3,7 +3,7 @@
 use std::{
     collections::HashMap,
     fs::{self, OpenOptions},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -133,6 +133,7 @@ pub(crate) struct MessageMetadataStage {
     connection: Option<Connection>,
     path: Option<PathBuf>,
     retain_on_drop: bool,
+    remove_parent_on_cleanup: bool,
     /// Body fingerprints are retained only for the explicitly enabled
     /// forensic verification path. Metadata-only verification remains fully
     /// staged in SQLite and does not retain content hashes in memory.
@@ -171,6 +172,7 @@ impl MessageMetadataStage {
             connection: Some(connection),
             path: Some(path),
             retain_on_drop: false,
+            remove_parent_on_cleanup: true,
             content_fingerprints: HashMap::new(),
         };
         if let Err(error) = stage.initialize(false) {
@@ -195,6 +197,7 @@ impl MessageMetadataStage {
             connection: Some(Connection::open_in_memory()?),
             path: None,
             retain_on_drop: false,
+            remove_parent_on_cleanup: false,
             content_fingerprints: HashMap::new(),
         };
         stage.initialize(false)?;
@@ -255,6 +258,7 @@ impl MessageMetadataStage {
             connection: Some(connection),
             path: Some(path),
             retain_on_drop: true,
+            remove_parent_on_cleanup: false,
             content_fingerprints: HashMap::new(),
         };
         if let Err(error) = stage
@@ -285,18 +289,26 @@ impl MessageMetadataStage {
 
     pub(crate) fn finish(&mut self) -> Result<(), String> {
         self.retain_on_drop = false;
-        if let Some(path) = self.path.take() {
-            if let Some(connection) = self.connection.take() {
-                connection
-                    .close()
-                    .map_err(|(_, error)| format!("could not close verification stage: {error}"))?;
+        let mut errors = Vec::new();
+        if let Some(connection) = self.connection.take() {
+            match connection.close() {
+                Ok(()) => {}
+                Err((connection, error)) => {
+                    self.connection = Some(connection);
+                    errors.push(format!("could not close verification stage: {error}"));
+                }
             }
-            fs::remove_file(&path)
-                .map_err(|error| format!("could not remove verification stage: {error}"))?;
-            for suffix in ["-wal", "-shm"] {
-                let sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
-                let _ = fs::remove_file(sidecar);
-            }
+        }
+        if let Some(path) = self.path.as_ref() {
+            errors.extend(cleanup_stage_files(path, self.remove_parent_on_cleanup));
+        }
+        if errors.is_empty() {
+            self.path = None;
+        } else {
+            return Err(errors.join("; "));
+        }
+        if self.connection.is_some() {
+            return Err("verification stage connection remains open after cleanup".to_owned());
         }
         Ok(())
     }
@@ -845,18 +857,48 @@ fn metadata_date_key(value: Option<&str>) -> Option<String> {
 
 impl Drop for MessageMetadataStage {
     fn drop(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            let _ = connection.close();
+        if let Some(connection) = self.connection.take()
+            && let Err((connection, _)) = connection.close()
+        {
+            drop(connection);
         }
         if !self.retain_on_drop
-            && let Some(path) = self.path.take()
+            && let Some(path) = self.path.as_ref()
         {
-            let _ = fs::remove_file(&path);
-            if let Some(directory) = path.parent() {
-                let _ = fs::remove_dir(directory);
-            }
+            let _ = cleanup_stage_files(path, self.remove_parent_on_cleanup);
         }
     }
+}
+
+fn cleanup_stage_files(path: &Path, remove_parent: bool) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut artifacts = vec![(path.to_path_buf(), "verification stage")];
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        artifacts.push((PathBuf::from(sidecar), "verification stage sidecar"));
+    }
+    for (artifact, description) in artifacts {
+        if let Err(error) = fs::remove_file(&artifact)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            errors.push(format!(
+                "could not remove {description} {}: {error}",
+                artifact.display()
+            ));
+        }
+    }
+    if remove_parent
+        && let Some(directory) = path.parent()
+        && let Err(error) = fs::remove_dir(directory)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        errors.push(format!(
+            "could not remove verification stage directory {}: {error}",
+            directory.display()
+        ));
+    }
+    errors
 }
 
 #[cfg(test)]
@@ -963,6 +1005,38 @@ mod tests {
         assert_eq!(stage.count(side).unwrap(), 0);
         assert_eq!(stage.resume_mailbox(side, "INBOX", folder).unwrap(), None);
         drop(stage);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn finish_attempts_every_artifact_and_retains_state_for_retry() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let mut stage = MessageMetadataStage::open_durable(path.clone(), "plan").unwrap();
+        let journal = PathBuf::from(format!("{}-journal", path.display()));
+        let wal = PathBuf::from(format!("{}-wal", path.display()));
+        let shm = PathBuf::from(format!("{}-shm", path.display()));
+        std::fs::create_dir(&journal).unwrap();
+        std::fs::create_dir(&wal).unwrap();
+        std::fs::create_dir(&shm).unwrap();
+
+        let error = stage.finish().unwrap_err();
+        assert!(error.contains("-journal"), "{error}");
+        assert!(error.contains("-wal"), "{error}");
+        assert!(error.contains("-shm"), "{error}");
+        assert!(!path.exists(), "main database removal was still attempted");
+        assert!(
+            stage.path.is_some(),
+            "failed cleanup state must be retained"
+        );
+        assert!(stage.connection.is_none(), "connection closed successfully");
+
+        std::fs::remove_dir(journal).unwrap();
+        std::fs::remove_dir(wal).unwrap();
+        std::fs::remove_dir(shm).unwrap();
+        stage.finish().unwrap();
+        assert!(stage.path.is_none());
+        assert!(!path.exists());
         let _ = std::fs::remove_dir_all(directory);
     }
 
