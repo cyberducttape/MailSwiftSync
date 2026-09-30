@@ -2715,6 +2715,14 @@ mod tests {
         let error = parse_message_fetch_body_hashes_response_bytes(oversized, "INBOX", Some(77), 5)
             .unwrap_err();
         assert!(error.contains("exceeded the 5-byte body-hash bound"));
+
+        // A bare `}\r\n` after BODY[] used to make a malformed literal
+        // length slice from index 1 to index 0 and panic under fuzzing.
+        let malformed_literal = b"* 2 FETCH (UID 1 BODY[] }\r\n)\r\n";
+        let error =
+            parse_message_fetch_body_hashes_response_bytes(malformed_literal, "INBOX", Some(77), 5)
+                .unwrap_err();
+        assert!(error.contains("omitted BODY[] literal"));
     }
 
     #[test]

@@ -214,19 +214,7 @@ fn fetch_message_id_bytes(record: &[u8]) -> Option<String> {
         .position(|part| part.eq_ignore_ascii_case(marker))?
         + marker.len();
     let literal = record[marker_start..].strip_prefix(b" ")?;
-    let literal_end = literal.windows(3).position(|part| part == b"}\r\n")?;
-    let literal_size = std::str::from_utf8(&literal[1..literal_end]).ok()?;
-    let size = literal_size
-        .strip_suffix('+')
-        .unwrap_or(literal_size)
-        .parse::<usize>()
-        .ok()?;
-    let body_start = marker_start
-        + record[marker_start..]
-            .windows(2)
-            .position(|part| part == b"\r\n")?
-        + 2;
-    let body = record.get(body_start..body_start + size)?;
+    let body = fetch_literal_payload(literal)?;
     parse_message_id_header(&String::from_utf8_lossy(body))
 }
 
@@ -241,19 +229,24 @@ fn fetch_body_literal(record: &[u8]) -> Option<&[u8]> {
         })?;
     let marker_start = marker_start + marker_len;
     let literal = record[marker_start..].strip_prefix(b" ")?;
-    let literal_end = literal.windows(3).position(|part| part == b"}\r\n")?;
-    let literal_size = std::str::from_utf8(&literal[1..literal_end]).ok()?;
-    let size = literal_size
+    fetch_literal_payload(literal)
+}
+
+/// Parse an IMAP literal header and return its exact payload. `get` is used
+/// for every attacker-controlled range so malformed framing such as a bare
+/// `}\r\n` delimiter fails closed instead of panicking.
+fn fetch_literal_payload(literal: &[u8]) -> Option<&[u8]> {
+    let literal = literal.strip_prefix(b"{")?;
+    let header_end = literal.windows(3).position(|part| part == b"}\r\n")?;
+    let size_text = std::str::from_utf8(literal.get(..header_end)?).ok()?;
+    let size = size_text
         .strip_suffix('+')
-        .unwrap_or(literal_size)
+        .unwrap_or(size_text)
         .parse::<usize>()
         .ok()?;
-    let body_start = marker_start
-        + record[marker_start..]
-            .windows(2)
-            .position(|part| part == b"\r\n")?
-        + 2;
-    record.get(body_start..body_start.checked_add(size)?)
+    let body_start = header_end.checked_add(3)?;
+    let body_end = body_start.checked_add(size)?;
+    literal.get(body_start..body_end)
 }
 
 pub(super) fn parse_message_id_header(body: &str) -> Option<String> {
