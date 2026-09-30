@@ -408,6 +408,15 @@ impl UiLanguage {
             "Projects" => "Projekte",
             "Stop" => "Anhalten",
             "Durable view is stale" => "Dauerhafte Ansicht ist nicht aktuell",
+            "Migration still running" => "Migration läuft noch",
+            "This desktop owns the migration controller. Closing the window will interrupt the run and require recovery review; migrations cannot yet continue after the desktop exits." => {
+                "Diese Desktop-Anwendung besitzt den Migrationscontroller. Beim Schließen des Fensters wird die Ausführung unterbrochen und muss anschließend geprüft werden; Migrationen können nach dem Beenden der Anwendung noch nicht weiterlaufen."
+            }
+            "To stop safely, use Stop migration in Activity and wait for the run to finish before closing." => {
+                "Zum sicheren Anhalten verwenden Sie „Migration anhalten“ unter Aktivität und warten Sie vor dem Schließen, bis die Ausführung beendet ist."
+            }
+            "Keep window open" => "Fenster geöffnet lassen",
+            "Go to Activity" => "Zu Aktivität wechseln",
             "Migration plan" => "Migrationsplan",
             "PROVIDER QUALIFICATION" => "ANBIETERQUALIFIZIERUNG",
             "UNQUALIFIED" => "NICHT QUALIFIZIERT",
@@ -1542,6 +1551,11 @@ mod tests {
     fn destructive_and_safety_paths_are_translated() {
         for key in [
             "Confirm live migration",
+            "Migration still running",
+            "This desktop owns the migration controller. Closing the window will interrupt the run and require recovery review; migrations cannot yet continue after the desktop exits.",
+            "To stop safely, use Stop migration in Activity and wait for the run to finish before closing.",
+            "Keep window open",
+            "Go to Activity",
             "I understand — start migration",
             "Confirm live batch migration",
             "I understand — start batch",

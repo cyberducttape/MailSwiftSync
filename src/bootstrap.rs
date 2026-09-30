@@ -429,6 +429,7 @@ impl App {
             durability_recovery_pending: false,
             stop_confirm_open: false,
             stop_confirm_focus_requested: false,
+            close_during_run_confirm_open: false,
             keyring_open: false,
             credential_delete_confirmation: None,
             credential_delete_focus_requested: false,

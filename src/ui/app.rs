@@ -32,6 +32,13 @@ impl eframe::App for App {
     /// minimized or hidden, so a running migration keeps draining events.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        if ctx.input(|input| input.viewport().close_requested()) && self.running() {
+            // The desktop owns the controller. Closing it would trigger the
+            // platform process-containment policy and interrupt the engine;
+            // do not let a window-manager close silently become a stop action.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_during_run_confirm_open = true;
+        }
         // eframe only repaints on input. Background work reports through
         // channels drained by `poll`, and workers wait (with timeouts) for
         // durable acknowledgements, so keep frames coming while any is in
@@ -274,10 +281,39 @@ impl eframe::App for App {
         self.bulk_clear_confirmation(&ctx);
         self.bulk_import_confirmation(&ctx);
         self.bulk_live_confirmation(&ctx);
+        self.close_during_run_confirmation(&ctx);
     }
 }
 
 impl App {
+    fn close_during_run_confirmation(&mut self, ctx: &egui::Context) {
+        if !self.close_during_run_confirm_open {
+            return;
+        }
+        if !self.running() {
+            self.close_during_run_confirm_open = false;
+            return;
+        }
+        let mut open = true;
+        egui::Modal::new(egui::Id::new("close_during_run_confirmation"))
+            .show(ctx, |ui| {
+                ui.heading(self.language.text("Migration still running"));
+                ui.label(self.language.text("This desktop owns the migration controller. Closing the window will interrupt the run and require recovery review; migrations cannot yet continue after the desktop exits."));
+                ui.label(self.language.text("To stop safely, use Stop migration in Activity and wait for the run to finish before closing."));
+                ui.horizontal(|ui| {
+                    let stay = ui.button(self.language.text("Keep window open"));
+                    if stay.clicked() {
+                        open = false;
+                    }
+                    if ui.button(self.language.text("Go to Activity")).clicked() {
+                        self.active_view = WorkspaceView::Activity;
+                        open = false;
+                    }
+                });
+            });
+        self.close_during_run_confirm_open = open;
+    }
+
     fn current_dry_preflight_ready(&self) -> bool {
         let Some(job_id) = self.job_id.as_deref() else {
             return false;
@@ -858,5 +894,42 @@ mod workflow_tests {
             plan_workflow_step(true, true, false, false),
             PlanWorkflowStep::DryPreflight
         );
+    }
+
+    #[test]
+    fn active_migration_cancels_window_close_request() {
+        use crate::ui::App;
+        use eframe::App as EframeApp;
+        use eframe::egui::{Context, RawInput, ViewportCommand, ViewportEvent, ViewportId};
+
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-close-guard-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = App::from_state_path(Some(&state_path));
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        app.receiver = Some(receiver);
+        let context = Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut input = RawInput::default();
+        input
+            .viewports
+            .entry(ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(ViewportEvent::Close);
+        let output = context.run_ui(input, |ui| EframeApp::logic(&mut app, ui.ctx(), &mut frame));
+
+        assert!(app.close_during_run_confirm_open);
+        assert!(
+            output.viewport_output[&ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, ViewportCommand::CancelClose))
+        );
+
+        drop(app);
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_file(state_path.with_extension("lock"));
     }
 }

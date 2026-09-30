@@ -151,6 +151,9 @@ pub(crate) struct App {
     pub(crate) durability_recovery_pending: bool,
     pub(crate) stop_confirm_open: bool,
     pub(crate) stop_confirm_focus_requested: bool,
+    /// Closing the desktop would terminate its controller and interrupt the
+    /// engine; require the operator to acknowledge that boundary first.
+    pub(crate) close_during_run_confirm_open: bool,
     pub(crate) keyring_open: bool,
     pub(crate) credential_delete_confirmation: Option<CredentialDeleteTarget>,
     pub(crate) credential_delete_focus_requested: bool,
