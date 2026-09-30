@@ -3,6 +3,7 @@
 use crate::App;
 use crate::core;
 use crate::migration_plan::completeness as plan_completeness;
+use crate::ui::status::RecommendedAction;
 use crate::ui::{StatusSeverity, WorkspaceView};
 use crate::ui::{customer_proof_ready, recommended_workspace_action};
 use eframe::egui::{self, RichText};
@@ -190,36 +191,7 @@ impl App {
 
         crate::ui::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            crate::ui::section_label(ui, self.language.message("ui.recommended-next-step"));
-            ui.label(RichText::new(self.language.text(next_action.text)).size(15.0));
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_enabled_ui(!self.workspace_read_only, |ui| {
-                    if crate::ui::primary_button(ui, self.language.text(next_action.button_label))
-                        .clicked()
-                    {
-                        self.active_view = next_action.destination;
-                    }
-                    if ui
-                        .button(self.language.message("ui.refresh-preflight-assessment"))
-                        .clicked()
-                    {
-                        self.assess_plan();
-                    }
-                    if ui
-                        .button(self.language.message("ui.import-mailbox-list"))
-                        .clicked()
-                    {
-                        self.active_view = WorkspaceView::Mailboxes;
-                    }
-                });
-            });
-        });
-        ui.add_space(16.0);
-
-        crate::ui::card(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            self.lifecycle_stepper(ui);
+            self.lifecycle_stepper(ui, &next_action);
             if attention_count > 0 {
                 ui.label(
                     RichText::new(format!(
@@ -649,16 +621,32 @@ impl App {
         }
     }
 
-    pub(crate) fn lifecycle_stepper(&self, ui: &mut egui::Ui) {
+    pub(crate) fn lifecycle_stepper(&mut self, ui: &mut egui::Ui, next_action: &RecommendedAction) {
         let phases = [
-            (core::Phase::Discovery, "Prepare"),
-            (core::Phase::Preflight, "Preflight"),
-            (core::Phase::Pilot, "Pilot"),
-            (core::Phase::Seed, "Seed"),
-            (core::Phase::CatchUp, "Catch-up"),
-            (core::Phase::FinalDelta, "Cutover"),
-            (core::Phase::Verification, "Verify"),
-            (core::Phase::Complete, "Complete"),
+            (core::Phase::Discovery, "Prepare", "ui.phase-action-prepare"),
+            (
+                core::Phase::Preflight,
+                "Preflight",
+                "ui.phase-action-preflight",
+            ),
+            (core::Phase::Pilot, "Pilot", "ui.phase-action-pilot"),
+            (core::Phase::Seed, "Seed", "ui.phase-action-seed"),
+            (core::Phase::CatchUp, "Catch-up", "ui.phase-action-catch-up"),
+            (
+                core::Phase::FinalDelta,
+                "Cutover",
+                "ui.phase-action-cutover",
+            ),
+            (
+                core::Phase::Verification,
+                "Verify",
+                "ui.phase-action-verify",
+            ),
+            (
+                core::Phase::Complete,
+                "Complete",
+                "ui.phase-action-complete",
+            ),
         ];
         let current = match self.active_project_id() {
             None => core::Phase::Discovery,
@@ -671,7 +659,7 @@ impl App {
         };
         let current_index = phases
             .iter()
-            .position(|(phase, _)| *phase == current)
+            .position(|(phase, _, _)| *phase == current)
             .unwrap_or(usize::MAX);
         ui.horizontal(|ui| {
             crate::ui::section_label(ui, self.language.message("ui.migration-lifecycle"));
@@ -687,10 +675,10 @@ impl App {
         let steps = phases
             .iter()
             .enumerate()
-            .map(|(index, (_, label))| {
+            .map(|(index, (_, label, detail_key))| {
                 (
                     self.language.text(label),
-                    None,
+                    Some(self.language.message(detail_key)),
                     step_state(index, current_index),
                 )
             })
@@ -701,6 +689,34 @@ impl App {
             self.theme_colors().success,
             self.theme_colors().info,
         );
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(self.language.message("ui.recommended-next-step"))
+                .strong()
+                .color(self.theme_colors().text_secondary),
+        );
+        ui.label(RichText::new(self.language.text(next_action.text)).size(14.0));
+        ui.add_enabled_ui(!self.workspace_read_only, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if crate::ui::primary_button(ui, self.language.text(next_action.button_label))
+                    .clicked()
+                {
+                    self.active_view = next_action.destination;
+                }
+                if ui
+                    .button(self.language.message("ui.refresh-preflight-assessment"))
+                    .clicked()
+                {
+                    self.assess_plan();
+                }
+                if ui
+                    .button(self.language.message("ui.import-mailbox-list"))
+                    .clicked()
+                {
+                    self.active_view = WorkspaceView::Mailboxes;
+                }
+            });
+        });
         if current == core::Phase::Attention {
             ui.label(RichText::new(self.language.message("ui.a-mailbox-or-run-needs-operator-review-normal-lifecycle-progress-is-paused-46a8d56892")).small().color(self.theme_colors().danger));
         }

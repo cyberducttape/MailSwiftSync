@@ -529,7 +529,7 @@ impl App {
             self.current_dry_preflight_ready(),
         );
         crate::ui::card(ui, |ui| {
-            crate::ui::section_label(ui, self.language.message("ui.migration-workflow"));
+            crate::ui::section_label(ui, self.language.message("ui.next-readiness-action"));
             if self.running() {
                 if ui
                     .button(self.language.message("ui.stop-migration"))
