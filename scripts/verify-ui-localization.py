@@ -71,7 +71,7 @@ def status_message_keys() -> set[str]:
 
 def stable_message_keys() -> set[str]:
     keys: set[str] = set()
-    for path in UI_DIR.glob("*.rs"):
+    for path in (ROOT / "src").rglob("*.rs"):
         source = path.read_text(encoding="utf-8")
         keys.update(
             decode_rust_string(value)
@@ -114,8 +114,16 @@ def main() -> int:
     missing = sorted(source_copy - english_sources)
     missing_german = sorted(key for key in ENGLISH if key not in GERMAN)
     extra_german = sorted(key for key in GERMAN if key not in ENGLISH)
+    # Duplicate English labels are safe only when they resolve to the same
+    # localized text. Stable keys can intentionally name the same UI concept
+    # from different surfaces (for example Source/Destination); differing
+    # translations for one English source would make source-based lookup
+    # ambiguous and nondeterministic.
     duplicate_english = sorted(
-        text for text in english_sources if list(ENGLISH.values()).count(text) > 1
+        text
+        for text in english_sources
+        if list(ENGLISH.values()).count(text) > 1
+        and len({GERMAN[key] for key, value in ENGLISH.items() if value == text}) > 1
     )
     invalid_ids = sorted(
         key

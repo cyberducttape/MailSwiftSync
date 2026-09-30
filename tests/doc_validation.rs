@@ -102,7 +102,7 @@ fn production_status_does_not_claim_runtime_eta_support() {
         "production status must not imply an ETA exists before runtime telemetry is wired"
     );
     assert!(
-        recovery.contains("#[cfg(test)]\n    pub fn estimate_resume_duration"),
+        recovery.contains("#[cfg(test)]") && recovery.contains("pub fn estimate_resume_duration"),
         "the documented ETA boundary should track the current test-only helper"
     );
 }

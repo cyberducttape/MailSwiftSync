@@ -68,7 +68,9 @@ impl App {
                     self.oauth_authorization_cancel = None;
                     self.oauth_authorization_stage = None;
                     self.set_status(
-                        "OAuth authorization worker stopped before returning a result.",
+                        self.language.message(
+                            "ui.oauth-authorization-worker-stopped-before-returning-a-result",
+                        ),
                         StatusSeverity::Error,
                     );
                     break;
