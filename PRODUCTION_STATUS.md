@@ -202,7 +202,7 @@ new metadata verifier against real accounts.
 - ✅ Durable controller recovery and maintenance-window supervision
 - ✅ Recovery dashboard/planner CLI command (`recovery-guidance`)
 - ✅ Provider runbook generation CLI command (`runbook`) and read-only provider checklist in the Migration plan
-- ⚠️ Pre/post-migration reporting helpers (not live-wired)
+- ✅ Post-migration report export is live-wired to one consistent durable project snapshot; it remains fail-closed when evidence or counters are incomplete
 - ✅ Comprehensive setup documentation
 - ✅ OAuth token lifecycle management
 - ✅ Automated test suite enforced by CI; counts are published per target

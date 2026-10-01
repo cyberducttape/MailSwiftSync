@@ -46,6 +46,15 @@ impl App {
                     self.report_export_result("Project JSON", self.export_project_json());
                 }
                 if ui
+                    .button(self.language.message("ui.export-post-migration-report"))
+                    .clicked()
+                {
+                    self.report_export_result(
+                        "Post-migration report",
+                        self.export_post_migration_report(),
+                    );
+                }
+                if ui
                     .add_enabled(
                         proof_ready,
                         egui::Button::new(self.language.message("ui.export-customer-proof-json")),

@@ -45,6 +45,18 @@ impl App {
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 
+    pub(crate) fn export_post_migration_report(&self) -> Result<(), String> {
+        let project_id = self
+            .active_project_id()
+            .ok_or("No durable migration project is available yet.")?;
+        let path = rfd::FileDialog::new()
+            .set_file_name("mailswiftsync-post-migration-report.json")
+            .save_file()
+            .ok_or("Report export cancelled.")?;
+        let report = reports::operator::build_post_migration_report_json(&self.store, project_id)?;
+        write_private_atomic(&path, &report).map_err(|e| e.to_string())
+    }
+
     /// Export the customer-safe proof artifact. Unlike the operator JSON
     /// report, this intentionally omits project IDs, endpoints, plan
     /// snapshots, credential references, executable paths, and diagnostic

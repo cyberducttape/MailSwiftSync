@@ -239,6 +239,40 @@ pub(crate) fn build_project_json(
     serde_json::to_string_pretty(&with_proof_digest(value)?).map_err(|e| e.to_string())
 }
 
+pub(crate) fn build_post_migration_report_json(
+    store: &core::StateStore,
+    project_id: &str,
+) -> Result<String, String> {
+    let snapshot = store
+        .project_report_snapshot(project_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("The durable migration project no longer exists.")?;
+    if snapshot.mailboxes.is_empty() {
+        return Err("The project has no mailbox jobs to report.".into());
+    }
+    let report = core::post_migration_report::PostMigrationReport::from_project_snapshot(&snapshot);
+    let value = serde_json::json!({
+        "format": "mailswiftsync-post-migration-report",
+        "format_version": 1,
+        "application_version": env!("CARGO_PKG_VERSION"),
+        "project": {
+            "id": snapshot.project.id,
+            "name": snapshot.project.name,
+            "phase": format!("{:?}", snapshot.project.phase),
+            "has_active_runs": snapshot.has_active_runs,
+        },
+        "report": report,
+        "count_semantics": {
+            "total_processed": "sum of source messages in durable mailbox evidence",
+            "total_skipped": "not recorded at message level by the durable ledger; remains zero and is surfaced as an exception",
+            "total_failed": "sum of failed messages in durable mailbox evidence",
+            "missing_extra_changed": "sum of durable verification differences",
+        },
+        "note": "This report is fail-closed: missing evidence, active runs, and unavailable counters remain explicit exceptions and are not converted into a successful migration claim."
+    });
+    serde_json::to_string_pretty(&with_proof_digest(value)?).map_err(|e| e.to_string())
+}
+
 pub(crate) fn build_verification_report(
     store: &core::StateStore,
     project_id: &str,
