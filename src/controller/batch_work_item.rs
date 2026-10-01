@@ -600,7 +600,12 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             }
             if live && let Err(error) = fresh_dual_imaps_authentication(&form) {
                 if should_retry_batch_error(&error, attempt, retry_count) {
-                    provider_limiter.observe_failure(&provider_key, &error);
+                    if let Some(until) = provider_limiter.observe_failure(&provider_key, &error) {
+                        let _ = tx.try_send(Event::ProviderCooldown {
+                            endpoint: provider_key.replace('|', " → "),
+                            until,
+                        });
+                    }
                     send_run_line(
                         &tx,
                         &form,
@@ -621,6 +626,12 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         },
                     );
                     let delay = transient_retry_delay(&error, attempt);
+                    let _ = tx.try_send(Event::RetryScheduled {
+                        job_id: job_id.clone(),
+                        attempt: u32::try_from(attempt + 2).unwrap_or(u32::MAX),
+                        delay,
+                        failure_class: classify_failure(&error).label(),
+                    });
                     let started = std::time::Instant::now();
                     while started.elapsed() < delay {
                         if cancel.load(Ordering::Relaxed) {
@@ -763,7 +774,12 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                     break;
                 }
                 Err(error) if should_retry_batch_error(&error, attempt, retry_count) => {
-                    provider_limiter.observe_failure(&provider_key, &error);
+                    if let Some(until) = provider_limiter.observe_failure(&provider_key, &error) {
+                        let _ = tx.try_send(Event::ProviderCooldown {
+                            endpoint: provider_key.replace('|', " → "),
+                            until,
+                        });
+                    }
                     send_run_line(
                         &tx,
                         &form,
@@ -784,6 +800,12 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                         },
                     );
                     let delay = transient_retry_delay(&error, attempt);
+                    let _ = tx.try_send(Event::RetryScheduled {
+                        job_id: job_id.clone(),
+                        attempt: u32::try_from(attempt + 2).unwrap_or(u32::MAX),
+                        delay,
+                        failure_class: classify_failure(&error).label(),
+                    });
                     let started = std::time::Instant::now();
                     while started.elapsed() < delay {
                         if cancel.load(Ordering::Relaxed) {

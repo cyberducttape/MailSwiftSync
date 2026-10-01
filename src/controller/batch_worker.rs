@@ -82,11 +82,13 @@ impl AdaptiveProviderLimiter {
         }
     }
 
-    pub(crate) fn observe_failure(&self, key: &str, error: &str) {
+    /// Record a failure; returns when the endpoint pair's cooldown ends if
+    /// this was a capacity failure that (re)armed one.
+    pub(crate) fn observe_failure(&self, key: &str, error: &str) -> Option<Instant> {
         if crate::controller::failure::classify_failure(error)
             != crate::controller::failure::FailureClass::Capacity
         {
-            return;
+            return None;
         }
         let base = crate::core::provider_intelligence::ProviderErrorClassifier::classify(
             "generic",
@@ -96,12 +98,12 @@ impl AdaptiveProviderLimiter {
         .unwrap_or(Duration::from_secs(5));
         let mut state = match self.state.lock() {
             Ok(state) => state,
-            Err(_) => return,
+            Err(_) => return None,
         };
         let now = Instant::now();
         state.retain(|_, value| !value.escalation_expired(now));
         if state.len() >= MAX_ADAPTIVE_PROVIDER_KEYS && !state.contains_key(key) {
-            return;
+            return None;
         }
         let entry = state.entry(key.to_owned()).or_insert(ProviderCooldown {
             blocked_until: now,
@@ -115,6 +117,7 @@ impl AdaptiveProviderLimiter {
             .min(Duration::from_secs(120));
         entry.blocked_until = entry.blocked_until.max(now + cooldown);
         entry.consecutive_capacity_failures = entry.consecutive_capacity_failures.saturating_add(1);
+        Some(entry.blocked_until)
     }
 
     /// Record that a job admitted at `launched_at` completed. Only a launch

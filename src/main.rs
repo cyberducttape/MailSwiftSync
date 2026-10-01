@@ -24,6 +24,7 @@ mod oauth_refresh;
 mod output;
 mod plan_identity;
 mod process;
+mod progress;
 mod provider;
 mod reports;
 mod runner;

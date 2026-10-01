@@ -291,6 +291,10 @@ pub(crate) struct App {
     /// Database-backed UI read model. Rendering consumes this cache instead
     /// of issuing SQLite queries on every egui repaint.
     pub(crate) ui_snapshot: WorkspaceSnapshot,
+    /// Presentation-only telemetry for the current run (Activity view).
+    pub(crate) run_telemetry: crate::controller::telemetry::RunTelemetry,
+    /// Maintenance window for the ETA check, `HH:MM-HH:MM[@days]`.
+    pub(crate) activity_window_spec: String,
     /// GUI-only read-model worker; `None` keeps the synchronous refresh path.
     pub(crate) snapshot_worker: Option<crate::ui::snapshot_worker::SnapshotWorker>,
     pub(crate) historical_mailbox_offset: u32,
@@ -563,6 +567,9 @@ impl App {
                 .as_ref()
                 .is_some_and(crate::ui::snapshot_worker::SnapshotWorker::in_flight)
             || self.keyring_operation_receiver.is_some()
+            || self
+                .run_telemetry
+                .has_live_countdowns(std::time::Instant::now())
             || self.oauth_authorization_receiver.is_some()
             || self.start_credentials_receiver.is_some()
             || self.bulk_import_receiver.is_some()

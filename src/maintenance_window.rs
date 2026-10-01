@@ -61,6 +61,37 @@ impl MaintenanceWindow {
         }
     }
 
+    /// Minutes until the window closes for an instant inside it, `None`
+    /// outside it, and `Some(None)` for a full-day window that never closes.
+    fn minutes_until_close(&self, minute_of_day: u32, weekday: Weekday) -> Option<Option<u32>> {
+        if !self.contains(minute_of_day, weekday) {
+            return None;
+        }
+        if self.start_minute == self.end_minute {
+            return Some(None);
+        }
+        Some(Some(if minute_of_day < self.end_minute {
+            self.end_minute - minute_of_day
+        } else {
+            // Inside a window that wraps past midnight, before midnight.
+            24 * 60 - minute_of_day + self.end_minute
+        }))
+    }
+
+    /// Wall-clock form of `minutes_until_close` for the current local time.
+    pub(crate) fn closes_in_now(&self) -> Option<Option<std::time::Duration>> {
+        let now = Local::now();
+        let minute_of_day = now.hour() * 60 + now.minute();
+        self.minutes_until_close(minute_of_day, now.weekday())
+            .map(|minutes| {
+                minutes.map(|minutes| {
+                    // Subtract the seconds already spent in the current minute.
+                    std::time::Duration::from_secs(u64::from(minutes) * 60)
+                        .saturating_sub(std::time::Duration::from_secs(u64::from(now.second())))
+                })
+            })
+    }
+
     pub(crate) fn contains_now(&self) -> bool {
         let now = Local::now();
         let minute_of_day = now.hour() * 60 + now.minute();
@@ -157,6 +188,30 @@ mod tests {
         assert!(window.contains(0, Weekday::Wed));
         assert!(window.contains(0, Weekday::Fri));
         assert!(!window.contains(0, Weekday::Tue));
+    }
+
+    #[test]
+    fn reports_minutes_until_close_including_wrapped_windows() {
+        let day = MaintenanceWindow::parse("09:00-17:00").unwrap();
+        assert_eq!(
+            day.minutes_until_close(16 * 60, Weekday::Mon),
+            Some(Some(60))
+        );
+        assert_eq!(day.minutes_until_close(18 * 60, Weekday::Mon), None);
+        let night = MaintenanceWindow::parse("22:00-06:00").unwrap();
+        assert_eq!(
+            night.minutes_until_close(23 * 60, Weekday::Fri),
+            Some(Some(420))
+        );
+        assert_eq!(
+            night.minutes_until_close(5 * 60, Weekday::Sat),
+            Some(Some(60))
+        );
+        let always = MaintenanceWindow::parse("00:00-00:00").unwrap();
+        assert_eq!(
+            always.minutes_until_close(12 * 60, Weekday::Sun),
+            Some(None)
+        );
     }
 
     #[test]

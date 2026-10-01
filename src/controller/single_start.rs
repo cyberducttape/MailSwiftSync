@@ -326,6 +326,7 @@ impl App {
         self.cancel_requested = Some(cancel.clone());
         self.receiver = Some(rx);
         self.run_started_at = Some(std::time::Instant::now());
+        self.run_telemetry.reset(std::time::Instant::now(), 1);
         self.set_status(
             if self.form.dry_run {
                 "Preflight in progress"

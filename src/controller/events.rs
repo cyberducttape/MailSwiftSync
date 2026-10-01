@@ -143,6 +143,25 @@ pub(crate) enum Event {
         mismatches: Vec<core::MessageMismatch>,
     },
     VerificationFailed(String),
+    /// Cumulative, content-free engine progress for one process. Snapshots
+    /// are throttled and may be dropped; each one supersedes the last.
+    Progress {
+        run_id: String,
+        job_id: String,
+        progress: crate::progress::TransferProgress,
+    },
+    /// A batch mailbox will be retried after `delay`.
+    RetryScheduled {
+        job_id: String,
+        attempt: u32,
+        delay: std::time::Duration,
+        failure_class: &'static str,
+    },
+    /// The shared limiter is holding launches for one endpoint pair.
+    ProviderCooldown {
+        endpoint: String,
+        until: std::time::Instant,
+    },
     Finished(Result<StreamOutcome, String>),
 }
 

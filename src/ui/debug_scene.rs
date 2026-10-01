@@ -6,7 +6,8 @@
 //! placeholder `.example` data, and `MAILSWIFTSYNC_DEBUG_WINDOW=WIDTHxHEIGHT`
 //! sets the initial window size. `MAILSWIFTSYNC_DEBUG_PROVIDERS=gmail-m365`
 //! selects the Google Workspace → Microsoft 365 presets with placeholder
-//! users and no session secrets (`gmail-m365-connect` also opens the
+//! users and no session secrets; `MAILSWIFTSYNC_DEBUG_TELEMETRY=1` seeds
+//! synthetic Activity operations telemetry (`gmail-m365-connect` also opens the
 //! source card's browser sign-in). Release builds do not compile this module.
 use crate::App;
 use crate::bulk_import::BulkJob;
@@ -30,6 +31,9 @@ pub(crate) fn apply(app: &mut App) {
             app.open_card_oauth_connect(true, "google", "alex@source.example");
         }
     }
+    if std::env::var_os("MAILSWIFTSYNC_DEBUG_TELEMETRY").is_some() {
+        telemetry_demo(app);
+    }
     if let Ok(view) = std::env::var("MAILSWIFTSYNC_DEBUG_VIEW") {
         app.active_view = match view.as_str() {
             "plan" => WorkspaceView::Plan,
@@ -51,6 +55,88 @@ pub(crate) fn apply(app: &mut App) {
             _ => {}
         }
     }
+}
+
+/// Synthetic operations telemetry over the demo queue: twenty minutes of
+/// samples, three transfers in flight, a retry, a cooldown, and a failure.
+/// The event channel's sender is leaked so the view renders as running.
+fn telemetry_demo(app: &mut App) {
+    use crate::progress::TransferProgress;
+    use std::time::{Duration, Instant};
+    if app.bulk_jobs.is_empty() {
+        demo_data(app);
+    }
+    let now = Instant::now();
+    let start = now - Duration::from_secs(20 * 60);
+    app.run_telemetry.reset(start, app.bulk_jobs.len());
+    app.form.profile.batch_concurrency = 4;
+    for (index, state) in [(1, "Running"), (2, "Running"), (7, "Running")] {
+        app.bulk_jobs[index].state = state.into();
+    }
+    for (job, finished_at) in [
+        ("demo-job-3", 300),
+        ("demo-job-4", 520),
+        ("demo-job-9", 900),
+    ] {
+        app.run_telemetry.record_job_finished(
+            job,
+            "verified",
+            "",
+            start + Duration::from_secs(finished_at),
+        );
+    }
+    let jobs = [
+        ("demo-job-1", 1_900_000_000_u64, 120_000_000_u64),
+        ("demo-job-2", 850_000_000, 40_000_000),
+        ("demo-job-7", 3_200_000_000, 900_000_000),
+    ];
+    let mut copied_so_far = [0_u64; 3];
+    for step in 0..=40_u64 {
+        let at = start + Duration::from_secs(step * 30);
+        let wave = 0.75 + 0.25 * ((step as f64) / 4.0).sin();
+        for (slot, (job, source_bytes, existing)) in jobs.into_iter().enumerate() {
+            if step > 0 {
+                copied_so_far[slot] += (source_bytes as f64 * 0.012 * wave) as u64;
+            }
+            let copied = copied_so_far[slot];
+            app.run_telemetry.record_progress(
+                job,
+                TransferProgress {
+                    messages_copied: copied / 48_000,
+                    bytes_copied: copied,
+                    source_bytes: Some(source_bytes),
+                    source_messages: Some(source_bytes / 48_000),
+                    destination_bytes_at_start: Some(existing),
+                    destination_messages_at_start: Some(existing / 48_000),
+                    messages_left: Some((source_bytes.saturating_sub(existing + copied)) / 48_000),
+                },
+                at,
+            );
+        }
+    }
+    app.run_telemetry.record_retry(
+        "demo-job-11",
+        crate::controller::telemetry::RetryNote {
+            attempt: 2,
+            retry_at: now + Duration::from_secs(47),
+            failure_class: "capacity",
+        },
+    );
+    app.run_telemetry.record_cooldown(
+        "imap.source.example:993 → imap.destination.example:993",
+        now + Duration::from_secs(95),
+    );
+    app.run_telemetry.record_job_finished(
+        "demo-job-5",
+        "failed",
+        "[authentication] Destination rejected the credential: AUTHENTICATIONFAILED",
+        now - Duration::from_secs(240),
+    );
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::mem::forget(sender);
+    app.receiver = Some(receiver);
+    app.run_started_at = Some(start);
+    app.activity_window_spec = "00:00-23:59".into();
 }
 
 fn demo_data(app: &mut App) {

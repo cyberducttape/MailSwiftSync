@@ -14,6 +14,8 @@ use std::{
 
 const PROCESS_REGISTRATION_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const RELIABLE_EVENT_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// Minimum spacing of throttled progress snapshots per engine process.
+const PROGRESS_EVENT_INTERVAL: Duration = Duration::from_millis(500);
 pub(crate) type OutputObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// Reliable lifecycle events must not wait forever behind lossy diagnostic
@@ -557,6 +559,9 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let out_project_id = project_id.to_owned();
     let out_logger = diagnostic_logger.clone();
     let out_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
+    let progress = Arc::new(Mutex::new(crate::progress::TransferProgress::default()));
+    let out_progress = Arc::clone(&progress);
+    let mut last_progress_event: Option<std::time::Instant> = None;
     let out_thread = thread::spawn(move || {
         for_each_lossy_line(stdout, |line| {
             let safe = crate::process::redact_known_secrets(
@@ -573,6 +578,22 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             }
             if let Ok(mut evidence) = out_evidence.lock() {
                 evidence.observe(&safe);
+            }
+            // Counters advance on this lossless reader; only the throttled
+            // snapshot uses the best-effort presentation channel.
+            let snapshot = out_progress.lock().ok().and_then(|mut progress| {
+                (progress.observe(&safe)
+                    && last_progress_event
+                        .is_none_or(|sent| sent.elapsed() >= PROGRESS_EVENT_INTERVAL))
+                .then_some(*progress)
+            });
+            if let Some(snapshot) = snapshot {
+                last_progress_event = Some(std::time::Instant::now());
+                let _ = out_tx.try_send(Event::Progress {
+                    run_id: out_run_id.clone(),
+                    job_id: out_job_id.clone(),
+                    progress: snapshot,
+                });
             }
             if dovecot_exit_two_is_delta
                 && let Some(candidate) = dovecot_state_candidate(&safe)
@@ -779,6 +800,19 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 .and_then(|result| result.as_ref().err())
                 .map(|error| format!("stderr reader failed: {error}"))
         });
+    // The readers have joined: deliver the final counters reliably so the
+    // cockpit does not stop at the last throttled snapshot.
+    let final_progress = progress.lock().ok().map(|progress| *progress);
+    if let Some(final_progress) = final_progress.filter(|progress| progress.has_activity()) {
+        let _ = send_reliable_event(
+            tx,
+            Event::Progress {
+                run_id: run_id.to_owned(),
+                job_id: job_id.to_owned(),
+                progress: final_progress,
+            },
+        );
+    }
     let dropped = dropped_diagnostics.load(Ordering::Relaxed);
     if dropped > 0 {
         // The reader threads have joined, so the content-free accounting
@@ -1503,11 +1537,11 @@ pub(crate) fn validate_dovecot_checkpoint_context(
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        TerminalEvidenceSource, automap_blocks_live_certification, automap_folder_kind,
+        RunContext, TerminalEvidenceSource, automap_blocks_live_certification, automap_folder_kind,
         infer_automap_folder_mapping, message_verification_enabled,
         persist_engine_identity_before_launch, process_tail_text, record_process_tail,
-        resolve_imapsync_identity, terminal_evidence_source, validate_body_hash_limits,
-        validate_destination_folder_policy,
+        resolve_imapsync_identity, run_streaming, terminal_evidence_source,
+        validate_body_hash_limits, validate_destination_folder_policy,
     };
     use crate::{
         BoundedLineBuffer, Event, MAX_DIAGNOSTIC_LINE_BYTES, MAX_PROCESS_TAIL_BYTES, StreamOutcome,
@@ -1660,6 +1694,76 @@ mod tests {
         assert_eq!(identity.version, "imapsync 2.314");
         assert_eq!(identity.output_profile, ImapsyncOutputProfile::Packaged2314);
         fs::remove_file(path).unwrap();
+    }
+
+    /// Progress is counted on the lossless reader, so a saturated controller
+    /// that drops throttled snapshots still receives exact final totals.
+    #[test]
+    fn final_progress_is_exact_even_when_snapshots_are_dropped() {
+        let path = std::env::temp_dir().join(format!(
+            "mailswiftsync-progress-engine-{}-{}.sh",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(
+            &path,
+            "#!/bin/sh\n\
+             printf 'Host1 Nb messages: 300 messages\\nHost1 Total size: 300000 bytes\\n'\n\
+             i=1\n\
+             while [ $i -le 300 ]; do\n\
+             printf 'msg INBOX/%d {1000} copied to INBOX/%d  1 msgs/s  1 KiB/s  ETA: x  0 s  %d/300 msgs left\\n' $i $i $((300 - i))\n\
+             i=$((i + 1))\n\
+             done\n",
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        let (tx, rx) = mpsc::sync_channel(2);
+        let controller = thread::spawn(move || {
+            let mut snapshots = Vec::new();
+            while let Ok(event) = rx.recv() {
+                match event {
+                    Event::ProcessStarted(.., reply) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    Event::Progress { progress, .. } => snapshots.push(progress),
+                    _ => {}
+                }
+                // A slow controller keeps the bounded channel saturated.
+                thread::sleep(std::time::Duration::from_millis(2));
+            }
+            snapshots
+        });
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let result = run_streaming(RunContext {
+            executable: &path.to_string_lossy(),
+            args: &[],
+            env: &[],
+            tx: &tx,
+            run_id: "run",
+            job_id: "job",
+            project_id: "project",
+            prefix: "",
+            cancel: &cancel,
+            secrets: &[],
+            timeout: std::time::Duration::from_secs(30),
+            dovecot_exit_two_is_delta: false,
+            imapsync_output_profile: ImapsyncOutputProfile::Unknown,
+            diagnostic_logger: None,
+            attempt_number: 1,
+            live_transfer: false,
+        });
+        drop(tx);
+        let snapshots = controller.join().unwrap();
+        fs::remove_file(path).unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        let last = snapshots
+            .last()
+            .expect("final progress snapshot is delivered");
+        assert_eq!(last.messages_copied, 300);
+        assert_eq!(last.bytes_copied, 300_000);
+        assert_eq!(last.source_messages, Some(300));
+        assert_eq!(last.messages_left, Some(0));
+        assert!(snapshots.len() < 300, "snapshots must be throttled");
     }
 
     #[test]

@@ -456,6 +456,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn progress_from_the_active_process_reaches_telemetry_and_foreign_progress_does_not() {
+        with_app(|app| {
+            let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+            app.receiver = Some(receiver);
+            app.active_run = Some(crate::controller::ActiveRunContext {
+                run_id: "run-a".into(),
+                project_id: "project-a".into(),
+                job_id: Some("job-a".into()),
+                batch_job_ids: Vec::new(),
+                batch_child_run_ids: Vec::new(),
+                batch_child_indices: std::collections::HashMap::new(),
+                batch_plan_fingerprints: Vec::new(),
+                kind: crate::controller::RunKind::Single,
+                dry_run: true,
+                plan_fingerprint: "plan-a".into(),
+                credential_fingerprint: "credential-a".into(),
+            });
+            app.run_telemetry.reset(std::time::Instant::now(), 1);
+            let progress = |bytes| crate::progress::TransferProgress {
+                bytes_copied: bytes,
+                messages_copied: 1,
+                ..Default::default()
+            };
+            for (run_id, job_id, bytes) in [("run-a", "job-a", 5_000), ("run-b", "job-a", 9_000)] {
+                sender
+                    .send(crate::Event::Progress {
+                        run_id: run_id.into(),
+                        job_id: job_id.into(),
+                        progress: progress(bytes),
+                    })
+                    .unwrap();
+            }
+            app.poll();
+            assert_eq!(app.run_telemetry.totals(), (5_000, 1));
+            app.active_run = None;
+            app.receiver = None;
+        });
+    }
+
     fn stop_worker_sync<T: Send + 'static>(sender: std::sync::mpsc::SyncSender<T>, panic: bool) {
         let worker = std::thread::spawn(move || {
             let _sender = sender;

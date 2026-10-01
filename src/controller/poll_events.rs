@@ -454,6 +454,12 @@ impl App {
                                 break;
                             } else {
                                 let _ = reply.send(reply_result);
+                                self.run_telemetry.record_job_finished(
+                                    &job_id,
+                                    &final_state,
+                                    &detail,
+                                    std::time::Instant::now(),
+                                );
                                 if self.durability_recovery_pending {
                                     *recovered_durability = true;
                                 }
@@ -574,7 +580,48 @@ impl App {
                             ));
                         }
                     }
+                    Event::Progress {
+                        run_id,
+                        job_id,
+                        progress,
+                    } => {
+                        // Presentation-only and content-free; stale or
+                        // foreign processes are ignored like engine lines.
+                        if process_event_is_current(active_run.as_ref(), &run_id, &job_id) {
+                            self.run_telemetry.record_progress(
+                                &job_id,
+                                progress,
+                                std::time::Instant::now(),
+                            );
+                        }
+                    }
+                    Event::RetryScheduled {
+                        job_id,
+                        attempt,
+                        delay,
+                        failure_class,
+                    } => {
+                        if active_run.is_some() {
+                            self.run_telemetry.record_retry(
+                                &job_id,
+                                controller::telemetry::RetryNote {
+                                    attempt,
+                                    retry_at: std::time::Instant::now() + delay,
+                                    failure_class,
+                                },
+                            );
+                        }
+                    }
+                    Event::ProviderCooldown { endpoint, until } => {
+                        if active_run.is_some() {
+                            self.run_telemetry.record_cooldown(&endpoint, until);
+                        }
+                    }
                     Event::Finished(r) => {
+                        if let Err(error) = &r {
+                            self.run_telemetry
+                                .record_run_failure(error, std::time::Instant::now());
+                        }
                         static REPORTED_FINISHED_EVENT: std::sync::atomic::AtomicBool =
                             std::sync::atomic::AtomicBool::new(false);
                         if crate::runner::process_supervision_debug_enabled()

@@ -101,6 +101,7 @@ capability in its `manifest_rows` are checked against these fields.
 | **Provider-specific runbooks** | yes | partial | unit | no | Exposed through the headless `runbook` command and as read-only guidance for the selected source/destination presets on the GUI Plan page; the runbook does not sequence or gate the workflow |
 | **Recovery guidance** (7 scenarios) | yes | partial | unit+integration | no | Fail-closed guidance is exposed through the headless `recovery-guidance` command and rendered in the Activity workspace for interruption, transport, and throttling attention states |
 | **Resume/recovery dashboard** | yes | partial | unit+integration | no | Activity exposes durable run state and selected recovery guidance; a dedicated multi-run recovery dashboard remains future work |
+| **Live throughput, progress, and ETA** | yes | yes | unit | no | Activity derives rolling throughput, transferred totals, per-mailbox progress, retry countdowns, endpoint cooldowns, and an estimated finish (checked against an optional maintenance window) from content-free counters parsed from imapsync output; values are estimates and Dovecot runs report no progress |
 
 ---
 

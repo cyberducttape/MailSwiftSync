@@ -149,6 +149,7 @@ impl App {
         self.cancel_requested = Some(worker.cancel.clone());
         self.receiver = Some(worker.receiver);
         self.run_started_at = Some(Instant::now());
+        self.run_telemetry.reset(Instant::now(), job_count);
         self.set_status(
             format!(
                 "{}: {} jobs",

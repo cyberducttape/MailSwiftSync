@@ -50,6 +50,7 @@ impl App {
             self.language.message("ui.activity"),
             self.language.message("ui.live-output-is-retained-here-for-operator-review-durable-run-history-remain-c0022b7aa7"),
         );
+        self.operations_panel(ui);
         let selected_recovery_guidance = self
             .job_id
             .as_deref()
