@@ -143,7 +143,27 @@ pub(crate) fn run(state_path: Option<&Path>) -> DoctorReport {
 }
 
 fn check_imapsync(path: &str) -> DoctorCheck {
-    check_executable_version(path, "imapsync executable", Some(is_qualified_version))
+    with_install_hint(check_executable_version(
+        path,
+        "imapsync executable",
+        Some(is_qualified_version),
+    ))
+}
+
+/// Point an unqualified or missing engine at the one-command installer when
+/// this host has an automatic route.
+fn with_install_hint(mut check: DoctorCheck) -> DoctorCheck {
+    if check.status != "qualified"
+        && matches!(
+            crate::engine_install::plan_for_host(),
+            crate::engine_install::InstallPlan::Automatic(_)
+        )
+    {
+        check.detail.push_str(
+            "; run `mailswiftsync install-engine` to install the qualified imapsync 2.314",
+        );
+    }
+    check
 }
 
 fn check_doveadm(path: &str) -> DoctorCheck {

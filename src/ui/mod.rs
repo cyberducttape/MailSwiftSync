@@ -12,7 +12,7 @@ mod batch_queue;
 mod batch_sheet;
 #[cfg(debug_assertions)]
 pub(crate) mod debug_scene;
-mod engine;
+pub(crate) mod engine;
 pub(crate) mod fonts;
 mod keyring_ops;
 mod language;

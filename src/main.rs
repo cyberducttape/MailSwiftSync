@@ -12,6 +12,7 @@ mod diagnostic_log;
 mod doctor;
 mod endpoint;
 mod engine;
+mod engine_install;
 mod headless;
 mod imap_probe;
 mod imap_protocol;

@@ -78,6 +78,7 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
+        self.poll_engine_setup();
         match poll_worker(&mut self.keyring_operation_receiver) {
             WorkerPoll::Ready(result) => self.complete_keyring_operation(result),
             WorkerPoll::Stopped => self.set_status(
@@ -494,6 +495,53 @@ mod tests {
             app.active_run = None;
             app.receiver = None;
         });
+    }
+
+    #[test]
+    fn stopped_engine_setup_worker_releases_the_dialog() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.engine_setup_receiver = Some(receiver);
+                stop_worker(sender, panic);
+                app.poll();
+                assert!(app.engine_setup_receiver.is_none());
+                assert!(!app.background_work_pending());
+                let (text, _) = app.engine_setup_status.clone().unwrap();
+                assert!(text.contains(WORKER_STOPPED_UNEXPECTEDLY), "{text}");
+            });
+        }
+    }
+
+    #[test]
+    fn engine_check_reports_qualified_and_unqualified_versions() {
+        use std::os::unix::fs::PermissionsExt;
+        for (version, qualified) in [("2.314", true), ("2.229", false)] {
+            with_app(|app| {
+                let script = std::env::temp_dir().join(format!(
+                    "mailswiftsync-engine-check-{}.sh",
+                    uuid::Uuid::new_v4()
+                ));
+                std::fs::write(&script, format!("#!/bin/sh\nprintf '{version}\\n'\n")).unwrap();
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+                app.form.profile.imapsync_path = script.to_string_lossy().into_owned();
+                app.start_engine_check();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while app.engine_setup_receiver.is_some() {
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    app.poll();
+                }
+                let (text, severity) = app.engine_setup_status.clone().unwrap();
+                assert!(text.contains(version), "{text}");
+                assert_eq!(
+                    severity == crate::StatusSeverity::Success,
+                    qualified,
+                    "{text}"
+                );
+                let _ = std::fs::remove_file(script);
+            });
+        }
     }
 
     fn stop_worker_sync<T: Send + 'static>(sender: std::sync::mpsc::SyncSender<T>, panic: bool) {

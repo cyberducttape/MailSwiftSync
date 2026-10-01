@@ -25,6 +25,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "oauth-authorize",
     "recovery-guidance",
     "doctor",
+    "install-engine",
     "completions",
     "help",
     "version",

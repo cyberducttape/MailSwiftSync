@@ -10,7 +10,7 @@ mod events;
 pub(crate) mod failure;
 mod operator_actions;
 mod orchestrator;
-mod poll;
+pub(crate) mod poll;
 mod poll_completion;
 mod poll_events;
 mod preflight;

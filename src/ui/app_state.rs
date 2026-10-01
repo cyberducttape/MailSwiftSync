@@ -171,6 +171,10 @@ pub(crate) struct App {
     /// the run is admitted.
     pub(crate) live_auth_receiver: Option<Receiver<Result<LiveAuthProof, String>>>,
     pub(crate) manual_oauth_refresh_receiver: Option<Receiver<ManualOAuthRefreshResult>>,
+    /// Engine install/check worker for the engine dialog.
+    pub(crate) engine_setup_receiver: Option<Receiver<crate::ui::engine::EngineSetupMessage>>,
+    pub(crate) engine_setup_progress: Option<crate::engine_install::InstallProgress>,
+    pub(crate) engine_setup_status: Option<(String, StatusSeverity)>,
     pub(crate) keyring_operation_receiver:
         Option<Receiver<crate::ui::keyring_ops::KeyringOperationResult>>,
     pub(crate) oauth_authorization_receiver: Option<Receiver<OAuthAuthorizationMessage>>,
@@ -567,6 +571,7 @@ impl App {
                 .as_ref()
                 .is_some_and(crate::ui::snapshot_worker::SnapshotWorker::in_flight)
             || self.keyring_operation_receiver.is_some()
+            || self.engine_setup_receiver.is_some()
             || self
                 .run_telemetry
                 .has_live_countdowns(std::time::Instant::now())

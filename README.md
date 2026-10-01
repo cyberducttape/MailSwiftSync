@@ -140,8 +140,27 @@ MailSwiftSync's trusted imapsync verification contract is qualified only for
 output is fail-closed and cannot become trusted MailSwiftSync verification
 evidence. Use the exact qualified version when migration proof matters.
 
+**One command (Debian/Ubuntu and Windows):**
+
+```bash
+mailswiftsync install-engine
+```
+
+It downloads imapsync **2.314** from the official distribution over HTTPS,
+refuses the artifact unless its SHA-256 matches the digest pinned in
+MailSwiftSync (the same pin as the container image), installs it — with
+`apt-get` via `sudo` on Debian/Ubuntu, or by unpacking the portable engine
+into MailSwiftSync's private per-user `engines` directory on Windows — and
+then confirms that the engine reports 2.314. The desktop offers the same
+action as **Install qualified imapsync 2.314** in **Choose migration engine**
+(using `pkexec` for the package manager on Linux), next to **Check installed
+engine**. `mailswiftsync doctor` points to the command whenever the configured
+engine is missing or unqualified.
+
+Manual installation remains available:
+
 - **Ubuntu/Debian:** download the **2.314** `.deb` from the official imapsync distribution, then install it with `sudo apt install ./imapsync-*.deb`. Do not substitute the current package when trusted verification is required.
-- **macOS:** install imapsync using the vendor distribution or your approved package-management workflow.
+- **macOS:** automatic installation is not offered because imapsync needs Perl modules from CPAN; install 2.314 from the official tarball following its `INSTALL.d/INSTALL.OnMac.txt`, or use the pinned container image.
 - **Windows:** install the official Windows package and enter the full path to `imapsync.exe` in MailSwiftSync.
 
 Verify an imapsync installation in a terminal before configuring accounts:

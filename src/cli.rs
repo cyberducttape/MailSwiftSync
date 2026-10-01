@@ -931,6 +931,27 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("install-engine") {
+        let mut confirmed = false;
+        for argument in arguments.by_ref() {
+            if argument == std::ffi::OsStr::new("--yes") && !confirmed {
+                confirmed = true;
+            } else {
+                eprintln!("{INSTALL_ENGINE_USAGE}");
+                std::process::exit(2);
+            }
+        }
+        match install_engine_command(confirmed) {
+            Ok(message) => {
+                out!("{message}");
+                return Ok(());
+            }
+            Err((code, message)) => {
+                eprintln!("{message}");
+                std::process::exit(code);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("oauth-authorize") {
         match oauth_authorize_command(arguments) {
             Ok(message) => {
@@ -1135,7 +1156,7 @@ fn print_cli_help() {
         "\nUsage:\n  mailswiftsync                 Open the desktop controller\n  mailswiftsync <command>        Run a headless control-plane operation"
     );
     out!(
-        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate credential-free operational status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST minimal credential-free operational status to HTTPS; opt into customer metadata explicitly\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n  oauth-authorize <provider> <keyring-id> --client-id <id>  Authorize IMAP access in a browser and store the refresh configuration"
+        "\nCommands:\n  verify <report> [trusted-key]  Verify report integrity and optional signer trust\n  sign <report> <key> [key-id]   Sign a customer proof with an Ed25519 key\n  migrateaudit <source.json> <destination.json> <report.json>  Compare resource snapshots and emit migration assurance\n  runbook <source> <destination>  Emit the provider-specific operator runbook as JSON\n  risk <messages> <folders> <bytes>  Emit a pre-migration scale risk report as JSON\n  post-report <processed> <skipped> <failed> <missing> <extra> <changed>  Emit a post-migration exception report\n  backup <state> <backup>        Create an integrity-checked ledger backup\n  restore <backup> <state>       Restore a validated ledger and preserve rollback state\n  status <state> [project-id]    Emit detailed status JSON; add --summary for bounded state counts\n  fleet-status <directory>       Aggregate credential-free operational status across every ledger found under a directory\n  recover <state>                Recover interrupted work conservatively\n  support-bundle <state> <out>   Export a sanitized diagnostic bundle\n  customer-proof <state> <out>   Export completed customer evidence; add --allow-incomplete only for labeled progress evidence\n  notify-webhook <state> <url>   POST minimal credential-free operational status to HTTPS; opt into customer metadata explicitly\n  supervise <state> [poll] [n] [window]  Run automation-safe supervision, optionally confined to a maintenance window\n  headless <state> <mode>        Run preflight/live or batch-preflight/batch-live\n  oauth-authorize <provider> <keyring-id> --client-id <id>  Authorize IMAP access in a browser and store the refresh configuration\n  install-engine [--yes]         Download, verify, and install the qualified imapsync engine"
     );
     out!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
@@ -1146,6 +1167,86 @@ fn print_cli_help() {
     out!(
         "\nDoctor:\n  doctor [state.db] [--strict]   Report the local qualification envelope as JSON; --strict sets the exit status\n\nShell integration:\n  completions bash|zsh|fish      Print a shell completion script"
     );
+}
+
+const INSTALL_ENGINE_USAGE: &str = "Usage: mailswiftsync install-engine [--yes]";
+
+/// Download, verify, and install the qualified imapsync engine.
+fn install_engine_command(confirmed: bool) -> Result<String, (i32, String)> {
+    use crate::engine_install::{
+        Elevation, InstallMethod, InstallPlan, InstallProgress, QUALIFIED_IMAPSYNC_VERSION,
+    };
+    use std::io::{BufRead, IsTerminal, Write};
+    let method = match crate::engine_install::plan_for_host() {
+        InstallPlan::Automatic(method) => method,
+        InstallPlan::Manual(guidance) => return Err((1, guidance.to_owned())),
+    };
+    let (artifact, how) = match method {
+        InstallMethod::DebianPackage => (
+            crate::engine_install::DEBIAN_PACKAGE,
+            "install it with apt-get (sudo will ask for your password)",
+        ),
+        InstallMethod::WindowsPortable => (
+            crate::engine_install::WINDOWS_PORTABLE,
+            "unpack it into MailSwiftSync's private engines directory",
+        ),
+    };
+    eprintln!(
+        "MailSwiftSync will download imapsync {QUALIFIED_IMAPSYNC_VERSION} from {}\nverify SHA-256 {}\nand {how}.",
+        artifact.url, artifact.sha256
+    );
+    if !confirmed {
+        if !std::io::stdin().is_terminal() {
+            return Err((
+                2,
+                "Re-run with --yes to confirm a non-interactive install.".into(),
+            ));
+        }
+        eprint!("Continue? [y/N] ");
+        let _ = std::io::stderr().flush();
+        let mut answer = String::new();
+        let _ = std::io::stdin().lock().read_line(&mut answer);
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            return Err((
+                1,
+                "Engine installation cancelled; nothing was changed.".into(),
+            ));
+        }
+    }
+    let mut last_percent = None;
+    let installed = crate::engine_install::install(method, Elevation::Sudo, |event| match event {
+        InstallProgress::Downloading { received, total } => {
+            if let Some(total) = total.filter(|total| *total > 0) {
+                let percent = received * 100 / total / 10 * 10;
+                if last_percent != Some(percent) {
+                    last_percent = Some(percent);
+                    eprintln!("Downloading… {percent}%");
+                }
+            }
+        }
+        InstallProgress::Verified => eprintln!("Download verified."),
+        InstallProgress::Installing => eprintln!("Installing…"),
+        InstallProgress::Checking => eprintln!("Confirming the engine version…"),
+    })
+    .map_err(|error| (1, error))?;
+    let mut message = format!(
+        "Installed qualified imapsync {} at {}",
+        installed.version,
+        installed.executable.display()
+    );
+    if method == InstallMethod::WindowsPortable {
+        let saved = crate::Form::load().and_then(|mut form| {
+            form.profile.imapsync_path = installed.executable.to_string_lossy().into_owned();
+            form.save()
+        });
+        match saved {
+            Ok(()) => message.push_str("\nThe saved profile now uses this engine."),
+            Err(error) => message.push_str(&format!(
+                "\nCould not update the saved profile ({error}); enter this path under Advanced engine options."
+            )),
+        }
+    }
+    Ok(message)
 }
 
 const OAUTH_AUTHORIZE_USAGE: &str = "Usage: mailswiftsync oauth-authorize google|microsoft|custom <keyring-id> --client-id <id> [--client-secret-file <path>] [--tenant <tenant>] [--authorize-url <url> --token-url <url> --scope <scope>] [--redirect-host 127.0.0.1|localhost] [--login-hint <address>]";
