@@ -1,7 +1,7 @@
 //! Pure filtering policy for the verification mailbox projection.
 
 use crate::core::{AttentionReason, ReportMailboxSnapshot};
-use crate::ui::{contains_ascii_case_insensitive, needs_operator_review};
+use crate::ui::{contains_case_insensitive, needs_operator_review};
 
 pub(crate) fn verification_row_matches(
     mailbox: &ReportMailboxSnapshot,
@@ -17,8 +17,8 @@ pub(crate) fn verification_row_matches(
         _ => true,
     };
     let text_match = search.is_empty()
-        || contains_ascii_case_insensitive(&mailbox.job.source_mailbox, search)
-        || contains_ascii_case_insensitive(&mailbox.job.destination_mailbox, search);
+        || contains_case_insensitive(&mailbox.job.source_mailbox, search)
+        || contains_case_insensitive(&mailbox.job.destination_mailbox, search);
     result_match
         && text_match
         && attention_reason.is_none_or(|reason| mailbox.attention_reason == Some(reason))

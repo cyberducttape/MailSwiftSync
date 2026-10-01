@@ -189,7 +189,7 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::contains_ascii_case_insensitive;
+    use crate::ui::contains_case_insensitive;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use uuid::Uuid;
 
@@ -241,11 +241,25 @@ mod tests {
     #[test]
     fn filter_matching_is_case_insensitive_without_changing_input() {
         let value = "Customer-09@Example.Test";
-        assert!(contains_ascii_case_insensitive(value, "customer-09"));
-        assert!(contains_ascii_case_insensitive(value, "EXAMPLE.TEST"));
-        assert!(!contains_ascii_case_insensitive(value, "customer-10"));
-        assert!(contains_ascii_case_insensitive(value, ""));
+        assert!(contains_case_insensitive(value, "customer-09"));
+        assert!(contains_case_insensitive(value, "EXAMPLE.TEST"));
+        assert!(!contains_case_insensitive(value, "customer-10"));
+        assert!(contains_case_insensitive(value, ""));
         assert_eq!(value, "Customer-09@Example.Test");
+    }
+
+    #[test]
+    fn filter_matching_folds_unicode_case() {
+        assert!(contains_case_insensitive(
+            "Jürgen.Müller@Beispiel.de",
+            "MÜLLER"
+        ));
+        assert!(contains_case_insensitive("ÉLODIE@exemple.fr", "élodie"));
+        assert!(contains_case_insensitive("Straße-Archiv", "STRASSE"));
+        assert!(contains_case_insensitive("ΟΔΟΣ", "οδος"));
+        assert!(contains_case_insensitive("Иван.Петров", "ПЕТРОВ"));
+        assert!(contains_case_insensitive("Müller", "mül"));
+        assert!(!contains_case_insensitive("Müller", "muller"));
     }
 
     #[test]

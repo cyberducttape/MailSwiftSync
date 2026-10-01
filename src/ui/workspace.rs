@@ -7,9 +7,7 @@
 use crate::App;
 use crate::core::{self, StateStore};
 use crate::migration_plan::Form;
-use crate::ui::{
-    StatusSeverity, contains_ascii_case_insensitive, format_phase_name, job_state_badge,
-};
+use crate::ui::{StatusSeverity, contains_case_insensitive, format_phase_name, job_state_badge};
 use eframe::egui::{self, RichText};
 use std::time::{Duration, Instant};
 
@@ -63,9 +61,9 @@ pub(crate) fn filter_project_indices(
     visible_indices.clear();
     for (index, project) in projects.iter().enumerate() {
         if query.is_empty()
-            || contains_ascii_case_insensitive(&project.name, query)
-            || contains_ascii_case_insensitive(&project.source_endpoint, query)
-            || contains_ascii_case_insensitive(&project.destination_endpoint, query)
+            || contains_case_insensitive(&project.name, query)
+            || contains_case_insensitive(&project.source_endpoint, query)
+            || contains_case_insensitive(&project.destination_endpoint, query)
         {
             visible_indices.push(index);
         }

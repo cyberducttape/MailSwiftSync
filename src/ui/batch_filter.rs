@@ -1,7 +1,7 @@
 //! Search and state filtering for the batch mailbox cockpit.
 
 use crate::App;
-use crate::ui::{contains_ascii_case_insensitive, display_state_key};
+use crate::ui::{display_state_key, fold_search_text};
 
 /// Filter the cached row projection without touching the owned queue forms.
 /// Keeping this pure makes the large-batch cost measurable independently from
@@ -16,7 +16,7 @@ pub(crate) fn filter_batch_indices<'a, I>(
 ) where
     I: Iterator<Item = &'a str>,
 {
-    let normalized_search = search.trim().to_ascii_lowercase();
+    let normalized_search = fold_search_text(search.trim());
     visible_indices.clear();
     for (index, (value, raw_state)) in search_values.iter().zip(states).enumerate() {
         let state = display_state_key(raw_state);
@@ -25,9 +25,7 @@ pub(crate) fn filter_batch_indices<'a, I>(
             || state == state_filter
             || (state_filter == "delta_required" && state.contains("delta"))
             || (state_filter == "verification_difference" && state.contains("verification"));
-        let search_matches = normalized_search.is_empty()
-            || value.contains(&normalized_search)
-            || (!normalized_search.is_ascii() && contains_ascii_case_insensitive(value, search));
+        let search_matches = normalized_search.is_empty() || value.contains(&normalized_search);
         if state_matches && search_matches {
             visible_indices.push(index);
         }
@@ -46,15 +44,16 @@ impl App {
                     .entry(display_state_key(&job.state))
                     .or_default()
                     .insert(index);
-                [
-                    job.label.as_str(),
-                    job.source_host.as_str(),
-                    job.source_user.as_str(),
-                    job.destination_host.as_str(),
-                    job.destination_user.as_str(),
-                ]
-                .join(" ")
-                .to_ascii_lowercase()
+                fold_search_text(
+                    &[
+                        job.label.as_str(),
+                        job.source_host.as_str(),
+                        job.source_user.as_str(),
+                        job.destination_host.as_str(),
+                        job.destination_user.as_str(),
+                    ]
+                    .join(" "),
+                )
             })
             .collect();
     }
@@ -73,7 +72,7 @@ impl App {
             self.rebuild_bulk_search_values();
             self.bulk_search_matches_valid = false;
         }
-        let normalized_search = raw_search.to_ascii_lowercase();
+        let normalized_search = fold_search_text(&raw_search);
         self.bulk_visible_indices.clear();
         if !self.bulk_search_matches_valid || self.bulk_filter_cache_search != raw_search {
             self.bulk_search_match_indices.clear();
@@ -131,12 +130,7 @@ fn filter_batch_search_indices(
         search_values
             .iter()
             .enumerate()
-            .filter_map(|(index, value)| {
-                (value.contains(normalized_search)
-                    || (!normalized_search.is_ascii()
-                        && contains_ascii_case_insensitive(value, normalized_search)))
-                .then_some(index)
-            }),
+            .filter_map(|(index, value)| value.contains(normalized_search).then_some(index)),
     );
 }
 
@@ -171,6 +165,42 @@ mod tests {
             &mut visible,
         );
         assert_eq!(visible, vec![1]);
+    }
+
+    #[test]
+    fn batch_search_folds_unicode_case() {
+        use crate::bulk_import::BulkJob;
+        use crate::{App, Form};
+
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-unicode-search-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = App::from_state_path(Some(&state_path));
+        for (label, user) in [
+            ("Jürgen Müller", "j.mueller@source.example"),
+            ("Straße Archiv", "archiv@source.example"),
+            ("Ascii Only", "plain@source.example"),
+        ] {
+            let mut form = Form::default();
+            form.profile.source_user = user.into();
+            app.bulk_jobs
+                .push(BulkJob::from_form(label.into(), form, "ready".into()));
+        }
+        app.bulk_jobs_generation = 1;
+        for (search, expected) in [
+            ("MÜLLER", vec![0]),
+            ("strasse", vec![1]),
+            ("STRAẞE", vec![1]),
+            ("ASCII", vec![2]),
+        ] {
+            app.bulk_search = search.into();
+            app.refresh_bulk_filter_cache();
+            assert_eq!(app.bulk_visible_indices, expected, "search {search:?}");
+        }
+        drop(app);
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_file(state_path.with_extension("lock"));
     }
 
     #[test]

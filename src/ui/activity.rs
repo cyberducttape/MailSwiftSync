@@ -1,8 +1,7 @@
 //! Activity and bounded engine-output presentation.
 
 use crate::ui::{
-    StatusSeverity, WorkspaceView, contains_ascii_case_insensitive, needs_operator_review,
-    status_color,
+    StatusSeverity, WorkspaceView, contains_case_insensitive, needs_operator_review, status_color,
 };
 use crate::{App, MAX_ACTIVITY_HISTORY_ROWS};
 use eframe::egui::{self, Color32, RichText};
@@ -285,7 +284,7 @@ impl App {
                                 run.detail.as_str(),
                             ]
                             .iter()
-                            .any(|value| contains_ascii_case_insensitive(value, search));
+                            .any(|value| contains_case_insensitive(value, search));
                         status_match && text_match
                     })
                     .map(|(index, _)| index)

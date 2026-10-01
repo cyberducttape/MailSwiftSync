@@ -37,15 +37,37 @@ pub(crate) fn truncate_utf8(value: &str, limit: usize) -> String {
     value[..end].to_owned()
 }
 
-/// Allocation-free matching for the ASCII identifiers used by workspace
-/// filters. The query is normalized by callers when repeated matching is
-/// needed; this helper preserves the original strings.
-pub(crate) fn contains_ascii_case_insensitive(value: &str, needle: &str) -> bool {
+/// Case-fold text for search matching. ASCII stays allocation-light; other
+/// text gets Unicode lowercasing plus the full-folding expansions that plain
+/// lowercasing misses (ß/ẞ → "ss", final sigma → σ), so "STRASSE" finds
+/// "Straße" and "ΟΔΟΣ" finds "οδος".
+pub(crate) fn fold_search_text(value: &str) -> String {
+    if value.is_ascii() {
+        return value.to_ascii_lowercase();
+    }
+    let mut folded = String::with_capacity(value.len());
+    for lower in value.chars().flat_map(char::to_lowercase) {
+        match lower {
+            'ß' => folded.push_str("ss"),
+            'ς' => folded.push('σ'),
+            other => folded.push(other),
+        }
+    }
+    folded
+}
+
+/// Case-insensitive substring match for filter boxes. Mailbox identities and
+/// labels are routinely internationalized, so this folds Unicode case; the
+/// all-ASCII path stays allocation-free for large queues.
+pub(crate) fn contains_case_insensitive(value: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    value
-        .as_bytes()
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+    if value.is_ascii() && needle.is_ascii() {
+        return value
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()));
+    }
+    fold_search_text(value).contains(&fold_search_text(needle))
 }

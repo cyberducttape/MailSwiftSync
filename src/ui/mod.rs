@@ -33,8 +33,8 @@ pub(crate) use app_state::{App, OAuthAuthorizationMessage};
 pub(crate) use batch_queue::mailbox_import_available;
 pub(crate) use language::UiLanguage;
 pub(crate) use output::{
-    contains_ascii_case_insensitive, markdown_escape, push_visible_output, redact_secrets,
-    truncate_utf8,
+    contains_case_insensitive, fold_search_text, markdown_escape, push_visible_output,
+    redact_secrets, truncate_utf8,
 };
 #[cfg(test)]
 pub(crate) use status::recommended_next_action;
