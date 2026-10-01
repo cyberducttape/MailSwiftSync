@@ -28,6 +28,13 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn("imapsync is required for provider smoke testing", SCRIPT)
         self.assertIn('doveadm_binary="$(command -v doveadm || true)"', SCRIPT)
 
+    def test_secret_permissions_fail_closed(self):
+        self.assertIn(
+            'provider smoke testing requires 600 (owner-only)',
+            SCRIPT,
+        )
+        self.assertIn('exit 1', SCRIPT)
+
 
 if __name__ == "__main__":
     unittest.main()

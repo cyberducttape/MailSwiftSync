@@ -176,7 +176,8 @@ for secret_file in "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" "${MAILSWIFTSYNC_PR
   fi
   perms=$(stat -c %a "$secret_file" 2>/dev/null || stat -f %OLp "$secret_file" 2>/dev/null || echo "unknown")
   if [[ "$perms" != "600" ]]; then
-    echo "WARNING: $secret_file permissions are $perms; should be 600 (owner-only)" >&2
+    echo "ERROR: $secret_file permissions are $perms; provider smoke testing requires 600 (owner-only)" >&2
+    exit 1
   fi
 done
 
