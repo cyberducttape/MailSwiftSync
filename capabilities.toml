@@ -8,6 +8,11 @@ last_reviewed = "2026-09-30"
 # for the human-facing status layout.
 experimental_only_terms = ["native dovecot execution"]
 
+# A capability's optional `manifest_rows` names the CAPABILITY_MANIFEST.md
+# table rows that describe it. scripts/verify-capability-claims.py checks
+# each named row's Code, Wired, and Live Provider cells against these
+# fields, and regenerates the manifest's machine-readable status table.
+
 [capabilities.aggregate_evidence]
 code = "implemented"
 controller = "wired"
@@ -16,6 +21,7 @@ generic_lab = "passed"
 gmail_live = false
 m365_live = false
 production_supported = false
+manifest_rows = ["Aggregate evidence"]
 
 [capabilities.message_level_metadata_reconciliation]
 code = "implemented"
@@ -25,6 +31,7 @@ generic_lab = "passed"
 gmail_live = false
 m365_live = false
 production_supported = false
+manifest_rows = ["Message-level mismatch detection"]
 
 [capabilities.message_body_proof]
 code = "bounded_opt_in"
@@ -43,6 +50,7 @@ generic_lab = "passed"
 gmail_live = false
 m365_live = false
 production_supported = false
+manifest_rows = ["Gmail authentication (OAuth)", "Microsoft 365 authentication (OAuth)"]
 
 [capabilities.provider_oauth_authorization]
 code = "implemented"
@@ -52,6 +60,7 @@ generic_lab = "passed"
 gmail_live = false
 m365_live = false
 production_supported = false
+manifest_rows = ["OAuth consent (authorization code + PKCE)"]
 
 [capabilities.provider_live_validation]
 code = "available"
@@ -70,6 +79,7 @@ generic_lab = "passed"
 gmail_live = false
 m365_live = false
 production_supported = false
+manifest_rows = ["Provider-specific runbooks"]
 
 [capabilities.recovery_guidance]
 code = "implemented"
@@ -79,6 +89,7 @@ generic_lab = "passed"
 gmail_live = false
 m365_live = false
 production_supported = false
+manifest_rows = ["Recovery guidance"]
 
 [capabilities.uidvalidity_delta_checkpoints]
 code = "implemented"

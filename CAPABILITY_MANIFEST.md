@@ -1,12 +1,32 @@
 # MailSwiftSync Capability Manifest
 
 **Status source:** [`capabilities.toml`](capabilities.toml)
-**Last verified:** 2026-09-29
+**Last verified:** 2026-09-30
 
 This manifest documents what MailSwiftSync actually does, not what it claims to do.
 The `[documentation]` policy in `capabilities.toml` also marks terms that must
 remain confined to the README's experimental/planned status section; CI checks
 that status layout against the machine-readable source.
+
+## Machine-Readable Status
+
+Generated from `capabilities.toml` by `python3 scripts/verify-capability-claims.py --write`;
+`make capability-check` fails when this table is stale. Rows below that name a
+capability in its `manifest_rows` are checked against these fields.
+
+<!-- capabilities:begin -->
+| Capability | code | controller | ui | generic_lab | gmail_live | m365_live | production_supported |
+|---|---|---|---|---|---|---|---|
+| `aggregate_evidence` | implemented | wired | wired | passed | no | no | no |
+| `message_body_proof` | bounded_opt_in | wired | wired | not_run | no | no | no |
+| `message_level_metadata_reconciliation` | implemented | wired | partial | passed | no | no | no |
+| `provider_live_validation` | available | wired | partial | passed | no | no | no |
+| `provider_oauth_authorization` | implemented | wired | wired | passed | no | no | no |
+| `provider_oauth_refresh` | implemented | wired | partial | passed | no | no | no |
+| `provider_runbooks` | implemented | wired | partial | passed | no | no | no |
+| `recovery_guidance` | implemented | wired | partial | passed | no | no | no |
+| `uidvalidity_delta_checkpoints` | implemented | wired | not_claimed | not_run | no | no | no |
+<!-- capabilities:end -->
 
 ## Legend
 
@@ -52,7 +72,7 @@ that status layout against the machine-readable source.
 | **Gmail authentication (OAuth)** | yes | partial | unit | no | Token refresh implemented, scope documentation corrected to https://mail.google.com/ |
 | **Gmail-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |
 | **Microsoft 365 authentication (OAuth)** | yes | partial | unit | no | Token refresh implemented, scope documentation corrected to IMAP.AccessAsUser.All |
-| **OAuth consent (authorization code + PKCE)** | yes | CLI only | unit + loopback | no | `oauth-authorize` for Google, Microsoft, and custom providers; stores the refresh configuration in the OS keyring; not yet run against live tenants |
+| **OAuth consent (authorization code + PKCE)** | yes | yes | unit + loopback | no | Browser PKCE authorization from the GUI account screen and the `oauth-authorize` CLI command, for Google, Microsoft, and custom providers; stores the refresh configuration in the OS keyring; not yet run against live tenants |
 | **Microsoft 365-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |
 | **Fastmail authentication (app password)** | yes | yes | unit | no | Standard IMAP auth |
 | **Fastmail-specific throttling presets** | no | no | none | no | No provider-specific IMAP rate is asserted; use configured generic imapsync message/byte limits |

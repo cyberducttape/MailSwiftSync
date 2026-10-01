@@ -60,6 +60,77 @@ class CapabilityClaimTests(unittest.TestCase):
         self.assertEqual(CHECKER.find_status_section_violations(valid, manifest), [])
         self.assertEqual(len(CHECKER.find_status_section_violations(invalid, manifest)), 1)
 
+    MANIFEST = {
+        "capabilities": {
+            "provider_oauth_authorization": {
+                "code": "implemented",
+                "controller": "wired",
+                "ui": "wired",
+                "gmail_live": False,
+                "m365_live": False,
+                "production_supported": False,
+                "manifest_rows": ["OAuth consent (authorization code + PKCE)"],
+            },
+            "provider_oauth_refresh": {
+                "code": "implemented",
+                "controller": "wired",
+                "ui": "partial",
+                "gmail_live": False,
+                "m365_live": False,
+                "production_supported": False,
+                "manifest_rows": ["Gmail authentication (OAuth)"],
+            },
+        }
+    }
+
+    @staticmethod
+    def manifest_doc(oauth_wired="yes", refresh_wired="partial", live="no", table=None):
+        table = CHECKER.render_status_table(CapabilityClaimTests.MANIFEST) if table is None else table
+        return (
+            f"{CHECKER.TABLE_BEGIN}\n{table}\n{CHECKER.TABLE_END}\n\n"
+            "| Capability | Code | Wired | Tested | Live Provider | Notes |\n"
+            "|---|---|---|---|---|---|\n"
+            f"| **OAuth consent (authorization code + PKCE)** | yes | {oauth_wired} | unit | {live} | x |\n"
+            f"| **Gmail authentication (OAuth)** | yes | {refresh_wired} | unit | no | x |\n"
+        )
+
+    def test_consistent_manifest_rows_pass(self):
+        self.assertEqual(CHECKER.find_manifest_drift(self.manifest_doc(), self.MANIFEST), [])
+
+    def test_gui_wired_capability_cannot_be_documented_as_cli_only(self):
+        violations = CHECKER.find_manifest_drift(
+            self.manifest_doc(oauth_wired="CLI only"), self.MANIFEST
+        )
+        self.assertEqual(len(violations), 1)
+        self.assertIn("OAuth consent", violations[0])
+
+    def test_partially_wired_capability_cannot_be_documented_as_unwired(self):
+        violations = CHECKER.find_manifest_drift(
+            self.manifest_doc(refresh_wired="no"), self.MANIFEST
+        )
+        self.assertEqual(len(violations), 1)
+
+    def test_live_provider_claim_requires_recorded_live_validation(self):
+        violations = CHECKER.find_manifest_drift(self.manifest_doc(live="yes"), self.MANIFEST)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("Live Provider", violations[0])
+
+    def test_stale_generated_table_and_missing_rows_are_reported(self):
+        stale = self.manifest_doc(table="| stale |")
+        self.assertTrue(any("stale" in v for v in CHECKER.find_manifest_drift(stale, self.MANIFEST)))
+        missing = self.manifest_doc().replace("Gmail authentication (OAuth)", "Gmail auth")
+        self.assertTrue(
+            any("not found" in v for v in CHECKER.find_manifest_drift(missing, self.MANIFEST))
+        )
+
+    def test_repository_manifest_matches_capabilities_toml(self):
+        import tomllib
+
+        with CHECKER.MANIFEST.open("rb") as stream:
+            manifest = tomllib.load(stream)
+        content = CHECKER.CAPABILITY_MANIFEST_MD.read_text(encoding="utf-8")
+        self.assertEqual(CHECKER.find_manifest_drift(content, manifest), [])
+
 
 if __name__ == "__main__":
     unittest.main()

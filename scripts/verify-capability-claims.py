@@ -10,6 +10,19 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "capabilities.toml"
 CORE_RS = ROOT / "src" / "core.rs"
+CAPABILITY_MANIFEST_MD = ROOT / "CAPABILITY_MANIFEST.md"
+TABLE_BEGIN = "<!-- capabilities:begin -->"
+TABLE_END = "<!-- capabilities:end -->"
+TABLE_FIELDS = (
+    "code",
+    "controller",
+    "ui",
+    "generic_lab",
+    "gmail_live",
+    "m365_live",
+    "production_supported",
+)
+CODE_PRESENT = {"implemented", "available", "bounded_opt_in"}
 
 # These patterns identify affirmative readiness claims, not references to the
 # release gate or statements that production readiness is still outstanding.
@@ -75,6 +88,105 @@ def find_status_section_violations(content: str, manifest: dict) -> list[str]:
     return violations
 
 
+def render_status_table(manifest: dict) -> str:
+    """Render every capability field verbatim as the manifest's status table."""
+    def cell(value) -> str:
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        return str(value)
+
+    lines = [
+        "| Capability | " + " | ".join(TABLE_FIELDS) + " |",
+        "|" + "---|" * (len(TABLE_FIELDS) + 1),
+    ]
+    for name, capability in sorted(manifest.get("capabilities", {}).items()):
+        cells = [cell(capability.get(field, "")) for field in TABLE_FIELDS]
+        lines.append(f"| `{name}` | " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def replace_status_table(content: str, manifest: dict) -> str | None:
+    """Return the manifest with a regenerated status block, or None if absent."""
+    if content.count(TABLE_BEGIN) != 1 or content.count(TABLE_END) != 1:
+        return None
+    head, rest = content.split(TABLE_BEGIN, 1)
+    _, tail = rest.split(TABLE_END, 1)
+    return f"{head}{TABLE_BEGIN}\n{render_status_table(manifest)}\n{TABLE_END}{tail}"
+
+
+def manifest_table_rows(content: str) -> dict[str, list[str]]:
+    """Map each Markdown table row's capability name to its cells."""
+    rows = {}
+    for line in content.splitlines():
+        if not line.startswith("|") or re.fullmatch(r"[|\s:-]+", line):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        bold = re.match(r"\*\*(.+?)\*\*", cells[0])
+        name = bold.group(1) if bold else strip_markup(cells[0])
+        rows.setdefault(name, cells)
+    return rows
+
+
+def expected_wired(capability: dict) -> str:
+    """Derive the human Wired column contract from controller/ui fields."""
+    controller = capability.get("controller")
+    ui = capability.get("ui")
+    if controller == "wired" and ui in ("wired", "not_claimed"):
+        return "yes"
+    if controller in ("wired", "partial") and ui in ("wired", "partial", "not_claimed"):
+        return "partial"
+    return "no"
+
+
+def find_manifest_drift(content: str, manifest: dict) -> list[str]:
+    """Check the generated table and every manifest row linked to a capability."""
+    violations = []
+    regenerated = replace_status_table(content, manifest)
+    if regenerated is None:
+        violations.append(
+            f"status table markers {TABLE_BEGIN} / {TABLE_END} must each appear exactly once"
+        )
+    elif regenerated != content:
+        violations.append(
+            "status table is stale; run python3 scripts/verify-capability-claims.py --write"
+        )
+
+    rows = manifest_table_rows(content)
+    for name, capability in sorted(manifest.get("capabilities", {}).items()):
+        for row_name in capability.get("manifest_rows", []):
+            cells = rows.get(row_name)
+            if cells is None or len(cells) < 5:
+                violations.append(f"{name}: manifest row {row_name!r} not found")
+                continue
+            code, wired, live = cells[1].casefold(), cells[2].casefold(), cells[4].casefold()
+            code_expected = "yes" if capability.get("code") in CODE_PRESENT else "no"
+            if code != code_expected:
+                violations.append(
+                    f"{row_name}: Code is {cells[1]!r} but capabilities.toml "
+                    f"{name}.code = {capability.get('code')!r} (expected {code_expected!r})"
+                )
+            wired_expected = expected_wired(capability)
+            wired_ok = {
+                "yes": wired.startswith("yes"),
+                "partial": wired.startswith("yes") or wired.startswith("partial"),
+                "no": not wired.startswith("yes") and not wired.startswith("partial"),
+            }[wired_expected]
+            if not wired_ok:
+                violations.append(
+                    f"{row_name}: Wired is {cells[2]!r} but capabilities.toml {name} has "
+                    f"controller={capability.get('controller')!r}, ui={capability.get('ui')!r} "
+                    f"(expected {wired_expected!r})"
+                )
+            if live.startswith("yes") and not (
+                capability.get("gmail_live") or capability.get("m365_live")
+            ):
+                violations.append(
+                    f"{row_name}: Live Provider is {cells[4]!r} but capabilities.toml "
+                    f"{name} records no live provider validation"
+                )
+    return violations
+
+
 def get_schema_version() -> int:
     """Extract CURRENT_SCHEMA_VERSION from src/core.rs."""
     if not CORE_RS.exists():
@@ -84,9 +196,18 @@ def get_schema_version() -> int:
     return int(match.group(1)) if match else 0
 
 
-def main() -> int:
+def main(argv: list[str]) -> int:
     with MANIFEST.open("rb") as stream:
         manifest = tomllib.load(stream)
+
+    manifest_content = CAPABILITY_MANIFEST_MD.read_text(encoding="utf-8")
+    if "--write" in argv:
+        regenerated = replace_status_table(manifest_content, manifest)
+        if regenerated is None:
+            print(f"{CAPABILITY_MANIFEST_MD.name}: missing {TABLE_BEGIN} / {TABLE_END} markers")
+            return 1
+        CAPABILITY_MANIFEST_MD.write_text(regenerated, encoding="utf-8")
+        manifest_content = regenerated
 
     schema_version = get_schema_version()
     unsupported = [
@@ -96,6 +217,11 @@ def main() -> int:
     ]
 
     violations = []
+
+    violations.extend(
+        f"{CAPABILITY_MANIFEST_MD.name}: {violation}"
+        for violation in find_manifest_drift(manifest_content, manifest)
+    )
 
     readme = ROOT / "README.md"
     if readme.exists():
@@ -154,4 +280,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
