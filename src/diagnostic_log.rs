@@ -9,8 +9,13 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc::{self, Receiver, SyncSender, TrySendError},
+    },
+    thread::{self, JoinHandle},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use crate::credentials::{ensure_private_directory, restrict_file_permissions};
@@ -25,9 +30,172 @@ const WRITER_CAPACITY: usize = 64 * 1024;
 const FLUSH_BYTES: usize = 64 * 1024;
 const FLUSH_LINES: usize = 64;
 
+/// Lines and bytes that may wait for the writer thread. A full queue drops
+/// the line and reports it to the caller instead of blocking.
+const QUEUE_LINES: usize = 16_384;
+const QUEUE_BYTES: usize = 16 * 1024 * 1024;
+/// How long `finish_run` waits for a run's queued lines to reach disk.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Handle to the asynchronous diagnostic writer.
+///
+/// Child-output drainers call `write_line` on every engine line, so it must
+/// never wait on the filesystem: a stalled disk would stop the drainer, fill
+/// the child's pipe, and block the migration engine. Lines are bounded and
+/// queued with `try_send`; a dedicated thread owns every file operation
+/// (writes, flushes, rotation, permission hardening, retention pruning). When
+/// the writer falls behind, lines are dropped and counted by the caller.
 pub(crate) struct DiagnosticLogger {
-    directory: PathBuf,
-    state: Mutex<LoggerState>,
+    sender: Option<SyncSender<Command>>,
+    worker: Option<JoinHandle<()>>,
+    queued_bytes: Arc<AtomicUsize>,
+}
+
+enum Command {
+    Line {
+        project_id: String,
+        run_id: String,
+        job_id: String,
+        rendered: String,
+    },
+    Finish {
+        run_id: String,
+        reply: SyncSender<Result<usize, String>>,
+    },
+    /// Simulates a stalled filesystem: the writer blocks until resumed.
+    #[cfg(test)]
+    Pause(Receiver<()>),
+}
+
+impl DiagnosticLogger {
+    pub(crate) fn create(directory: &Path) -> Result<Self, String> {
+        ensure_private_directory(directory)
+            .map_err(|error| format!("could not secure diagnostic log directory: {error}"))?;
+        let mut writer = LogWriter {
+            directory: directory.to_owned(),
+            state: LoggerState::default(),
+        };
+        writer.prune()?;
+        let (sender, receiver) = mpsc::sync_channel(QUEUE_LINES);
+        let queued_bytes = Arc::new(AtomicUsize::new(0));
+        let worker_bytes = Arc::clone(&queued_bytes);
+        let worker = thread::Builder::new()
+            .name("diagnostic-log".into())
+            .spawn(move || writer.run(receiver, &worker_bytes))
+            .map_err(|error| format!("could not start diagnostic log writer: {error}"))?;
+        Ok(Self {
+            sender: Some(sender),
+            worker: Some(worker),
+            queued_bytes,
+        })
+    }
+
+    /// Queue one engine line without blocking. An error means the line was
+    /// not queued (writer behind or stopped); callers count it as dropped.
+    pub(crate) fn write_line(
+        &self,
+        project_id: &str,
+        run_id: &str,
+        job_id: &str,
+        stream: &str,
+        line: &str,
+    ) -> Result<(), String> {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let rendered = format!("{timestamp} [{stream}] {}\n", truncate_line(line));
+        let length = rendered.len();
+        if self
+            .queued_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                (queued.saturating_add(length) <= QUEUE_BYTES).then_some(queued + length)
+            })
+            .is_err()
+        {
+            return Err("diagnostic log writer is behind; line dropped".to_owned());
+        }
+        let command = Command::Line {
+            project_id: project_id.to_owned(),
+            run_id: run_id.to_owned(),
+            job_id: job_id.to_owned(),
+            rendered,
+        };
+        let sent = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| "diagnostic log writer stopped".to_owned())
+            .and_then(|sender| {
+                sender.try_send(command).map_err(|error| {
+                    match error {
+                        TrySendError::Full(_) => "diagnostic log writer is behind; line dropped",
+                        TrySendError::Disconnected(_) => "diagnostic log writer stopped",
+                    }
+                    .to_owned()
+                })
+            });
+        if sent.is_err() {
+            self.queued_bytes.fetch_sub(length, Ordering::AcqRel);
+        }
+        sent
+    }
+
+    /// Close a run's transcript once its drainers have finished. Waits a
+    /// bounded time for the run's queued lines, then returns how many of them
+    /// the writer could not persist. Never called from a drainer thread.
+    pub(crate) fn finish_run(&self, run_id: &str) -> Result<usize, String> {
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(|| "diagnostic log writer stopped".to_owned())?;
+        let (reply, response) = mpsc::sync_channel(1);
+        let deadline = Instant::now() + FINISH_TIMEOUT;
+        let mut command = Command::Finish {
+            run_id: run_id.to_owned(),
+            reply,
+        };
+        loop {
+            match sender.try_send(command) {
+                Ok(()) => break,
+                Err(TrySendError::Full(returned)) if Instant::now() < deadline => {
+                    command = returned;
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(TrySendError::Full(_)) => {
+                    return Err("diagnostic log writer did not drain in time".to_owned());
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err("diagnostic log writer stopped".to_owned());
+                }
+            }
+        }
+        response
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| "diagnostic log writer did not drain in time".to_owned())?
+    }
+}
+
+#[cfg(test)]
+impl DiagnosticLogger {
+    fn pause_writer(&self) -> SyncSender<()> {
+        let (resume, paused) = mpsc::sync_channel(1);
+        self.sender
+            .as_ref()
+            .unwrap()
+            .send(Command::Pause(paused))
+            .unwrap();
+        resume
+    }
+}
+
+impl Drop for DiagnosticLogger {
+    fn drop(&mut self) {
+        // Disconnecting the queue lets the writer drain, flush, and prune.
+        drop(self.sender.take());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -49,57 +217,76 @@ struct FileState {
     pending_flush_lines: usize,
 }
 
-impl DiagnosticLogger {
-    pub(crate) fn create(directory: &Path) -> Result<Self, String> {
-        ensure_private_directory(directory)
-            .map_err(|error| format!("could not secure diagnostic log directory: {error}"))?;
-        let logger = Self {
-            directory: directory.to_owned(),
-            state: Mutex::new(LoggerState::default()),
-        };
-        if let Ok(mut state) = logger.state.lock() {
-            logger.prune(&mut state)?;
-        } else {
-            return Err("diagnostic log lock was poisoned".to_owned());
+/// File state owned exclusively by the writer thread.
+struct LogWriter {
+    directory: PathBuf,
+    state: LoggerState,
+}
+
+impl LogWriter {
+    fn run(mut self, receiver: Receiver<Command>, queued_bytes: &AtomicUsize) {
+        // Lines the writer could not persist, per run, until `finish_run`.
+        let mut failures: HashMap<String, usize> = HashMap::new();
+        for command in receiver {
+            match command {
+                Command::Line {
+                    project_id,
+                    run_id,
+                    job_id,
+                    rendered,
+                } => {
+                    let length = rendered.len();
+                    if self
+                        .write_rendered(&project_id, &run_id, &job_id, &rendered)
+                        .is_err()
+                    {
+                        *failures.entry(run_id).or_default() += 1;
+                    }
+                    queued_bytes.fetch_sub(length, Ordering::AcqRel);
+                }
+                Command::Finish { run_id, reply } => {
+                    let failed = failures.remove(&run_id).unwrap_or(0);
+                    let _ = reply.send(self.finish_run(&run_id).map(|()| failed));
+                }
+                #[cfg(test)]
+                Command::Pause(resume) => {
+                    let _ = resume.recv();
+                }
+            }
         }
-        Ok(logger)
+        for file in self.state.files.values_mut() {
+            let _ = file.file.flush();
+        }
+        self.state.files.clear();
+        self.state.run_paths.clear();
+        let _ = self.prune();
     }
 
-    pub(crate) fn write_line(
-        &self,
+    fn write_rendered(
+        &mut self,
         project_id: &str,
         run_id: &str,
         job_id: &str,
-        stream: &str,
-        line: &str,
+        rendered: &str,
     ) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "diagnostic log lock was poisoned".to_owned())?;
-        if !state.files.contains_key(run_id) {
+        if !self.state.files.contains_key(run_id) {
             let file = self.new_file(project_id, run_id, job_id, 0)?;
-            state
+            self.state
                 .run_paths
                 .entry(run_id.to_owned())
                 .or_default()
                 .push(file.path.clone());
-            state.files.insert(run_id.to_owned(), file);
-            self.prune(&mut state)?;
+            self.state.files.insert(run_id.to_owned(), file);
+            self.prune()?;
         }
-        let file_state = state
+        let file_state = self
+            .state
             .files
             .get_mut(run_id)
-            .ok_or_else(|| "diagnostic log state was not initialized".to_owned())?;
+            .ok_or_else(|| "diagnostic log self.state was not initialized".to_owned())?;
         if file_state.project_id != project_id || file_state.job_id != job_id {
             return Err("diagnostic run identifier was reused for another mailbox".to_owned());
         }
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .unwrap_or_default();
-        let bounded = truncate_line(line);
-        let rendered = format!("{timestamp} [{stream}] {bounded}\n");
         let rotation = if file_state.bytes_written > 0
             && file_state.bytes_written.saturating_add(rendered.len()) > MAX_FILE_BYTES
         {
@@ -118,22 +305,23 @@ impl DiagnosticLogger {
         };
         if let Some((project_id, run_id, job_id, part)) = rotation {
             let replacement = self.new_file(&project_id, &run_id, &job_id, part)?;
-            state
+            self.state
                 .run_paths
                 .entry(run_id.to_owned())
                 .or_default()
                 .push(replacement.path.clone());
-            state.files.insert(run_id.to_owned(), replacement);
-            self.prune(&mut state)?;
+            self.state.files.insert(run_id.to_owned(), replacement);
+            self.prune()?;
         }
-        if state.total_bytes.saturating_add(rendered.len() as u64) > MAX_DIRECTORY_BYTES {
+        if self.state.total_bytes.saturating_add(rendered.len() as u64) > MAX_DIRECTORY_BYTES {
             return Err("diagnostic directory byte limit reached".to_owned());
         }
-        let total_bytes = state.total_bytes.saturating_add(rendered.len() as u64);
-        let file_state = state
+        let total_bytes = self.state.total_bytes.saturating_add(rendered.len() as u64);
+        let file_state = self
+            .state
             .files
             .get_mut(run_id)
-            .ok_or_else(|| "diagnostic log state was not initialized".to_owned())?;
+            .ok_or_else(|| "diagnostic log self.state was not initialized".to_owned())?;
         file_state
             .file
             .write_all(rendered.as_bytes())
@@ -153,22 +341,18 @@ impl DiagnosticLogger {
             file_state.pending_flush_bytes = 0;
             file_state.pending_flush_lines = 0;
         }
-        state.total_bytes = total_bytes;
+        self.state.total_bytes = total_bytes;
         Ok(())
     }
 
-    pub(crate) fn finish_run(&self, run_id: &str) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "diagnostic log lock was poisoned".to_owned())?;
-        let flush_result = state.files.remove(run_id).map(|mut file| {
+    fn finish_run(&mut self, run_id: &str) -> Result<(), String> {
+        let flush_result = self.state.files.remove(run_id).map(|mut file| {
             file.file
                 .flush()
                 .map_err(|error| format!("could not flush completed diagnostic log: {error}"))
         });
-        state.run_paths.remove(run_id);
-        let prune_result = self.prune(&mut state);
+        self.state.run_paths.remove(run_id);
+        let prune_result = self.prune();
         flush_result.unwrap_or(Ok(()))?;
         prune_result
     }
@@ -225,7 +409,8 @@ impl DiagnosticLogger {
         })
     }
 
-    fn prune(&self, state: &mut LoggerState) -> Result<(), String> {
+    fn prune(&mut self) -> Result<(), String> {
+        let state = &mut self.state;
         let active_paths = state
             .run_paths
             .values()
@@ -281,19 +466,6 @@ impl DiagnosticLogger {
             .map(|metadata| metadata.len())
             .sum();
         Ok(())
-    }
-}
-
-impl Drop for DiagnosticLogger {
-    fn drop(&mut self) {
-        if let Ok(mut state) = self.state.lock() {
-            for file in state.files.values_mut() {
-                let _ = file.file.flush();
-            }
-            state.files.clear();
-            state.run_paths.clear();
-            let _ = self.prune(&mut state);
-        }
     }
 }
 
@@ -581,6 +753,38 @@ mod tests {
                 }
             }
         }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn stalled_writer_never_blocks_drainers_and_drops_excess_lines() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let logger = DiagnosticLogger::create(&directory).unwrap();
+        let resume = logger.pause_writer();
+        let started = Instant::now();
+        let mut accepted = 0usize;
+        let mut dropped = 0usize;
+        for index in 0..QUEUE_LINES + 500 {
+            match logger.write_line("project", "run", "job", "stdout", &format!("line {index}")) {
+                Ok(()) => accepted += 1,
+                Err(_) => dropped += 1,
+            }
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "write_line waited on the stalled writer"
+        );
+        assert!(dropped >= 500, "a full queue drops instead of blocking");
+        resume.send(()).unwrap();
+        assert_eq!(logger.finish_run("run").unwrap(), 0);
+        drop(logger);
+        let persisted = fs::read_dir(&directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| fs::read_to_string(entry.path()).unwrap())
+            .map(|content| content.matches("[stdout] line ").count())
+            .sum::<usize>();
+        assert_eq!(persisted, accepted);
         fs::remove_dir_all(directory).unwrap();
     }
 

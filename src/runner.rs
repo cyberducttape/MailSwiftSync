@@ -622,7 +622,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
     let err_run_id = run_id.to_owned();
     let err_job_id = job_id.to_owned();
     let err_project_id = project_id.to_owned();
-    let err_logger = diagnostic_logger;
+    let err_logger = diagnostic_logger.clone();
     let err_failed_diagnostic_writes = Arc::clone(&failed_diagnostic_writes);
     let err_thread = thread::spawn(move || {
         for_each_lossy_line(stderr, |line| {
@@ -826,7 +826,26 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             },
         );
     }
-    let failed_diagnostic_writes = failed_diagnostic_writes.load(Ordering::Relaxed);
+    let mut failed_diagnostic_writes = failed_diagnostic_writes.load(Ordering::Relaxed);
+    // Both drainers have joined. Close this run's transcript off the drainer
+    // path; the writer reports lines it accepted but could not persist.
+    if let Some(logger) = &diagnostic_logger {
+        match logger.finish_run(run_id) {
+            Ok(failed) => failed_diagnostic_writes += failed,
+            Err(error) => {
+                let _ = send_reliable_event(
+                    tx,
+                    Event::RunLine {
+                        run_id: run_id.to_owned(),
+                        job_id: job_id.to_owned(),
+                        text: format!(
+                            "{prefix}[diagnostics] Diagnostic log not finalized: {error}"
+                        ),
+                    },
+                );
+            }
+        }
+    }
     if failed_diagnostic_writes > 0 {
         let _ = send_reliable_event(
             tx,
