@@ -566,6 +566,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             if !provider_limiter.wait(&provider_key, &cancel) {
                 break;
             }
+            let provider_admitted_at = std::time::Instant::now();
             if live {
                 // A queue-level admission must not mint an access token for
                 // every selected mailbox. Refresh immediately before this
@@ -744,6 +745,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
             });
             match result {
                 Ok(outcome) => {
+                    provider_limiter.observe_success(&provider_key, provider_admitted_at);
                     if outcome == StreamOutcome::DeltaRequired {
                         send_run_line(
                             &tx,
