@@ -102,6 +102,23 @@ pub(super) fn literal_header(line: &[u8]) -> Option<LiteralHeader> {
     })
 }
 
+/// Return the tagged completion line for `tag`. Only complete responses
+/// outside literals are considered, so message content containing a line such
+/// as `v004 OK` can never stand in for the server's real completion. Malformed
+/// literal framing yields `None`, which callers treat as failure.
+pub(super) fn tagged_completion<'a>(response: &'a [u8], tag: &str) -> Option<&'a [u8]> {
+    for frame in split_responses(response) {
+        let frame = frame.ok()?;
+        let [line] = frame.protocol[..] else {
+            continue;
+        };
+        if line.starts_with(tag.as_bytes()) && line.get(tag.len()) == Some(&b' ') {
+            return Some(line);
+        }
+    }
+    None
+}
+
 /// One complete IMAP server response with literal payloads separated from
 /// protocol text. `protocol[i]` is the text preceding `literals[i]`, including
 /// that literal's `{N}` header; the final protocol segment is the text after

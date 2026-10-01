@@ -2242,19 +2242,19 @@ mod tests {
     #[test]
     fn imap_preflight_requires_tagged_ok_responses() {
         assert!(imap_command_succeeded(
-            "* CAPABILITY IMAP4rev1\na001 oK done",
+            "* CAPABILITY IMAP4rev1\r\na001 oK done\r\n",
             "a001"
         ));
         assert!(!imap_command_succeeded(
-            "* CAPABILITY IMAP4rev1\na001 okay done",
+            "* CAPABILITY IMAP4rev1\r\na001 okay done\r\n",
             "a001"
         ));
         assert!(!imap_command_succeeded(
-            "* CAPABILITY IMAP4rev1\na001 NO denied",
+            "* CAPABILITY IMAP4rev1\r\na001 NO denied\r\n",
             "a001"
         ));
         assert!(!imap_command_succeeded(
-            "* CAPABILITY IMAP4rev1\na001 BAD denied",
+            "* CAPABILITY IMAP4rev1\r\na001 BAD denied\r\n",
             "a001"
         ));
     }

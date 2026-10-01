@@ -270,7 +270,9 @@ const MAX_IMAP_LIST_INVENTORY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_IMAP_LIST_DURATION: Duration = Duration::from_secs(60);
 const MAX_IMAP_COMMAND_DURATION: Duration = Duration::from_secs(15);
 const MAX_MESSAGE_FETCH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
-const MESSAGE_FETCH_PAGE_SIZE: u64 = 32;
+/// Initial metadata FETCH page; `FetchPagePlanner` adapts it per folder.
+const MESSAGE_FETCH_PAGE_SIZE: u64 = 128;
+const MAX_UID_SET_BYTES: usize = 7_000;
 const MESSAGE_UID_SEARCH_WINDOW_SIZE: u64 = 10_000;
 const MAX_MESSAGE_FETCH_RECORDS: usize = 1_000_000;
 pub(crate) const MAX_BODY_HASH_MESSAGES_PER_ENDPOINT: usize = 100_000;
@@ -881,17 +883,25 @@ fn read_imap_greeting<S: Read>(
     Ok(response)
 }
 
-pub(crate) fn imap_command_succeeded(response: &str, tag: &str) -> bool {
-    response.lines().any(|line| {
-        let mut fields = line.split_whitespace();
-        fields.next() == Some(tag) && fields.next().is_some_and(|status| atom_eq(status, "OK"))
+/// Whether the server's tagged completion for `tag` is OK. The completion is
+/// located by the literal-aware framer, never by scanning raw lines.
+pub(crate) fn imap_command_succeeded(response: impl AsRef<[u8]>, tag: &str) -> bool {
+    literal_framing::tagged_completion(response.as_ref(), tag).is_some_and(|line| {
+        String::from_utf8_lossy(line)
+            .split_whitespace()
+            .nth(1)
+            .is_some_and(|status| atom_eq(status, "OK"))
     })
 }
 
-fn imap_command_failure(response: &str, tag: &str, operation: &str, host: &str) -> String {
-    let detail = response
-        .lines()
-        .find(|line| is_tagged_response(line, tag))
+fn imap_command_failure(
+    response: impl AsRef<[u8]>,
+    tag: &str,
+    operation: &str,
+    host: &str,
+) -> String {
+    let detail = literal_framing::tagged_completion(response.as_ref(), tag)
+        .map(String::from_utf8_lossy)
         .map(|line| {
             line.chars()
                 .map(|character| {
@@ -1531,7 +1541,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
         &mut buffer,
         budget,
         resume_after_uid,
-        |stream, buffer, uid_page| {
+        if body_hash.is_some() {
+            FetchPagePlanner::body()
+        } else {
+            FetchPagePlanner::metadata()
+        },
+        |stream, buffer, uid_page, uid_set| {
             budget.check()?;
             if body_hash.is_some() && body_hash_message_limit_exceeded(sink.len(), uid_page.len()) {
                 return Err(format!(
@@ -1540,11 +1555,6 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             }
             let tag = format!("v{:03}", page_number + 3);
             page_number = page_number.saturating_add(1);
-            let uid_set = uid_page
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(",");
             let body_field = body_hash.map_or("", |_| " BODY.PEEK[]");
             let command = format!(
                 "{tag} UID FETCH {uid_set} (UID RFC822.SIZE INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)]{body_field})\r\n"
@@ -1562,10 +1572,12 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
                 MAX_MESSAGE_FETCH_RESPONSE_BYTES,
                 budget,
             )?;
-            let response = String::from_utf8_lossy(&raw_response);
-            if !imap_command_succeeded(&response, &tag) {
+            let response_bytes = raw_response.len();
+            // Check the raw bytes: a lossy UTF-8 copy would shift literal
+            // lengths for 8-bit message bodies and break literal framing.
+            if !imap_command_succeeded(&raw_response, &tag) {
                 return Err(imap_command_failure(
-                    &response,
+                    &raw_response,
                     &tag,
                     "FETCH mailbox metadata",
                     host,
@@ -1639,7 +1651,7 @@ fn fetch_mailbox_with_existing_stream<S: Read + Write, C: MessageSink>(
             if let Some(last_uid) = uid_page.last().copied() {
                 sink.checkpoint_page(mailbox, snapshot, last_uid)?;
             }
-            Ok(())
+            Ok(response_bytes)
         },
     )?;
     if searched_uid_count != start_exists {
@@ -1765,10 +1777,11 @@ fn enumerate_uid_pages<S: Read + Write, F>(
     buffer: &mut [u8; 4096],
     budget: &MessageFetchBudget<'_>,
     resume_after_uid: Option<u64>,
+    mut planner: FetchPagePlanner,
     mut consume_page: F,
 ) -> Result<u64, String>
 where
-    F: FnMut(&mut S, &mut [u8; 4096], &[u64]) -> Result<(), String>,
+    F: FnMut(&mut S, &mut [u8; 4096], &[u64], &str) -> Result<usize, String>,
 {
     let mut window_start = 1_u64;
     let mut searched_uid_count = 0_u64;
@@ -1789,9 +1802,9 @@ where
         )?;
         response.clear();
         read_imap_tagged_with_budget(stream, &search_tag, response, buffer, 1_048_576, budget)?;
-        if !imap_command_succeeded(response, &search_tag) {
+        if !imap_command_succeeded(response.as_str(), &search_tag) {
             return Err(imap_command_failure(
-                response,
+                response.as_str(),
                 &search_tag,
                 "SEARCH mailbox UID window",
                 host,
@@ -1813,16 +1826,108 @@ where
             ));
         }
         searched_uid_count = searched_uid_count.saturating_add(uids.len() as u64);
-        for uid_page in uids.chunks(MESSAGE_FETCH_PAGE_SIZE as usize) {
-            if resume_after_uid
-                .is_none_or(|resume| uid_page.last().copied().is_none_or(|last| last > resume))
-            {
-                consume_page(stream, buffer, uid_page)?;
-            }
+        // Skip exactly the UIDs already staged before an interruption. Page
+        // sizes adapt, so page boundaries are not stable across runs and
+        // cannot be used to decide what was already fetched.
+        let mut offset =
+            resume_after_uid.map_or(0, |resume| uids.partition_point(|uid| *uid <= resume));
+        while offset < uids.len() {
+            let (count, uid_set) = encode_uid_page(&uids[offset..], planner.size());
+            let uid_page = &uids[offset..offset + count];
+            let response_bytes = consume_page(stream, buffer, uid_page, &uid_set)?;
+            planner.observe(uid_page.len(), response_bytes);
+            offset += count;
         }
         window_start = window_end.saturating_add(1);
     }
     Ok(searched_uid_count)
+}
+
+/// Adaptive UID FETCH page sizing.
+///
+/// A fixed small page turns a large mailbox into thousands of round trips,
+/// which dominates on providers tens of milliseconds away. Pages are instead
+/// sized from the observed response bytes per message so each response lands
+/// near a byte budget: growth is at most 2x per page, contraction is
+/// immediate, and both stay within fixed bounds. Body pages use a separate,
+/// smaller envelope because one message may approach the per-message bound.
+#[derive(Debug, Clone)]
+struct FetchPagePlanner {
+    size: usize,
+    min: usize,
+    max: usize,
+    target_response_bytes: usize,
+}
+
+impl FetchPagePlanner {
+    fn metadata() -> Self {
+        Self {
+            size: MESSAGE_FETCH_PAGE_SIZE as usize,
+            min: 32,
+            max: 1024,
+            target_response_bytes: 1024 * 1024,
+        }
+    }
+
+    fn body() -> Self {
+        Self {
+            size: 8,
+            min: 1,
+            max: 64,
+            target_response_bytes: MAX_MESSAGE_FETCH_RESPONSE_BYTES / 4,
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn observe(&mut self, messages: usize, response_bytes: usize) {
+        if messages == 0 {
+            return;
+        }
+        let per_message = (response_bytes / messages).max(1);
+        let ideal = self.target_response_bytes / per_message;
+        self.size = ideal
+            .min(self.size.saturating_mul(2))
+            .clamp(self.min, self.max);
+    }
+}
+
+/// Encode the longest prefix of sorted, unique `uids` (up to `max_count`) as
+/// an IMAP sequence set, compressing consecutive runs (`1:500,502,504:900`).
+/// The set is kept under `MAX_UID_SET_BYTES` so the command line stays within
+/// the 8192-octet client limit RFC 7162 recommends; at least one UID is
+/// always taken.
+fn encode_uid_page(uids: &[u64], max_count: usize) -> (usize, String) {
+    use std::fmt::Write as _;
+    let mut set = String::new();
+    let mut count = 0;
+    while count < uids.len().min(max_count.max(1)) {
+        let start = uids[count];
+        let mut end_index = count;
+        while end_index + 1 < uids.len().min(max_count.max(1))
+            && uids[end_index + 1] == uids[end_index] + 1
+        {
+            end_index += 1;
+        }
+        let mut item = String::new();
+        if end_index == count {
+            let _ = write!(item, "{start}");
+        } else {
+            let _ = write!(item, "{start}:{}", uids[end_index]);
+        }
+        let separator = usize::from(!set.is_empty());
+        if count > 0 && set.len() + separator + item.len() > MAX_UID_SET_BYTES {
+            break;
+        }
+        if separator == 1 {
+            set.push(',');
+        }
+        set.push_str(&item);
+        count = end_index + 1;
+    }
+    (count, set)
 }
 
 fn parse_uid_search_response(
@@ -2761,6 +2866,65 @@ mod tests {
     }
 
     #[test]
+    fn tagged_completion_inside_a_literal_cannot_mask_a_failure() {
+        let response = b"* 1 FETCH (UID 1 BODY[] {21}\r\nv004 OK all good\r\n.\r\n)\r\nv004 NO [LIMIT] too many\r\n";
+        assert!(!super::imap_command_succeeded(response, "v004"));
+        assert!(
+            super::imap_command_failure(response, "v004", "FETCH", "host")
+                .ends_with("v004 NO [LIMIT] too many")
+        );
+        let ok = b"* 1 FETCH (UID 1 BODY[] {20}\r\nv004 NO not really\r\n)\r\nv004 OK done\r\n";
+        assert!(super::imap_command_succeeded(ok, "v004"));
+        // Broken literal framing never counts as success.
+        assert!(!super::imap_command_succeeded(
+            b"* 1 FETCH (BODY[] {99}\r\nv004 OK x\r\n",
+            "v004"
+        ));
+    }
+
+    #[test]
+    fn uid_pages_compress_runs_and_respect_count_and_byte_limits() {
+        assert_eq!(
+            super::encode_uid_page(&[1, 2, 3, 5, 7, 8, 9, 20], 100),
+            (8, "1:3,5,7:9,20".to_owned())
+        );
+        assert_eq!(
+            super::encode_uid_page(&[1, 2, 3, 4], 2),
+            (2, "1:2".to_owned())
+        );
+        assert_eq!(super::encode_uid_page(&[4, 9], 0), (1, "4".to_owned()));
+        let sparse = (0..5_000_u64)
+            .map(|index| 4_000_000_000 + index * 2)
+            .collect::<Vec<_>>();
+        let (count, set) = super::encode_uid_page(&sparse, 5_000);
+        assert!(count > 0 && count < sparse.len());
+        assert!(set.len() <= super::MAX_UID_SET_BYTES, "{}", set.len());
+        assert_eq!(set.split(',').count(), count);
+    }
+
+    #[test]
+    fn fetch_page_planner_grows_gradually_and_contracts_immediately() {
+        let mut planner = super::FetchPagePlanner::metadata();
+        let start = planner.size();
+        planner.observe(start, start * 200);
+        assert_eq!(planner.size(), start * 2, "growth is capped at 2x per page");
+        for _ in 0..10 {
+            planner.observe(planner.size(), planner.size() * 200);
+        }
+        assert_eq!(planner.size(), 1024, "growth stops at the maximum");
+        planner.observe(1024, 1024 * 100_000);
+        assert_eq!(
+            planner.size(),
+            32,
+            "large responses contract to the minimum at once"
+        );
+
+        let mut body = super::FetchPagePlanner::body();
+        body.observe(8, 8 * 40 * 1024 * 1024);
+        assert_eq!(body.size(), 1, "one large message per body page");
+    }
+
+    #[test]
     fn body_literals_that_look_like_protocol_do_not_split_fetch_records() {
         let adversarial: &[u8] = b"Subject: test\r\n\r\nHello\r\n* 2 FETCH (UID 999 BODY[] {3}\r\nabc)\r\nv002 OK FETCH completed\r\n* BYE\r\n)\r\nBODY[HEADER.FIELDS (MESSAGE-ID)] {5}\r\nUID 4242 \r\n";
         for non_sync in [false, true] {
@@ -2932,6 +3096,7 @@ mod resume_tests {
         uidvalidity: u64,
         uidnext: u64,
         fetched: Vec<u64>,
+        fetch_commands: usize,
         input: Vec<u8>,
         output: Vec<u8>,
     }
@@ -2943,6 +3108,7 @@ mod resume_tests {
                 uidvalidity,
                 uidnext,
                 fetched: Vec::new(),
+                fetch_commands: 0,
                 input: Vec::new(),
                 output: Vec::new(),
             }
@@ -2981,8 +3147,13 @@ mod resume_tests {
             } else if let Some(rest) = command.strip_prefix("UID FETCH ") {
                 let set = rest.split_whitespace().next().unwrap();
                 let with_body = rest.contains("BODY.PEEK[]");
+                self.fetch_commands += 1;
                 let mut reply = String::new();
-                for uid in set.split(',').map(|uid| uid.parse::<u64>().unwrap()) {
+                let requested = set.split(',').flat_map(|item| {
+                    let (low, high) = item.split_once(':').unwrap_or((item, item));
+                    low.parse::<u64>().unwrap()..=high.parse::<u64>().unwrap()
+                });
+                for uid in requested {
                     self.fetched.push(uid);
                     let sequence = self.uids.iter().position(|value| *value == uid).unwrap() + 1;
                     let header = format!("Message-ID: <{uid}@example.test>\r\n\r\n");
@@ -3116,6 +3287,30 @@ mod resume_tests {
 
     fn folder(count: u64) -> Vec<u64> {
         (1..=count).collect()
+    }
+
+    #[test]
+    fn large_folder_inventory_uses_few_adaptive_fetch_round_trips() {
+        // Contiguous and sparse UID layouts: each UID is fetched exactly once
+        // and pages grow well past the old fixed 32-UID size.
+        for uids in [
+            folder(5_000),
+            (1..=5_000).map(|uid| uid * 2).collect::<Vec<_>>(),
+        ] {
+            let uidnext = uids.last().unwrap() + 1;
+            let mut server = FolderServer::new(&uids, 9, uidnext);
+            let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+            assert_eq!(scan(&mut stage, &mut server), uids.len() as u64);
+            let mut fetched = server.fetched.clone();
+            fetched.sort_unstable();
+            assert_eq!(fetched, uids, "every UID fetched exactly once");
+            assert!(
+                server.fetch_commands <= 12,
+                "{} FETCH round trips for {} messages",
+                server.fetch_commands,
+                uids.len()
+            );
+        }
     }
 
     #[test]
