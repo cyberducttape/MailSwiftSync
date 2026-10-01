@@ -4,7 +4,10 @@
 //! `MAILSWIFTSYNC_DEBUG_DIALOG` opens one dialog (including `clear-queue`), and
 //! `MAILSWIFTSYNC_DEBUG_DEMO=1` fills the plan and batch queue with
 //! placeholder `.example` data, and `MAILSWIFTSYNC_DEBUG_WINDOW=WIDTHxHEIGHT`
-//! sets the initial window size. Release builds do not compile this module.
+//! sets the initial window size. `MAILSWIFTSYNC_DEBUG_PROVIDERS=gmail-m365`
+//! selects the Google Workspace → Microsoft 365 presets with placeholder
+//! users and no session secrets (`gmail-m365-connect` also opens the
+//! source card's browser sign-in). Release builds do not compile this module.
 use crate::App;
 use crate::bulk_import::BulkJob;
 use crate::ui::WorkspaceView;
@@ -12,6 +15,20 @@ use crate::ui::WorkspaceView;
 pub(crate) fn apply(app: &mut App) {
     if std::env::var_os("MAILSWIFTSYNC_DEBUG_DEMO").is_some() {
         demo_data(app);
+    }
+    let providers = std::env::var("MAILSWIFTSYNC_DEBUG_PROVIDERS").unwrap_or_default();
+    if providers.starts_with("gmail-m365") {
+        app.source_provider = crate::ProviderPreset::GoogleWorkspace;
+        app.destination_provider = crate::ProviderPreset::Microsoft365;
+        app.apply_provider_preset(true, crate::ProviderPreset::GoogleWorkspace);
+        app.apply_provider_preset(false, crate::ProviderPreset::Microsoft365);
+        app.form.profile.source_user = "alex@source.example".into();
+        app.form.profile.destination_user = "alex@destination.example".into();
+        app.form.source_password = crate::credentials::SecretString::default();
+        app.form.destination_password = crate::credentials::SecretString::default();
+        if providers == "gmail-m365-connect" {
+            app.open_card_oauth_connect(true, "google", "alex@source.example");
+        }
     }
     if let Ok(view) = std::env::var("MAILSWIFTSYNC_DEBUG_VIEW") {
         app.active_view = match view.as_str() {

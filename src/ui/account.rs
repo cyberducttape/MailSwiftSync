@@ -6,8 +6,6 @@ use std::sync::{Arc, atomic::AtomicBool, mpsc};
 use super::app_state::{CredentialDeleteTarget, ManualOAuthRefreshResult};
 use super::keyring_ops::KeyringOperation;
 
-use super::ThemeColors;
-
 pub(crate) fn password_reveal_allowed(editable: bool, requested: bool) -> bool {
     editable && requested
 }
@@ -24,169 +22,389 @@ fn authorization_missing(
     !local_dovecot && !saved_credential && !has_session_credential
 }
 
-/// Render one source or destination account editor. The form controller owns
-/// the values; this module owns only their presentation and validation hints.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn render_account(
+/// Masked secret entry with a reveal toggle that is only honoured while the
+/// plan is editable.
+fn secret_row(
     ui: &mut egui::Ui,
     language: crate::ui::UiLanguage,
-    title: &str,
-    host: &mut String,
-    user: &mut String,
-    auth_method: &mut String,
+    label: &str,
     password: &mut SecretString,
-    saved_credential: bool,
-    color: Color32,
+    visibility_title: &str,
 ) {
-    let editable = ui.ctx().data(|data| {
-        data.get_temp::<bool>(egui::Id::new("plan_controls_enabled"))
-            .unwrap_or(true)
-    });
-    let danger = ui.visuals().error_fg_color;
-    let inline_error = |ui: &mut egui::Ui, label: &str, value: &str, required: bool| {
-        let message = if required && value.trim().is_empty() {
-            Some(language.message("ui.is-required").replace("{}", label))
-        } else if !value.is_empty() && value.chars().any(char::is_control) {
-            Some(
-                language
-                    .text("{} contains an invalid control character.")
-                    .replace("{}", label),
-            )
-        } else {
-            None
-        };
-        if let Some(message) = message {
-            ui.label(RichText::new(message).color(danger).size(12.0));
-        }
-    };
-    crate::ui::card(ui, |ui| {
-        ui.label(RichText::new(title).size(16.0).strong().color(color));
-        ui.label(
-            RichText::new(if title.to_lowercase().contains("dovecot") {
-                language.message("ui.local-dovecot-account")
-            } else {
-                language.message("ui.imap-connection")
-            })
-            .size(12.0)
-            .color(ui.visuals().weak_text_color()),
-        );
-        crate::ui::form_row(ui, language.message("ui.server"), |ui| {
-            ui.add_enabled(
-                editable,
-                egui::TextEdit::singleline(host).desired_width(f32::INFINITY),
-            )
-        });
-        inline_error(ui, language.message("ui.server"), host, true);
-        crate::ui::form_row(ui, language.message("ui.user"), |ui| {
-            ui.add_enabled(
-                editable,
-                egui::TextEdit::singleline(user).desired_width(f32::INFINITY),
-            )
-        });
-        inline_error(ui, language.message("ui.user"), user, true);
-        let local_dovecot = title.to_lowercase().contains("dovecot");
-        let authorization_missing =
-            authorization_missing(local_dovecot, saved_credential, !password.is_empty());
-        let authorization_heading = if authorization_missing {
-            RichText::new(format!(
-                "⚠ {}",
-                language.message("ui.account-authorization")
-            ))
-            .strong()
-            .color(danger)
-        } else {
-            RichText::new(language.message("ui.account-authorization"))
-        };
-        egui::CollapsingHeader::new(authorization_heading)
-            .id_salt(("account_authorization", title))
-            .default_open(authorization_missing)
-            .open(authorization_missing.then_some(true))
-            .show(ui, |ui| {
-        crate::ui::form_row(ui, language.message("ui.authentication"), |ui| {
-            egui::ComboBox::from_id_salt(("auth_method", title))
-                .selected_text(if auth_method_is_oauth(auth_method) {
-                    "OAuth 2.0 / XOAUTH2"
-                } else {
-                    language.message("ui.password")
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(auth_method, "password".into(), language.message("ui.password"));
-                    ui.selectable_value(auth_method, "oauth2".into(), "OAuth 2.0 / XOAUTH2");
-                });
-        });
-        if auth_method_is_oauth(auth_method) {
-            ui.collapsing(language.message("ui.oauth-setup-guidance"), |ui| {
-                ui.label(
-                    RichText::new(
-                        language.message("ui.use-a-provider-issued-access-token-with-imap-scope-tokens-stay-in-this-sess-7703cd486b"),
-                    )
-                    .size(12.0)
-                    .color(ui.visuals().weak_text_color()),
-                );
-            });
-        }
-        let secret_label = if auth_method_is_oauth(auth_method) {
-            language.message("ui.access-token")
-        } else {
-            language.message("ui.password")
-        };
-        crate::ui::form_row(ui, secret_label, |ui| {
-            let visibility_id = password_visibility_id(title);
-            let visible = ui.ctx().data_mut(|data| {
-                let requested = data.get_temp::<bool>(visibility_id).unwrap_or(false);
-                if !editable {
-                    data.remove::<bool>(visibility_id);
-                }
-                password_reveal_allowed(editable, requested)
-            });
-            ui.add_enabled(
-                editable,
-                egui::TextEdit::singleline(password.as_mut_string())
-                    .password(!visible)
-                    .desired_width((ui.available_width() - 64.0).max(80.0)),
-            );
-            if ui
-                .add_enabled(
-                    editable,
-                    egui::Button::new(language.text(if visible { "Hide" } else { "Show" })),
-                )
-                .clicked()
-            {
-                ui.ctx()
-                    .data_mut(|data| data.insert_temp(visibility_id, !visible));
+    let editable = ui.is_enabled();
+    crate::ui::form_row(ui, label, |ui| {
+        let visibility_id = password_visibility_id(visibility_title);
+        let visible = ui.ctx().data_mut(|data| {
+            let requested = data.get_temp::<bool>(visibility_id).unwrap_or(false);
+            if !editable {
+                data.remove::<bool>(visibility_id);
             }
+            password_reveal_allowed(editable, requested)
         });
-        if saved_credential && password.is_empty() {
-            ui.label(
-                RichText::new(language.text(if auth_method_is_oauth(auth_method) {
-                    "Saved OAuth credential configured; session token not required."
-                } else {
-                    "Saved credential configured; session password not required."
-                }))
-                .color(if ui.visuals().dark_mode {
-                    ThemeColors::dark().success
-                } else {
-                    ThemeColors::light().success
-                })
-                .size(12.0),
-            );
-        } else {
-            inline_error(
-                ui,
-                language.text(if auth_method_is_oauth(auth_method) {
-                    "Access token"
-                } else {
-                    "Password"
-                }),
-                password.as_str(),
-                authorization_missing,
-            );
+        ui.add(
+            egui::TextEdit::singleline(password.as_mut_string())
+                .password(!visible)
+                .desired_width((ui.available_width() - 64.0).max(80.0)),
+        );
+        if ui
+            .button(language.text(if visible { "Hide" } else { "Show" }))
+            .clicked()
+        {
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(visibility_id, !visible));
         }
-            });
     });
 }
 
+fn inline_field_error(
+    ui: &mut egui::Ui,
+    language: crate::ui::UiLanguage,
+    label: &str,
+    value: &str,
+    required: bool,
+) {
+    let message = if required && value.trim().is_empty() {
+        Some(language.message("ui.is-required").replace("{}", label))
+    } else if !value.is_empty() && value.chars().any(char::is_control) {
+        Some(
+            language
+                .text("{} contains an invalid control character.")
+                .replace("{}", label),
+        )
+    } else {
+        None
+    };
+    if let Some(message) = message {
+        ui.label(
+            RichText::new(message)
+                .color(ui.visuals().error_fg_color)
+                .size(12.0),
+        );
+    }
+}
+
+/// Provider whose browser sign-in MailSwiftSync can run from the account
+/// card, as the `oauth_authorize` provider name and display label.
+fn browser_oauth_provider(preset: crate::ProviderPreset) -> Option<(&'static str, &'static str)> {
+    match preset {
+        crate::ProviderPreset::GoogleWorkspace => Some(("google", "Google Workspace")),
+        crate::ProviderPreset::Microsoft365 => Some(("microsoft", "Microsoft 365")),
+        _ => None,
+    }
+}
+
+fn default_oauth_keyring_id(source: bool, user: &str) -> String {
+    format!(
+        "mailswiftsync-{}-{}",
+        if source { "source" } else { "destination" },
+        user.trim()
+    )
+}
+
 impl App {
+    /// One source or destination account card, provider first: choose the
+    /// provider, enter the mailbox user, then sign in. Endpoint, port, TLS,
+    /// trust anchors and the authentication override live under Advanced.
+    pub(crate) fn account_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        source: bool,
+        dovecot: bool,
+        color: Color32,
+    ) {
+        let language = self.language;
+        let local_dovecot = !source && dovecot;
+        crate::ui::card(ui, |ui| {
+            let title = if source {
+                language.message("ui.source-account")
+            } else if local_dovecot {
+                language.text("Local Dovecot destination")
+            } else {
+                language.text("Destination account")
+            };
+            ui.label(RichText::new(title).size(16.0).strong().color(color));
+            if local_dovecot {
+                ui.label(
+                    RichText::new(language.message("ui.local-dovecot-account"))
+                        .size(12.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            } else {
+                self.provider_picker(ui, source);
+            }
+            let preset = self.effective_provider(source);
+            let fixed_endpoint = !local_dovecot
+                && !matches!(
+                    preset,
+                    crate::ProviderPreset::GenericImap | crate::ProviderPreset::CpanelDovecot
+                );
+            let profile = &mut self.form.profile;
+            let (host, user) = if source {
+                (&mut profile.source_host, &mut profile.source_user)
+            } else {
+                (&mut profile.destination_host, &mut profile.destination_user)
+            };
+            if fixed_endpoint {
+                // Provider presets own the endpoint; it remains editable
+                // under Advanced connection settings.
+                ui.label(
+                    RichText::new(format!("{} · {}", language.message("ui.server"), host))
+                        .size(12.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            } else {
+                crate::ui::form_row(ui, language.message("ui.server"), |ui| {
+                    ui.add(egui::TextEdit::singleline(host).desired_width(f32::INFINITY))
+                });
+                inline_field_error(ui, language, language.message("ui.server"), host, true);
+            }
+            crate::ui::form_row(ui, language.message("ui.user"), |ui| {
+                ui.add(egui::TextEdit::singleline(user).desired_width(f32::INFINITY))
+            });
+            inline_field_error(ui, language, language.message("ui.user"), user, true);
+            if !local_dovecot {
+                ui.add_space(6.0);
+                self.account_sign_in(ui, source, preset);
+            }
+        });
+    }
+
+    fn account_sign_in(&mut self, ui: &mut egui::Ui, source: bool, preset: crate::ProviderPreset) {
+        let language = self.language;
+        let colors = self.theme_colors();
+        let profile = &self.form.profile;
+        let (auth, credential_id, refresh_id, user) = if source {
+            (
+                profile.source_auth.clone(),
+                profile.source_credential_id.trim().to_owned(),
+                profile.source_oauth_refresh_credential_id.trim().to_owned(),
+                profile.source_user.clone(),
+            )
+        } else {
+            (
+                profile.destination_auth.clone(),
+                profile.destination_credential_id.trim().to_owned(),
+                profile
+                    .destination_oauth_refresh_credential_id
+                    .trim()
+                    .to_owned(),
+                profile.destination_user.clone(),
+            )
+        };
+        let oauth = auth_method_is_oauth(&auth);
+        let session_secret = if source {
+            !self.form.source_password.is_empty()
+        } else {
+            !self.form.destination_password.is_empty()
+        };
+        let stored_now = self
+            .oauth_authorization_result
+            .as_ref()
+            .is_some_and(|result| result.source == source && result.stored);
+        let verified_now = stored_now
+            && self
+                .oauth_authorization_result
+                .as_ref()
+                .is_some_and(|result| result.imap_authenticated);
+        let proposed_only = !stored_now
+            && self
+                .plan_oauth_prefilled_id
+                .as_ref()
+                .is_some_and(|(side, id)| *side == source && *id == refresh_id);
+        let connected = oauth && !refresh_id.is_empty() && !proposed_only;
+        let saved_credential = !credential_id.is_empty() || connected;
+        let missing = authorization_missing(false, saved_credential, session_secret);
+        let visibility_title = if source {
+            "source-account"
+        } else {
+            "destination-account"
+        };
+        if oauth {
+            if connected {
+                ui.label(
+                    RichText::new(
+                        language
+                            .text(if verified_now {
+                                "✓ Account connected · token refresh stored as {}"
+                            } else {
+                                "✓ Saved sign-in configured · keyring ID {}"
+                            })
+                            .replace("{}", &refresh_id),
+                    )
+                    .color(colors.success),
+                );
+            }
+            if let Some((provider, provider_label)) = browser_oauth_provider(preset) {
+                let label = language
+                    .text(if connected {
+                        "Reconnect {} account"
+                    } else {
+                        "Connect {} account"
+                    })
+                    .replace("{}", provider_label);
+                let panel_open = self.plan_oauth_connect_side == Some(source);
+                let clicked = if panel_open {
+                    false
+                } else if connected {
+                    ui.button(label).clicked()
+                } else {
+                    crate::ui::primary_button(ui, &label).clicked()
+                };
+                if clicked {
+                    self.open_card_oauth_connect(source, provider, &user);
+                }
+                if panel_open {
+                    crate::ui::card(ui, |ui| {
+                        let ctx = ui.ctx().clone();
+                        self.oauth_authorization_section(ui, ui.is_enabled(), &ctx, Some(source));
+                        if ui.link(language.text("Hide sign-in details")).clicked() {
+                            self.plan_oauth_connect_side = None;
+                        }
+                    });
+                }
+            } else {
+                ui.label(
+                    RichText::new(language.text(
+                        "Browser sign-in is built in for Google Workspace and Microsoft 365. For other OAuth providers run `mailswiftsync oauth-authorize`, or paste an access token below.",
+                    ))
+                    .size(12.0)
+                    .color(ui.visuals().weak_text_color()),
+                );
+            }
+            egui::CollapsingHeader::new(language.text("Use a temporary access token instead"))
+                .id_salt(("temporary_access_token", source))
+                .default_open(session_secret)
+                .show(ui, |ui| {
+                    let password = if source {
+                        &mut self.form.source_password
+                    } else {
+                        &mut self.form.destination_password
+                    };
+                    secret_row(
+                        ui,
+                        language,
+                        language.message("ui.access-token"),
+                        password,
+                        visibility_title,
+                    );
+                });
+        } else {
+            let password = if source {
+                &mut self.form.source_password
+            } else {
+                &mut self.form.destination_password
+            };
+            secret_row(
+                ui,
+                language,
+                language.message("ui.password"),
+                password,
+                visibility_title,
+            );
+            if !credential_id.is_empty() && !session_secret {
+                ui.label(
+                    RichText::new(
+                        language
+                            .text("Saved credential configured; session password not required."),
+                    )
+                    .color(colors.success)
+                    .size(12.0),
+                );
+            }
+        }
+        if missing {
+            ui.label(
+                RichText::new(format!(
+                    "⚠ {}",
+                    language.text(if oauth {
+                        "Connect the account or provide an access token before testing it."
+                    } else {
+                        "Enter the password or a saved keyring ID before testing the account."
+                    })
+                ))
+                .color(colors.danger)
+                .size(12.0),
+            );
+        }
+    }
+
+    /// Prepare the shared OAuth authorization state for one account card.
+    pub(crate) fn open_card_oauth_connect(&mut self, source: bool, provider: &str, user: &str) {
+        if self.oauth_authorization_receiver.is_some() {
+            return;
+        }
+        if self.oauth_authorization_provider != provider
+            || self.oauth_authorization_source != source
+        {
+            self.oauth_authorization_result = None;
+        }
+        self.oauth_authorization_source = source;
+        self.oauth_authorization_provider = provider.to_owned();
+        if self.oauth_authorization_login_hint.trim().is_empty() {
+            self.oauth_authorization_login_hint = user.trim().to_owned();
+        }
+        let refresh_id = if source {
+            &mut self.form.profile.source_oauth_refresh_credential_id
+        } else {
+            &mut self.form.profile.destination_oauth_refresh_credential_id
+        };
+        if refresh_id.trim().is_empty() && !user.trim().is_empty() {
+            *refresh_id = default_oauth_keyring_id(source, user);
+            self.plan_oauth_prefilled_id = Some((source, refresh_id.clone()));
+        }
+        self.plan_oauth_connect_side = Some(source);
+    }
+
+    pub(crate) fn effective_provider(&self, source: bool) -> crate::ProviderPreset {
+        let (selected, host) = if source {
+            (self.source_provider, &self.form.profile.source_host)
+        } else {
+            (
+                self.destination_provider,
+                &self.form.profile.destination_host,
+            )
+        };
+        if selected == crate::ProviderPreset::GenericImap {
+            crate::ProviderPreset::infer_from_host(host).unwrap_or(selected)
+        } else {
+            selected
+        }
+    }
+
+    fn provider_picker(&mut self, ui: &mut egui::Ui, source: bool) {
+        let current = self.effective_provider(source);
+        let mut selected = current;
+        crate::ui::form_row(ui, self.language.message("ui.provider"), |ui| {
+            egui::ComboBox::from_id_salt(("provider_preset", source))
+                .selected_text(self.language.text(current.display_name()))
+                .width(ui.available_width().min(260.0))
+                .show_ui(ui, |ui| {
+                    for preset in crate::ProviderPreset::ALL {
+                        ui.selectable_value(
+                            &mut selected,
+                            preset,
+                            self.language.text(preset.display_name()),
+                        );
+                    }
+                });
+        });
+        if selected != current {
+            if source {
+                self.source_provider = selected;
+            } else {
+                self.destination_provider = selected;
+            }
+            self.apply_provider_preset(source, selected);
+        }
+        if selected != crate::ProviderPreset::GenericImap {
+            ui.label(
+                RichText::new(self.language.text(selected.defaults().note))
+                    .size(12.0)
+                    .color(self.theme_colors().text_secondary),
+            );
+        }
+    }
+
     pub(crate) fn keyring_dialog(&mut self, ctx: &egui::Context) {
         if !self.keyring_open {
             return;
@@ -264,20 +482,25 @@ impl App {
                     .color(self.theme_colors().danger),
                 );
                 ui.separator();
-                self.oauth_authorization_section(ui, editable, ctx);
+                self.oauth_authorization_section(ui, editable, ctx, None);
                 ui.separator();
                 self.oauth_refresh_section(ui, editable);
             });
         self.keyring_open = open;
     }
 
+    /// Browser OAuth authorization. `fixed_side` is set when an account card
+    /// hosts the flow: the side and provider then come from that card.
     fn oauth_authorization_section(
         &mut self,
         ui: &mut egui::Ui,
         editable: bool,
         ctx: &egui::Context,
+        fixed_side: Option<bool>,
     ) {
-        ui.heading(self.language.message("ui.connect-provider-account"));
+        if fixed_side.is_none() {
+            ui.heading(self.language.message("ui.connect-provider-account"));
+        }
         ui.label(
             RichText::new(self.language.message("ui.oauth-app-registration-required"))
                 .size(12.0)
@@ -286,39 +509,41 @@ impl App {
         let mut start = false;
         let pending = self.oauth_authorization_receiver.is_some();
         ui.add_enabled_ui(editable, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.connect-account-side"));
-                ui.selectable_value(
-                    &mut self.oauth_authorization_source,
-                    true,
-                    self.language.message("ui.source"),
-                );
-                ui.selectable_value(
-                    &mut self.oauth_authorization_source,
-                    false,
-                    self.language.message("ui.destination"),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.provider"));
-                egui::ComboBox::from_id_salt("oauth_authorization_provider")
-                    .selected_text(match self.oauth_authorization_provider.as_str() {
-                        "microsoft" => "Microsoft 365",
-                        _ => "Google Workspace",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.oauth_authorization_provider,
-                            "google".into(),
-                            "Google Workspace",
-                        );
-                        ui.selectable_value(
-                            &mut self.oauth_authorization_provider,
-                            "microsoft".into(),
-                            "Microsoft 365",
-                        );
-                    });
-            });
+            if fixed_side.is_none() {
+                ui.horizontal(|ui| {
+                    ui.label(self.language.message("ui.connect-account-side"));
+                    ui.selectable_value(
+                        &mut self.oauth_authorization_source,
+                        true,
+                        self.language.message("ui.source"),
+                    );
+                    ui.selectable_value(
+                        &mut self.oauth_authorization_source,
+                        false,
+                        self.language.message("ui.destination"),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.label(self.language.message("ui.provider"));
+                    egui::ComboBox::from_id_salt("oauth_authorization_provider")
+                        .selected_text(match self.oauth_authorization_provider.as_str() {
+                            "microsoft" => "Microsoft 365",
+                            _ => "Google Workspace",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.oauth_authorization_provider,
+                                "google".into(),
+                                "Google Workspace",
+                            );
+                            ui.selectable_value(
+                                &mut self.oauth_authorization_provider,
+                                "microsoft".into(),
+                                "Microsoft 365",
+                            );
+                        });
+                });
+            }
             if self.oauth_authorization_provider == "microsoft" {
                 ui.horizontal(|ui| {
                     ui.label(self.language.message("ui.microsoft-tenant"));
@@ -356,16 +581,16 @@ impl App {
             } else {
                 "Google Workspace"
             };
-            start = ui
-                .add_enabled(
-                    !pending,
-                    egui::Button::new(
-                        self.language
-                            .message("ui.connect-account-in-browser")
-                            .replace("{}", provider_label),
-                    ),
-                )
-                .clicked();
+            let start_label = self
+                .language
+                .message("ui.connect-account-in-browser")
+                .replace("{}", provider_label);
+            start = if fixed_side.is_some() && !pending {
+                crate::ui::primary_button(ui, &start_label).clicked()
+            } else {
+                ui.add_enabled(!pending, egui::Button::new(start_label))
+                    .clicked()
+            };
         });
         if start {
             self.start_oauth_authorization(ctx);

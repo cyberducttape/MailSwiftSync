@@ -2,8 +2,10 @@ use crate::ui::format_phase_name;
 use crate::ui::status_color;
 use crate::*;
 
+/// The single next readiness step for a one-mailbox plan. Plan and Overview
+/// both present this, so the operator never sees two competing next actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlanWorkflowStep {
+pub(crate) enum PlanWorkflowStep {
     Assess,
     TestAccounts,
     DryPreflight,
@@ -424,32 +426,22 @@ impl App {
         let dovecot = self.form.engine() == core::Engine::Dovecot;
         ui.add_enabled_ui(plan_configuration_enabled(self.running()), |ui| {
         crate::ui::card(ui, |ui| {
-            crate::ui::section_label(ui, self.language.message("ui.migration-method"));
-            ui.horizontal_wrapped(|ui| {
-                ui.radio_value(
-                    &mut self.form.profile.engine,
-                    core::Engine::ImapSync,
-                    self.language.message("ui.standard-imap-migration-imapsync"),
-                );
-                ui.radio_value(
-                    &mut self.form.profile.engine,
-                    core::Engine::Dovecot,
-                    self.language.message("ui.local-dovecot-migration-doveadm"),
-                );
-            });
-            ui.label(
-                egui::RichText::new(self.language.text(if self.form.engine() == core::Engine::Dovecot {
-                    "Advanced method: runs local Dovecot tools and follows Dovecot-specific destination semantics."
-                } else {
-                    "Recommended for provider-to-provider moves; runs the imapsync engine."
-                }))
-                .small()
-                .color(colors.text_secondary),
-            );
-            ui.add_space(8.0);
             crate::ui::form_row(ui, self.language.message("ui.plan-name"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.name).desired_width(360.0))
             });
+            if dovecot {
+                // The expert method lives under Advanced; never leave it as
+                // hidden state that changes destination semantics.
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        self.language.message("ui.migration-method"),
+                        self.language.message("ui.local-dovecot-migration-doveadm")
+                    ))
+                    .small()
+                    .color(colors.warning),
+                );
+            }
         });
         crate::ui::card(ui, |ui| {
             egui::CollapsingHeader::new(
@@ -458,6 +450,29 @@ impl App {
             )
             .id_salt("advanced_migration_settings")
             .show(ui, |ui| {
+                crate::ui::section_label(ui, self.language.message("ui.migration-method"));
+                ui.horizontal_wrapped(|ui| {
+                    ui.radio_value(
+                        &mut self.form.profile.engine,
+                        core::Engine::ImapSync,
+                        self.language.message("ui.standard-imap-migration-imapsync"),
+                    );
+                    ui.radio_value(
+                        &mut self.form.profile.engine,
+                        core::Engine::Dovecot,
+                        self.language.message("ui.local-dovecot-migration-doveadm"),
+                    );
+                });
+                ui.label(
+                    egui::RichText::new(self.language.text(if self.form.engine() == core::Engine::Dovecot {
+                        "Advanced method: runs local Dovecot tools and follows Dovecot-specific destination semantics."
+                    } else {
+                        "Recommended for provider-to-provider moves; runs the imapsync engine."
+                    }))
+                    .small()
+                    .color(colors.text_secondary),
+                );
+                ui.add_space(8.0);
                 crate::ui::form_row(ui, self.language.message("ui.tools"), |ui| {
                     if ui
                         .button(format!(
@@ -613,85 +628,9 @@ impl App {
         crate::ui::card(ui, |ui| self.provider_runbook_panel(ui));
         });
         ui.add_space(16.0);
-        let current_plan = crate::plan_identity::fingerprint_digest(&self.form.plan_fingerprint());
-        let account_test_current = crate::controller::capability_observation_matches(
-            self.capability_observation_fingerprint.as_deref(),
-            &current_plan,
-        ) && self.source_capabilities.is_some()
-            && self.destination_capabilities.is_some();
-        let workflow_step = plan_workflow_step(
-            !self.preflight.is_empty(),
-            dovecot,
-            account_test_current,
-            self.current_dry_preflight_ready(),
-        );
         crate::ui::card(ui, |ui| {
             crate::ui::section_label(ui, self.language.message("ui.next-readiness-action"));
-            if self.running() {
-                if ui
-                    .button(self.language.message("ui.stop-migration"))
-                    .clicked()
-                {
-                    self.stop_confirm_open = true;
-                    self.stop_confirm_focus_requested = false;
-                }
-            } else {
-                let label = match workflow_step {
-                    PlanWorkflowStep::Assess => self.language.message("ui.assess-configuration"),
-                    PlanWorkflowStep::TestAccounts => {
-                        if self.capability_receiver.is_some() {
-                            self.language.message("ui.testing-accounts")
-                        } else {
-                            self.language
-                                .message("ui.test-accounts-and-inspect-namespaces")
-                        }
-                    }
-                    PlanWorkflowStep::DryPreflight => {
-                        self.language.message("ui.run-preflight-3cd0b7eb")
-                    }
-                    PlanWorkflowStep::StartLive => self.language.message("ui.start-live-migration"),
-                };
-                let in_flight = workflow_step == PlanWorkflowStep::TestAccounts
-                    && self.capability_receiver.is_some();
-                let clicked = if in_flight {
-                    ui.add_enabled(false, egui::Button::new(label)).clicked()
-                } else {
-                    crate::ui::primary_button(ui, label).clicked()
-                };
-                if clicked {
-                    match workflow_step {
-                        PlanWorkflowStep::Assess => self.assess_plan(),
-                        PlanWorkflowStep::TestAccounts => self.start_capability_probe(),
-                        PlanWorkflowStep::DryPreflight => {
-                            self.form.dry_run = true;
-                            self.start();
-                        }
-                        PlanWorkflowStep::StartLive => {
-                            self.form.dry_run = false;
-                            self.start();
-                        }
-                    }
-                }
-            }
-            let workflow_hint = match workflow_step {
-                PlanWorkflowStep::Assess => {
-                    "Review the proposed plan before testing either account."
-                }
-                PlanWorkflowStep::TestAccounts => {
-                    "Authenticate both IMAP accounts and inspect folder namespaces."
-                }
-                PlanWorkflowStep::DryPreflight => {
-                    "Run the engine's non-writing preflight after account testing."
-                }
-                PlanWorkflowStep::StartLive => {
-                    "The exact plan passed dry preflight; live execution still requires explicit confirmation."
-                }
-            };
-            ui.label(
-                egui::RichText::new(self.language.text(workflow_hint))
-                    .small()
-                    .color(colors.text_secondary),
-            );
+            self.plan_workflow_controls(ui);
         });
         ui.add_space(8.0);
         egui::CollapsingHeader::new(self.language.message("ui.plan-tools"))
@@ -738,6 +677,94 @@ impl App {
             });
     }
 
+    pub(crate) fn current_plan_workflow_step(&self) -> PlanWorkflowStep {
+        let current_plan = crate::plan_identity::fingerprint_digest(&self.form.plan_fingerprint());
+        let account_test_current = crate::controller::capability_observation_matches(
+            self.capability_observation_fingerprint.as_deref(),
+            &current_plan,
+        ) && self.source_capabilities.is_some()
+            && self.destination_capabilities.is_some();
+        plan_workflow_step(
+            !self.preflight.is_empty(),
+            self.form.engine() == core::Engine::Dovecot,
+            account_test_current,
+            self.current_dry_preflight_ready(),
+        )
+    }
+
+    pub(crate) fn plan_workflow_hint(step: PlanWorkflowStep) -> &'static str {
+        match step {
+            PlanWorkflowStep::Assess => "Review the proposed plan before testing either account.",
+            PlanWorkflowStep::TestAccounts => {
+                "Authenticate both IMAP accounts and inspect folder namespaces."
+            }
+            PlanWorkflowStep::DryPreflight => {
+                "Run the engine's non-writing preflight after account testing."
+            }
+            PlanWorkflowStep::StartLive => {
+                "The exact plan passed dry preflight; live execution still requires explicit confirmation."
+            }
+        }
+    }
+
+    /// Render the one primary readiness button (or Stop while running) and
+    /// its hint. Shared by the Plan page and the Overview lifecycle card.
+    pub(crate) fn plan_workflow_controls(&mut self, ui: &mut egui::Ui) {
+        let colors = self.theme_colors();
+        let workflow_step = self.current_plan_workflow_step();
+        if self.running() {
+            if ui
+                .button(self.language.message("ui.stop-migration"))
+                .clicked()
+            {
+                self.stop_confirm_open = true;
+                self.stop_confirm_focus_requested = false;
+            }
+        } else {
+            let label = match workflow_step {
+                PlanWorkflowStep::Assess => self.language.message("ui.assess-configuration"),
+                PlanWorkflowStep::TestAccounts => {
+                    if self.capability_receiver.is_some() {
+                        self.language.message("ui.testing-accounts")
+                    } else {
+                        self.language
+                            .message("ui.test-accounts-and-inspect-namespaces")
+                    }
+                }
+                PlanWorkflowStep::DryPreflight => {
+                    self.language.message("ui.run-preflight-3cd0b7eb")
+                }
+                PlanWorkflowStep::StartLive => self.language.message("ui.start-live-migration"),
+            };
+            let in_flight = workflow_step == PlanWorkflowStep::TestAccounts
+                && self.capability_receiver.is_some();
+            let clicked = if in_flight {
+                ui.add_enabled(false, egui::Button::new(label)).clicked()
+            } else {
+                crate::ui::primary_button(ui, label).clicked()
+            };
+            if clicked {
+                match workflow_step {
+                    PlanWorkflowStep::Assess => self.assess_plan(),
+                    PlanWorkflowStep::TestAccounts => self.start_capability_probe(),
+                    PlanWorkflowStep::DryPreflight => {
+                        self.form.dry_run = true;
+                        self.start();
+                    }
+                    PlanWorkflowStep::StartLive => {
+                        self.form.dry_run = false;
+                        self.start();
+                    }
+                }
+            }
+        }
+        ui.label(
+            egui::RichText::new(self.language.text(Self::plan_workflow_hint(workflow_step)))
+                .small()
+                .color(colors.text_secondary),
+        );
+    }
+
     fn endpoint_plan_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -745,49 +772,13 @@ impl App {
         dovecot: bool,
         color: egui::Color32,
     ) {
-        self.provider_field(ui, source);
+        self.account_card(ui, source, dovecot, color);
         let language = self.language;
-        let saved_credential = if source {
-            !self.form.profile.source_credential_id.trim().is_empty()
-        } else {
-            !self
-                .form
-                .profile
-                .destination_credential_id
-                .trim()
-                .is_empty()
-        };
-        if source {
-            super::account::render_account(
-                ui,
-                language,
-                language.message("ui.source-account"),
-                &mut self.form.profile.source_host,
-                &mut self.form.profile.source_user,
-                &mut self.form.profile.source_auth,
-                &mut self.form.source_password,
-                saved_credential,
-                color,
+        let fixed_endpoint = (source || !dovecot)
+            && !matches!(
+                self.effective_provider(source),
+                ProviderPreset::GenericImap | ProviderPreset::CpanelDovecot
             );
-        } else {
-            // Native Dovecot writes to local storage; destination IMAP
-            // authentication controls do not apply in that mode.
-            super::account::render_account(
-                ui,
-                language,
-                language.text(if dovecot {
-                    "Local Dovecot destination"
-                } else {
-                    "Destination account"
-                }),
-                &mut self.form.profile.destination_host,
-                &mut self.form.profile.destination_user,
-                &mut self.form.profile.destination_auth,
-                &mut self.form.destination_password,
-                saved_credential,
-                color,
-            );
-        }
         ui.add_space(10.0);
         let id_salt = if source {
             "source_connection_settings"
@@ -798,6 +789,37 @@ impl App {
             .id_salt(id_salt)
             .show(ui, |ui| {
                 crate::ui::card(ui, |ui| {
+                    if source || !dovecot {
+                        let profile = &mut self.form.profile;
+                        let (host, auth) = if source {
+                            (&mut profile.source_host, &mut profile.source_auth)
+                        } else {
+                            (&mut profile.destination_host, &mut profile.destination_auth)
+                        };
+                        if fixed_endpoint {
+                            Self::text_field(ui, language.message("ui.server"), host);
+                        }
+                        crate::ui::form_row(ui, language.message("ui.authentication"), |ui| {
+                            egui::ComboBox::from_id_salt(("auth_method", source))
+                                .selected_text(if auth_method_is_oauth(auth) {
+                                    "OAuth 2.0 / XOAUTH2"
+                                } else {
+                                    language.message("ui.password")
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        auth,
+                                        "password".into(),
+                                        language.message("ui.password"),
+                                    );
+                                    ui.selectable_value(
+                                        auth,
+                                        "oauth2".into(),
+                                        "OAuth 2.0 / XOAUTH2",
+                                    );
+                                });
+                        });
+                    }
                     if source {
                         Self::text_field(
                             ui,
@@ -891,52 +913,6 @@ impl App {
                     }
                 });
         });
-    }
-
-    fn provider_field(&mut self, ui: &mut egui::Ui, source: bool) {
-        let current = if source {
-            self.source_provider
-        } else {
-            self.destination_provider
-        };
-        let mut selected = current;
-        let label = if source {
-            self.language.message("ui.where-are-you-migrating-from")
-        } else {
-            self.language.message("ui.where-are-you-migrating-to")
-        };
-        crate::ui::form_row(ui, label, |ui| {
-            egui::ComboBox::from_id_salt(("provider_preset", source))
-                .selected_text(self.language.text(current.label()))
-                .width(ui.available_width().min(260.0))
-                .show_ui(ui, |ui| {
-                    for preset in ProviderPreset::ALL {
-                        ui.selectable_value(
-                            &mut selected,
-                            preset,
-                            self.language.text(preset.label()),
-                        );
-                    }
-                });
-        });
-        if selected != current {
-            if source {
-                self.source_provider = selected;
-            } else {
-                self.destination_provider = selected;
-            }
-            self.apply_provider_preset(source, selected);
-        }
-        // Keep the provider's authentication guidance visible while its
-        // preset is active, not only on the frame it was chosen.
-        if selected != ProviderPreset::GenericImap {
-            ui.label(
-                egui::RichText::new(self.language.text(selected.defaults().note))
-                    .small()
-                    .color(self.theme_colors().text_secondary),
-            );
-        }
-        ui.add_space(6.0);
     }
 
     fn provider_runbook_panel(&self, ui: &mut egui::Ui) {

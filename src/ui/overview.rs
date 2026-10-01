@@ -77,41 +77,29 @@ impl App {
             proof_ready,
         );
 
-        if project.is_none() && self.bulk_jobs.is_empty() {
-            crate::ui::card(ui, |ui| {
-                ui.label(
-                    RichText::new(self.language.message("ui.start-your-first-migration"))
-                        .size(18.0)
-                        .strong(),
-                );
-                ui.label(RichText::new(self.language.message("ui.mailswiftsync-guides-every-migration-through-a-reviewable-preflight-before-219ddd077f")).color(colors.text_secondary));
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(self.language.message("ui.begin-in-prepare-choose-the-source-and-destination-then-test-both-accounts-a8911f7278"))
-                        .color(colors.text_secondary),
-                );
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if crate::ui::primary_button(
-                        ui,
-                        self.language.message("ui.configure-first-mailbox"),
-                    )
-                    .clicked()
-                    {
-                        self.active_view = WorkspaceView::Plan;
-                    }
-                    if ui
-                        .button(self.language.message("ui.import-mailbox-list"))
-                        .clicked()
-                    {
-                        self.active_view = WorkspaceView::Mailboxes;
-                    }
-                });
-                ui.add_space(4.0);
-                ui.label(RichText::new(self.language.message("ui.for-a-batch-import-the-mailbox-list-and-begin-with-a-small-pilot-during-the-pilot-stage")).small().color(colors.text_secondary));
-            });
-            ui.add_space(16.0);
-        }
+        let first_run = project.is_none() && self.bulk_jobs.is_empty();
+        let (configured, total) = plan_completeness(&self.form.profile);
+        let primary = overview_primary(OverviewPrimaryInputs {
+            running: self.running(),
+            attention: workspace_attention_count,
+            proof_ready,
+            has_imported_queue: has_bulk_jobs,
+            phase,
+            has_project: project.is_some(),
+            plan_complete: configured == total,
+        });
+        crate::ui::card(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            self.lifecycle_card(
+                ui,
+                &next_action,
+                primary,
+                first_run,
+                workspace_attention_count,
+                batch_summary.total,
+            );
+        });
+        ui.add_space(16.0);
 
         ui.columns(3, |columns| {
             crate::ui::card(&mut columns[0], |ui| {
@@ -192,14 +180,9 @@ impl App {
         if !self.bulk_jobs.is_empty() && self.bulk_selection_view_dirty {
             self.refresh_bulk_selection_view();
         }
-        self.operator_cockpit(ui, phase, attention_count, has_bulk_jobs);
+        self.operator_cockpit(ui, phase, workspace_attention_count, has_bulk_jobs);
         ui.add_space(16.0);
 
-        crate::ui::card(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            self.lifecycle_stepper(ui, &next_action);
-        });
-        ui.add_space(16.0);
         self.attention_center(ui);
         self.overview_readiness_controls(ui);
         ui.add_space(16.0);
@@ -585,7 +568,7 @@ impl App {
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(self.language.text(
-                        "Begin in Prepare by choosing the source, destination, and account access.",
+                        "Begin in Discovery by choosing the source, destination, and account access.",
                     ))
                     .color(colors.text_secondary),
                 );
@@ -779,33 +762,20 @@ impl App {
         }
     }
 
-    pub(crate) fn lifecycle_stepper(&mut self, ui: &mut egui::Ui, next_action: &RecommendedAction) {
-        let phases = [
-            (core::Phase::Discovery, "Prepare", "ui.phase-action-prepare"),
-            (
-                core::Phase::Preflight,
-                "Preflight",
-                "ui.phase-action-preflight",
-            ),
-            (core::Phase::Pilot, "Pilot", "ui.phase-action-pilot"),
-            (core::Phase::Seed, "Seed", "ui.phase-action-seed"),
-            (core::Phase::CatchUp, "Catch-up", "ui.phase-action-catch-up"),
-            (
-                core::Phase::FinalDelta,
-                "Cutover",
-                "ui.phase-action-cutover",
-            ),
-            (
-                core::Phase::Verification,
-                "Verify",
-                "ui.phase-action-verify",
-            ),
-            (
-                core::Phase::Complete,
-                "Complete",
-                "ui.phase-action-complete",
-            ),
-        ];
+    /// The Overview's one authoritative lifecycle: the durable project
+    /// phases, named exactly as everywhere else, with a single primary
+    /// action. Assessment is part of Discovery/Preflight, not a second
+    /// workflow.
+    fn lifecycle_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        next_action: &RecommendedAction,
+        primary: OverviewPrimary,
+        first_run: bool,
+        attention_count: usize,
+        imported_count: usize,
+    ) {
+        let colors = self.theme_colors();
         let current = match self.active_project_id() {
             None => core::Phase::Discovery,
             Some(_) => self
@@ -815,9 +785,9 @@ impl App {
                 .map(|project| project.phase)
                 .unwrap_or(core::Phase::Discovery),
         };
-        let current_index = phases
+        let current_index = LIFECYCLE
             .iter()
-            .position(|(phase, _, _)| *phase == current)
+            .position(|(phase, _)| *phase == current)
             .unwrap_or(usize::MAX);
         ui.horizontal(|ui| {
             crate::ui::section_label(ui, self.language.message("ui.migration-lifecycle"));
@@ -825,59 +795,134 @@ impl App {
                 crate::ui::pill(
                     ui,
                     self.language.message("ui.attention-required"),
-                    self.theme_colors().danger,
+                    colors.danger,
                 );
             }
         });
+        if first_run {
+            ui.label(
+                RichText::new(self.language.message("ui.start-your-first-migration"))
+                    .size(18.0)
+                    .strong(),
+            );
+            ui.label(RichText::new(self.language.message("ui.mailswiftsync-guides-every-migration-through-a-reviewable-preflight-before-219ddd077f")).color(colors.text_secondary));
+        }
         ui.add_space(6.0);
-        let steps = phases
+        let steps = LIFECYCLE
             .iter()
             .enumerate()
-            .map(|(index, (_, label, detail_key))| {
+            .map(|(index, (phase, detail_key))| {
                 (
-                    self.language.text(label),
+                    self.language.text(crate::ui::format_phase_name(*phase)),
                     Some(self.language.message(detail_key)),
                     step_state(index, current_index),
                 )
             })
             .collect::<Vec<_>>();
-        crate::ui::stepper(
-            ui,
-            &steps,
-            self.theme_colors().success,
-            self.theme_colors().info,
-        );
+        crate::ui::stepper(ui, &steps, colors.success, colors.info);
         ui.add_space(10.0);
         ui.label(
             RichText::new(self.language.message("ui.recommended-next-step"))
                 .strong()
-                .color(self.theme_colors().text_secondary),
+                .color(colors.text_secondary),
         );
-        ui.label(RichText::new(self.language.text(next_action.text)).size(14.0));
-        ui.add_enabled_ui(!self.workspace_read_only, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                if crate::ui::primary_button(ui, self.language.text(next_action.button_label))
+        ui.add_enabled_ui(!self.workspace_read_only, |ui| match primary {
+            OverviewPrimary::PlanStep => self.plan_workflow_controls(ui),
+            OverviewPrimary::ConfigurePlan => {
+                ui.label(
+                    RichText::new(self.language.message("ui.begin-in-prepare-choose-the-source-and-destination-then-test-both-accounts-a8911f7278"))
+                        .size(14.0),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    if crate::ui::primary_button(
+                        ui,
+                        self.language.message("ui.configure-first-mailbox"),
+                    )
                     .clicked()
+                    {
+                        self.active_view = WorkspaceView::Plan;
+                    }
+                    if ui
+                        .link(self.language.message("ui.import-mailbox-list"))
+                        .clicked()
+                    {
+                        self.active_view = WorkspaceView::Mailboxes;
+                    }
+                });
+            }
+            OverviewPrimary::Navigate => {
+                ui.label(RichText::new(self.language.text(next_action.text)).size(14.0));
+                let label = if !self.running() && attention_count > 0 {
+                    self.language
+                        .text("Review attention items ({})  →")
+                        .replace("{}", &attention_count.to_string())
+                } else if !self.running() && next_action.destination == WorkspaceView::Mailboxes
+                    && imported_count > 0
                 {
+                    self.language
+                        .text("Review imported mailboxes ({})  →")
+                        .replace("{}", &imported_count.to_string())
+                } else {
+                    self.language.text(next_action.button_label).to_owned()
+                };
+                if crate::ui::primary_button(ui, &label).clicked() {
                     self.active_view = next_action.destination;
                 }
-                if ui
-                    .button(self.language.message("ui.refresh-preflight-assessment"))
-                    .clicked()
-                {
-                    self.assess_plan();
-                }
-                if ui
-                    .button(self.language.message("ui.import-mailbox-list"))
-                    .clicked()
-                {
-                    self.active_view = WorkspaceView::Mailboxes;
-                }
-            });
+            }
         });
         if current == core::Phase::Attention {
-            ui.label(RichText::new(self.language.message("ui.a-mailbox-or-run-needs-operator-review-normal-lifecycle-progress-is-paused-46a8d56892")).small().color(self.theme_colors().danger));
+            ui.label(RichText::new(self.language.message("ui.a-mailbox-or-run-needs-operator-review-normal-lifecycle-progress-is-paused-46a8d56892")).small().color(colors.danger));
         }
+    }
+}
+
+const LIFECYCLE: [(core::Phase, &str); 8] = [
+    (core::Phase::Discovery, "ui.phase-action-prepare"),
+    (core::Phase::Preflight, "ui.phase-action-preflight"),
+    (core::Phase::Pilot, "ui.phase-action-pilot"),
+    (core::Phase::Seed, "ui.phase-action-seed"),
+    (core::Phase::CatchUp, "ui.phase-action-catch-up"),
+    (core::Phase::FinalDelta, "ui.phase-action-cutover"),
+    (core::Phase::Verification, "ui.phase-action-verify"),
+    (core::Phase::Complete, "ui.phase-action-complete"),
+];
+
+/// What the Overview's single primary button does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverviewPrimary {
+    /// Nothing is configured yet: open the plan.
+    ConfigurePlan,
+    /// Run the plan's own next readiness step (assess, test, preflight, live).
+    PlanStep,
+    /// Navigate to the page that owns the recommended action.
+    Navigate,
+}
+
+struct OverviewPrimaryInputs {
+    running: bool,
+    attention: usize,
+    proof_ready: bool,
+    has_imported_queue: bool,
+    phase: core::Phase,
+    has_project: bool,
+    plan_complete: bool,
+}
+
+fn overview_primary(inputs: OverviewPrimaryInputs) -> OverviewPrimary {
+    if inputs.running
+        || inputs.attention > 0
+        || inputs.proof_ready
+        || inputs.has_imported_queue
+        || !matches!(
+            inputs.phase,
+            core::Phase::Discovery | core::Phase::Preflight
+        )
+    {
+        OverviewPrimary::Navigate
+    } else if !inputs.has_project && !inputs.plan_complete {
+        OverviewPrimary::ConfigurePlan
+    } else {
+        OverviewPrimary::PlanStep
     }
 }
 
@@ -890,5 +935,90 @@ fn step_state(index: usize, current: usize) -> crate::ui::StepState {
         crate::ui::StepState::Current
     } else {
         crate::ui::StepState::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LIFECYCLE, OverviewPrimary, OverviewPrimaryInputs, overview_primary};
+    use crate::core::Phase;
+
+    fn inputs() -> OverviewPrimaryInputs {
+        OverviewPrimaryInputs {
+            running: false,
+            attention: 0,
+            proof_ready: false,
+            has_imported_queue: false,
+            phase: Phase::Discovery,
+            has_project: false,
+            plan_complete: true,
+        }
+    }
+
+    #[test]
+    fn lifecycle_uses_every_durable_phase_once_in_order() {
+        let phases: Vec<_> = LIFECYCLE.iter().map(|(phase, _)| *phase).collect();
+        assert_eq!(
+            phases,
+            [
+                Phase::Discovery,
+                Phase::Preflight,
+                Phase::Pilot,
+                Phase::Seed,
+                Phase::CatchUp,
+                Phase::FinalDelta,
+                Phase::Verification,
+                Phase::Complete,
+            ]
+        );
+    }
+
+    #[test]
+    fn readiness_phases_reuse_the_plan_step_as_the_single_primary_action() {
+        assert_eq!(overview_primary(inputs()), OverviewPrimary::PlanStep);
+        assert_eq!(
+            overview_primary(OverviewPrimaryInputs {
+                phase: Phase::Preflight,
+                has_project: true,
+                ..inputs()
+            }),
+            OverviewPrimary::PlanStep
+        );
+        assert_eq!(
+            overview_primary(OverviewPrimaryInputs {
+                plan_complete: false,
+                ..inputs()
+            }),
+            OverviewPrimary::ConfigurePlan
+        );
+    }
+
+    #[test]
+    fn running_attention_batches_and_later_phases_navigate() {
+        for case in [
+            OverviewPrimaryInputs {
+                running: true,
+                ..inputs()
+            },
+            OverviewPrimaryInputs {
+                attention: 3,
+                ..inputs()
+            },
+            OverviewPrimaryInputs {
+                has_imported_queue: true,
+                ..inputs()
+            },
+            OverviewPrimaryInputs {
+                proof_ready: true,
+                ..inputs()
+            },
+            OverviewPrimaryInputs {
+                phase: Phase::Seed,
+                has_project: true,
+                ..inputs()
+            },
+        ] {
+            assert_eq!(overview_primary(case), OverviewPrimary::Navigate);
+        }
     }
 }

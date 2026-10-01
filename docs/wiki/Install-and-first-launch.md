@@ -40,14 +40,14 @@ The left card is **Source account**. This is the mailbox you are copying from.
 
 The right card is **Destination account**. This is the mailbox that receives copied messages. With the Dovecot engine it becomes **Local Dovecot destination**: no destination password, port, or TLS setting applies, because Dovecot writes to local storage.
 
-For each card choose a provider preset if one fits, then enter:
+Each card starts with the **Provider**, then asks only for what that provider needs:
 
-- **Server** — the IMAP server host name, such as `imap.example.com`.
+- **Provider** — Google Workspace, Microsoft 365, Fastmail, Zoho Mail, cPanel / Dovecot, or **Other IMAP server**. A hosted provider fills in its IMAP endpoint and preferred authentication.
+- **Server** — shown only for **Other IMAP server** and cPanel / Dovecot, such as `imap.example.com`.
 - **User** — usually the complete email address.
-- **Authentication** — **Password**, or **OAuth 2.0 / XOAUTH2** for imapsync.
-- **Password** or **Access token** — the account password, an app password where the provider requires one, or a current OAuth access token.
+- **Sign-in** — for Google Workspace and Microsoft 365, click **Connect … account** to authorize in the browser with your registered OAuth app (see [OAUTH_SETUP.md](../../OAUTH_SETUP.md#authorize-with-mailswiftsync)); a temporary access token can be pasted instead. Password providers show a **Password** field for the account or app password.
 
-**Connection details** below each card hold the port, an optional OS-keyring **Credential ID**, an enterprise **CA bundle**, an optional **Certificate pin (SHA-256)** (imapsync only), and **TLS**.
+**Advanced connection settings** below each card hold the server override for hosted providers, the **Authentication** method override, the port, an optional OS-keyring **Credential ID**, an enterprise **CA bundle**, an optional **Certificate pin (SHA-256)** (imapsync only), and **TLS**. The migration method (imapsync or local Dovecot) is under **Advanced migration settings**.
 
 Do not reverse the cards. MailSwiftSync never treats the destination as a source unless you put it in the left card.
 

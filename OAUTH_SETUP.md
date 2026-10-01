@@ -31,11 +31,12 @@ workaround after Basic Authentication removal.
 ## Authorize with MailSwiftSync
 
 After registering an OAuth application (steps below), authorize from the
-desktop using **Migration plan → Advanced migration settings → OS keyring
-credentials → Connect provider account** or use the
-CLI flow for automation. In the desktop, select the source/destination and
-provider, enter the client ID, optional client secret, sign-in hint, and the
-profile's OS keyring ID. Microsoft also requires the tenant. The exact
+desktop by choosing Google Workspace or Microsoft 365 as the account's
+provider on the **Migration plan** and clicking **Connect … account** in that
+account card (also available under **Advanced migration settings → OS keyring
+credentials → Connect provider account**), or use the CLI flow for automation.
+In the desktop, enter the client ID, optional client secret, and sign-in hint;
+the card proposes an OS keyring ID that you can change. Microsoft also requires the tenant. The exact
 loopback redirect URI is displayed while the browser flow is waiting; register
 that URI with the OAuth application. After consent, MailSwiftSync stores and
 reads back the refresh configuration, tests a refresh, then verifies IMAP

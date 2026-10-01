@@ -46,6 +46,28 @@ impl ProviderPreset {
         }
     }
 
+    /// Provider name for account cards (without the "preset" suffix).
+    pub(crate) fn display_name(self) -> &'static str {
+        match self {
+            Self::GenericImap => "Other IMAP server",
+            Self::CpanelDovecot => "cPanel / Dovecot",
+            Self::GoogleWorkspace => "Google Workspace",
+            Self::Microsoft365 => "Microsoft 365",
+            Self::Fastmail => "Fastmail",
+            Self::ZohoMail => "Zoho Mail",
+        }
+    }
+
+    /// Recognize a provider from its preset IMAP endpoint so profiles loaded
+    /// without a remembered preset still get the provider-specific card.
+    pub(crate) fn infer_from_host(host: &str) -> Option<Self> {
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        Self::ALL.into_iter().find(|preset| {
+            let preset_host = preset.defaults().host;
+            !preset_host.is_empty() && host == preset_host
+        })
+    }
+
     pub(crate) fn runbook_name(self) -> &'static str {
         match self {
             Self::GenericImap => "generic",
@@ -78,14 +100,14 @@ impl ProviderPreset {
                 port: "993",
                 tls: "imaps",
                 auth: "oauth2",
-                note: "OAuth is preferred; Workspace administrators may use delegated gmail.imap_admin access. Register your own OAuth client, then run `mailswiftsync oauth-authorize google` to store a refresh token.",
+                note: "OAuth is preferred; Workspace administrators may use delegated gmail.imap_admin access. Register your own OAuth client, then use Connect Google Workspace account below to store a refresh token.",
             },
             Self::Microsoft365 => ProviderDefaults {
                 host: "outlook.office365.com",
                 port: "993",
                 tls: "imaps",
                 auth: "oauth2",
-                note: "Register your own OAuth application, then run `mailswiftsync oauth-authorize microsoft` to store a refresh token; live launches refresh access tokens automatically. Exchange Online IMAP and tenant OAuth policy must permit the account.",
+                note: "Register your own OAuth application, then use Connect Microsoft 365 account below to store a refresh token; live launches refresh access tokens automatically. Exchange Online IMAP and tenant OAuth policy must permit the account.",
             },
             Self::Fastmail => ProviderDefaults {
                 host: "imap.fastmail.com",
@@ -108,6 +130,24 @@ impl ProviderPreset {
 #[cfg(test)]
 mod tests {
     use super::ProviderPreset;
+
+    #[test]
+    fn hosted_provider_endpoints_are_recognized_for_loaded_profiles() {
+        assert_eq!(
+            ProviderPreset::infer_from_host("IMAP.gmail.com."),
+            Some(ProviderPreset::GoogleWorkspace)
+        );
+        assert_eq!(
+            ProviderPreset::infer_from_host("outlook.office365.com"),
+            Some(ProviderPreset::Microsoft365)
+        );
+        // Presets without a fixed endpoint never match, including empty hosts.
+        assert_eq!(ProviderPreset::infer_from_host(""), None);
+        assert_eq!(ProviderPreset::infer_from_host("imap.example.com"), None);
+        for preset in ProviderPreset::ALL {
+            assert!(!preset.display_name().contains("preset"));
+        }
+    }
 
     #[test]
     fn presets_are_explicit_hints_with_safe_defaults() {

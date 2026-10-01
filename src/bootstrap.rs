@@ -431,6 +431,8 @@ impl App {
             oauth_authorization_source: true,
             oauth_authorization_redirect_uri: String::new(),
             oauth_authorization_result: None,
+            plan_oauth_connect_side: None,
+            plan_oauth_prefilled_id: None,
             start_credentials_receiver: None,
             start_credentials_plan: None,
             credentials_ready_for_start: false,

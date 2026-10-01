@@ -184,6 +184,11 @@ pub(crate) struct App {
     pub(crate) oauth_authorization_source: bool,
     pub(crate) oauth_authorization_redirect_uri: String,
     pub(crate) oauth_authorization_result: Option<OAuthAuthorizationResult>,
+    /// Account card (true = source) whose inline browser sign-in is open.
+    pub(crate) plan_oauth_connect_side: Option<bool>,
+    /// Keyring ID the card proposed (side, id); it is not a saved sign-in
+    /// until an authorization is stored under it.
+    pub(crate) plan_oauth_prefilled_id: Option<(bool, String)>,
     /// Loading an OS-keyring credential can involve IPC and must not block an
     /// egui frame. The cloned form is returned only after the worker has
     /// completed the load.
