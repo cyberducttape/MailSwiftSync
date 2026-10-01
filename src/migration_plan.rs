@@ -1431,9 +1431,8 @@ pub(crate) struct PreparedCommand {
 mod tests {
     use super::{
         DovecotConfigDialect, Form, MAX_PROFILE_BYTES, OAuthRefreshOutcome,
-        decode_report_run_snapshot, decode_saved_profile, detect_dovecot_config_dialect,
-        dovecot_config_dialect, persist_rotated_refresh_config_with_retry,
-        validate_certificate_pin,
+        decode_report_run_snapshot, decode_saved_profile, dovecot_config_dialect,
+        persist_rotated_refresh_config_with_retry, validate_certificate_pin,
     };
     use crate::SecretString;
     use crate::oauth_refresh::OAuthRefreshConfig;
@@ -1460,6 +1459,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn dovecot_config_dialect_is_probed_from_the_selected_doveadm() {
+        use super::detect_dovecot_config_dialect;
         use std::os::unix::fs::PermissionsExt;
 
         let path = std::env::temp_dir().join(format!(

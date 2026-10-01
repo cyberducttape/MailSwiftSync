@@ -513,6 +513,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn engine_check_reports_qualified_and_unqualified_versions() {
         use std::os::unix::fs::PermissionsExt;

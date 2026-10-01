@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 #[test]
 fn aggregate_verifier_budget_fails_closed_before_reconciliation() {
     assert!(enforce_verifier_state_budget(MAX_ESTIMATED_VERIFIER_STATE_BYTES).is_ok());
@@ -1477,10 +1480,10 @@ fn durable_stage_reconciliation_benchmark() {
             .collect::<ExtractedMessages>()
     };
     let directory = std::env::temp_dir().join(format!("mss-stage-bench-{}", uuid::Uuid::new_v4()));
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    let builder = std::fs::DirBuilder::new();
     builder.create(&directory).unwrap();
+    #[cfg(unix)]
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut stage =
         MessageMetadataStage::open_durable(directory.join("stage.sqlite"), "bench").unwrap();
     stage

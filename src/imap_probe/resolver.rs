@@ -1,11 +1,12 @@
 //! Bounded DNS resolution and IPv4/IPv6 connection racing for IMAP probes.
 
 #[cfg(not(test))]
+use std::process::{Command, Stdio};
+#[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream, ToSocketAddrs},
-    process::{Command, Stdio},
     sync::mpsc,
     time::{Duration, Instant},
 };
@@ -312,6 +313,8 @@ pub(super) fn connect_racing(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::process::{Command, Stdio};
 
     #[test]
     fn dns_lookup_resolves_literals() {
