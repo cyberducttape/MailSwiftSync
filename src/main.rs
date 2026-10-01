@@ -34,6 +34,8 @@ mod storage_paths;
 mod ui;
 mod verification;
 mod webhook;
+#[cfg(windows)]
+mod windows_private;
 
 #[cfg(test)]
 use atomic_artifact::write_private_atomic;

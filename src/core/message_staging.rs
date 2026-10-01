@@ -34,19 +34,26 @@ pub(crate) fn durable_stage_path(state_path: &std::path::Path, job_id: &str) -> 
 
 #[cfg(unix)]
 type FileIdentity = (u64, u64);
-#[cfg(not(unix))]
+#[cfg(windows)]
+type FileIdentity = crate::windows_private::FileIdentity;
+#[cfg(all(not(unix), not(windows)))]
 type FileIdentity = ();
 
-fn file_identity(metadata: &fs::Metadata) -> FileIdentity {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        (metadata.dev(), metadata.ino())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-    }
+#[cfg(unix)]
+fn path_identity(path: &std::path::Path) -> std::io::Result<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::symlink_metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn path_identity(path: &std::path::Path) -> std::io::Result<FileIdentity> {
+    crate::windows_private::path_identity(path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn path_identity(_: &std::path::Path) -> std::io::Result<FileIdentity> {
+    Ok(())
 }
 
 /// Require an opened stage descriptor to be a regular file owned by this
@@ -70,8 +77,19 @@ fn secure_stage_file(file: &fs::File) -> std::io::Result<FileIdentity> {
             ));
         }
         crate::credentials::restrict_open_file_permissions(file)?;
+        Ok((metadata.dev(), metadata.ino()))
     }
-    Ok(file_identity(&metadata))
+    #[cfg(windows)]
+    {
+        // Ownership is checked and the DACL replaced through the handle.
+        crate::credentials::restrict_open_file_permissions(file)?;
+        crate::windows_private::handle_identity(file)
+    }
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let _ = metadata;
+        Ok(())
+    }
 }
 
 /// Apply the stage's owner-only contract to a sidecar left by an earlier
@@ -83,6 +101,11 @@ fn secure_existing_sidecar(path: &std::path::Path) -> std::io::Result<()> {
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     }
     match options.open(path) {
         Ok(file) => secure_stage_file(&file).map(drop),
@@ -157,6 +180,13 @@ impl MessageMetadataStage {
                 .mode(0o600)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
         options
             .open(&path)
             .map_err(|error| format!("could not create verification stage: {error}"))?;
@@ -223,6 +253,13 @@ impl MessageMetadataStage {
                 .mode(0o600)
                 .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
         if let Ok(metadata) = fs::symlink_metadata(&path)
             && metadata.file_type().is_symlink()
         {
@@ -247,9 +284,8 @@ impl MessageMetadataStage {
             .map_err(|error| format!("could not open durable verification stage: {error}"))?;
         // SQLite reopens by pathname; require it to be the descriptor we
         // secured.
-        let opened_identity = fs::symlink_metadata(&path)
-            .map_err(|error| format!("could not inspect durable verification stage: {error}"))
-            .map(|metadata| file_identity(&metadata))?;
+        let opened_identity = path_identity(&path)
+            .map_err(|error| format!("could not inspect durable verification stage: {error}"))?;
         if opened_identity != expected_identity {
             return Err("durable verification stage path changed while opening".to_owned());
         }
@@ -940,6 +976,26 @@ fn cleanup_stage_files(path: &Path, remove_parent: bool) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_file_replaced_after_validation_is_detected() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("verification.sqlite");
+        let replacement = directory.join("replacement.sqlite");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let secured = secure_stage_file(&file).unwrap();
+        assert_eq!(secured, path_identity(&path).unwrap());
+        drop(file);
+        std::fs::write(&replacement, b"replacement").unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        assert_ne!(secured, path_identity(&path).unwrap());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn stage_batches_and_rolls_back_mailboxes() {

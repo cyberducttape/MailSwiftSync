@@ -170,7 +170,27 @@ fn secure_runtime_directory(path: &Path) -> std::io::Result<fs::File> {
     Ok(directory)
 }
 
-#[cfg(not(unix))]
+/// Windows counterpart of the Unix helper: create non-recursively, open the
+/// final component without following a reparse point, require that this
+/// user owns it, then replace its DACL through the same handle. A directory
+/// pre-created by another account keeps that account as owner (and so as
+/// `Owner Rights`), which is why ownership is checked before hardening.
+#[cfg(windows)]
+fn secure_runtime_directory(path: &Path) -> std::io::Result<fs::File> {
+    use windows_sys::Win32::Storage::FileSystem::{READ_CONTROL, WRITE_DAC};
+
+    match fs::create_dir(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let directory = crate::windows_private::open_no_follow(path, true, READ_CONTROL | WRITE_DAC)?;
+    crate::windows_private::verify_owner(&directory, "secret runtime directory")?;
+    crate::windows_private::apply_private_dacl(&directory, true)?;
+    Ok(directory)
+}
+
+#[cfg(all(not(unix), not(windows)))]
 fn secure_runtime_directory(path: &Path) -> std::io::Result<()> {
     match fs::create_dir(path) {
         Ok(()) => {}
@@ -605,7 +625,18 @@ pub fn ensure_private_directory(path: &Path) -> std::io::Result<()> {
     secure_runtime_directory(path).map(|_| ())
 }
 
-#[cfg(not(unix))]
+/// Windows callers get handle-based validation equivalent to the Unix
+/// contract: the final component must not be a reparse point, this user must
+/// own it, and its DACL (including inheritable entries) must not let another
+/// account write, delete, or re-ACL it.
+#[cfg(windows)]
+pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
+    let directory = crate::windows_private::open_no_follow(path, true, READ_CONTROL)?;
+    crate::windows_private::verify_private_handle(&directory, "state directory")
+}
+
+#[cfg(all(not(unix), not(windows)))]
 pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() {
@@ -615,6 +646,13 @@ pub fn verify_private_directory(path: &Path) -> std::io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Windows counterpart: verify ownership on the handle and replace its DACL
+/// through a reopened handle, never through a pathname.
+#[cfg(windows)]
+pub fn restrict_open_file_permissions(file: &fs::File) -> std::io::Result<()> {
+    crate::windows_private::restrict_open_file(file)
 }
 
 #[cfg(windows)]
@@ -636,7 +674,10 @@ pub fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, permissions)
 }
 
+// Runtime directories are hardened through a handle by
+// `secure_runtime_directory`; this path-based form remains for tests.
 #[cfg(windows)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn restrict_directory_permissions(path: &Path) -> std::io::Result<()> {
     restrict_windows_acl(path, true)
 }
@@ -650,64 +691,17 @@ pub fn restrict_directory_permissions(_: &Path) -> std::io::Result<()> {
 fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
     use std::{os::windows::ffi::OsStrExt, ptr};
     use windows_sys::Win32::{
-        Foundation::{ERROR_SUCCESS, HLOCAL, LocalFree},
-        Security::Authorization::{
-            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1, SE_FILE_OBJECT,
-            SetNamedSecurityInfoW,
-        },
-        Security::{
-            ACL, DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl,
-            PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-        },
+        Foundation::ERROR_SUCCESS,
+        Security::Authorization::{SE_FILE_OBJECT, SetNamedSecurityInfoW},
+        Security::{DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION},
     };
 
-    // Owner and LocalSystem are the only principals that need access to
-    // short-lived secrets, signing keys, locks, and the durable ledger. The
-    // protected DACL prevents inherited Users/Administrators access from
-    // silently widening the boundary on a permissive parent directory.
-    let sddl = if directory {
-        "D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)"
-    } else {
-        "D:P(A;;FA;;;OW)(A;;FA;;;SY)"
-    };
     let path_wide = path
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    let sddl_wide = sddl
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
-    let mut descriptor_size = 0_u32;
-    let converted = unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl_wide.as_ptr(),
-            SDDL_REVISION_1,
-            &mut descriptor,
-            &mut descriptor_size,
-        )
-    };
-    if converted == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    let result = (|| {
-        let mut dacl_present: i32 = 0;
-        let mut dacl_defaulted: i32 = 0;
-        let mut dacl: *mut ACL = ptr::null_mut();
-        let valid_dacl = unsafe {
-            GetSecurityDescriptorDacl(
-                descriptor,
-                &mut dacl_present,
-                &mut dacl,
-                &mut dacl_defaulted,
-            )
-        };
-        if valid_dacl == 0 || dacl_present == 0 || dacl.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
+    crate::windows_private::with_private_dacl(directory, |dacl| {
         let error = unsafe {
             SetNamedSecurityInfoW(
                 path_wide.as_ptr(),
@@ -723,11 +717,7 @@ fn restrict_windows_acl(path: &Path, directory: bool) -> std::io::Result<()> {
             return Err(std::io::Error::from_raw_os_error(error as i32));
         }
         Ok(())
-    })();
-    unsafe {
-        LocalFree(descriptor as HLOCAL);
-    }
-    result
+    })
 }
 
 /// Securely verify that a directory is writable.

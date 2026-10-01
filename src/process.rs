@@ -97,7 +97,7 @@ pub(crate) fn attach_child_supervisor(child: &Child) -> std::io::Result<ChildSup
             }
             return Err(std::io::Error::last_os_error());
         }
-        return Ok(ChildSupervisor { job });
+        Ok(ChildSupervisor { job })
     }
     #[cfg(not(windows))]
     {
@@ -134,9 +134,9 @@ pub(crate) fn acquire_instance_lock(state_path: &Path) -> Result<InstanceLock, S
     {
         return Err("application lock is not a regular file".to_owned());
     }
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     crate::credentials::restrict_open_file_permissions(&file).map_err(|error| error.to_string())?;
-    #[cfg(not(unix))]
+    #[cfg(all(not(unix), not(windows)))]
     crate::credentials::restrict_file_permissions(&lock_path).map_err(|error| error.to_string())?;
     if file.try_lock_exclusive().is_err() {
         // Explicitly close a denied contender before returning. This keeps a
@@ -417,9 +417,10 @@ mod tests {
             Ok(supervisor) => supervisor,
             Err(error) => {
                 eprintln!("Windows Job Object attachment failed: {error:?}");
-                skip_on_windows_hosted_runner!();
+                // Reap the ping tree before a hosted-runner skip returns.
                 let _ = child.kill();
                 let _ = child.wait();
+                skip_on_windows_hosted_runner!();
                 panic!("Job Object attachment failed: {error}");
             }
         };
@@ -843,16 +844,11 @@ pub(crate) fn terminate_recorded_process_group(process: &core::ActiveProcess) {
 /// Terminate a child group created by this process. This helper is used only
 /// for an already-owned live child; startup recovery must use the identity-
 /// checked function above.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn terminate_process_group_by_pid(pid: u32) {
-    #[cfg(unix)]
-    {
-        terminate_process_group_id(pid);
-        thread::sleep(Duration::from_secs(2));
-        force_kill_process_group_id(pid);
-    }
-    #[cfg(not(unix))]
-    let _ = pid;
+    terminate_process_group_id(pid);
+    thread::sleep(Duration::from_secs(2));
+    force_kill_process_group_id(pid);
 }
 
 #[cfg(target_os = "linux")]

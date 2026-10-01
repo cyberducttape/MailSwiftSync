@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 #[cfg(not(test))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
-    io::{Read, Write},
+    io::Write,
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     sync::mpsc,
     time::{Duration, Instant},
@@ -114,6 +114,7 @@ pub(super) fn resolve_dns_with_deadline(
     }
 }
 
+#[cfg(any(not(test), unix))]
 fn wait_for_child_output(
     child: &mut std::process::Child,
     deadline: Instant,
@@ -141,6 +142,7 @@ fn wait_for_child_output(
             if !status.success() {
                 return Err(std::io::Error::other("system DNS lookup failed"));
             }
+            use std::io::Read;
             let mut output = Vec::new();
             child
                 .stdout

@@ -146,7 +146,9 @@ fn is_sql_identifier(byte: u8) -> bool {
 
 #[cfg(unix)]
 type DatabaseIdentity = (u64, u64);
-#[cfg(not(unix))]
+#[cfg(windows)]
+type DatabaseIdentity = crate::windows_private::FileIdentity;
+#[cfg(all(not(unix), not(windows)))]
 type DatabaseIdentity = ();
 
 fn database_identity(path: &Path) -> std::io::Result<DatabaseIdentity> {
@@ -162,7 +164,13 @@ fn database_identity(path: &Path) -> std::io::Result<DatabaseIdentity> {
         use std::os::unix::fs::MetadataExt;
         Ok((metadata.dev(), metadata.ino()))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // Volume serial and FILE_ID_INFO from a no-follow handle, so a
+        // replaced path is detected as it is by device/inode on Unix.
+        crate::windows_private::path_identity(path)
+    }
+    #[cfg(all(not(unix), not(windows)))]
     {
         Ok(())
     }
@@ -1921,5 +1929,25 @@ mod schema_check_expression_tests {
         let ddl =
             "CREATE TABLE t ([CHECK(source_messages >= 0)] TEXT) -- CHECK(source_messages >= 0)\n";
         assert!(sqlite_check_expressions(ddl).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod database_identity_tests {
+    use super::{database_identity, verify_database_identity};
+
+    #[test]
+    fn replaced_database_path_is_detected() {
+        let directory = crate::credentials::create_secret_directory().unwrap();
+        let path = directory.join("state.db");
+        let replacement = directory.join("replacement.db");
+        std::fs::write(&path, b"original").unwrap();
+        std::fs::write(&replacement, b"replacement").unwrap();
+        let identity = database_identity(&path).unwrap();
+        verify_database_identity(&path, identity).unwrap();
+        std::fs::rename(&replacement, &path).unwrap();
+        let error = verify_database_identity(&path, identity).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
