@@ -4,15 +4,14 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+permissions: {}
 
 jobs:
   verify:
     name: Release quality gate
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     outputs:
       release-channel: ${{ steps.release-channel.outputs.value }}
     steps:
@@ -81,6 +80,10 @@ jobs:
         run: cargo deny check advisories bans licenses sources
 
   build:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -238,6 +241,10 @@ jobs:
 
   sbom:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@ffaa7fb73f2b6e3c49bc425913220fa3d71c3ee5 # 1.92.0
@@ -268,6 +275,8 @@ jobs:
     name: Packaged Dovecot + imapsync integration
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build distributed runtime image
@@ -291,6 +300,8 @@ jobs:
   native-runtime-tests:
     name: Release native runtime tests (${{ matrix.os }})
     timeout-minutes: 20
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -385,6 +396,10 @@ jobs:
       (needs.windows-privileged-qualification.result == 'skipped' &&
       needs.verify.outputs.release-channel == 'preview'))
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

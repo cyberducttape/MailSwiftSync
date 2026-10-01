@@ -183,6 +183,58 @@ fn stable_release_requires_privileged_self_hosted_windows_qualification() {
 }
 
 #[test]
+fn release_jobs_use_least_privilege_permissions() {
+    let release = fs::read_to_string(".github/workflows/release.yml")
+        .expect("release workflow should be readable");
+    assert!(
+        release.contains("permissions: {}"),
+        "release workflow must deny permissions by default"
+    );
+    let job_lines = |job: &str| {
+        let marker = format!("  {job}:");
+        let mut found = false;
+        let mut lines = Vec::new();
+        for line in release.lines() {
+            if line == marker {
+                found = true;
+                continue;
+            }
+            if found
+                && line.starts_with("  ")
+                && !line.starts_with("    ")
+                && !line.trim().is_empty()
+            {
+                break;
+            }
+            if found {
+                lines.push(line);
+            }
+        }
+        lines.join("\n")
+    };
+    for job in [
+        "verify",
+        "packaged-integration",
+        "native-runtime-tests",
+        "windows-privileged-qualification",
+    ] {
+        let section = job_lines(job);
+        assert!(
+            section.contains("permissions:") && section.contains("contents: read"),
+            "{job} must explicitly use read-only contents permissions"
+        );
+        assert!(
+            !section.contains("id-token: write") && !section.contains("attestations: write"),
+            "{job} must not receive release attestation permissions"
+        );
+    }
+    let publish = job_lines("publish");
+    assert!(publish.contains("contents: write"));
+    assert!(publish.contains("id-token: write"));
+    assert!(publish.contains("attestations: write"));
+}
+
+#[test]
 fn imap_fuzz_workflow_runs_targets_with_nightly() {
     let workflow = std::fs::read_to_string(".github/workflows/imap-fuzz.yml")
         .expect("IMAP parser fuzz workflow must be checked in");
