@@ -11,7 +11,7 @@ use crate::ui::{StatusSeverity, contains_case_insensitive, format_phase_name, jo
 use eframe::egui::{self, RichText};
 use std::time::{Duration, Instant};
 
-const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+pub(crate) const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const MAILBOX_PAGE_SIZE: u32 = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,38 @@ pub(crate) struct WorkspaceRefreshOptions<'a> {
     pub(crate) verification_attention_reason: Option<core::AttentionReason>,
     pub(crate) load_report: bool,
     pub(crate) load_runs: bool,
+}
+
+/// Owned form of `WorkspaceRefreshOptions`, sent to the read-model worker
+/// and compared to decide whether a completed snapshot still matches the
+/// view that is on screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OwnedRefreshOptions {
+    pub(crate) active_project_id: Option<String>,
+    pub(crate) all_projects_loaded: bool,
+    pub(crate) mailbox_offset: u32,
+    pub(crate) mailbox_cursor: Option<i64>,
+    pub(crate) verification_offset: u32,
+    pub(crate) verification_cursor: Option<i64>,
+    pub(crate) verification_attention_reason: Option<core::AttentionReason>,
+    pub(crate) load_report: bool,
+    pub(crate) load_runs: bool,
+}
+
+impl OwnedRefreshOptions {
+    pub(crate) fn borrowed(&self) -> WorkspaceRefreshOptions<'_> {
+        WorkspaceRefreshOptions {
+            active_project_id: self.active_project_id.as_deref(),
+            all_projects_loaded: self.all_projects_loaded,
+            mailbox_offset: self.mailbox_offset,
+            mailbox_cursor: self.mailbox_cursor,
+            verification_offset: self.verification_offset,
+            verification_cursor: self.verification_cursor,
+            verification_attention_reason: self.verification_attention_reason,
+            load_report: self.load_report,
+            load_runs: self.load_runs,
+        }
+    }
 }
 
 /// Resolve the project that owns the current workspace. An active run has
@@ -73,7 +105,7 @@ pub(crate) fn filter_project_indices(
 /// The durable read model rendered by the workspace views. Individual read
 /// failures retain the last successful value so a transient SQLite contention
 /// event does not blank the operator's view.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct WorkspaceSnapshot {
     pub(crate) projects: Vec<core::ProjectListItem>,
     pub(crate) projects_revision: u64,
@@ -141,6 +173,45 @@ impl WorkspaceSnapshot {
         self.runs_revision = None;
     }
 
+    /// Drop project-scoped rows when the view retargets another project so
+    /// a previous project's data is never shown under the new selection.
+    pub(crate) fn reset_project_scope(&mut self, project_id: Option<String>) {
+        self.snapshot_project_id = project_id;
+        self.verification_rows.clear();
+        self.verification_loaded = false;
+        self.verification_offset = 0;
+        self.verification_cursor = None;
+        self.verification_last_rowid = None;
+        self.runs.clear();
+        self.runs_revision = None;
+        self.project = None;
+        self.jobs.clear();
+        self.attention_reason_counts.clear();
+        self.verification_attention_reason = None;
+    }
+
+    pub(crate) fn project_scope(&self) -> Option<&str> {
+        self.snapshot_project_id.as_deref()
+    }
+
+    /// Whether the displayed mailbox page is the one the view asked for.
+    /// Cursor pagination must not advance from a page still being loaded.
+    pub(crate) fn shows_mailbox_page(&self, offset: u32, cursor: Option<i64>) -> bool {
+        self.mailbox_offset == Some(offset) && self.mailbox_cursor == cursor
+    }
+
+    pub(crate) fn shows_verification_page(
+        &self,
+        offset: u32,
+        cursor: Option<i64>,
+        attention_reason: Option<core::AttentionReason>,
+    ) -> bool {
+        self.verification_loaded
+            && self.verification_offset == offset
+            && self.verification_cursor == cursor
+            && self.verification_attention_reason == attention_reason
+    }
+
     pub(crate) fn stale_notice(&self) -> Option<String> {
         let error = self.refresh_error.as_ref()?;
         let age = self
@@ -165,8 +236,13 @@ impl WorkspaceSnapshot {
     }
 
     /// Refresh the UI's durable read model when it is stale or the selected
-    /// project changed. Rendering itself never calls SQLite.
-    pub(crate) fn refresh(&mut self, store: &StateStore, options: WorkspaceRefreshOptions<'_>) {
+    /// project changed. Rendering itself never calls SQLite. Returns whether
+    /// the snapshot may have changed (false when the refresh was skipped).
+    pub(crate) fn refresh(
+        &mut self,
+        store: &StateStore,
+        options: WorkspaceRefreshOptions<'_>,
+    ) -> bool {
         let project_id = options.active_project_id.map(str::to_owned);
         let project_changed = project_id.as_deref() != self.snapshot_project_id.as_deref();
         let report_needs_load = options.load_report
@@ -181,7 +257,7 @@ impl WorkspaceSnapshot {
                 .refreshed_at
                 .is_some_and(|at| at.elapsed() < REFRESH_INTERVAL)
         {
-            return;
+            return false;
         }
 
         self.refreshed_at = Some(Instant::now());
@@ -216,7 +292,7 @@ impl WorkspaceSnapshot {
         }) {
             self.refresh_error = None;
             self.last_successful_refresh = Some(Instant::now());
-            return;
+            return false;
         }
         let project_limit = if options.all_projects_loaded {
             usize::MAX
@@ -234,18 +310,7 @@ impl WorkspaceSnapshot {
         }
 
         if project_changed {
-            self.snapshot_project_id = project_id.clone();
-            self.verification_rows.clear();
-            self.verification_loaded = false;
-            self.verification_offset = 0;
-            self.verification_cursor = None;
-            self.verification_last_rowid = None;
-            self.runs.clear();
-            self.runs_revision = None;
-            self.project = None;
-            self.jobs.clear();
-            self.attention_reason_counts.clear();
-            self.verification_attention_reason = None;
+            self.reset_project_scope(project_id.clone());
         }
 
         let Some(project_id) = project_id else {
@@ -256,7 +321,7 @@ impl WorkspaceSnapshot {
             } else {
                 self.refresh_error = Some(refresh_errors.join("; "));
             }
-            return;
+            return true;
         };
 
         let project_data_changed = project_changed
@@ -345,6 +410,7 @@ impl WorkspaceSnapshot {
         } else {
             self.refresh_error = Some(refresh_errors.join("; "));
         }
+        true
     }
 }
 
@@ -402,6 +468,10 @@ impl App {
         }
         let colors = self.theme_colors();
         let page_len = self.ui_snapshot.jobs.len();
+        let requested = self.snapshot_refresh_options();
+        let page_loaded = self
+            .ui_snapshot
+            .shows_mailbox_page(requested.mailbox_offset, requested.mailbox_cursor);
         let total_jobs = self.ui_snapshot.mailbox_counts.total;
         ui.label(
             RichText::new(format!(
@@ -440,7 +510,7 @@ impl App {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(
-                    self.historical_mailbox_offset > 0,
+                    self.historical_mailbox_offset > 0 && page_loaded,
                     egui::Button::new(self.language.message("ui.previous-200")),
                 )
                 .clicked()
@@ -452,7 +522,7 @@ impl App {
             }
             if ui
                 .add_enabled(
-                    self.historical_mailbox_offset as usize + page_len < total_jobs,
+                    page_loaded && self.historical_mailbox_offset as usize + page_len < total_jobs,
                     egui::Button::new(self.language.message("ui.next-200")),
                 )
                 .clicked()

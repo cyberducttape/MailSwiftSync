@@ -22,6 +22,7 @@ mod plan;
 mod qualification;
 mod reports;
 mod settings;
+mod snapshot_worker;
 mod status;
 mod theme;
 mod verification;
@@ -51,7 +52,7 @@ pub(crate) use theme::contrast_ratio;
 pub(crate) use theme::next_ui_scale;
 pub(crate) use theme::{AppearancePreferences, ThemeColors, ThemeKind, install_style};
 pub(crate) use workspace::preferred_project_id;
-pub(crate) use workspace::{WorkspaceRefreshOptions, WorkspaceSnapshot, WorkspaceView};
+pub(crate) use workspace::{OwnedRefreshOptions, WorkspaceSnapshot, WorkspaceView};
 mod app;
 
 /// Grouped content on a raised, softly bordered surface. Every page and

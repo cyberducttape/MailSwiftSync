@@ -192,6 +192,11 @@ impl App {
                                 .unwrap_or_default()
                         })
                         .unwrap_or(mailbox_counts.total);
+                    let page_loaded = self.ui_snapshot.shows_verification_page(
+                        self.verification_offset,
+                        self.verification_cursor,
+                        self.verification_attention_reason,
+                    );
                     let verification_rows = &self.ui_snapshot.verification_rows;
                     let visible = &self.verification_visible_indices;
                     ui.label(
@@ -271,14 +276,15 @@ impl App {
                     ui.horizontal(|ui| {
                         let previous = ui
                             .add_enabled(
-                                self.verification_offset > 0,
+                                self.verification_offset > 0 && page_loaded,
                                 egui::Button::new(self.language.message("ui.previous")),
                             )
                             .clicked();
                         let next = ui
                             .add_enabled(
-                                self.verification_offset as usize + verification_rows.len()
-                                    < filtered_total,
+                                page_loaded
+                                    && self.verification_offset as usize + verification_rows.len()
+                                        < filtered_total,
                                 egui::Button::new(self.language.message("ui.next")),
                             )
                             .clicked();

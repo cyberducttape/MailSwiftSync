@@ -142,10 +142,10 @@ use ui::job_state_badge;
 #[cfg(test)]
 use ui::recommended_next_action;
 use ui::{
-    AppearancePreferences, ThemeColors, ThemeKind, UiLanguage, WorkspaceRefreshOptions,
-    WorkspaceSnapshot, WorkspaceView, display_job_state, markdown_escape, needs_operator_review,
-    preferred_project_id, project_health_state_counts, push_visible_output,
-    successful_run_severity, successful_run_status, truncate_utf8,
+    AppearancePreferences, ThemeColors, ThemeKind, UiLanguage, WorkspaceSnapshot, WorkspaceView,
+    display_job_state, markdown_escape, needs_operator_review, preferred_project_id,
+    project_health_state_counts, push_visible_output, successful_run_severity,
+    successful_run_status, truncate_utf8,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]

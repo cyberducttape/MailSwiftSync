@@ -508,6 +508,7 @@ impl App {
             activity_status_filter: "all".into(),
             reopen_reason: String::new(),
             ui_snapshot: WorkspaceSnapshot::default(),
+            snapshot_worker: None,
             historical_mailbox_offset: 0,
             historical_mailbox_cursor: None,
             historical_mailbox_cursor_stack: Vec::new(),

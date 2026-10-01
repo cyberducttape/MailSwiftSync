@@ -286,6 +286,8 @@ pub(crate) struct App {
     /// Database-backed UI read model. Rendering consumes this cache instead
     /// of issuing SQLite queries on every egui repaint.
     pub(crate) ui_snapshot: WorkspaceSnapshot,
+    /// GUI-only read-model worker; `None` keeps the synchronous refresh path.
+    pub(crate) snapshot_worker: Option<crate::ui::snapshot_worker::SnapshotWorker>,
     pub(crate) historical_mailbox_offset: u32,
     pub(crate) historical_mailbox_cursor: Option<i64>,
     pub(crate) historical_mailbox_cursor_stack: Vec<Option<i64>>,
@@ -377,43 +379,90 @@ impl App {
             .find(|mailbox| mailbox.job.id == job_id)
     }
 
+    pub(crate) fn snapshot_refresh_options(&self) -> crate::ui::OwnedRefreshOptions {
+        crate::ui::OwnedRefreshOptions {
+            active_project_id: self.active_project_id().map(str::to_owned),
+            all_projects_loaded: self.ui_all_projects_loaded,
+            mailbox_offset: if self.workspace_read_only {
+                self.historical_mailbox_offset
+            } else {
+                0
+            },
+            mailbox_cursor: if self.workspace_read_only {
+                self.historical_mailbox_cursor
+            } else {
+                None
+            },
+            verification_offset: self.verification_offset,
+            verification_cursor: self.verification_cursor,
+            verification_attention_reason: self.verification_attention_reason,
+            load_report: matches!(
+                self.active_view,
+                WorkspaceView::Overview
+                    | WorkspaceView::Mailboxes
+                    | WorkspaceView::Activity
+                    | WorkspaceView::Verification
+            ),
+            load_runs: self.active_view == WorkspaceView::Activity,
+        }
+    }
+
+    /// Move read-model refreshes onto a worker with its own read-only
+    /// connection, so SQLite contention cannot stall egui frames. Returns
+    /// whether the worker started; without one, refresh stays synchronous.
+    pub(crate) fn enable_snapshot_worker(&mut self) -> bool {
+        if self.snapshot_worker.is_some() {
+            return true;
+        }
+        let Some(path) = self
+            .state_path
+            .clone()
+            .filter(|_| self.persistence_available)
+        else {
+            return false;
+        };
+        match crate::ui::snapshot_worker::SnapshotWorker::spawn(path) {
+            Ok(worker) => {
+                self.snapshot_worker = Some(worker);
+                true
+            }
+            Err(error) => {
+                push_visible_output(
+                    &mut self.output,
+                    format!(
+                        "[read-model] worker unavailable; refreshing on the UI thread: {error}"
+                    ),
+                );
+                false
+            }
+        }
+    }
+
     /// Refresh the database-backed UI read model at a low frequency. egui may
     /// repaint many times per second while a process is producing output;
     /// those repaints must not turn into repeated SQLite reads.
     pub(crate) fn refresh_ui_snapshot(&mut self) {
-        let project_id = self.active_project_id().map(str::to_owned);
-        self.ui_snapshot.refresh(
-            &self.store,
-            WorkspaceRefreshOptions {
-                active_project_id: project_id.as_deref(),
-                all_projects_loaded: self.ui_all_projects_loaded,
-                mailbox_offset: if self.workspace_read_only {
-                    self.historical_mailbox_offset
-                } else {
-                    0
-                },
-                mailbox_cursor: if self.workspace_read_only {
-                    self.historical_mailbox_cursor
-                } else {
-                    None
-                },
-                verification_offset: self.verification_offset,
-                verification_cursor: self.verification_cursor,
-                verification_attention_reason: self.verification_attention_reason,
-                load_report: matches!(
-                    self.active_view,
-                    WorkspaceView::Overview
-                        | WorkspaceView::Mailboxes
-                        | WorkspaceView::Activity
-                        | WorkspaceView::Verification
-                ),
-                load_runs: self.active_view == WorkspaceView::Activity,
-            },
-        );
+        let options = self.snapshot_refresh_options();
+        if let Some(worker) = self.snapshot_worker.as_mut() {
+            match worker.poll(&mut self.ui_snapshot, &options) {
+                crate::ui::snapshot_worker::SnapshotPoll::Failed(error) => {
+                    self.snapshot_worker = None;
+                    push_visible_output(
+                        &mut self.output,
+                        format!("[read-model] {error}; refreshing on the UI thread"),
+                    );
+                }
+                _ => return,
+            }
+        }
+        self.ui_snapshot.refresh(&self.store, options.borrowed());
     }
 
     pub(crate) fn refresh_ui_snapshot_now(&mut self) {
-        self.ui_snapshot.invalidate();
+        match self.snapshot_worker.as_mut() {
+            Some(worker) => worker.request_invalidation(),
+            None => self.ui_snapshot.invalidate(),
+        }
         self.refresh_ui_snapshot();
     }
 
@@ -504,6 +553,10 @@ impl App {
             || self.capability_receiver.is_some()
             || self.live_auth_receiver.is_some()
             || self.manual_oauth_refresh_receiver.is_some()
+            || self
+                .snapshot_worker
+                .as_ref()
+                .is_some_and(crate::ui::snapshot_worker::SnapshotWorker::in_flight)
             || self.keyring_operation_receiver.is_some()
             || self.oauth_authorization_receiver.is_some()
             || self.start_credentials_receiver.is_some()

@@ -159,6 +159,7 @@ pub(crate) fn run() -> eframe::Result<()> {
                 let mut app = App::default();
                 #[cfg(debug_assertions)]
                 crate::ui::debug_scene::apply(&mut app);
+                app.enable_snapshot_worker();
                 Ok(Box::new(app))
             }),
         );
