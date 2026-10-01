@@ -12,6 +12,7 @@ mailswiftsync headless /path/to/state.db live
 mailswiftsync headless /path/to/state.db batch-preflight
 mailswiftsync headless /path/to/state.db batch-live
 mailswiftsync customer-proof /path/to/state.db /path/to/customer-proof.json
+mailswiftsync post-report-state /path/to/state.db /path/to/post-migration-report.json
 ```
 
 The live form always runs a fresh preflight in the same process before
@@ -70,7 +71,7 @@ binary is upgraded, rather than being interpreted with missing columns.
 4. Run one representative **dry pilot** against a test destination. Resolve authentication, TLS, quota, folder, and configuration failures before increasing scope.
 5. Run the **live pilot** only after the matching preflight succeeds. Confirm the destination again, clear **Dry run / preflight**, click **Start live migration**, and accept the live confirmation. If a static session password, manually supplied OAuth access token, or ordinary password keyring value changes, MailSwiftSync requires a new preflight before live promotion. Automatic OAuth refresh is different: its stable account/auth/refresh-reference binding must match, while the short-lived access token may rotate; live admission still performs fresh authenticated readiness checks after refresh.
 6. For a batch, run the batch preflight on **Mailboxes** first, review every row, then promote only the unchanged queue to live. Keep **Concurrent workers** conservative (normally 1–2 until the provider pair is proven) and never ignore duplicate destinations or Attention items. On a retry, use **Select unresolved**, which selects only rows that need follow-up and never Verified rows; select a Verified row only when you intentionally want to repeat it.
-7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON for the change ticket as well.
+7. After each live phase, open Verification, review the evidence level and run identity, and export the Markdown/JSON verification report. Export the project-health JSON and the fail-closed post-migration report for the change ticket as well; automation can use `post-report-state`.
 8. Treat `Verified` as evidence-backed completion. Aggregate evidence is not message-level proof. Use **Accept residual difference** in Verification only when the exception is approved; this creates `Verified with exceptions` with the operator, timestamp, related evidence run, and acceptance reason in the ledger.
 9. Export **Customer proof JSON** for the change record and retain the separate project JSON/Markdown report for operator forensics. Customer proof omits internal endpoints, credential references, plan snapshots, executable paths, and diagnostic detail. Sign the customer proof with the approved Ed25519 key before distributing it.
 10. For a GUI-independent maintenance window, run `mailswiftsync supervise <state.db> 30 0` under the host service manager. It retries only automation-safe work and leaves Attention/verification-difference rows for review; configure restart limits and logs in the service manager.

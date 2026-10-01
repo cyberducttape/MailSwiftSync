@@ -52,7 +52,7 @@ impl PostMigrationReport {
                 changed_count = changed_count.saturating_add(evidence.modified_messages);
             } else {
                 report.exceptions.push(MigrationException {
-                    id: format!("incomplete-evidence-{}", uuid::Uuid::new_v4()),
+                    id: format!("incomplete-evidence-{}", mailbox.job.id),
                     severity: ExceptionSeverity::Critical,
                     category: "incomplete_evidence".to_string(),
                     message: format!(
@@ -79,14 +79,22 @@ impl PostMigrationReport {
             extra_count,
             changed_count,
         );
-        report.exceptions.extend(generated.exceptions);
+        report
+            .exceptions
+            .extend(generated.exceptions.into_iter().map(|mut exception| {
+                // Numeric aggregate exceptions have one stable category per
+                // report. Deterministic IDs make repeated exports of the
+                // same durable snapshot produce the same proof digest.
+                exception.id = format!("post-report-{}", exception.category);
+                exception
+            }));
         report.remediation_steps.extend(generated.remediation_steps);
 
         // The ledger does not persist a message-level skipped count. Keep the
         // exported zero explicitly qualified instead of presenting it as an
         // observed fact.
         report.exceptions.push(MigrationException {
-            id: format!("skipped-count-unavailable-{}", uuid::Uuid::new_v4()),
+            id: "skipped-count-unavailable".to_string(),
             severity: ExceptionSeverity::Warning,
             category: "skipped_count_unavailable".to_string(),
             message: "The durable ledger does not record a message-level skipped count".to_string(),
@@ -99,7 +107,7 @@ impl PostMigrationReport {
 
         if snapshot.has_active_runs {
             report.exceptions.push(MigrationException {
-                id: format!("active-run-{}", uuid::Uuid::new_v4()),
+                id: "active-run".to_string(),
                 severity: ExceptionSeverity::Critical,
                 category: "active_run".to_string(),
                 message: "The project still has an active migration run".to_string(),
@@ -362,5 +370,15 @@ mod tests {
                 .any(|exception| exception.category == "skipped_count_unavailable")
         );
         assert!(!report.is_successful());
+    }
+
+    #[test]
+    fn durable_snapshot_reports_are_reproducible() {
+        let snapshot = snapshot_with_evidence();
+        let first =
+            serde_json::to_value(PostMigrationReport::from_project_snapshot(&snapshot)).unwrap();
+        let second =
+            serde_json::to_value(PostMigrationReport::from_project_snapshot(&snapshot)).unwrap();
+        assert_eq!(first, second);
     }
 }
