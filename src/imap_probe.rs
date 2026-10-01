@@ -839,9 +839,7 @@ fn read_with_deadline<S: Read>(
 }
 
 fn list_literal_size(line: &str) -> Option<usize> {
-    let end = line.strip_suffix('}')?;
-    let start = end.rfind('{')? + 1;
-    end[start..].parse().ok()
+    literal_framing::literal_length(line.as_bytes())
 }
 
 fn authenticated_list_command(request_special_use: bool) -> &'static [u8] {
@@ -2701,6 +2699,145 @@ mod tests {
         assert_eq!(
             fingerprints.fingerprints.get(&key).map(String::as_str),
             Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    /// Build a two-message metadata+body FETCH response whose literals carry
+    /// arbitrary payloads, using the synchronizing or non-synchronizing form.
+    fn fetch_response_with_bodies(bodies: &[&[u8]], non_sync: bool) -> Vec<u8> {
+        let plus = if non_sync { "+" } else { "" };
+        let mut response = Vec::new();
+        for (index, body) in bodies.iter().enumerate() {
+            let header = format!("Message-ID: <m{index}@example.com>\r\n\r\n");
+            response.extend_from_slice(
+                format!(
+                    "* {} FETCH (UID {} RFC822.SIZE {} INTERNALDATE \"01-Jan-2026 00:00:00 +0000\" BODY[HEADER.FIELDS (MESSAGE-ID)] {{{}{plus}}}\r\n{header} BODY[] {{{}{plus}}}\r\n",
+                    index + 1,
+                    100 + index,
+                    body.len(),
+                    header.len(),
+                    body.len()
+                )
+                .as_bytes(),
+            );
+            response.extend_from_slice(body);
+            response.extend_from_slice(b")\r\n");
+        }
+        response.extend_from_slice(b"v002 OK FETCH completed\r\n");
+        response
+    }
+
+    fn assert_bodies_parse_exactly(bodies: &[&[u8]], non_sync: bool) {
+        let response = fetch_response_with_bodies(bodies, non_sync);
+        let messages =
+            super::parse_message_fetch_metadata_response_bytes(&response, "INBOX", Some(77))
+                .unwrap();
+        let hashes =
+            parse_message_fetch_body_hashes_response_bytes(&response, "INBOX", Some(77), 1 << 20)
+                .unwrap();
+        assert_eq!(messages.len(), bodies.len());
+        assert_eq!(hashes.fingerprints.len(), bodies.len());
+        for (index, body) in bodies.iter().enumerate() {
+            let key = crate::core::MailboxMessageKey::with_uidvalidity(
+                "INBOX",
+                77,
+                (100 + index).to_string(),
+            );
+            assert_eq!(
+                messages[&key].message_id.as_deref(),
+                Some(format!("<m{index}@example.com>").as_str())
+            );
+            assert_eq!(messages[&key].size_bytes, Some(body.len() as u64));
+            assert_eq!(hashes.fingerprints[&key], sha256_hex(body));
+        }
+    }
+
+    #[test]
+    fn body_literals_that_look_like_protocol_do_not_split_fetch_records() {
+        let adversarial: &[u8] = b"Subject: test\r\n\r\nHello\r\n* 2 FETCH (UID 999 BODY[] {3}\r\nabc)\r\nv002 OK FETCH completed\r\n* BYE\r\n)\r\nBODY[HEADER.FIELDS (MESSAGE-ID)] {5}\r\nUID 4242 \r\n";
+        for non_sync in [false, true] {
+            assert_bodies_parse_exactly(&[adversarial, b"plain body\r\n"], non_sync);
+        }
+    }
+
+    #[test]
+    fn arbitrary_literal_payloads_never_alter_the_fetch_parse() {
+        // Deterministic property test: protocol-looking fragments spliced at
+        // arbitrary byte offsets and line boundaries, with random filler and
+        // bare CR/LF bytes, must leave UIDs, Message-IDs, and digests intact.
+        const FRAGMENTS: &[&[u8]] = &[
+            b"* 2 FETCH (",
+            b"* 2 FETCH (UID 7 BODY[] {4}\r\n",
+            b"v002 OK FETCH completed\r\n",
+            b"A001 OK",
+            b"* BYE\r\n",
+            b")\r\n",
+            b"{12}\r\n",
+            b"{3+}\r\n",
+            b"~{2}\r\n",
+            b"BODY[] {1}\r\n",
+            b"\r\n",
+            b"\r",
+            b"\n",
+        ];
+        let mut state = 0x4649_5845_u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        for _ in 0..400 {
+            let mut bodies = Vec::new();
+            for _ in 0..2 {
+                let mut body = Vec::new();
+                for _ in 0..(next() % 12) {
+                    if next() % 2 == 0 {
+                        body.extend_from_slice(FRAGMENTS[next() as usize % FRAGMENTS.len()]);
+                    } else {
+                        for _ in 0..(next() % 9) {
+                            body.push(next() as u8);
+                        }
+                    }
+                }
+                bodies.push(body);
+            }
+            let bodies = bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            assert_bodies_parse_exactly(&bodies, next() % 2 == 0);
+        }
+    }
+
+    #[test]
+    fn fetch_items_after_a_literal_are_found_in_protocol_text_only() {
+        let response = b"* 1 FETCH (BODY[] {14}\r\nUID 1 BODY[] x UID 7 RFC822.SIZE 14)\r\nv002 OK FETCH completed\r\n";
+        let hashes =
+            parse_message_fetch_body_hashes_response_bytes(response, "INBOX", Some(77), 64)
+                .unwrap();
+        let key = crate::core::MailboxMessageKey::with_uidvalidity("INBOX", 77, "7");
+        assert_eq!(hashes.fingerprints[&key], sha256_hex(b"UID 1 BODY[] x"));
+    }
+
+    #[test]
+    fn fetch_parser_fails_closed_on_truncated_or_literal8_framing() {
+        let truncated = b"* 1 FETCH (UID 1 BODY[] {50}\r\nshort)\r\nv002 OK FETCH completed\r\n";
+        assert!(
+            parse_message_fetch_body_hashes_response_bytes(truncated, "INBOX", Some(77), 64)
+                .unwrap_err()
+                .contains("response ended first")
+        );
+        let binary = b"* 1 FETCH (UID 1 BINARY[] ~{2}\r\nhi)\r\nv002 OK FETCH completed\r\n";
+        assert!(
+            super::parse_message_fetch_metadata_response_bytes(binary, "INBOX", Some(77))
+                .unwrap_err()
+                .contains("literal8")
         );
     }
 
