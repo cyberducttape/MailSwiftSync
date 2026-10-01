@@ -277,7 +277,7 @@ Open an issue with: `[FEATURE REQUEST]` prefix
 - **Product:** MailSwiftSync v0.1.0-alpha.1
 - **Status:** Technical Preview / Early Adoption
 - **Schema Version:** 14
-- **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; native Dovecot 2.3/2.4 CI qualification remains pending
+- **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; the packaged native-Dovecot CI fixture now passes, while live provider and target-storage qualification remain pending
 - **Status snapshot date:** September 30, 2026 (not a build timestamp)
 
 ---

@@ -44,7 +44,7 @@ capability in its `manifest_rows` are checked against these fields.
 | Capability | Code | Wired | Tested | Live Provider | Notes |
 |------------|------|-------|--------|---------------|-------|
 | IMAP message transfer (imapsync) | yes | yes | integration | pending | Engine: imapsync 2.314 |
-| Native IMAP message transfer (Dovecot) | yes | yes | no | pending | Dedicated native-engine fixture added; no successful CI execution has yet been recorded |
+| Native IMAP message transfer (Dovecot) | yes | yes | integration | pending | Packaged native-engine CI fixture passes; live provider and target-storage qualification remain pending |
 | Folder/label mapping | yes | yes | integration | pending | Integration coverage is through generic imapsync mapping/automap; no provider-specific namespace translation engine |
 | Message extraction (imapsync) | yes | yes (TLS live path) | unit | pending | Post-transfer verifier enumerates selectable folders and fetches bounded UID, Message-ID, size, and date metadata; live-provider evidence is pending |
 | Message extraction (Dovecot) | yes | partial | unit | pending | Native Dovecot aggregate verification includes mailbox UIDVALIDITY context for safe resume binding; the generic IMAP metadata verifier currently services imapsync runs |
@@ -136,6 +136,7 @@ particular target.
 
 ✅ **Fully integrated and tested:**
 - Basic IMAP transfer through imapsync against disposable Dovecot servers
+- Native Dovecot transfer against the packaged Dovecot fixture, with aggregate evidence
 - Folder mapping and discovery
 - Aggregate evidence (folder/message counts)
 - Exception recording and acceptance
@@ -153,8 +154,8 @@ particular target.
 - Pre/post-migration reports (available as explicit CLI exports, not automatically generated for every live run)
 - Dedicated recovery dashboard (supported recovery guidance is visible in Activity; a multi-run dashboard remains future work)
 
-⚠️ **Unit-tested but not integration-tested:**
-- Native Dovecot engine execution (`doveadm sync`, native preflight, and native verification)
+⚠️ **Integration-tested but not fully qualified:**
+- Native Dovecot engine execution (`doveadm sync`, native preflight, and aggregate verification) remains provider- and target-storage-unqualified
 - OAuth token refresh (refreshes correctly, not tested end-to-end with actual IMAP session)
 - Provider-specific error handling (classifies correctly, not tested against real errors)
 - Confidence scoring algorithms (match correctly, not validated with mixed message sets)

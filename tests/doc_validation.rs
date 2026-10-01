@@ -234,8 +234,8 @@ fn capability_manifest_is_current() {
         "Capability manifest should distinguish the wired imapsync path from native Dovecot scope"
     );
     assert!(
-        manifest.contains("Native IMAP message transfer (Dovecot) | yes | yes | no"),
-        "Capability manifest must not call the native Dovecot path integration-tested"
+        manifest.contains("Native IMAP message transfer (Dovecot) | yes | yes | integration"),
+        "Capability manifest must record the passing native Dovecot integration fixture"
     );
     assert!(
         manifest.contains("Gmail-specific throttling presets")
