@@ -1,5 +1,37 @@
 use crate::*;
 
+pub(crate) const WORKER_STOPPED_UNEXPECTEDLY: &str =
+    "worker terminated unexpectedly before returning a result";
+
+/// Outcome of draining one single-result background channel.
+pub(crate) enum WorkerPoll<T> {
+    Pending,
+    Ready(T),
+    /// The worker dropped its sender (exit or panic) without a result.
+    Stopped,
+}
+
+/// Drain a single-result worker channel. Both a result and a disconnected
+/// sender clear the slot, so a crashed worker can never leave its receiver
+/// behind to make `background_work_pending` and the start/import guards
+/// believe the operation is still running.
+pub(crate) fn poll_worker<T>(slot: &mut Option<Receiver<T>>) -> WorkerPoll<T> {
+    let Some(receiver) = slot.as_ref() else {
+        return WorkerPoll::Pending;
+    };
+    match receiver.try_recv() {
+        Ok(value) => {
+            *slot = None;
+            WorkerPoll::Ready(value)
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            *slot = None;
+            WorkerPoll::Stopped
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => WorkerPoll::Pending,
+    }
+}
+
 impl App {
     pub(crate) fn poll(&mut self) {
         // Exact callers (probe results, assessment, admission) recompute the
@@ -17,11 +49,18 @@ impl App {
                 StatusSeverity::Warning,
             );
         }
-        if let Some(receiver) = &self.bulk_import_receiver
-            && let Ok(result) = receiver.try_recv()
-        {
-            self.bulk_import_receiver = None;
-            self.apply_bulk_import_result(result);
+        match poll_worker(&mut self.bulk_import_receiver) {
+            WorkerPoll::Ready(result) => self.apply_bulk_import_result(result),
+            WorkerPoll::Stopped => {
+                self.apply_bulk_import_result(Err(format!(
+                    "Mailbox import {WORKER_STOPPED_UNEXPECTEDLY}; no rows were imported."
+                )));
+                self.set_status(
+                    format!("Mailbox import {WORKER_STOPPED_UNEXPECTEDLY}."),
+                    StatusSeverity::Error,
+                );
+            }
+            WorkerPoll::Pending => {}
         }
         if let Some(receiver) = &self.manual_oauth_refresh_receiver {
             match receiver.try_recv() {
@@ -70,12 +109,14 @@ impl App {
                 Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => break,
             }
         }
-        let start_credentials_result = self
-            .start_credentials_receiver
-            .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok());
+        let start_credentials_result = match poll_worker(&mut self.start_credentials_receiver) {
+            WorkerPoll::Ready(result) => Some(result),
+            WorkerPoll::Stopped => Some(Err(format!(
+                "Credential loading {WORKER_STOPPED_UNEXPECTEDLY}; migration was not started."
+            ))),
+            WorkerPoll::Pending => None,
+        };
         if let Some(result) = start_credentials_result {
-            self.start_credentials_receiver = None;
             let probed_plan = self.start_credentials_plan.take();
             let current_plan = self.start_credentials_plan_marker();
             match result {
@@ -97,12 +138,14 @@ impl App {
                 }
             }
         }
-        let live_auth_result = self
-            .live_auth_receiver
-            .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok());
+        let live_auth_result = match poll_worker(&mut self.live_auth_receiver) {
+            WorkerPoll::Ready(result) => Some(result),
+            WorkerPoll::Stopped => Some(Err(format!(
+                "live authentication {WORKER_STOPPED_UNEXPECTEDLY}"
+            ))),
+            WorkerPoll::Pending => None,
+        };
         if let Some(result) = live_auth_result {
-            self.live_auth_receiver = None;
             match result {
                 Ok(proof) => {
                     self.live_auth_proof = Some(proof);
@@ -121,10 +164,19 @@ impl App {
                 }
             }
         }
-        let capability_result = self
-            .capability_receiver
-            .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok());
+        let capability_result = match poll_worker(&mut self.capability_receiver) {
+            WorkerPoll::Ready(result) => Some(result),
+            WorkerPoll::Stopped => {
+                self.capability_probe_request_id = None;
+                self.capability_probe_fingerprint = None;
+                self.set_status(
+                    format!("Preflight discovery failed: capability {WORKER_STOPPED_UNEXPECTEDLY}"),
+                    StatusSeverity::Error,
+                );
+                None
+            }
+            WorkerPoll::Pending => None,
+        };
         if let Some(result) = capability_result {
             let current_fingerprint = plan_fingerprint_digest(&self.form.plan_fingerprint());
             let matches = self
@@ -139,7 +191,6 @@ impl App {
                         &current_fingerprint,
                     )
                 });
-            self.capability_receiver = None;
             self.capability_probe_request_id = None;
             self.capability_probe_fingerprint = None;
             if matches {
@@ -215,8 +266,12 @@ impl App {
         if !pending_db_events.is_empty() || !self.deferred_events.is_empty() {
             // A parent Finished event must not finalize the batch while a
             // child completion or its audit trail is waiting on durable
-            // storage. The retained events will be retried on the next poll.
-            done = None;
+            // storage. The retained events will be retried on the next poll;
+            // the terminal event itself must be retained after them, or the
+            // run would never finish once the worker has exited.
+            if let Some(result) = done.take() {
+                self.deferred_events.push_back(Event::Finished(result));
+            }
         }
         // First service worker requests and commit their durable acknowledgments.
         // Refreshing the presentation snapshot can perform synchronous SQLite
@@ -232,5 +287,160 @@ impl App {
                 StatusSeverity::Error,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WORKER_STOPPED_UNEXPECTEDLY;
+    use crate::App;
+    use std::sync::mpsc::{Sender, channel};
+
+    fn with_app(test: impl FnOnce(&mut App)) {
+        let state_path = std::env::temp_dir().join(format!(
+            "mailswiftsync-worker-stop-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let mut app = App::from_state_path(Some(&state_path));
+        test(&mut app);
+        drop(app);
+        let _ = std::fs::remove_file(&state_path);
+        let _ = std::fs::remove_file(state_path.with_extension("lock"));
+    }
+
+    /// Simulate both ways a worker can vanish: returning without sending,
+    /// and panicking while it owns the sender.
+    fn stop_worker<T: Send + 'static>(sender: Sender<T>, panic: bool) {
+        let worker = std::thread::spawn(move || {
+            let _sender = sender;
+            if panic {
+                panic!("deliberate worker panic");
+            }
+        });
+        assert_eq!(worker.join().is_err(), panic);
+    }
+
+    fn assert_released(app: &App, expected_status: &str) {
+        assert!(
+            !app.background_work_pending(),
+            "a stopped worker left a receiver behind"
+        );
+        assert_eq!(app.status.severity, crate::StatusSeverity::Error);
+        assert!(
+            app.status.text.contains(expected_status),
+            "unexpected status: {}",
+            app.status.text
+        );
+    }
+
+    #[test]
+    fn stopped_credential_loader_releases_start_and_reports() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.start_credentials_receiver = Some(receiver);
+                app.start_credentials_plan = Some("plan".into());
+                stop_worker(sender, panic);
+                app.poll();
+                assert_released(app, "Credential loading");
+                assert!(app.status.text.contains(WORKER_STOPPED_UNEXPECTEDLY));
+                assert!(app.start_credentials_plan.is_none());
+                assert!(!app.credentials_ready_for_start);
+            });
+        }
+    }
+
+    #[test]
+    fn stopped_live_auth_probe_releases_admission_and_reports() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.live_auth_receiver = Some(receiver);
+                stop_worker(sender, panic);
+                app.poll();
+                assert_released(app, "Live authentication failed");
+                assert!(app.live_auth_proof.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn stopped_capability_probe_releases_discovery_and_reports() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.capability_receiver = Some(receiver);
+                app.capability_probe_request_id = Some("request".into());
+                app.capability_probe_fingerprint =
+                    Some(crate::plan_fingerprint_digest(&app.form.plan_fingerprint()));
+                stop_worker(sender, panic);
+                app.poll();
+                assert_released(app, "Preflight discovery failed");
+                assert!(app.capability_probe_request_id.is_none());
+                assert!(app.capability_probe_fingerprint.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn stopped_bulk_importer_releases_import_and_reports() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.bulk_import_receiver = Some(receiver);
+                stop_worker(sender, panic);
+                app.poll();
+                assert_released(app, "Mailbox import");
+                assert!(app.bulk_message.contains(WORKER_STOPPED_UNEXPECTEDLY));
+            });
+        }
+    }
+
+    #[test]
+    fn stopped_oauth_workers_release_their_receivers() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.manual_oauth_refresh_receiver = Some(receiver);
+                stop_worker(sender, panic);
+                app.poll();
+                assert_released(app, "OAuth refresh worker stopped");
+            });
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.oauth_authorization_receiver = Some(receiver);
+                stop_worker(sender, panic);
+                app.poll();
+                assert_released(app, "OAuth authorization worker stopped");
+                assert!(app.oauth_authorization_cancel.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn stopped_execution_worker_without_terminal_event_ends_the_run() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+                app.receiver = Some(receiver);
+                stop_worker_sync(sender, panic);
+                app.poll();
+                assert!(
+                    !app.running(),
+                    "execution receiver survived a vanished worker"
+                );
+                assert!(!app.background_work_pending());
+            });
+        }
+    }
+
+    fn stop_worker_sync<T: Send + 'static>(sender: std::sync::mpsc::SyncSender<T>, panic: bool) {
+        let worker = std::thread::spawn(move || {
+            let _sender = sender;
+            if panic {
+                panic!("deliberate worker panic");
+            }
+        });
+        assert_eq!(worker.join().is_err(), panic);
     }
 }

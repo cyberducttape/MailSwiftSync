@@ -43,7 +43,21 @@ impl App {
                 } else {
                     match rx.try_recv() {
                         Ok(event) => event,
-                        Err(_) => break,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            // Workers always send `Finished` last, including
+                            // from their panic guards. A closed channel with
+                            // no terminal event means the worker vanished;
+                            // finalize as a failure needing review instead of
+                            // leaving the UI "running" forever.
+                            if done.is_none() {
+                                done = Some(Err(format!(
+                                    "execution {}; migration requires operator review",
+                                    crate::controller::poll::WORKER_STOPPED_UNEXPECTEDLY
+                                )));
+                            }
+                            break;
+                        }
                     }
                 };
                 processed_events += 1;
