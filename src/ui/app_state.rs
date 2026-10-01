@@ -171,6 +171,8 @@ pub(crate) struct App {
     /// the run is admitted.
     pub(crate) live_auth_receiver: Option<Receiver<Result<LiveAuthProof, String>>>,
     pub(crate) manual_oauth_refresh_receiver: Option<Receiver<ManualOAuthRefreshResult>>,
+    pub(crate) keyring_operation_receiver:
+        Option<Receiver<crate::ui::keyring_ops::KeyringOperationResult>>,
     pub(crate) oauth_authorization_receiver: Option<Receiver<OAuthAuthorizationMessage>>,
     pub(crate) oauth_authorization_cancel: Option<Arc<AtomicBool>>,
     pub(crate) oauth_authorization_stage: Option<OAuthAuthorizationStage>,
@@ -502,6 +504,7 @@ impl App {
             || self.capability_receiver.is_some()
             || self.live_auth_receiver.is_some()
             || self.manual_oauth_refresh_receiver.is_some()
+            || self.keyring_operation_receiver.is_some()
             || self.oauth_authorization_receiver.is_some()
             || self.start_credentials_receiver.is_some()
             || self.bulk_import_receiver.is_some()

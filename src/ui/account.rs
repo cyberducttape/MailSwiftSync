@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::sync::{Arc, atomic::AtomicBool, mpsc};
 
 use super::app_state::{CredentialDeleteTarget, ManualOAuthRefreshResult};
+use super::keyring_ops::KeyringOperation;
 
 use super::ThemeColors;
 
@@ -204,7 +205,8 @@ impl App {
                 ui.add_space(8.0);
                 let editable = !self.running()
                     && self.manual_oauth_refresh_receiver.is_none()
-                    && self.oauth_authorization_receiver.is_none();
+                    && self.oauth_authorization_receiver.is_none()
+                    && !self.keyring_operation_pending();
                 ui.add_enabled_ui(editable, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(self.language.message("ui.source-id"));
@@ -222,16 +224,10 @@ impl App {
                             self.language.message("ui.store-source-password")
                         };
                         if ui.button(source_label).clicked() {
-                            match self.form.store_keyring_password(true) {
-                                Ok(()) => self.set_status(self.language.message("ui.source-credential-stored-in-os-keyring"), StatusSeverity::Success),
-                                Err(error) => self.set_status(error, StatusSeverity::Error),
-                            }
+                            self.begin_keyring_operation(KeyringOperation::StorePassword { source: true });
                         }
                         if ui.button(self.language.message("ui.load-source")).clicked() {
-                            match self.form.load_keyring_password(true) {
-                                Ok(()) => self.set_status(self.language.message("ui.source-credential-loaded"), StatusSeverity::Success),
-                                Err(error) => self.set_status(error, StatusSeverity::Error),
-                            }
+                            self.begin_keyring_operation(KeyringOperation::LoadPassword { source: true });
                         }
                         if ui.button(self.language.message("ui.delete-source")).clicked() {
                             self.credential_delete_confirmation =
@@ -245,16 +241,10 @@ impl App {
                             self.language.message("ui.store-destination-password")
                         };
                         if ui.button(destination_label).clicked() {
-                            match self.form.store_keyring_password(false) {
-                                Ok(()) => self.set_status(self.language.message("ui.destination-credential-stored-in-os-keyring"), StatusSeverity::Success),
-                                Err(error) => self.set_status(error, StatusSeverity::Error),
-                            }
+                            self.begin_keyring_operation(KeyringOperation::StorePassword { source: false });
                         }
                         if ui.button(self.language.message("ui.load-destination")).clicked() {
-                            match self.form.load_keyring_password(false) {
-                                Ok(()) => self.set_status(self.language.message("ui.destination-credential-loaded"), StatusSeverity::Success),
-                                Err(error) => self.set_status(error, StatusSeverity::Error),
-                            }
+                            self.begin_keyring_operation(KeyringOperation::LoadPassword { source: false });
                         }
                         if ui.button(self.language.message("ui.delete-destination")).clicked() {
                             self.credential_delete_confirmation =
@@ -1030,34 +1020,7 @@ impl App {
                         .clicked()
                     {
                         close = true;
-                        let result = match target {
-                            CredentialDeleteTarget::Password { source } => {
-                                self.form.delete_keyring_password(source)
-                            }
-                            CredentialDeleteTarget::OAuthRefresh { source } => {
-                                self.form.delete_oauth_refresh_config(source)
-                            }
-                        };
-                        match result {
-                            Ok(()) => self.set_status(
-                                self.language.text(match target {
-                                    CredentialDeleteTarget::Password { source: true } => {
-                                        "Source credential deleted from OS keyring"
-                                    }
-                                    CredentialDeleteTarget::Password { source: false } => {
-                                        "Destination credential deleted from OS keyring"
-                                    }
-                                    CredentialDeleteTarget::OAuthRefresh { source: true } => {
-                                        "Source OAuth refresh configuration deleted"
-                                    }
-                                    CredentialDeleteTarget::OAuthRefresh { source: false } => {
-                                        "Destination OAuth refresh configuration deleted"
-                                    }
-                                }),
-                                StatusSeverity::Success,
-                            ),
-                            Err(error) => self.set_status(error, StatusSeverity::Error),
-                        }
+                        self.begin_keyring_operation(KeyringOperation::Delete(target));
                     }
                 });
             });
@@ -1068,49 +1031,8 @@ impl App {
     }
 
     fn store_oauth_refresh_editor(&mut self, source: bool) {
-        let side = self
-            .language
-            .text(if source { "Source" } else { "Destination" });
-        let result = store_oauth_refresh_editor_values(
-            &mut self.oauth_refresh_editor_endpoint,
-            &mut self.oauth_refresh_editor_client_id,
-            &mut self.oauth_refresh_editor_client_secret,
-            &mut self.oauth_refresh_editor_refresh_token,
-            |config| self.form.store_oauth_refresh_config(source, config),
-        );
-        match result {
-            Ok(()) => {
-                self.set_status(
-                    self.language
-                        .text("{} OAuth refresh configuration stored in OS keyring")
-                        .replace("{}", side),
-                    StatusSeverity::Success,
-                );
-            }
-            Err(error) => self.set_status(error, StatusSeverity::Error),
-        }
+        self.begin_keyring_operation(KeyringOperation::StoreOAuthRefresh { source });
     }
-}
-
-fn store_oauth_refresh_editor_values(
-    endpoint: &mut String,
-    client_id: &mut String,
-    client_secret: &mut crate::credentials::SecretString,
-    refresh_token: &mut crate::credentials::SecretString,
-    persist: impl FnOnce(&crate::oauth_refresh::OAuthRefreshConfig) -> Result<(), String>,
-) -> Result<(), String> {
-    let config = crate::oauth_refresh::OAuthRefreshConfig {
-        token_endpoint: endpoint.clone(),
-        client_id: client_id.clone(),
-        client_secret: client_secret.clone(),
-        refresh_token: refresh_token.clone(),
-    };
-    persist(&config)?;
-    endpoint.clear();
-    client_id.clear();
-    *client_secret = crate::credentials::SecretString::default();
-    *refresh_token = crate::credentials::SecretString::default();
-    Ok(())
 }
 
 fn manual_oauth_refresh_marker(form: &crate::migration_plan::Form, source: bool) -> String {
@@ -1204,10 +1126,7 @@ fn oauth_authorization_marker(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        authorization_missing, manual_oauth_refresh_marker, oauth_authorization_marker,
-        store_oauth_refresh_editor_values,
-    };
+    use super::{authorization_missing, manual_oauth_refresh_marker, oauth_authorization_marker};
     use crate::migration_plan::Form;
 
     #[test]
@@ -1254,53 +1173,5 @@ mod tests {
             initial,
             oauth_authorization_marker(&form, false, "microsoft", "tenant-a", "client-b")
         );
-    }
-
-    #[test]
-    fn failed_oauth_config_persistence_preserves_editor_values() {
-        let mut endpoint = "https://issuer.example/token".to_owned();
-        let mut client_id = "registered-client".to_owned();
-        let mut client_secret = crate::credentials::SecretString::from("client-secret");
-        let mut refresh_token = crate::credentials::SecretString::from("refresh-token");
-
-        let result = store_oauth_refresh_editor_values(
-            &mut endpoint,
-            &mut client_id,
-            &mut client_secret,
-            &mut refresh_token,
-            |_| Err("keyring unavailable".into()),
-        );
-
-        assert_eq!(result.unwrap_err(), "keyring unavailable");
-        assert_eq!(endpoint, "https://issuer.example/token");
-        assert_eq!(client_id, "registered-client");
-        assert_eq!(client_secret.as_str(), "client-secret");
-        assert_eq!(refresh_token.as_str(), "refresh-token");
-    }
-
-    #[test]
-    fn successful_oauth_config_persistence_clears_editor_values() {
-        let mut endpoint = "https://issuer.example/token".to_owned();
-        let mut client_id = "registered-client".to_owned();
-        let mut client_secret = crate::credentials::SecretString::from("client-secret");
-        let mut refresh_token = crate::credentials::SecretString::from("refresh-token");
-
-        store_oauth_refresh_editor_values(
-            &mut endpoint,
-            &mut client_id,
-            &mut client_secret,
-            &mut refresh_token,
-            |config| {
-                assert_eq!(config.client_secret.as_str(), "client-secret");
-                assert_eq!(config.refresh_token.as_str(), "refresh-token");
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert!(endpoint.is_empty());
-        assert!(client_id.is_empty());
-        assert!(client_secret.is_empty());
-        assert!(refresh_token.is_empty());
     }
 }

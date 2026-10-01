@@ -14,6 +14,7 @@ mod batch_sheet;
 pub(crate) mod debug_scene;
 mod engine;
 pub(crate) mod fonts;
+mod keyring_ops;
 mod language;
 mod output;
 mod overview;

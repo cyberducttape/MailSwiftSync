@@ -424,7 +424,6 @@ impl Form {
             .map(Some)
             .map_err(|error| format!("Could not open OS keyring entry `{id}`: {error}"))
     }
-    #[allow(dead_code)]
     pub(crate) fn store_keyring_password(&self, source: bool) -> Result<(), String> {
         let entry = self
             .keyring_entry(source)?
@@ -461,7 +460,6 @@ impl Form {
         }
         Ok(())
     }
-    #[allow(dead_code)]
     pub(crate) fn delete_keyring_password(&self, source: bool) -> Result<(), String> {
         let entry = self
             .keyring_entry(source)?

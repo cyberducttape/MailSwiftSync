@@ -419,6 +419,7 @@ impl App {
             capability_staleness_checked_at: None,
             live_auth_receiver: None,
             manual_oauth_refresh_receiver: None,
+            keyring_operation_receiver: None,
             oauth_authorization_receiver: None,
             oauth_authorization_cancel: None,
             oauth_authorization_stage: None,

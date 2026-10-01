@@ -78,6 +78,14 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
+        match poll_worker(&mut self.keyring_operation_receiver) {
+            WorkerPoll::Ready(result) => self.complete_keyring_operation(result),
+            WorkerPoll::Stopped => self.set_status(
+                format!("OS keyring {WORKER_STOPPED_UNEXPECTEDLY}."),
+                StatusSeverity::Error,
+            ),
+            WorkerPoll::Pending => {}
+        }
         loop {
             let message = self
                 .oauth_authorization_receiver
@@ -413,6 +421,20 @@ mod tests {
                 app.poll();
                 assert_released(app, "OAuth authorization worker stopped");
                 assert!(app.oauth_authorization_cancel.is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn stopped_keyring_worker_releases_credential_controls() {
+        for panic in [false, true] {
+            with_app(|app| {
+                let (sender, receiver) = channel();
+                app.keyring_operation_receiver = Some(receiver);
+                stop_worker(sender, panic);
+                app.poll();
+                assert_released(app, "OS keyring");
+                assert!(!app.keyring_operation_pending());
             });
         }
     }
