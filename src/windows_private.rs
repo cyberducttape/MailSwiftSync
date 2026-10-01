@@ -22,8 +22,8 @@ use windows_sys::Win32::{
         ERROR_SUCCESS, GENERIC_ALL, GENERIC_WRITE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
     },
     Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
-        SE_FILE_OBJECT, SetSecurityInfo,
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+        GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT, SetSecurityInfo,
     },
     Security::{
         ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, CreateWellKnownSid, DACL_SECURITY_INFORMATION, GetAce,
@@ -107,14 +107,15 @@ pub(crate) fn open_no_follow(path: &Path, directory: bool, access: u32) -> io::R
     Ok(file)
 }
 
-/// Verify an opened directory is a private boundary: owned by this user, and
-/// no other account may write, delete, or re-ACL it or (through inheritable
-/// entries) the objects later created inside it. BUILTIN\Administrators and
-/// LocalSystem are trusted, as root is on Unix.
+/// Verify an opened directory is a private boundary: owned by this user or a
+/// trusted principal, and no other account may write, delete, or re-ACL it or
+/// (through inheritable entries) the objects later created inside it.
+/// BUILTIN\Administrators and LocalSystem are trusted, as root is on Unix;
+/// user-profile folders such as `%LOCALAPPDATA%` are often owned by them.
 pub(crate) fn verify_private_handle(file: &fs::File, label: &str) -> io::Result<()> {
     let trusted = TrustedSids::current()?;
     let descriptor = SecurityDescriptor::of(file)?;
-    trusted.require_owner(descriptor.owner, label)?;
+    trusted.require_owner(descriptor.owner, label, true)?;
     let dacl = descriptor.dacl;
     if dacl.is_null() {
         return Err(denied(format!(
@@ -155,11 +156,14 @@ pub(crate) fn verify_private_handle(file: &fs::File, label: &str) -> io::Result<
     Ok(())
 }
 
-/// Require that this user owns the opened object.
+/// Require that this user (token user or default owner) owns the opened
+/// object. Callers then grant access through `Owner Rights`, so a SYSTEM- or
+/// Administrators-owned object is refused here: re-ACLing it would lock out a
+/// non-elevated user.
 pub(crate) fn verify_owner(file: &fs::File, label: &str) -> io::Result<()> {
     let trusted = TrustedSids::current()?;
     let descriptor = SecurityDescriptor::of(file)?;
-    trusted.require_owner(descriptor.owner, label)
+    trusted.require_owner(descriptor.owner, label, false)
 }
 
 /// Replace the DACL of an open object with the protected owner+SYSTEM DACL.
@@ -361,17 +365,44 @@ impl TrustedSids {
         Ok(Self { owners, writers })
     }
 
-    fn require_owner(&self, owner: PSID, label: &str) -> io::Result<()> {
-        if owner.is_null() || !self.owners.iter().any(|sid| sid == sid_bytes(owner)) {
-            return Err(denied(format!("{label} is owned by another account")));
+    fn require_owner(&self, owner: PSID, label: &str, allow_privileged: bool) -> io::Result<()> {
+        if owner.is_null() {
+            return Err(denied(format!("{label} has no owner")));
         }
-        Ok(())
+        let owner_bytes = sid_bytes(owner);
+        // writers[2..4] are LocalSystem and BUILTIN\Administrators.
+        let privileged = &self.writers[2..4];
+        if self.owners.iter().any(|sid| sid == owner_bytes)
+            || (allow_privileged && privileged.iter().any(|sid| sid == owner_bytes))
+        {
+            return Ok(());
+        }
+        Err(denied(format!(
+            "{label} is owned by another account ({})",
+            sid_string(owner)
+        )))
     }
 
     fn trusts(&self, sid: PSID) -> bool {
         let sid = sid_bytes(sid);
         self.writers.iter().any(|trusted| trusted == sid)
     }
+}
+
+/// Render a SID as `S-1-...` for operator-facing errors.
+fn sid_string(sid: PSID) -> String {
+    let mut wide: *mut u16 = ptr::null_mut();
+    if unsafe { ConvertSidToStringSidW(sid, &mut wide) } == 0 || wide.is_null() {
+        return "unknown SID".into();
+    }
+    let length = (0..)
+        .take_while(|&index| unsafe { *wide.add(index) } != 0)
+        .count();
+    let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(wide, length) });
+    unsafe {
+        LocalFree(wide as HLOCAL);
+    }
+    text
 }
 
 fn sid_bytes<'a>(sid: PSID) -> &'a [u8] {
