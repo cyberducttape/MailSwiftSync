@@ -44,6 +44,8 @@ distribution_documents=(
   docs/provider-facts.md
   docs/release-0.1.0-alpha.md
   docs/release-readiness.md
+  docs/verification-envelope.md
+  docs/accessibility-evidence.md
   docs/bulk-migrations-template.csv
   docs/distribution/INSTALL.md
   docs/distribution/SERVICE.md

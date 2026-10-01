@@ -78,6 +78,14 @@ if [[ ! -d "$workspace/docs" ]]; then
   echo "FAIL: release archive omits docs/" >&2
   exit 1
 fi
+for document in \
+  docs/accessibility-evidence.md \
+  docs/verification-envelope.md; do
+  if [[ ! -f "$workspace/$document" ]]; then
+    echo "FAIL: release archive omits $document" >&2
+    exit 1
+  fi
+done
 
 binary_count=$(find "$workspace" -mindepth 1 -maxdepth 1 -type f \
   \( -name 'mailswiftsync-*' -o -name 'mailswiftsync-*.exe' \) -print | wc -l | tr -d ' ')

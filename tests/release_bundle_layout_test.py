@@ -65,6 +65,8 @@ def make_bundle(root: Path) -> None:
     docs = root / "docs"
     docs.mkdir()
     (docs / "release-readiness.md").write_text("# fixture\n", encoding="utf-8")
+    (docs / "accessibility-evidence.md").write_text("# fixture\n", encoding="utf-8")
+    (docs / "verification-envelope.md").write_text("# fixture\n", encoding="utf-8")
 
 
 def run_verifier(archive: Path, expected: bool) -> None:
