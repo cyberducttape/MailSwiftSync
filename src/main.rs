@@ -27,7 +27,7 @@ mod plan_identity;
 mod process;
 mod progress;
 mod provider;
-pub(crate) mod reports;
+mod reports;
 mod runner;
 mod storage;
 mod storage_paths;

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::ProjectReportSnapshot;
+use super::{ProjectReportSnapshot, VerificationOutcome};
 
 /// Post-migration exception report for operator review and remediation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,15 +41,71 @@ impl PostMigrationReport {
         let mut missing_count: u64 = 0;
         let mut extra_count: u64 = 0;
         let mut changed_count: u64 = 0;
-        let mut report = Self::generate(0, 0, 0, 0, 0, 0);
+        let mut report = Self {
+            total_processed: 0,
+            total_skipped: 0,
+            total_failed: 0,
+            exceptions: Vec::new(),
+            remediation_steps: Vec::new(),
+        };
 
         for mailbox in &snapshot.mailboxes {
+            if let Some(reason) = mailbox.attention_reason {
+                report.exceptions.push(MigrationException {
+                    id: format!("operator-attention-{}", mailbox.job.id),
+                    severity: ExceptionSeverity::Critical,
+                    category: "operator_attention".to_string(),
+                    message: format!(
+                        "Mailbox {} still requires operator attention ({})",
+                        mailbox.job.source_mailbox,
+                        reason.as_str()
+                    ),
+                    affected_folder: None,
+                    affected_message_id: None,
+                });
+                report.remediation_steps.push(format!(
+                    "Resolve the {} condition for mailbox {} before accepting the project",
+                    reason.as_str(),
+                    mailbox.job.source_mailbox
+                ));
+            }
             if let Some((_, evidence, _)) = &mailbox.evidence {
                 total_processed = total_processed.saturating_add(evidence.source_messages);
                 total_failed = total_failed.saturating_add(evidence.failed_messages);
                 missing_count = missing_count.saturating_add(evidence.missing_messages);
                 extra_count = extra_count.saturating_add(evidence.extra_messages);
                 changed_count = changed_count.saturating_add(evidence.modified_messages);
+                // Aggregate counters only cover concrete differences. An
+                // inconclusive or candidate-only classification can carry
+                // zero differences and must not read as a clean mailbox.
+                let outcome = evidence.verification_outcome();
+                let severity = match outcome {
+                    VerificationOutcome::Incomplete | VerificationOutcome::Failed => {
+                        Some(ExceptionSeverity::Critical)
+                    }
+                    VerificationOutcome::Ambiguous | VerificationOutcome::ProbableMatch => {
+                        Some(ExceptionSeverity::Warning)
+                    }
+                    _ => None,
+                };
+                if let Some(severity) = severity {
+                    report.exceptions.push(MigrationException {
+                        id: format!("unresolved-verification-{}", mailbox.job.id),
+                        severity,
+                        category: "unresolved_verification".to_string(),
+                        message: format!(
+                            "Mailbox {} verification is {}",
+                            mailbox.job.source_mailbox,
+                            outcome.as_str()
+                        ),
+                        affected_folder: None,
+                        affected_message_id: None,
+                    });
+                    report.remediation_steps.push(format!(
+                        "Re-run or review verification for mailbox {} until it reaches an exact match",
+                        mailbox.job.source_mailbox
+                    ));
+                }
             } else {
                 report.exceptions.push(MigrationException {
                     id: format!("incomplete-evidence-{}", mailbox.job.id),
@@ -370,6 +426,33 @@ mod tests {
                 .any(|exception| exception.category == "skipped_count_unavailable")
         );
         assert!(!report.is_successful());
+    }
+
+    #[test]
+    fn inconclusive_evidence_without_differences_is_not_clean() {
+        let mut snapshot = snapshot_with_evidence();
+        snapshot.has_active_runs = false;
+        snapshot.mailboxes.truncate(1);
+        let mailbox = &mut snapshot.mailboxes[0];
+        mailbox.attention_reason = Some(crate::core::AttentionReason::VerificationIncomplete);
+        let evidence = &mut mailbox.evidence.as_mut().unwrap().1;
+        evidence.verification_outcome = Some(VerificationOutcome::Incomplete);
+        evidence.failed_messages = 0;
+        evidence.missing_messages = 0;
+        evidence.extra_messages = 0;
+        evidence.modified_messages = 0;
+
+        let report = PostMigrationReport::from_project_snapshot(&snapshot);
+        assert!(report.has_critical_issues());
+        for category in ["unresolved_verification", "operator_attention"] {
+            assert!(
+                report.exceptions.iter().any(|exception| {
+                    exception.category == category
+                        && exception.severity == ExceptionSeverity::Critical
+                }),
+                "missing {category}"
+            );
+        }
     }
 
     #[test]

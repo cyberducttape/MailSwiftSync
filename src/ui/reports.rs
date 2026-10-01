@@ -49,11 +49,12 @@ impl App {
         let project_id = self
             .active_project_id()
             .ok_or("No durable migration project is available yet.")?;
+        // Build first so a refused report fails before the operator picks a path.
+        let report = reports::operator::build_post_migration_report_json(&self.store, project_id)?;
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-post-migration-report.json")
             .save_file()
             .ok_or("Report export cancelled.")?;
-        let report = reports::operator::build_post_migration_report_json(&self.store, project_id)?;
         write_private_atomic(&path, &report).map_err(|e| e.to_string())
     }
 

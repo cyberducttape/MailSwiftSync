@@ -228,6 +228,11 @@ fn release_jobs_use_least_privilege_permissions() {
             "{job} must not receive release attestation permissions"
         );
     }
+    assert_eq!(
+        release.matches("contents: write").count(),
+        1,
+        "only the publish job may write repository contents"
+    );
     let publish = job_lines("publish");
     assert!(publish.contains("contents: write"));
     assert!(publish.contains("id-token: write"));

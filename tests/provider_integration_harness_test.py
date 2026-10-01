@@ -29,11 +29,10 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn('doveadm_binary="$(command -v doveadm || true)"', SCRIPT)
 
     def test_secret_permissions_fail_closed(self):
-        self.assertIn(
-            'provider smoke testing requires 600 (owner-only)',
-            SCRIPT,
-        )
-        self.assertIn('exit 1', SCRIPT)
+        message = 'provider smoke testing requires 600 or 400 (owner-only)'
+        self.assertIn(message, SCRIPT)
+        after_message = SCRIPT.split(message, 1)[1].lstrip().splitlines()
+        self.assertEqual(after_message[1].strip(), 'exit 1')
 
 
 if __name__ == "__main__":
