@@ -89,21 +89,20 @@ fn production_readiness_surfaces_have_one_conservative_source() {
 }
 
 #[test]
-fn production_status_does_not_claim_runtime_eta_support() {
+fn production_status_describes_runtime_eta_boundary() {
     let status =
         fs::read_to_string("PRODUCTION_STATUS.md").expect("active production status should exist");
-    let recovery = fs::read_to_string("src/core/recovery_dashboard.rs")
-        .expect("recovery planner source should exist");
+    let manifest =
+        fs::read_to_string("CAPABILITY_MANIFEST.md").expect("capability manifest should exist");
     assert!(
-        status.contains("Time-to-completion estimates | ❌ Not available at runtime")
-            && status.contains(
-                "runtime progress, observed throughput, and a defensible ETA are not implemented"
-            ),
-        "production status must not imply an ETA exists before runtime telemetry is wired"
+        status.contains("Time-to-completion estimates | ⚠️ Estimate for imapsync only")
+            && status.contains("Activity exposes an explicitly labelled imapsync")
+            && status.contains("native Dovecot runs remain progress- and ETA-free"),
+        "production status must describe the conservative runtime ETA boundary"
     );
     assert!(
-        recovery.contains("#[cfg(test)]") && recovery.contains("pub fn estimate_resume_duration"),
-        "the documented ETA boundary should track the current test-only helper"
+        manifest.contains("**Live throughput, progress, and ETA** | yes | yes"),
+        "the capability manifest must agree that runtime telemetry is wired"
     );
 }
 

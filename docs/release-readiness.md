@@ -274,16 +274,16 @@ screen-reader checklist are recorded in
   UI, and reload gates are reproducible with the three benchmark scripts below
   and must be repeated on each supported release host class.
 
-  A local release-mode baseline on 2026-09-27 (Linux x86_64, 16 CPUs, the
+  The latest local release-mode baseline on 2026-09-30 (Linux x86_64, the
   cases run sequentially in one process) was:
 
   | Import | Rows | Elapsed | RSS after case |
   | --- | ---: | ---: | ---: |
-  | CSV | 1,000 | 2 ms | 8.4 MiB |
-  | CSV | 10,000 | 21 ms | 14.2 MiB |
-  | CSV | 100,000 | 226 ms | 71.3 MiB |
-  | XLSX | 10,000 | 57 ms | 21.4 MiB |
-  | XLSX | 100,000 | 590 ms | 125.1 MiB |
+  | CSV | 1,000 | 2 ms | 8.7 MiB |
+  | CSV | 10,000 | 22 ms | 14.5 MiB |
+  | CSV | 100,000 | 220 ms | 71.6 MiB |
+  | XLSX | 10,000 | 55 ms | 22.2 MiB |
+  | XLSX | 100,000 | 558 ms | 125.9 MiB |
 
   RSS is the process resident set reported by Linux and is cumulative because
   the cases run in one process; it is evidence for a baseline, not a portable
@@ -305,7 +305,7 @@ screen-reader checklist are recorded in
   for filtering, 11 ms for selecting all 100,000 IDs, 3 ms for refreshing a
   1,000-row state update, and 2 ms for the virtualized first frame. The same
   script now renders the complete application shell with 100,000 rows; the
-  current baseline is 100 ms for that first frame. These are release-mode host
+  current baseline is 34 ms for that first frame. These are release-mode host
   baselines. The script enforces default budgets of 100 ms for filtering, 250
   ms for selection-all, 100 ms for state refresh, 100 ms for the virtualized
   first frame, and 500 ms for the full shell; qualified host classes may
@@ -316,8 +316,8 @@ screen-reader checklist are recorded in
   Durable workspace restart/read behavior has a separate opt-in command,
   `scripts/benchmark-reload-scale.sh`. It seeds and closes a file-backed
   100,000-row project, reopens it, then reads bounded mailbox, status, and
-  verification pages plus aggregate counts. The local release baseline was
-  532 ms to seed, 834 ms to reopen, and 135 ms for those bounded reads. This
+  verification pages plus aggregate counts. The latest local release baseline
+  was 557 ms to seed, 286 ms to reopen, and 84 ms for those bounded reads. This
   is evidence for the SQLite read path, not an egui first-frame measurement or
   a release budget; capture both on each supported release host. The script
   enforces default budgets of 5,000 ms for seeding, 2,000 ms for reopen, and

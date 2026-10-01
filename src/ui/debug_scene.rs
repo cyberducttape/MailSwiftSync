@@ -11,8 +11,10 @@
 //! source card's browser sign-in). Release builds do not compile this module.
 use crate::App;
 use crate::bulk_import::BulkJob;
+#[cfg(debug_assertions)]
 use crate::ui::WorkspaceView;
 
+#[cfg(debug_assertions)]
 pub(crate) fn apply(app: &mut App) {
     if std::env::var_os("MAILSWIFTSYNC_DEBUG_DEMO").is_some() {
         demo_data(app);
@@ -189,6 +191,7 @@ pub(crate) fn demo_data(app: &mut App) {
 }
 
 /// Initial window size from `MAILSWIFTSYNC_DEBUG_WINDOW`, e.g. `1280x1040`.
+#[cfg(debug_assertions)]
 pub(crate) fn window_size() -> Option<[f32; 2]> {
     let value = std::env::var("MAILSWIFTSYNC_DEBUG_WINDOW").ok()?;
     let (width, height) = value.split_once('x')?;

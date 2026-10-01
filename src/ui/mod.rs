@@ -10,7 +10,10 @@ mod batch_confirmations;
 mod batch_filter;
 mod batch_queue;
 mod batch_sheet;
-#[cfg(debug_assertions)]
+// Release-mode tests still use the deterministic debug scenes for the
+// accessibility and scale audits. Keep these fixtures out of production
+// binaries while making them available whenever the test harness is built.
+#[cfg(any(debug_assertions, test))]
 pub(crate) mod debug_scene;
 pub(crate) mod engine;
 pub(crate) mod fonts;

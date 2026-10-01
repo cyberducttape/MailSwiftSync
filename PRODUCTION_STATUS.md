@@ -83,7 +83,7 @@ very large accounts.
 | Transfer attempt history | ✅ Initial layer | Engine attempt start/finish and bounded failure class are durably recorded and exposed in customer-proof run metadata; this is not a per-message resume index |
 | Resume from interruption | ⚠️ Engine-dependent | Dovecot resumes from its validated opaque engine state; imapsync reruns idempotently and may rescan/revisit prior work |
 | Crash recovery | ✅ | Startup process identity/recovery paths are wired |
-| Time-to-completion estimates | ❌ Not available at runtime | The duration helper is test-only; runtime progress, observed throughput, and a defensible ETA are not implemented |
+| Time-to-completion estimates | ⚠️ Estimate for imapsync only | Activity derives bounded rolling throughput and an explicitly labelled ETA from imapsync progress; Dovecot runs do not expose transfer progress and therefore do not produce an ETA |
 | Recovery guidance | ⚠️ Partial GUI | Activity renders localized fail-closed guidance for interruption, transport, and throttling attention states; configuration and verification findings retain their dedicated remediation views |
 
 ---
@@ -190,7 +190,7 @@ new metadata verifier against real accounts.
 - ⏳ Successful live pilots with real data
 - ⏳ Recovery/interruption testing with production accounts
 - ⏳ Provider-specific edge case validation
-- ⚠️ Synthetic durable SQLite reconciliation benchmark measured 100k messages per endpoint; end-to-end large-mailbox/provider load qualification (100k+ messages) remains outstanding. See [verification envelope](docs/verification-envelope.md).
+- ⚠️ Synthetic durable SQLite reconciliation benchmark measured 100k messages per endpoint, and the current Linux release host passes the importer/UI/reload scale gates; end-to-end large-mailbox/provider load qualification (100k+ messages) remains outstanding. See [verification envelope](docs/verification-envelope.md).
 
 ---
 
@@ -276,9 +276,9 @@ Open an issue with: `[FEATURE REQUEST]` prefix
 
 - **Product:** MailSwiftSync v0.1.0-alpha.1
 - **Status:** Technical Preview / Early Adoption
-- **Schema Version:** 12
+- **Schema Version:** 14
 - **Qualified imapsync version:** exactly 2.314. Other versions may transfer, but their output cannot provide trusted MailSwiftSync verification evidence; native Dovecot 2.3/2.4 CI qualification remains pending
-- **Status snapshot date:** September 27, 2026 (not a build timestamp)
+- **Status snapshot date:** September 30, 2026 (not a build timestamp)
 
 ---
 
@@ -293,8 +293,9 @@ MailSwiftSync is **ready for technical preview deployments** with the following 
 
 The system provides a durable, safety-gated migration controller suitable for
 technical-preview use. It provides bounded, opt-in body-content proof only for
-encrypted imapsync runs; it does not yet provide provider-specific execution intelligence; provider runbooks are guidance only,
-not provider-specific execution or qualification, and recovery time estimates
-are not yet surfaced in the GUI workflow.
+encrypted imapsync runs; it does not yet provide provider-specific execution
+intelligence; provider runbooks are guidance only, not provider-specific
+execution or qualification. Activity exposes an explicitly labelled imapsync
+ETA, while native Dovecot runs remain progress- and ETA-free.
 
 **Next milestone:** Live validation with real provider mailboxes to reach GA 1.0 status.
