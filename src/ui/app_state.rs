@@ -80,6 +80,8 @@ pub(crate) struct App {
     pub(crate) bulk_visible_indices: Vec<usize>,
     /// Per-frame selection projection shared by the drawer and page counts.
     pub(crate) bulk_selection_view: crate::ui::batch::SelectionView,
+    /// Rebuild the selected-row projection only after queue/state/selection changes.
+    pub(crate) bulk_selection_view_dirty: bool,
     /// Lowercase searchable mailbox fields, rebuilt only when queue rows are
     /// imported or otherwise structurally changed.
     pub(crate) bulk_search_values: Vec<String>,
@@ -252,6 +254,9 @@ pub(crate) struct App {
     pub(crate) bulk_mode: BatchExecutionMode,
     pub(crate) bulk_clear_confirm_open: bool,
     pub(crate) pending_bulk_import: Option<std::path::PathBuf>,
+    pub(crate) pending_plaintext_import: Option<std::path::PathBuf>,
+    pub(crate) bulk_plaintext_import_acknowledged: bool,
+    pub(crate) plaintext_import_dialog_acknowledged: bool,
     pub(crate) pending_sheet_import: Option<PendingSheetImport>,
     pub(crate) bulk_sheet_index: usize,
     pub(crate) bulk_import_receiver: Option<Receiver<Result<BulkImportResult, String>>>,
@@ -322,11 +327,13 @@ impl App {
     pub(crate) fn clear_bulk_selection(&mut self) {
         self.bulk_selected_ids.clear();
         self.bulk_all_selected = false;
+        self.bulk_selection_view_dirty = true;
     }
 
     pub(crate) fn select_all_bulk_rows(&mut self) {
         self.bulk_selected_ids.clear();
         self.bulk_all_selected = true;
+        self.bulk_selection_view_dirty = true;
     }
 
     pub(crate) fn bulk_selection_scope(&self) -> crate::controller::SelectionScope {

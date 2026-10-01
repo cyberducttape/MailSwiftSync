@@ -6,6 +6,72 @@ use crate::controller::batch_admission::{apply_keyring_id, selection_value};
 use eframe::egui::{self, Color32, RichText};
 
 impl App {
+    pub(crate) fn bulk_plaintext_import_confirmation(&mut self, ctx: &egui::Context) {
+        let modal_id = egui::Id::new("plaintext_mailbox_import_confirmation");
+        if !crate::bulk_import::plaintext_secret_import_enabled()
+            || self.pending_plaintext_import.is_none()
+            || self.running()
+        {
+            crate::ui::reset_initial_focus(ctx, modal_id);
+            return;
+        }
+        let path_label = self
+            .pending_plaintext_import
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .and_then(|name| name.to_str())
+            .unwrap_or("the selected file")
+            .to_owned();
+        let mut acknowledged = false;
+        let mut cancel = false;
+        let mut checkbox = self.plaintext_import_dialog_acknowledged;
+        let response = egui::Modal::new(modal_id).show(ctx, |ui| {
+            ui.heading(self.language.message("ui.plaintext-import-warning-title"));
+            ui.label(
+                self.language
+                    .message("ui.plaintext-import-warning-body")
+                    .replace("{}", &path_label),
+            );
+            ui.add_space(8.0);
+            ui.checkbox(
+                &mut checkbox,
+                self.language.message("ui.plaintext-import-warning-ack"),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let cancel_button = ui.button(self.language.message("ui.cancel"));
+                crate::ui::focus_on_open(ui, &cancel_button, modal_id);
+                cancel |= cancel_button.clicked();
+                if ui
+                    .add_enabled(
+                        checkbox,
+                        egui::Button::new(self.language.message("ui.continue-import")),
+                    )
+                    .clicked()
+                {
+                    acknowledged = true;
+                }
+            });
+        });
+        self.plaintext_import_dialog_acknowledged = checkbox;
+        if cancel || response.should_close() {
+            self.pending_plaintext_import = None;
+            self.plaintext_import_dialog_acknowledged = false;
+            self.bulk_message = self
+                .language
+                .message("ui.plaintext-import-cancelled")
+                .into();
+            crate::ui::reset_initial_focus(ctx, modal_id);
+        } else if acknowledged {
+            crate::ui::reset_initial_focus(ctx, modal_id);
+            self.bulk_plaintext_import_acknowledged = true;
+            self.plaintext_import_dialog_acknowledged = false;
+            if let Some(path) = self.pending_plaintext_import.take() {
+                self.request_bulk_import_after_ack(path);
+            }
+        }
+    }
+
     pub(crate) fn bulk_clear_confirmation(&mut self, ctx: &egui::Context) {
         let modal_id = egui::Id::new("clear_mailbox_queue_confirmation");
         if !self.bulk_clear_confirm_open || self.running() {
@@ -98,6 +164,8 @@ impl App {
             let path = self.pending_bulk_import.take();
             if replace && let Some(path) = path {
                 self.import_bulk(&path);
+            } else {
+                self.bulk_plaintext_import_acknowledged = false;
             }
         }
     }

@@ -30,6 +30,7 @@ mod workspace;
 #[cfg(test)]
 pub(crate) use account::password_reveal_allowed;
 pub(crate) use app_state::{App, OAuthAuthorizationMessage};
+pub(crate) use batch_queue::mailbox_import_available;
 pub(crate) use language::UiLanguage;
 pub(crate) use output::{
     contains_ascii_case_insensitive, markdown_escape, push_visible_output, redact_secrets,

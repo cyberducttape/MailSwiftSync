@@ -64,6 +64,11 @@ submit its smoke proofs to the release evidence policy.
    - Observed throttling followed by recovery, plus quota/folder-limit errors
      classified without data loss
 
+Large-mailbox observations must identify the durable mailbox job ID and match
+that mailbox's source message/byte totals in the referenced digest-verified
+customer proof. Aggregate totals across several smaller mailboxes do not count
+as a 100k-message or 20-GiB mailbox qualification.
+
 ## Testing Procedure
 
 ### 1. Dry Pilot

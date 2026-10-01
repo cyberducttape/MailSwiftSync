@@ -55,7 +55,7 @@ pub(crate) fn render_account(
             None
         };
         if let Some(message) = message {
-            ui.label(RichText::new(message).color(danger).size(11.0));
+            ui.label(RichText::new(message).color(danger).size(12.0));
         }
     };
     crate::ui::card(ui, |ui| {
@@ -66,7 +66,7 @@ pub(crate) fn render_account(
             } else {
                 language.message("ui.imap-connection")
             })
-            .size(11.0)
+            .size(12.0)
             .color(ui.visuals().weak_text_color()),
         );
         crate::ui::form_row(ui, language.message("ui.server"), |ui| {
@@ -119,7 +119,7 @@ pub(crate) fn render_account(
                     RichText::new(
                         language.message("ui.use-a-provider-issued-access-token-with-imap-scope-tokens-stay-in-this-sess-7703cd486b"),
                     )
-                    .size(11.0)
+                    .size(12.0)
                     .color(ui.visuals().weak_text_color()),
                 );
             });
@@ -270,7 +270,7 @@ impl App {
                     RichText::new(
                         self.language.message("ui.this-is-password-storage-not-oauth-modern-auth-do-not-use-it-as-a-substitut-6c48271e27"),
                     )
-                    .size(11.0)
+                    .size(12.0)
                     .color(self.theme_colors().danger),
                 );
                 ui.separator();
@@ -290,7 +290,7 @@ impl App {
         ui.heading(self.language.message("ui.connect-provider-account"));
         ui.label(
             RichText::new(self.language.message("ui.oauth-app-registration-required"))
-                .size(11.0)
+                .size(12.0)
                 .color(self.theme_colors().text_secondary),
         );
         let mut start = false;
@@ -772,7 +772,7 @@ impl App {
             RichText::new(
                 self.language.message("ui.requires-an-oauth-application-you-have-registered-with-the-provider-run-mai-0289eda4e9"),
             )
-            .size(11.0)
+            .size(12.0)
             .color(self.theme_colors().text_secondary),
         );
         ui.add_enabled_ui(editable, |ui| {
@@ -817,7 +817,7 @@ impl App {
                 RichText::new(
                     self.language.message("ui.the-fields-above-are-entered-once-per-store-they-are-cleared-from-memory-im-9238dc1433"),
                 )
-                .size(11.0)
+                .size(12.0)
                 .color(self.theme_colors().text_secondary),
             );
             ui.horizontal(|ui| {

@@ -22,7 +22,11 @@ fn plaintext_secrets_allowed(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
 }
 
-fn allow_plaintext_secrets() -> bool {
+fn plaintext_import_allowed(environment_opt_in: bool, per_import_acknowledged: bool) -> bool {
+    environment_opt_in && per_import_acknowledged
+}
+
+pub(crate) fn plaintext_secret_import_enabled() -> bool {
     plaintext_secrets_allowed(
         std::env::var("MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS")
             .ok()
@@ -137,13 +141,18 @@ pub(crate) struct PendingSheetImport {
     pub(crate) path: PathBuf,
     #[allow(dead_code)]
     pub(crate) sheets: Vec<String>,
+    pub(crate) plaintext_acknowledged: bool,
 }
 
 pub(crate) enum BulkImportResult {
     #[allow(dead_code)]
     Jobs(Vec<BulkJob>),
     #[allow(dead_code)]
-    Workbook { path: PathBuf, sheets: Vec<String> },
+    Workbook {
+        path: PathBuf,
+        sheets: Vec<String>,
+        plaintext_acknowledged: bool,
+    },
 }
 
 /// Start a bounded/validated mailbox-file import away from the egui thread.
@@ -153,6 +162,7 @@ pub(crate) enum BulkImportResult {
 pub(crate) fn spawn_import(
     path: PathBuf,
     base: Form,
+    plaintext_acknowledged: bool,
 ) -> Receiver<Result<BulkImportResult, String>> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -162,9 +172,13 @@ pub(crate) fn spawn_import(
             .unwrap_or("")
             .to_ascii_lowercase();
         let result = if ext == "csv" {
-            read_csv(&path, &base).map(BulkImportResult::Jobs)
+            read_csv_with_ack(&path, &base, plaintext_acknowledged).map(BulkImportResult::Jobs)
         } else if ext == "xlsx" {
-            workbook_sheets(&path).map(|sheets| BulkImportResult::Workbook { path, sheets })
+            workbook_sheets(&path).map(|sheets| BulkImportResult::Workbook {
+                path,
+                sheets,
+                plaintext_acknowledged,
+            })
         } else {
             Err("Choose a .csv or .xlsx file. Legacy .xls imports are disabled because they cannot be safely bounded before parsing.".into())
         };
@@ -178,16 +192,27 @@ pub(crate) fn spawn_sheet_import(
     path: PathBuf,
     base: Form,
     sheet_index: usize,
+    plaintext_acknowledged: bool,
 ) -> Receiver<Result<BulkImportResult, String>> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let result = read_sheet(&path, &base, sheet_index).map(BulkImportResult::Jobs);
+        let result = read_sheet_with_ack(&path, &base, sheet_index, plaintext_acknowledged)
+            .map(BulkImportResult::Jobs);
         let _ = sender.send(result);
     });
     receiver
 }
 
+#[cfg(test)]
 pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String> {
+    read_csv_with_ack(path, base, false)
+}
+
+fn read_csv_with_ack(
+    path: &Path,
+    base: &Form,
+    plaintext_acknowledged: bool,
+) -> Result<Vec<BulkJob>, String> {
     let file = open_import_file(path)?;
     let mut reader = csv::ReaderBuilder::new()
         .from_reader(file.take(crate::MAX_BULK_IMPORT_BYTES.saturating_add(1)));
@@ -197,7 +222,8 @@ pub(crate) fn read_csv(path: &Path, base: &Form) -> Result<Vec<BulkJob>, String>
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .collect::<Vec<_>>();
-    let allow_plaintext_secrets = allow_plaintext_secrets();
+    let allow_plaintext_secrets =
+        plaintext_import_allowed(plaintext_secret_import_enabled(), plaintext_acknowledged);
     validate_headers(&headers, allow_plaintext_secrets)?;
     if headers.len() > crate::MAX_BULK_IMPORT_COLUMNS {
         return Err(format!(
@@ -247,10 +273,20 @@ pub(crate) fn workbook_sheets(path: &Path) -> Result<Vec<String>, String> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn read_sheet(
     path: &Path,
     base: &Form,
     sheet_index: usize,
+) -> Result<Vec<BulkJob>, String> {
+    read_sheet_with_ack(path, base, sheet_index, false)
+}
+
+fn read_sheet_with_ack(
+    path: &Path,
+    base: &Form,
+    sheet_index: usize,
+    plaintext_acknowledged: bool,
 ) -> Result<Vec<BulkJob>, String> {
     let mut book = open_import_workbook(path)?;
     validate_xlsx_sheet_layout(&mut book, sheet_index)?;
@@ -274,7 +310,8 @@ pub(crate) fn read_sheet(
             crate::MAX_BULK_IMPORT_COLUMNS
         ));
     }
-    let allow_plaintext_secrets = allow_plaintext_secrets();
+    let allow_plaintext_secrets =
+        plaintext_import_allowed(plaintext_secret_import_enabled(), plaintext_acknowledged);
     validate_headers(&headers, allow_plaintext_secrets)?;
     let defaults = BulkJob::defaults_from_form(base);
     let mut jobs = Vec::new();
@@ -712,7 +749,7 @@ fn job_from_values_with_defaults(
         && (!source_password.trim().is_empty() || !destination_password.trim().is_empty())
     {
         return Err(
-            "Plaintext credential values were detected. Use credential IDs instead (source_credential_id, destination_credential_id), or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
+            "Plaintext credential values were detected. Use credential IDs instead (source_credential_id, destination_credential_id). To import passwords, set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 and confirm the warning for this import in the GUI.".into()
         );
     }
     let get = |key: &str| {
@@ -780,7 +817,7 @@ pub(crate) fn validate_headers(
         seen.contains("source_password") || seen.contains("destination_password");
     if has_plaintext_passwords && !allow_plaintext_secrets {
         return Err(
-            "Plaintext credential columns detected. Remove source_password and destination_password, use credential IDs instead, or set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 to import password material.".into()
+            "Plaintext credential columns detected. Remove source_password and destination_password or use credential IDs instead. To import passwords, set MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1 and confirm the warning for this import in the GUI.".into()
         );
     }
 
@@ -904,7 +941,7 @@ fn open_import_workbook(path: &Path) -> Result<Sheets<BufReader<std::fs::File>>,
 mod tests {
     use super::{
         BulkJob, job_from_values, open_import_workbook, parse_xlsx_cell_reference,
-        plaintext_secrets_allowed, validate_xlsx_shared_strings,
+        plaintext_import_allowed, plaintext_secrets_allowed, validate_xlsx_shared_strings,
         validate_xlsx_sheet_entry_dimensions,
     };
     use crate::migration_plan::Form;
@@ -949,6 +986,14 @@ mod tests {
             assert!(!plaintext_secrets_allowed(value));
         }
         assert!(plaintext_secrets_allowed(Some("1")));
+    }
+
+    #[test]
+    fn plaintext_import_requires_both_opt_in_and_one_import_acknowledgement() {
+        assert!(!plaintext_import_allowed(false, false));
+        assert!(!plaintext_import_allowed(false, true));
+        assert!(!plaintext_import_allowed(true, false));
+        assert!(plaintext_import_allowed(true, true));
     }
 
     #[test]

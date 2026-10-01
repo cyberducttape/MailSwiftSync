@@ -36,6 +36,7 @@ pub(crate) use events::{
     process_event_is_current, run_line_is_current,
 };
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
+pub(crate) use poll_events::PollEventState;
 pub(crate) use preflight::{
     CapabilityProbeResult, assess_plan, capability_observation_matches,
     capability_probe_result_matches,

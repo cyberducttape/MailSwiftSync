@@ -275,10 +275,12 @@ impl App {
                 return;
             }
         };
-        let prepared = match self
-            .form
-            .prepared_command_with_throttle_divisor_and_checkpoint(1, dovecot_checkpoint.as_deref())
-        {
+        let prepared = match self.form.validated_plan().and_then(|plan| {
+            plan.prepared_command_with_throttle_divisor_and_checkpoint(
+                1,
+                dovecot_checkpoint.as_deref(),
+            )
+        }) {
             Ok(command) => command,
             Err(error) => {
                 self.set_status(error, StatusSeverity::Error);

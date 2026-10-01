@@ -27,7 +27,7 @@ impl App {
                             self.language.text(engine.label()),
                         );
                         if self.form.profile.engine == engine {
-                            ui.label(RichText::new(self.language.text(engine.description())).size(11.0).color(self.theme_colors().text_secondary));
+                            ui.label(RichText::new(self.language.text(engine.description())).size(12.0).color(self.theme_colors().text_secondary));
                         }
                     }
                     if self.form.profile.engine == core::Engine::Dovecot {
@@ -40,8 +40,8 @@ impl App {
                             ui.label(self.language.message("ui.config"));
                             ui.text_edit_singleline(&mut self.form.profile.dovecot_config);
                         });
-                        ui.label(RichText::new(self.language.message("ui.native-dovecot-execution-is-local-only-until-a-secret-safe-broker-is-implemented")).size(11.0).color(self.theme_colors().text_secondary));
-                        ui.label(RichText::new(self.language.message("ui.dry-mode-only-lists-the-destination-mailbox-native-dovecot-uses-the-selecte-338016b9c5")).size(11.0).color(self.theme_colors().text_secondary));
+                        ui.label(RichText::new(self.language.message("ui.native-dovecot-execution-is-local-only-until-a-secret-safe-broker-is-implemented")).size(12.0).color(self.theme_colors().text_secondary));
+                        ui.label(RichText::new(self.language.message("ui.dry-mode-only-lists-the-destination-mailbox-native-dovecot-uses-the-selecte-338016b9c5")).size(12.0).color(self.theme_colors().text_secondary));
                     }
                 });
                 if !editable {

@@ -2,21 +2,38 @@
 
 use crate::*;
 
+/// Mutable state shared across one bounded event-reduction pass.
+///
+/// Keeping this as a single value makes the poll-cycle contract explicit and
+/// gives the reducer a natural seam for later extraction from `App` without
+/// hiding durability ordering in a long positional argument list.
+pub(crate) struct PollEventState {
+    pub(crate) active_run: Option<ActiveRunContext>,
+    pub(crate) pending_db_events: Vec<PendingDbEvent>,
+    pub(crate) deferred_events: VecDeque<Event>,
+    pub(crate) durability_errors: Vec<String>,
+    pub(crate) recovered_durability: bool,
+    pub(crate) bulk_state_changed: bool,
+    pub(crate) ended_processes: HashSet<(String, String)>,
+}
+
 impl App {
     /// Consume at most the configured number of worker events for one UI
     /// cycle. This keeps process/event reduction separate from refresh and
     /// terminal completion bookkeeping in the outer poll loop.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn process_poll_events(
         &mut self,
-        active_run: &Option<ActiveRunContext>,
-        pending_db_events: &mut Vec<PendingDbEvent>,
-        deferred_events: &mut VecDeque<Event>,
-        durability_errors: &mut Vec<String>,
-        recovered_durability: &mut bool,
-        bulk_state_changed: &mut bool,
-        ended_processes: &mut HashSet<(String, String)>,
+        cycle: &mut PollEventState,
     ) -> Option<Result<StreamOutcome, String>> {
+        let PollEventState {
+            active_run,
+            pending_db_events,
+            deferred_events,
+            durability_errors,
+            recovered_durability,
+            bulk_state_changed,
+            ended_processes,
+        } = cycle;
         let mut done = None;
         if let Some(rx) = &self.receiver {
             let mut processed_events = 0;

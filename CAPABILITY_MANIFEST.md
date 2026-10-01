@@ -147,7 +147,7 @@ particular target.
 - Provider-specific throttling enforcement (adaptive cooldown reacts to observed signals, but provider quota policies are not encoded)
 - Automatic retry with provider-specific backoff
 - Pre-migration risk report generation during migration
-- Post-migration exception report generation
+- Automatic post-migration exception-report generation after each live run (an explicit headless `post-report` export is available)
 - Dedicated multi-run resume/recovery dashboard UI
 - Runbook steps that sequence or gate the GUI workflow (the Plan page shows them as read-only guidance)
 - Real provider integration testing (requires live credentials)
@@ -195,7 +195,7 @@ particular target.
 - Large-scale deployments without a qualified provider pilot or large-account load qualification
 - Unattended very-large migrations requiring durable per-message checkpoint/restart semantics
 - Critical customer mailboxes (lacking live provider validation)
-- Automated migrations (recovery guidance not surfaced)
+- Automated migration orchestration (Activity recovery guidance is advisory; it does not schedule, resume, or autonomously retry migrations)
 
 ---
 

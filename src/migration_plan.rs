@@ -699,6 +699,12 @@ impl Form {
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_internal(true)
     }
+    /// Validate the complete executable plan and return the only type that
+    /// can prepare an engine invocation.
+    pub(crate) fn validated_plan(&self) -> Result<ValidatedPlan<'_>, String> {
+        self.validate()?;
+        Ok(ValidatedPlan { form: self })
+    }
     pub(crate) fn validate_for_import(&self) -> Result<(), String> {
         self.validate_internal(false)
     }
@@ -935,123 +941,6 @@ impl Form {
             self.profile.imapsync_path.clone(),
             engine::try_imapsync_preview_args(&self.profile, self.dry_run, 1)?,
         ))
-    }
-    #[cfg(test)]
-    pub(crate) fn prepared_command(&self) -> Result<PreparedCommand, String> {
-        self.prepare_command_with_dialect(1, None, Some(DovecotConfigDialect::Modern24))
-    }
-    pub(crate) fn prepared_command_with_throttle_divisor_and_checkpoint(
-        &self,
-        throttle_divisor: usize,
-        checkpoint: Option<&str>,
-    ) -> Result<PreparedCommand, String> {
-        let dovecot_dialect = if self.engine() == core::Engine::Dovecot {
-            Some(detect_dovecot_config_dialect(&self.profile.doveadm_path)?)
-        } else {
-            None
-        };
-        self.prepare_command_with_dialect(throttle_divisor, checkpoint, dovecot_dialect)
-    }
-
-    fn prepare_command_with_dialect(
-        &self,
-        throttle_divisor: usize,
-        checkpoint: Option<&str>,
-        dovecot_dialect: Option<DovecotConfigDialect>,
-    ) -> Result<PreparedCommand, String> {
-        // Keep command preparation as a hard validation boundary. The
-        // low-level builder emits canonical options, but it must never be
-        // possible to prepare an engine invocation from a profile that has
-        // not passed the same validator used by admission.
-        self.extra_options_valid()?;
-        if self.engine() == core::Engine::Dovecot {
-            let dovecot_dialect = dovecot_dialect.ok_or_else(|| {
-                "Dovecot command preparation requires a detected configuration dialect".to_owned()
-            })?;
-            let secret_dir = create_secret_directory()?;
-            let source_file = secret_dir.join("source.secret");
-            let runtime_config = write_secret_file(&source_file, self.source_password.as_str())
-                .map_err(|error| format!("could not prepare source credential file: {error}"))
-                .and_then(|()| {
-                    write_dovecot_runtime_config(
-                        &secret_dir,
-                        &self.profile.dovecot_config,
-                        &source_file,
-                    )
-                });
-            let runtime_config = match runtime_config {
-                Ok(path) => path,
-                Err(error) => {
-                    let _ = std::fs::remove_dir_all(&secret_dir);
-                    return Err(error);
-                }
-            };
-            let config_path = runtime_config.to_string_lossy();
-            let (executable, args) = self.command_with_checkpoint_and_mode_and_config(
-                false,
-                checkpoint,
-                self.dry_run,
-                Some(&config_path),
-                dovecot_dialect,
-            );
-            let verification = if self.dry_run {
-                Vec::new()
-            } else {
-                self.dovecot_verification_commands_with_config(
-                    false,
-                    Some(&config_path),
-                    dovecot_dialect,
-                )
-            };
-            return Ok(PreparedCommand {
-                executable,
-                args,
-                cleanup: vec![secret_dir],
-                env: Vec::new(),
-                verification,
-            });
-        }
-        let mut args = engine::imapsync_args(&self.profile, self.dry_run, throttle_divisor);
-        let secret_dir = create_secret_directory()?;
-        let source_file = secret_dir.join("source.secret");
-        let destination_file = secret_dir.join("destination.secret");
-        if let Err(error) = write_secret_file(&source_file, self.source_password.as_str())
-            .and_then(|_| write_secret_file(&destination_file, self.destination_password.as_str()))
-        {
-            let _ = std::fs::remove_dir_all(&secret_dir);
-            return Err(format!(
-                "Could not prepare temporary credential files: {error}"
-            ));
-        }
-        if auth_method_is_oauth(&self.profile.source_auth) {
-            args.extend([
-                "--oauthaccesstoken1".into(),
-                source_file.to_string_lossy().into_owned(),
-            ]);
-        } else {
-            args.extend([
-                "--passfile1".into(),
-                source_file.to_string_lossy().into_owned(),
-            ]);
-        }
-        if auth_method_is_oauth(&self.profile.destination_auth) {
-            args.extend([
-                "--oauthaccesstoken2".into(),
-                destination_file.to_string_lossy().into_owned(),
-            ]);
-        } else {
-            args.extend([
-                "--passfile2".into(),
-                destination_file.to_string_lossy().into_owned(),
-            ]);
-        }
-        Ok(PreparedCommand {
-            executable: self.profile.imapsync_path.clone(),
-            args,
-            cleanup: vec![secret_dir],
-            env: Vec::new(),
-            verification: Vec::new(),
-        })
     }
     /// A deterministic, secret-free description of the live execution plan.
     /// It intentionally includes the generated arguments so changing an
@@ -1405,6 +1294,130 @@ impl Form {
         // The userdb lookup validates the local destination identity without
         // touching the mailbox store.
         vec![(self.profile.doveadm_path.clone(), user)]
+    }
+}
+
+/// An immutable plan that has passed the full admission validator. Engine
+/// invocation preparation is intentionally available only through this type.
+pub(crate) struct ValidatedPlan<'a> {
+    form: &'a Form,
+}
+
+impl ValidatedPlan<'_> {
+    #[cfg(test)]
+    pub(crate) fn prepared_command(&self) -> Result<PreparedCommand, String> {
+        self.prepare_command_with_dialect(1, None, Some(DovecotConfigDialect::Modern24))
+    }
+
+    pub(crate) fn prepared_command_with_throttle_divisor_and_checkpoint(
+        &self,
+        throttle_divisor: usize,
+        checkpoint: Option<&str>,
+    ) -> Result<PreparedCommand, String> {
+        let form = self.form;
+        let dovecot_dialect = if form.engine() == core::Engine::Dovecot {
+            Some(detect_dovecot_config_dialect(&form.profile.doveadm_path)?)
+        } else {
+            None
+        };
+        self.prepare_command_with_dialect(throttle_divisor, checkpoint, dovecot_dialect)
+    }
+
+    fn prepare_command_with_dialect(
+        &self,
+        throttle_divisor: usize,
+        checkpoint: Option<&str>,
+        dovecot_dialect: Option<DovecotConfigDialect>,
+    ) -> Result<PreparedCommand, String> {
+        let form = self.form;
+        if form.engine() == core::Engine::Dovecot {
+            let dovecot_dialect = dovecot_dialect.ok_or_else(|| {
+                "Dovecot command preparation requires a detected configuration dialect".to_owned()
+            })?;
+            let secret_dir = create_secret_directory()?;
+            let source_file = secret_dir.join("source.secret");
+            let runtime_config = write_secret_file(&source_file, form.source_password.as_str())
+                .map_err(|error| format!("could not prepare source credential file: {error}"))
+                .and_then(|()| {
+                    write_dovecot_runtime_config(
+                        &secret_dir,
+                        &form.profile.dovecot_config,
+                        &source_file,
+                    )
+                });
+            let runtime_config = match runtime_config {
+                Ok(path) => path,
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(&secret_dir);
+                    return Err(error);
+                }
+            };
+            let config_path = runtime_config.to_string_lossy();
+            let (executable, args) = form.command_with_checkpoint_and_mode_and_config(
+                false,
+                checkpoint,
+                form.dry_run,
+                Some(&config_path),
+                dovecot_dialect,
+            );
+            let verification = if form.dry_run {
+                Vec::new()
+            } else {
+                form.dovecot_verification_commands_with_config(
+                    false,
+                    Some(&config_path),
+                    dovecot_dialect,
+                )
+            };
+            return Ok(PreparedCommand {
+                executable,
+                args,
+                cleanup: vec![secret_dir],
+                env: Vec::new(),
+                verification,
+            });
+        }
+        let mut args = engine::imapsync_args(&form.profile, form.dry_run, throttle_divisor);
+        let secret_dir = create_secret_directory()?;
+        let source_file = secret_dir.join("source.secret");
+        let destination_file = secret_dir.join("destination.secret");
+        if let Err(error) = write_secret_file(&source_file, form.source_password.as_str())
+            .and_then(|_| write_secret_file(&destination_file, form.destination_password.as_str()))
+        {
+            let _ = std::fs::remove_dir_all(&secret_dir);
+            return Err(format!(
+                "Could not prepare temporary credential files: {error}"
+            ));
+        }
+        if auth_method_is_oauth(&form.profile.source_auth) {
+            args.extend([
+                "--oauthaccesstoken1".into(),
+                source_file.to_string_lossy().into_owned(),
+            ]);
+        } else {
+            args.extend([
+                "--passfile1".into(),
+                source_file.to_string_lossy().into_owned(),
+            ]);
+        }
+        if auth_method_is_oauth(&form.profile.destination_auth) {
+            args.extend([
+                "--oauthaccesstoken2".into(),
+                destination_file.to_string_lossy().into_owned(),
+            ]);
+        } else {
+            args.extend([
+                "--passfile2".into(),
+                destination_file.to_string_lossy().into_owned(),
+            ]);
+        }
+        Ok(PreparedCommand {
+            executable: form.profile.imapsync_path.clone(),
+            args,
+            cleanup: vec![secret_dir],
+            env: Vec::new(),
+            verification: Vec::new(),
+        })
     }
 }
 

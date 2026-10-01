@@ -107,7 +107,7 @@ pub(crate) fn show(
                     ui.horizontal(|ui| {
                         ui.label(language.message("ui.theme"));
                         ui.label(RichText::new(theme.label()).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
-                        ui.label(RichText::new(language.message("ui.fixed-palette")).size(10.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                        ui.label(RichText::new(language.message("ui.fixed-palette")).size(12.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                     });
                 }
                 ui.horizontal(|ui| {
@@ -157,7 +157,7 @@ pub(crate) fn show(
             ui.add_space(8.0);
             crate::ui::card(ui, |ui| {
                 ui.heading(language.message("ui.report-branding"));
-                ui.label(RichText::new(language.message("ui.optional-applied-to-customer-proof-exports-as-an-issued-by-line-independent-90154a5591")).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                ui.label(RichText::new(language.message("ui.optional-applied-to-customer-proof-exports-as-an-issued-by-line-independent-90154a5591")).size(12.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                 ui.horizontal(|ui| {
                     ui.label(language.message("ui.agency-operator-name"));
                     ui.text_edit_singleline(&mut branding.name);
@@ -183,7 +183,7 @@ pub(crate) fn show(
                     action = Some(SettingsAction::OpenProjectBrowser);
                     close_requested = true;
                 }
-                ui.label(RichText::new(format!("{} {}. {}", language.message("ui.current-engine"), language.text(engine.label()), language.message("ui.connection-credentials-advanced-options-and-readiness-are-available-from-th-89dbcd1dd5"))).size(11.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
+                ui.label(RichText::new(format!("{} {}. {}", language.message("ui.current-engine"), language.text(engine.label()), language.message("ui.connection-credentials-advanced-options-and-readiness-are-available-from-th-89dbcd1dd5"))).size(12.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
             });
         });
     *open = window_open && !close_requested;

@@ -483,7 +483,7 @@ impl App {
                                 RichText::new(self.language.text(
                                     "Body proof is resource-intensive. The run will stop rather than exceed either byte bound; successful evidence is labeled BodyHash.",
                                 ))
-                                .size(11.0)
+                                .size(12.0)
                                 .color(self.theme_colors().warning),
                             );
                             ui.horizontal(|ui| {
@@ -528,7 +528,7 @@ impl App {
                                 .on_hover_text(self.language.message("ui.maximum-wall-clock-time-for-one-engine-process-it-is-a-safety-bound-not-an-3b6f293e02"));
                             ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
                         });
-                        ui.label(RichText::new(self.language.message("ui.batch-targets-are-divided-across-workers-and-process-starts-are-globally-pa-f1ee89a779")).size(11.0).color(self.theme_colors().text_secondary));
+                        ui.label(RichText::new(self.language.message("ui.batch-targets-are-divided-across-workers-and-process-starts-are-globally-pa-f1ee89a779")).size(12.0).color(self.theme_colors().text_secondary));
                     });
                     ui.add_space(8.0);
                     if self.form.engine() == crate::core::Engine::Dovecot {
@@ -555,12 +555,12 @@ impl App {
                                     self.language
                                         .text(self.form.profile.dovecot_strategy.description()),
                                 )
-                                    .size(11.0)
+                                    .size(12.0)
                                     .color(self.theme_colors().text_secondary),
                             );
                             ui.label(
                                 RichText::new(self.language.message("ui.dovecot-has-no-mailswiftsync-throttle-source-load-may-be-high-initial-backu-3c35e921d5"))
-                                    .size(11.0)
+                                    .size(12.0)
                                     .color(self.theme_colors().warning),
                             );
                         });
@@ -568,7 +568,7 @@ impl App {
                         crate::ui::card(ui, |ui| {
                             ui.heading(RichText::new(self.language.message("ui.destructive-destination-option")).color(self.theme_colors().danger));
                             ui.checkbox(&mut self.form.profile.delete2, self.language.message("ui.delete-destination-messages-missing-from-source-delete2"));
-                            ui.label(RichText::new(self.language.message("ui.use-only-for-an-intentionally-exact-backup-after-a-tested-preflight-this-ca-f6b0d29b8c")).size(11.0).color(self.theme_colors().danger));
+                            ui.label(RichText::new(self.language.message("ui.use-only-for-an-intentionally-exact-backup-after-a-tested-preflight-this-ca-f6b0d29b8c")).size(12.0).color(self.theme_colors().danger));
                         });
                     }
                 });

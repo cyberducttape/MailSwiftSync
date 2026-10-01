@@ -5,6 +5,10 @@ use crate::bulk_import::{BulkImportResult, PendingSheetImport};
 use crate::controller::{BulkRetryScope, BulkStateSet};
 use crate::ui::display_state_key;
 
+pub(crate) fn mailbox_import_available(running: bool, import_in_progress: bool) -> bool {
+    !running && !import_in_progress
+}
+
 impl App {
     pub(crate) fn choose_bulk_import(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
@@ -24,6 +28,7 @@ impl App {
             .filter(|(_, job)| set.matches(&display_state_key(&job.state)))
             .filter_map(|(index, _)| self.bulk_job_ids.get(index).cloned())
             .collect();
+        self.bulk_selection_view_dirty = true;
         self.bulk_state_filter = "all".into();
         self.bulk_message = self
             .language
@@ -49,9 +54,17 @@ impl App {
                 self.detach_bulk_queue_identity();
                 self.mark_bulk_jobs_changed();
             }
-            Ok(BulkImportResult::Workbook { path, sheets }) => {
+            Ok(BulkImportResult::Workbook {
+                path,
+                sheets,
+                plaintext_acknowledged,
+            }) => {
                 self.bulk_sheet_index = 0;
-                self.pending_sheet_import = Some(PendingSheetImport { path, sheets });
+                self.pending_sheet_import = Some(PendingSheetImport {
+                    path,
+                    sheets,
+                    plaintext_acknowledged,
+                });
                 self.bulk_message = self
                     .language
                     .text("Choose the worksheet containing the migration rows before importing.")
@@ -81,10 +94,16 @@ impl App {
         self.bulk_import_receiver = Some(crate::bulk_import::spawn_import(
             path,
             self.form.clone_without_credentials(),
+            std::mem::take(&mut self.bulk_plaintext_import_acknowledged),
         ));
     }
 
-    pub(crate) fn begin_sheet_import(&mut self, path: std::path::PathBuf, sheet_index: usize) {
+    pub(crate) fn begin_sheet_import(
+        &mut self,
+        path: std::path::PathBuf,
+        sheet_index: usize,
+        plaintext_acknowledged: bool,
+    ) {
         if self.bulk_import_receiver.is_some() {
             self.bulk_message = self
                 .language
@@ -100,6 +119,7 @@ impl App {
             path,
             self.form.clone_without_credentials(),
             sheet_index,
+            plaintext_acknowledged,
         ));
     }
 
@@ -108,6 +128,15 @@ impl App {
     }
 
     pub(crate) fn request_bulk_import(&mut self, path: std::path::PathBuf) {
+        if crate::bulk_import::plaintext_secret_import_enabled() {
+            self.plaintext_import_dialog_acknowledged = false;
+            self.pending_plaintext_import = Some(path);
+            return;
+        }
+        self.request_bulk_import_after_ack(path);
+    }
+
+    pub(crate) fn request_bulk_import_after_ack(&mut self, path: std::path::PathBuf) {
         if self.bulk_jobs.is_empty() {
             self.import_bulk(&path);
         } else {
@@ -134,6 +163,7 @@ impl App {
     }
 
     pub(crate) fn mark_bulk_jobs_changed(&mut self) {
+        self.bulk_selection_view_dirty = true;
         self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
         self.bulk_summary = None;
         self.bulk_search_values.clear();
@@ -167,6 +197,7 @@ impl App {
     }
 
     pub(crate) fn mark_bulk_state_changed(&mut self) {
+        self.bulk_selection_view_dirty = true;
         self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
         self.bulk_summary = None;
         self.bulk_filter_cache_generation = u64::MAX;
@@ -198,5 +229,18 @@ impl App {
         let summary = crate::controller::BulkQueueSummary::from_jobs(&self.bulk_jobs);
         self.bulk_summary = Some((self.bulk_jobs_generation, summary));
         summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mailbox_import_available;
+
+    #[test]
+    fn mailbox_import_is_disabled_while_running_or_an_import_is_active() {
+        assert!(mailbox_import_available(false, false));
+        assert!(!mailbox_import_available(true, false));
+        assert!(!mailbox_import_available(false, true));
+        assert!(!mailbox_import_available(true, true));
     }
 }

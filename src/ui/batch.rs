@@ -82,10 +82,13 @@ impl App {
             .filter(|&index| index < self.bulk_jobs.len())
     }
 
-    /// Recompute the per-frame selection projection in one pass over the
-    /// selection. Selections can cover all 100k rows, so the drawer and the
-    /// page's counts share this instead of each walking the selection.
+    /// Recompute the cached selection projection after selection, queue, or
+    /// state changes. Selections can cover all 100k rows, so the drawer and
+    /// the Overview share this instead of each walking the selection.
     pub(crate) fn refresh_bulk_selection_view(&mut self) {
+        if !self.bulk_selection_view_dirty {
+            return;
+        }
         self.refresh_bulk_filter_cache();
         let mut view = std::mem::take(&mut self.bulk_selection_view);
         view.rows.clear();
@@ -111,6 +114,7 @@ impl App {
         }
         view.rows.sort_unstable();
         self.bulk_selection_view = view;
+        self.bulk_selection_view_dirty = false;
     }
 
     fn accumulate_selection_row(&self, view: &mut SelectionView, index: usize, omit_index: bool) {
@@ -129,6 +133,14 @@ impl App {
     }
 
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
+        if crate::bulk_import::plaintext_secret_import_enabled() {
+            ui.colored_label(
+                self.theme_colors().danger,
+                self.language
+                    .message("ui.plaintext-import-capability-warning"),
+            );
+            ui.add_space(6.0);
+        }
         let colors = self.theme_colors();
         crate::ui::page_header(
             ui,
@@ -174,9 +186,23 @@ impl App {
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::ui::primary_button(ui, self.language.message("ui.import-csv-xlsx"))
-                        .clicked()
-                    {
+                    let import_available = crate::ui::mailbox_import_available(
+                        self.running(),
+                        self.bulk_import_receiver.is_some(),
+                    );
+                    let import = ui
+                        .add_enabled_ui(import_available, |ui| {
+                            crate::ui::primary_button(
+                                ui,
+                                self.language.message("ui.import-csv-xlsx"),
+                            )
+                        })
+                        .inner
+                        .on_disabled_hover_text(
+                            self.language
+                                .message("ui.mailbox-import-unavailable-during-operation"),
+                        );
+                    if import.clicked() {
                         self.choose_bulk_import();
                     }
                     if ui
@@ -191,7 +217,7 @@ impl App {
                         self.language
                             .text("CSV or XLSX only; legacy .xls files must be converted first."),
                     )
-                    .size(11.0)
+                    .size(12.0)
                     .color(colors.text_secondary),
                 );
             });
@@ -207,9 +233,15 @@ impl App {
                 );
                 if ui
                     .add_enabled(
-                        !self.running(),
+                        crate::ui::mailbox_import_available(
+                            self.running(),
+                            self.bulk_import_receiver.is_some(),
+                        ),
                         egui::Button::new(self.language.message("ui.import-csv-xlsx")),
                     )
+                    .on_disabled_hover_text(self.language.message(
+                        "ui.mailbox-import-unavailable-during-operation",
+                    ))
                     .clicked()
                 {
                     self.choose_bulk_import();
@@ -363,6 +395,7 @@ impl App {
                             .iter()
                             .filter_map(|&index| self.bulk_job_ids.get(index).cloned())
                             .collect();
+                        self.bulk_selection_view_dirty = true;
                     }
                     selection_changed = true;
                 }
@@ -628,6 +661,7 @@ impl App {
                                     self.bulk_selected_ids.remove(job_id);
                                 }
                                 // Counts and the drawer refresh next frame.
+                                self.bulk_selection_view_dirty = true;
                                 ui.ctx().request_repaint();
                             }
                         });
@@ -788,7 +822,7 @@ impl App {
                 self.language
                     .text("Selected mailbox scope remains explicit while this drawer is open."),
             )
-            .size(11.0)
+            .size(12.0)
             .color(self.theme_colors().text_secondary),
         );
         ui.separator();

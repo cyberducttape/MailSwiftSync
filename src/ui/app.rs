@@ -27,6 +27,10 @@ fn plan_workflow_step(
     }
 }
 
+fn plan_configuration_enabled(migration_running: bool) -> bool {
+    !migration_running
+}
+
 fn selection_inspector_in_side_panel(
     view: WorkspaceView,
     has_selection: bool,
@@ -327,6 +331,7 @@ impl eframe::App for App {
         self.live_confirmation(&ctx);
         self.stop_confirmation(&ctx);
         self.bulk_sheet_selection(&ctx);
+        self.bulk_plaintext_import_confirmation(&ctx);
         self.bulk_clear_confirmation(&ctx);
         self.bulk_import_confirmation(&ctx);
         self.bulk_live_confirmation(&ctx);
@@ -408,6 +413,16 @@ impl App {
             self.language
                 .text("Choose the systems and accounts involved in this migration."),
         );
+        if self.running() {
+            ui.label(
+                egui::RichText::new(self.language.message("ui.plan-locked-during-migration"))
+                    .small()
+                    .color(colors.warning),
+            );
+            ui.add_space(8.0);
+        }
+        let dovecot = self.form.engine() == core::Engine::Dovecot;
+        ui.add_enabled_ui(plan_configuration_enabled(self.running()), |ui| {
         crate::ui::card(ui, |ui| {
             crate::ui::section_label(ui, self.language.message("ui.migration-method"));
             ui.horizontal_wrapped(|ui| {
@@ -435,10 +450,6 @@ impl App {
             crate::ui::form_row(ui, self.language.message("ui.plan-name"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.form.profile.name).desired_width(360.0))
             });
-            ui.checkbox(
-                &mut self.form.dry_run,
-                self.language.message("ui.dry-run-preflight"),
-            );
         });
         crate::ui::card(ui, |ui| {
             egui::CollapsingHeader::new(
@@ -470,7 +481,6 @@ impl App {
             });
         });
         ui.add_space(16.0);
-        let dovecot = self.form.engine() == core::Engine::Dovecot;
         if ui.available_width() < 900.0 {
             self.endpoint_plan_panel(ui, true, dovecot, colors.info);
             self.endpoint_plan_panel(ui, false, dovecot, colors.success);
@@ -601,6 +611,7 @@ impl App {
         }
         ui.add_space(16.0);
         crate::ui::card(ui, |ui| self.provider_runbook_panel(ui));
+        });
         ui.add_space(16.0);
         let current_plan = crate::plan_identity::fingerprint_digest(&self.form.plan_fingerprint());
         let account_test_current = crate::controller::capability_observation_matches(
@@ -989,7 +1000,10 @@ impl App {
 
 #[cfg(test)]
 mod workflow_tests {
-    use super::{PlanWorkflowStep, plan_workflow_step, selection_inspector_in_side_panel};
+    use super::{
+        PlanWorkflowStep, plan_configuration_enabled, plan_workflow_step,
+        selection_inspector_in_side_panel,
+    };
     use crate::ui::WorkspaceView;
 
     #[test]
@@ -1018,6 +1032,12 @@ mod workflow_tests {
             plan_workflow_step(true, true, false, false),
             PlanWorkflowStep::DryPreflight
         );
+    }
+
+    #[test]
+    fn plan_configuration_locks_only_while_a_migration_is_running() {
+        assert!(plan_configuration_enabled(false));
+        assert!(!plan_configuration_enabled(true));
     }
 
     #[test]

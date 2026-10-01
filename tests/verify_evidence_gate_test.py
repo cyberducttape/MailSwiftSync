@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the populated-evidence path of the shell release gate."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -65,10 +66,10 @@ class EvidenceGateTests(unittest.TestCase):
                 "engine_version": entry["engine_version"],
                 "test_summary": {
                     "mailboxes_tested": 1,
-                    "messages_total": entry["minimum_messages"],
-                    "bytes_total": entry["minimum_bytes"],
-                    "destination_messages_total": entry["minimum_messages"],
-                    "destination_bytes_total": entry["minimum_bytes"],
+                    "messages_total": 100000,
+                    "bytes_total": 20 * 1024**3,
+                    "destination_messages_total": 100000,
+                    "destination_bytes_total": 20 * 1024**3,
                     "folders_total": entry["minimum_folders"],
                     "destination_folders_total": entry["minimum_folders"],
                     "maximum_message_bytes": 10485760,
@@ -79,12 +80,13 @@ class EvidenceGateTests(unittest.TestCase):
                 },
                 "results": {
                     "overall_result": "pass_with_exceptions",
-                    "messages_covered_by_aggregate_evidence": entry["minimum_messages"],
-                    "verification_confidence": "aggregate_only",
+                    "messages_covered_by_aggregate_evidence": 100000,
+                    "messages_verified": 100000,
+                    "verification_confidence": "high",
                 },
                 "proof_digest": "0" * 64,
                 "proof_verification": "canonical_digest_verified",
-                "proof_file": "missing-proof.json",
+                "proof_file": "proof.json",
                 "run_id": "run",
                 "selected_run_id": "run",
                 "run_type": "live",
@@ -93,8 +95,8 @@ class EvidenceGateTests(unittest.TestCase):
                 "fixture_id": "fixture",
                 "scenario_ids": entry["required_scenarios_by_phase"]["live_pilot"],
                 "scenario_observations": {
-                    "large_mailbox_100k": {"messages": 100000},
-                    "large_mailbox_20gb": {"bytes": 20 * 1024**3},
+                    "large_mailbox_100k": {"mailbox_job_id": "job-a", "messages": 100000},
+                    "large_mailbox_20gb": {"mailbox_job_id": "job-a", "bytes": 20 * 1024**3},
                     "large_messages": {"maximum_message_bytes": 10485760},
                     "unicode_folders": {"observed": True},
                     "special_use_folders": {"observed": True},
@@ -113,6 +115,37 @@ class EvidenceGateTests(unittest.TestCase):
                 "mailswiftsync_binary_sha256": "a" * 64,
                 "imapsync_binary_sha256": "b" * 64,
             }
+            proof = {
+                "format": "mailswiftsync-customer-proof",
+                "project": {"project_id": "project", "dataset_digest": "d" * 64},
+                "provider_identity": {
+                    "source_provider": entry["source_provider"],
+                    "destination_provider": entry["destination_provider"],
+                    "source_auth_method": entry["source_auth_method"],
+                    "destination_auth_method": entry["destination_auth_method"],
+                    "fixture_id": "fixture",
+                },
+                "runs": [{
+                    "run_id": "run", "project_id": "project", "job_id": None,
+                    "status": "completed", "engine": "imapsync",
+                    "engine_version": "2.314", "started_at": "2026-09-20T00:00:00Z",
+                    "finished_at": "2026-09-20T00:01:00Z",
+                }],
+                "mailboxes": [
+                    {"job_id": job_id, "state": "verified", "evidence": {
+                        "source_messages": 50000, "destination_messages": 50000,
+                        "source_bytes": 10 * 1024**3, "destination_bytes": 10 * 1024**3,
+                    }}
+                    for job_id in ("job-a", "job-b")
+                ],
+            }
+            canonical_proof = json.dumps(
+                proof, separators=(",", ":"), ensure_ascii=False, sort_keys=True
+            )
+            proof_digest = hashlib.sha256(canonical_proof.encode()).hexdigest()
+            proof["proof_digest"] = proof_digest
+            evidence["proof_digest"] = proof_digest
+            (evidence_dir / "proof.json").write_text(json.dumps(proof), encoding="utf-8")
             (evidence_dir / "synthetic.json").write_text(
                 json.dumps(evidence), encoding="utf-8"
             )
@@ -129,7 +162,14 @@ class EvidenceGateTests(unittest.TestCase):
             self.assertNotIn("Traceback", output)
             self.assertNotIn("source_auth_method must be", output)
             self.assertNotIn("destination_auth_method must be", output)
-            self.assertIn("referenced customer proof is missing", output)
+            self.assertIn(
+                "large-mailbox-100k per-mailbox observation does not match verified customer-proof evidence",
+                output,
+            )
+            self.assertIn(
+                "large-mailbox-20gb per-mailbox observation does not match verified customer-proof evidence",
+                output,
+            )
 
             # Dry preflight evidence describes a no-transfer phase. It must
             # not be rejected for lacking live transfer totals, while the

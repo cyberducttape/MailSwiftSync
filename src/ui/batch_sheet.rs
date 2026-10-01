@@ -48,7 +48,7 @@ impl App {
                     RichText::new(
                         self.language.message("ui.the-selected-worksheet-is-parsed-and-validated-in-the-background-other-work-ca54bcb325"),
                     )
-                    .size(11.0)
+                    .size(12.0)
                     .color(self.theme_colors().text_secondary),
                 );
                 ui.horizontal(|ui| {
@@ -67,7 +67,11 @@ impl App {
                 .text("Worksheet selection cancelled; no rows were imported.")
                 .into();
         } else if import && let Some(pending) = self.pending_sheet_import.take() {
-            self.begin_sheet_import(pending.path, self.bulk_sheet_index);
+            self.begin_sheet_import(
+                pending.path,
+                self.bulk_sheet_index,
+                pending.plaintext_acknowledged,
+            );
         }
     }
 }

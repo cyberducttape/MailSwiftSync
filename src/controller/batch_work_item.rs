@@ -277,8 +277,12 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
         transfer_attempt_number,
         verification_failure,
     } = context;
-    let prepared = form
-        .prepared_command_with_throttle_divisor_and_checkpoint(concurrency, checkpoint.as_deref());
+    let prepared = form.validated_plan().and_then(|plan| {
+        plan.prepared_command_with_throttle_divisor_and_checkpoint(
+            concurrency,
+            checkpoint.as_deref(),
+        )
+    });
     match prepared {
         Ok(command) => {
             let cleanup_guard = CleanupGuard::new(command.cleanup.clone());

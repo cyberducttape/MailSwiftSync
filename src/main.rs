@@ -632,7 +632,7 @@ mod tests {
             .into_owned();
         form.dry_run = false;
         form.source_password = String::from("top-secret-credential").into();
-        let prepared = form.prepared_command().unwrap();
+        let prepared = form.validated_plan().unwrap().prepared_command().unwrap();
         let _cleanup = crate::credentials::CleanupGuard::new(prepared.cleanup.clone());
         let config_index = prepared.args.iter().position(|arg| arg == "-c").unwrap();
         let runtime_config = &prepared.args[config_index + 1];
@@ -1041,11 +1041,27 @@ mod tests {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
         form.profile.extra_options = "--timeout nope".into();
-        let error = match form.prepared_command() {
+        let error = match form
+            .validated_plan()
+            .and_then(|plan| plan.prepared_command())
+        {
             Ok(_) => panic!("invalid extra options were prepared"),
             Err(error) => error,
         };
         assert!(error.contains("requires an integer"));
+    }
+
+    #[test]
+    fn incomplete_form_cannot_be_promoted_to_a_validated_execution_plan() {
+        let form = Form::default();
+        let error = match form.validated_plan() {
+            Ok(_) => panic!("an incomplete form produced a command-preparation capability"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("not a valid endpoint"),
+            "unexpected validation error: {error}"
+        );
     }
 
     #[test]
@@ -2670,7 +2686,7 @@ mod tests {
         form.profile.destination_auth = "oauth2".into();
         form.source_password = String::from("source-access-token").into();
         form.destination_password = String::from("destination-access-token").into();
-        let prepared = form.prepared_command().unwrap();
+        let prepared = form.validated_plan().unwrap().prepared_command().unwrap();
         let source_index = prepared
             .args
             .iter()
@@ -2706,7 +2722,7 @@ mod tests {
     fn imapsync_runtime_plan_uses_ephemeral_passfiles() {
         let mut form = dovecot_form();
         form.profile.engine = core::Engine::ImapSync;
-        let prepared = form.prepared_command().unwrap();
+        let prepared = form.validated_plan().unwrap().prepared_command().unwrap();
         assert!(!prepared.args.contains(&"--password1".into()));
         assert!(!prepared.args.contains(&"--password2".into()));
         let source_index = prepared

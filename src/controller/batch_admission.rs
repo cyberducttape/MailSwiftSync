@@ -554,9 +554,8 @@ pub(crate) fn prepare_selected_batch_jobs(
         };
         if let Err(error) = credential_load {
             return Err(format!(
-                "Could not load credentials for queue row {} (durable mailbox {}): {error}",
-                queue_index + 1,
-                selected.durable_job_id
+                "Could not load credentials for queue row {} before durable admission: {error}",
+                queue_index + 1
             ));
         }
         if mode.is_live() {

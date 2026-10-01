@@ -302,6 +302,28 @@ for filename in files:
             for field in ("source_provider", "destination_provider", "source_auth_method", "destination_auth_method", "fixture_id"):
                 if evidence.get(field) != identity.get(field):
                     errors.append(f"{filename}: {field} does not match customer proof")
+        mailbox_observation_requirements = (
+            ("large-mailbox-100k", "large_mailbox_100k", "messages", "source_messages", "minimum_messages"),
+            ("large-mailbox-20gb", "large_mailbox_20gb", "bytes", "source_bytes", "minimum_bytes"),
+        )
+        proof_mailboxes = proof.get("mailboxes")
+        if not isinstance(proof_mailboxes, list):
+            proof_mailboxes = []
+        for scenario, observation_key, observation_metric, evidence_metric, minimum_key in mailbox_observation_requirements:
+            if scenario not in evidence.get("scenario_ids", []):
+                continue
+            observation = evidence.get("scenario_observations", {}).get(observation_key, {})
+            mailbox_job_id = observation.get("mailbox_job_id")
+            matching_mailboxes = [mailbox for mailbox in proof_mailboxes if isinstance(mailbox, dict) and mailbox.get("job_id") == mailbox_job_id]
+            if not mailbox_job_id or len(matching_mailboxes) != 1:
+                errors.append(f"{filename}: {scenario} must identify exactly one mailbox in the customer proof")
+                continue
+            mailbox_evidence = matching_mailboxes[0].get("evidence")
+            observed = observation.get(observation_metric)
+            proven = mailbox_evidence.get(evidence_metric) if isinstance(mailbox_evidence, dict) else None
+            minimum = int(scenario_requirements.get(scenario, {}).get(minimum_key, 0))
+            if not isinstance(observed, int) or not isinstance(proven, int) or observed != proven or proven < minimum:
+                errors.append(f"{filename}: {scenario} per-mailbox observation does not match verified customer-proof evidence or its threshold")
         project_id = proof.get("project", {}).get("project_id") if isinstance(proof.get("project"), dict) else None
         project_dataset_digest = proof.get("project", {}).get("dataset_digest") if isinstance(proof.get("project"), dict) else None
         if project_dataset_digest != evidence.get("test_dataset_digest"):

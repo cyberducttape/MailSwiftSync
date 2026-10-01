@@ -29,7 +29,7 @@ Required columns are:
 - `destination_host`
 - `destination_user`
 
-Optional columns are `project_name`, `source_credential_id`, `destination_credential_id`, and `name`. Password columns are intentionally rejected by default, even when blank; use keyring IDs instead, either as columns or with **Queue settings → Passwordless queue credentials** after import. The normal protected workflow starts from the [CSV template](../bulk-migrations-template.csv). Plaintext password imports are a separate, explicitly opt-in administrative exception and require `MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1`; never commit a populated password spreadsheet. Engine options are trusted application settings and cannot be imported from a spreadsheet.
+Optional columns are `project_name`, `source_credential_id`, `destination_credential_id`, and `name`. Password columns are intentionally rejected by default, even when blank; use keyring IDs instead, either as columns or with **Queue settings → Passwordless queue credentials** after import. The normal protected workflow starts from the [CSV template](../bulk-migrations-template.csv). Plaintext password imports are a separate administrative exception: set `MAILSWIFTSYNC_ALLOW_PLAINTEXT_SECRETS=1`, then acknowledge the warning separately for each file in the GUI. The Mailboxes page displays a persistent warning while this environment opt-in is enabled. Never commit a populated password spreadsheet. Engine options are trusted application settings and cannot be imported from a spreadsheet.
 
 ## Import and review
 

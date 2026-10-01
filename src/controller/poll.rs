@@ -2,14 +2,6 @@ use crate::*;
 
 impl App {
     pub(crate) fn poll(&mut self) {
-        let was_workspace_stale = self.ui_snapshot.is_stale();
-        self.refresh_ui_snapshot();
-        if !was_workspace_stale && self.ui_snapshot.is_stale() && !self.running() {
-            self.set_status(
-                "Durable state view is stale; execution is disabled until SQLite refresh succeeds.",
-                StatusSeverity::Error,
-            );
-        }
         // Exact callers (probe results, assessment, admission) recompute the
         // fingerprint themselves; this per-frame check only expires stale
         // observations promptly, so it need not hash files on every repaint.
@@ -166,22 +158,25 @@ impl App {
                 }
             }
         }
-        let mut pending_db_events = std::mem::take(&mut self.pending_db_events);
-        let mut deferred_events = std::mem::take(&mut self.deferred_events);
-        let mut durability_errors = Vec::new();
-        let mut recovered_durability = false;
-        let mut bulk_state_changed = false;
-        let active_run = self.active_run.clone();
-        let mut ended_processes = HashSet::new();
-        let mut done = self.process_poll_events(
-            &active_run,
-            &mut pending_db_events,
-            &mut deferred_events,
-            &mut durability_errors,
-            &mut recovered_durability,
-            &mut bulk_state_changed,
-            &mut ended_processes,
-        );
+        let mut event_cycle = controller::PollEventState {
+            active_run: self.active_run.clone(),
+            pending_db_events: std::mem::take(&mut self.pending_db_events),
+            deferred_events: std::mem::take(&mut self.deferred_events),
+            durability_errors: Vec::new(),
+            recovered_durability: false,
+            bulk_state_changed: false,
+            ended_processes: HashSet::new(),
+        };
+        let mut done = self.process_poll_events(&mut event_cycle);
+        let controller::PollEventState {
+            active_run,
+            mut pending_db_events,
+            deferred_events,
+            mut durability_errors,
+            mut recovered_durability,
+            bulk_state_changed,
+            ..
+        } = event_cycle;
         if bulk_state_changed {
             self.mark_bulk_state_changed();
         }
@@ -223,6 +218,19 @@ impl App {
             // storage. The retained events will be retried on the next poll.
             done = None;
         }
+        // First service worker requests and commit their durable acknowledgments.
+        // Refreshing the presentation snapshot can perform synchronous SQLite
+        // reads (including waiting on busy_timeout); it must not consume the
+        // same deadline budget as a worker waiting for this controller.
         self.finish_poll_run(done, active_run, cycle_had_durability_errors);
+
+        let was_workspace_stale = self.ui_snapshot.is_stale();
+        self.refresh_ui_snapshot();
+        if !was_workspace_stale && self.ui_snapshot.is_stale() && !self.running() {
+            self.set_status(
+                "Durable state view is stale; execution is disabled until SQLite refresh succeeds.",
+                StatusSeverity::Error,
+            );
+        }
     }
 }

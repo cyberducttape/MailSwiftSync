@@ -235,6 +235,18 @@ fn capability_manifest_is_current() {
             && manifest.matches("| no | no |").count() >= 3,
         "Capability manifest should not claim provider-specific throttle presets"
     );
+    assert!(
+        manifest.contains("explicit headless `post-report` export is available")
+            && manifest.contains(
+                "Automatic post-migration exception-report generation after each live run"
+            ),
+        "Capability manifest must distinguish an explicit report export from automatic report generation"
+    );
+    assert!(
+        manifest.contains("Activity recovery guidance is advisory; it does not schedule, resume, or autonomously retry migrations")
+            && !manifest.contains("Automated migrations (recovery guidance not surfaced)"),
+        "Capability manifest must not say recovery guidance is absent while documenting it in Activity"
+    );
 }
 
 #[test]

@@ -50,6 +50,14 @@ class ProviderEvidenceSchemaTests(unittest.TestCase):
             }.issubset(required)
         )
 
+    def test_large_mailbox_observations_are_bound_to_a_specific_mailbox(self):
+        observations = self.schema["properties"]["scenario_observations"]["properties"]
+        for scenario, metric in (("large_mailbox_100k", "messages"), ("large_mailbox_20gb", "bytes")):
+            with self.subTest(scenario=scenario):
+                self.assertIn("mailbox_job_id", observations[scenario]["required"])
+                self.assertIn("mailbox_job_id", observations[scenario]["properties"])
+                self.assertIn(metric, observations[scenario]["properties"])
+
     def test_sha256_fields_reject_non_digest_shapes_when_validator_available(self):
         try:
             import jsonschema
