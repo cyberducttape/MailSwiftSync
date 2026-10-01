@@ -244,6 +244,70 @@ impl PostMigrationReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{
+        MailboxEvidence, MailboxJob, Phase, Project, ProjectReportSnapshot, ReportMailboxSnapshot,
+        VerificationMethod, VerificationOutcome,
+    };
+
+    fn snapshot_with_evidence() -> ProjectReportSnapshot {
+        ProjectReportSnapshot {
+            project: Project {
+                id: "project".into(),
+                name: "Test project".into(),
+                source_endpoint: "source".into(),
+                destination_endpoint: "destination".into(),
+                phase: Phase::Complete,
+            },
+            mailboxes: vec![
+                ReportMailboxSnapshot {
+                    job: MailboxJob {
+                        id: "job-with-evidence".into(),
+                        source_mailbox: "source-a".into(),
+                        destination_mailbox: "destination-a".into(),
+                        state: "verified_with_exceptions".into(),
+                        config: None,
+                    },
+                    attention_reason: None,
+                    acceptance: None,
+                    evidence: Some((
+                        "run-a".into(),
+                        MailboxEvidence {
+                            verification_method: VerificationMethod::MetadataReconciliation,
+                            verification_outcome: Some(VerificationOutcome::Missing),
+                            source_messages: 10,
+                            destination_messages: 9,
+                            source_bytes: 100,
+                            destination_bytes: 90,
+                            unmatched_messages: Some(1),
+                            failed_messages: 2,
+                            source_folders: 1,
+                            destination_folders: 1,
+                            authoritative: false,
+                            missing_messages: 1,
+                            extra_messages: 2,
+                            modified_messages: 3,
+                            probable_messages: 0,
+                        },
+                        Some("{}".into()),
+                    )),
+                },
+                ReportMailboxSnapshot {
+                    job: MailboxJob {
+                        id: "job-without-evidence".into(),
+                        source_mailbox: "source-b".into(),
+                        destination_mailbox: "destination-b".into(),
+                        state: "attention".into(),
+                        config: None,
+                    },
+                    attention_reason: None,
+                    acceptance: None,
+                    evidence: None,
+                },
+            ],
+            runs: vec![],
+            has_active_runs: true,
+        }
+    }
 
     #[test]
     fn clean_migration_succeeds() {
@@ -274,5 +338,29 @@ mod tests {
                 .iter()
                 .any(|exception| exception.category == "failed_messages")
         );
+    }
+
+    #[test]
+    fn durable_snapshot_aggregation_remains_fail_closed() {
+        let report = PostMigrationReport::from_project_snapshot(&snapshot_with_evidence());
+        assert_eq!(report.total_processed, 10);
+        assert_eq!(report.total_failed, 2);
+        assert!(report.exceptions.iter().any(|exception| {
+            exception.category == "incomplete_evidence"
+                && exception.severity == ExceptionSeverity::Critical
+        }));
+        assert!(
+            report
+                .exceptions
+                .iter()
+                .any(|exception| exception.category == "active_run")
+        );
+        assert!(
+            report
+                .exceptions
+                .iter()
+                .any(|exception| exception.category == "skipped_count_unavailable")
+        );
+        assert!(!report.is_successful());
     }
 }
