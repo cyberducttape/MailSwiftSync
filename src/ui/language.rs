@@ -350,6 +350,7 @@ mod tests {
             "Destination credential stored in OS keyring",
             "Destination credential loaded",
             "Destination credential deleted from OS keyring",
+            "Mailbox state filter",
             "! imapsync was not found or did not report a version",
             "! imapsync {} is not the qualified version; transfers would be unverified",
             "Check installed engine",

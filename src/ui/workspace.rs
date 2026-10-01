@@ -575,10 +575,10 @@ impl App {
                 ui.label(RichText::new(self.language.message("ui.select-a-durable-project-to-make-it-the-workspace-for-reports-mailboxes-act-cee37f439c")).color(self.theme_colors().text_secondary));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label(self.language.message("ui.search"));
-                    ui.add(egui::TextEdit::singleline(&mut self.project_search)
+                    let field_label = ui.label(self.language.message("ui.search"));
+                    crate::ui::LabelledField::link_label(&ui.add(egui::TextEdit::singleline(&mut self.project_search)
                         .hint_text(self.language.message("ui.project-name-source-or-destination"))
-                        .desired_width(320.0));
+                        .desired_width(320.0)), &field_label);
                 });
                 ui.add_space(8.0);
                 ui.label(

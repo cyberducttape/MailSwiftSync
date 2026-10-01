@@ -47,6 +47,9 @@ unreachable control, missing accessible name/role/state, or clipped content at
 200% is a release blocker. Keep platform/screen-reader versions and the tested
 scenes in the release evidence; automated egui tests complement, but do not
 replace, those manual assistive-technology checks.
+Current automated coverage, the 200%/High Contrast review, and the manual
+screen-reader checklist are recorded in
+[accessibility-evidence.md](accessibility-evidence.md).
 
 ## Completed in the current hardening pass
 

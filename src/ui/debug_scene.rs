@@ -19,17 +19,7 @@ pub(crate) fn apply(app: &mut App) {
     }
     let providers = std::env::var("MAILSWIFTSYNC_DEBUG_PROVIDERS").unwrap_or_default();
     if providers.starts_with("gmail-m365") {
-        app.source_provider = crate::ProviderPreset::GoogleWorkspace;
-        app.destination_provider = crate::ProviderPreset::Microsoft365;
-        app.apply_provider_preset(true, crate::ProviderPreset::GoogleWorkspace);
-        app.apply_provider_preset(false, crate::ProviderPreset::Microsoft365);
-        app.form.profile.source_user = "alex@source.example".into();
-        app.form.profile.destination_user = "alex@destination.example".into();
-        app.form.source_password = crate::credentials::SecretString::default();
-        app.form.destination_password = crate::credentials::SecretString::default();
-        if providers == "gmail-m365-connect" {
-            app.open_card_oauth_connect(true, "google", "alex@source.example");
-        }
+        providers_demo(app, providers == "gmail-m365-connect");
     }
     if std::env::var_os("MAILSWIFTSYNC_DEBUG_TELEMETRY").is_some() {
         telemetry_demo(app);
@@ -60,7 +50,7 @@ pub(crate) fn apply(app: &mut App) {
 /// Synthetic operations telemetry over the demo queue: twenty minutes of
 /// samples, three transfers in flight, a retry, a cooldown, and a failure.
 /// The event channel's sender is leaked so the view renders as running.
-fn telemetry_demo(app: &mut App) {
+pub(crate) fn telemetry_demo(app: &mut App) {
     use crate::progress::TransferProgress;
     use std::time::{Duration, Instant};
     if app.bulk_jobs.is_empty() {
@@ -139,7 +129,22 @@ fn telemetry_demo(app: &mut App) {
     app.activity_window_spec = "00:00-23:59".into();
 }
 
-fn demo_data(app: &mut App) {
+/// Google Workspace → Microsoft 365 account cards with no secrets.
+pub(crate) fn providers_demo(app: &mut App, connect: bool) {
+    app.source_provider = crate::ProviderPreset::GoogleWorkspace;
+    app.destination_provider = crate::ProviderPreset::Microsoft365;
+    app.apply_provider_preset(true, crate::ProviderPreset::GoogleWorkspace);
+    app.apply_provider_preset(false, crate::ProviderPreset::Microsoft365);
+    app.form.profile.source_user = "alex@source.example".into();
+    app.form.profile.destination_user = "alex@destination.example".into();
+    app.form.source_password = crate::credentials::SecretString::default();
+    app.form.destination_password = crate::credentials::SecretString::default();
+    if connect {
+        app.open_card_oauth_connect(true, "google", "alex@source.example");
+    }
+}
+
+pub(crate) fn demo_data(app: &mut App) {
     let profile = &mut app.form.profile;
     profile.source_host = "imap.source.example".into();
     profile.source_user = "alex@source.example".into();

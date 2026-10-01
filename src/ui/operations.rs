@@ -162,91 +162,102 @@ impl App {
                 }
             });
             ui.add_space(6.0);
-            ui.columns(5, |columns| {
-                stat_tile(
-                    &mut columns[0],
-                    self.language.text("Estimated time remaining"),
-                    &eta.map_or_else(
-                        || {
-                            if self.running() {
-                                self.language.text("Estimating…").to_owned()
-                            } else {
-                                "—".to_owned()
-                            }
-                        },
-                        |eta| format!("~{}", format_estimate(eta)),
-                    ),
-                    &eta.map(|eta| {
-                        self.language
-                            .text("Finishes around {}")
-                            .replace("{}", &finish_clock(eta))
-                    })
-                    .unwrap_or_else(|| {
-                        self.language
-                            .text("Needs a few minutes of transfer data")
-                            .to_owned()
-                    }),
-                    26.0,
-                );
-                stat_tile(
-                    &mut columns[1],
-                    self.language.text("Throughput · 5-min average"),
-                    &throughput.map_or_else(
-                        || "—".to_owned(),
-                        |rate| format!("{}/s", format_bytes(rate.bytes_per_second)),
-                    ),
-                    &throughput.map_or_else(
-                        || self.language.text("Needs 10 s of transfer data").to_owned(),
-                        |rate| {
-                            self.language.text("{} msgs/min").replace(
+            let limit = if scope.total > 1 {
+                self.form.profile.batch_concurrency.clamp(1, 16)
+            } else {
+                1
+            };
+            tile_rows(ui, 5, 150.0, |index, ui| match index {
+                0 => {
+                    stat_tile(
+                        ui,
+                        self.language.text("Estimated time remaining"),
+                        &eta.map_or_else(
+                            || {
+                                if self.running() {
+                                    self.language.text("Estimating…").to_owned()
+                                } else {
+                                    "—".to_owned()
+                                }
+                            },
+                            |eta| format!("~{}", format_estimate(eta)),
+                        ),
+                        &eta.map(|eta| {
+                            self.language
+                                .text("Finishes around {}")
+                                .replace("{}", &finish_clock(eta))
+                        })
+                        .unwrap_or_else(|| {
+                            self.language
+                                .text("Needs a few minutes of transfer data")
+                                .to_owned()
+                        }),
+                        26.0,
+                    );
+                }
+                1 => {
+                    stat_tile(
+                        ui,
+                        self.language.text("Throughput · 5-min average"),
+                        &throughput.map_or_else(
+                            || "—".to_owned(),
+                            |rate| format!("{}/s", format_bytes(rate.bytes_per_second)),
+                        ),
+                        &throughput.map_or_else(
+                            || self.language.text("Needs 10 s of transfer data").to_owned(),
+                            |rate| {
+                                self.language.text("{} msgs/min").replace(
                                 "{}",
                                 &compact_count((rate.messages_per_second * 60.0).round() as u64),
                             )
-                        },
-                    ),
-                    20.0,
-                );
-                sparkline(&mut columns[1], &series, colors.info, self.language);
-                stat_tile(
-                    &mut columns[2],
-                    self.language.text("Transferred"),
-                    &format_bytes(bytes as f64),
-                    &self
-                        .language
-                        .text("{} messages")
-                        .replace("{}", &compact_count(messages)),
-                    20.0,
-                );
-                stat_tile(
-                    &mut columns[3],
-                    self.language.text("Mailboxes remaining"),
-                    &format!(
-                        "{} / {}",
-                        scope.total.saturating_sub(scope.finished),
-                        scope.total
-                    ),
-                    &self
-                        .language
-                        .text("{} finished · {} waiting")
-                        .replacen("{}", &scope.finished.to_string(), 1)
-                        .replacen("{}", &waiting.to_string(), 1),
-                    20.0,
-                );
-                let limit = if scope.total > 1 {
-                    self.form.profile.batch_concurrency.clamp(1, 16)
-                } else {
-                    1
-                };
-                stat_tile(
-                    &mut columns[4],
-                    self.language.text("Active workers"),
-                    &format!("{} / {}", scope.running, limit),
-                    &self
-                        .language
-                        .text("Retries pending: {}")
-                        .replace("{}", &pending_retries.to_string()),
-                    20.0,
-                );
+                            },
+                        ),
+                        20.0,
+                    );
+                    sparkline(ui, &series, colors.info, self.language);
+                }
+                2 => {
+                    stat_tile(
+                        ui,
+                        self.language.text("Transferred"),
+                        &format_bytes(bytes as f64),
+                        &self
+                            .language
+                            .text("{} messages")
+                            .replace("{}", &compact_count(messages)),
+                        20.0,
+                    );
+                }
+                3 => {
+                    stat_tile(
+                        ui,
+                        self.language.text("Mailboxes remaining"),
+                        &format!(
+                            "{} / {}",
+                            scope.total.saturating_sub(scope.finished),
+                            scope.total
+                        ),
+                        &self
+                            .language
+                            .text("{} finished · {} waiting")
+                            .replacen("{}", &scope.finished.to_string(), 1)
+                            .replacen("{}", &waiting.to_string(), 1),
+                        20.0,
+                    );
+                }
+                4 => {
+                    stat_tile(
+                        ui,
+                        self.language.text("Active workers"),
+                        &format!("{} / {}", scope.running, limit),
+                        &self
+                            .language
+                            .text("Retries pending: {}")
+                            .replace("{}", &pending_retries.to_string()),
+                        20.0,
+                    );
+                }
+                _ => {}
             });
             ui.add_space(8.0);
             self.maintenance_window_row(ui, eta);
@@ -260,11 +271,14 @@ impl App {
     fn maintenance_window_row(&mut self, ui: &mut egui::Ui, eta: Option<Duration>) {
         let colors = self.theme_colors();
         ui.horizontal_wrapped(|ui| {
-            ui.label(self.language.text("Maintenance window"));
-            ui.add(
-                egui::TextEdit::singleline(&mut self.activity_window_spec)
-                    .hint_text("22:00-06:00")
-                    .desired_width(150.0),
+            let field_label = ui.label(self.language.text("Maintenance window"));
+            crate::ui::LabelledField::link_label(
+                &ui.add(
+                    egui::TextEdit::singleline(&mut self.activity_window_spec)
+                        .hint_text("22:00-06:00")
+                        .desired_width(150.0),
+                ),
+                &field_label,
             );
             let spec = self.activity_window_spec.trim();
             if spec.is_empty() {
@@ -512,6 +526,37 @@ impl App {
                 self.active_view = view;
             }
         });
+    }
+}
+
+/// Fixed-width, left-aligned tiles that wrap onto further rows when the
+/// window is narrow or the UI scale is large, instead of squeezing (and
+/// justifying) text into five columns.
+fn tile_rows(
+    ui: &mut egui::Ui,
+    count: usize,
+    min_width: f32,
+    mut cell: impl FnMut(usize, &mut egui::Ui),
+) {
+    let gap = ui.spacing().item_spacing.x * 2.0;
+    let available = ui.available_width();
+    let per_row = (((available + gap) / (min_width + gap)).floor() as usize).clamp(1, count.max(1));
+    let width = (available - gap * (per_row - 1) as f32) / per_row as f32;
+    for start in (0..count).step_by(per_row) {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for index in start..(start + per_row).min(count) {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(width, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_width(width);
+                        cell(index, ui);
+                    },
+                );
+            }
+        });
+        ui.add_space(6.0);
     }
 }
 

@@ -380,6 +380,55 @@ pub(crate) fn stepper(
         StepState::Current => current,
         StepState::Pending => pending,
     };
+    // A step title must never break mid-word. When the columns are too
+    // narrow (large UI scale, long translations), list the steps vertically.
+    let column_width = ui.available_width() / steps.len() as f32;
+    let widest_title = steps
+        .iter()
+        .map(|(title, _, _)| {
+            egui::WidgetText::from(egui::RichText::new(*title).strong())
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    egui::TextStyle::Body,
+                )
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    if widest_title + 8.0 > column_width {
+        for (index, (title, detail, state)) in steps.iter().enumerate() {
+            let color = color_of(*state);
+            let marker = match state {
+                StepState::Done => "✔".to_owned(),
+                StepState::Current => "▶".to_owned(),
+                StepState::Pending => (index + 1).to_string(),
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(marker).strong().color(color));
+                let title_text =
+                    egui::RichText::new(*title).color(if *state == StepState::Pending {
+                        pending
+                    } else {
+                        ui.visuals().strong_text_color()
+                    });
+                ui.label(if *state == StepState::Current {
+                    title_text.strong()
+                } else {
+                    title_text
+                });
+                if let Some(detail) = detail {
+                    ui.label(
+                        egui::RichText::new(format!("· {detail}"))
+                            .small()
+                            .color(pending),
+                    );
+                }
+            });
+        }
+        return;
+    }
     ui.columns(steps.len(), |columns| {
         for (index, (column, (title, detail, state))) in columns.iter_mut().zip(steps).enumerate() {
             column.vertical_centered(|ui| {
@@ -474,7 +523,46 @@ pub(crate) const FORM_LABEL_WIDTH: f32 = 160.0;
 
 /// One labelled form row: a fixed-width, muted label followed by the field,
 /// which may use the remaining width.
-pub(crate) fn form_row<R>(
+/// A field that can take its accessible name from a visible label.
+pub(crate) trait LabelledField {
+    fn link_label(&self, label: &egui::Response);
+}
+
+impl LabelledField for egui::Response {
+    fn link_label(&self, label: &egui::Response) {
+        let _ = self.clone().labelled_by(label.id);
+    }
+}
+
+impl<T> LabelledField for egui::InnerResponse<T> {
+    fn link_label(&self, label: &egui::Response) {
+        self.response.link_label(label);
+    }
+}
+
+/// Expose a modal's content as a named, modal dialog. egui renders modals
+/// as plain containers, so without this a screen reader is never told that
+/// a confirmation opened or what it is about.
+pub(crate) fn name_modal(ui: &egui::Ui, heading: &egui::Response) {
+    let heading_id = heading.id.accesskit_id();
+    ui.ctx().accesskit_node_builder(ui.unique_id(), |builder| {
+        builder.set_role(egui::accesskit::Role::Dialog);
+        builder.set_modal();
+        builder.push_labelled_by(heading_id);
+    });
+}
+
+/// Give a control an accessible name when no visible label sits beside it.
+pub(crate) fn name_control(response: &egui::Response, name: &str) {
+    response
+        .ctx
+        .accesskit_node_builder(response.id, |builder| builder.set_label(name.to_owned()));
+}
+
+/// Label column + field. The label is linked to the field so screen readers
+/// announce it as the field's name; `add_field` must return the field's
+/// response (there is deliberately no `()` implementation).
+pub(crate) fn form_row<R: LabelledField>(
     ui: &mut egui::Ui,
     label: &str,
     add_field: impl FnOnce(&mut egui::Ui) -> R,
@@ -482,15 +570,19 @@ pub(crate) fn form_row<R>(
     ui.horizontal(|ui| {
         let height = ui.spacing().interact_size.y;
         let color = ui.visuals().weak_text_color();
-        ui.allocate_ui_with_layout(
-            egui::vec2(FORM_LABEL_WIDTH, height),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.set_min_width(FORM_LABEL_WIDTH);
-                ui.add(egui::Label::new(egui::RichText::new(label).color(color)).truncate());
-            },
-        );
-        add_field(ui)
+        let label = ui
+            .allocate_ui_with_layout(
+                egui::vec2(FORM_LABEL_WIDTH, height),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(FORM_LABEL_WIDTH);
+                    ui.add(egui::Label::new(egui::RichText::new(label).color(color)).truncate())
+                },
+            )
+            .inner;
+        let field = add_field(ui);
+        field.link_label(&label);
+        field
     })
     .inner
 }
@@ -525,6 +617,9 @@ pub(crate) fn endpoint_cell(ui: &mut egui::Ui, host: &str, user: &str) {
             .on_hover_text(user);
     });
 }
+
+#[cfg(test)]
+mod accessibility_audit;
 
 #[cfg(test)]
 mod dialog_reachability_tests {

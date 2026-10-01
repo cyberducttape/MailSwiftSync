@@ -111,11 +111,14 @@ impl App {
                             .replacen("{}", &mailbox_counts.needs_review.to_string(), 1),
                     );
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(self.language.message("ui.search"));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.verification_search)
-                                .hint_text(self.language.message("ui.mailbox-or-destination"))
-                                .desired_width(220.0),
+                        let field_label = ui.label(self.language.message("ui.search"));
+                        crate::ui::LabelledField::link_label(
+                            &ui.add(
+                                egui::TextEdit::singleline(&mut self.verification_search)
+                                    .hint_text(self.language.message("ui.mailbox-or-destination"))
+                                    .desired_width(220.0),
+                            ),
+                            &field_label,
                         );
                         egui::ComboBox::from_id_salt("verification_result_filter")
                             .selected_text(self.language.text(
@@ -502,12 +505,15 @@ impl App {
                         ui.heading(self.language.message("ui.accept-residual-difference"));
                         ui.label(RichText::new(self.language.message("ui.this-records-an-auditable-exception-it-does-not-change-the-underlying-evide-d1c2d9bc90")).color(self.theme_colors().text_secondary));
                         ui.horizontal(|ui| {
-                            ui.label(self.language.message("ui.operator"));
-                            ui.add(
-                                egui::TextEdit::singleline(
-                                    &mut self.verification_exception_operator,
-                                )
-                                .desired_width(220.0),
+                            let field_label = ui.label(self.language.message("ui.operator"));
+                            crate::ui::LabelledField::link_label(
+                                &ui.add(
+                                    egui::TextEdit::singleline(
+                                        &mut self.verification_exception_operator,
+                                    )
+                                    .desired_width(220.0),
+                                ),
+                                &field_label,
                             );
                         });
                         ui.add(egui::TextEdit::multiline(&mut self.verification_exception_reason).hint_text(self.language.message("ui.why-is-this-difference-acceptable-include-the-change-ticket-or-customer-app-f7056f09b1")).desired_rows(3));

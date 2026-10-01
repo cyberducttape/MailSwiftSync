@@ -353,7 +353,8 @@ impl App {
         let mut open = true;
         egui::Modal::new(egui::Id::new("close_during_run_confirmation"))
             .show(ctx, |ui| {
-                ui.heading(self.language.message("ui.migration-still-running"));
+                let modal_heading = ui.heading(self.language.message("ui.migration-still-running"));
+crate::ui::name_modal(ui, &modal_heading);
                 ui.label(self.language.message("ui.this-desktop-owns-the-migration-controller-closing-the-window-will-interrup-27f78da0f7"));
                 ui.label(self.language.message("ui.to-stop-safely-use-stop-migration-in-activity-and-wait-for-the-run-to-finis-e79da693d4"));
                 ui.horizontal(|ui| {
@@ -473,7 +474,13 @@ impl App {
                     .color(colors.text_secondary),
                 );
                 ui.add_space(8.0);
-                crate::ui::form_row(ui, self.language.message("ui.tools"), |ui| {
+                // Buttons carry their own names; "Tools" is a group caption,
+                // not a field label, so it is not linked to them.
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(self.language.message("ui.tools"))
+                            .color(ui.visuals().weak_text_color()),
+                    );
                     if ui
                         .button(format!(
                             "{}…",
@@ -817,7 +824,7 @@ impl App {
                                         "oauth2".into(),
                                         "OAuth 2.0 / XOAUTH2",
                                     );
-                                });
+                                })
                         });
                     }
                     if source {
@@ -911,7 +918,7 @@ impl App {
                     for mode in ["imaps", "starttls", "plain"] {
                         ui.selectable_value(value, mode.to_owned(), mode);
                     }
-                });
+                })
         });
     }
 

@@ -731,8 +731,11 @@ impl App {
                 ui.heading(self.language.message("ui.project-controls"));
                 ui.label(RichText::new(self.language.message("ui.this-project-is-complete-and-read-only-reopening-requires-an-audit-reason-a-47a60c2fa0")).color(self.theme_colors().danger));
                 ui.horizontal(|ui| {
-                    ui.label(self.language.message("ui.reason"));
-                    ui.text_edit_singleline(&mut self.reopen_reason);
+                    let field_label = ui.label(self.language.message("ui.reason"));
+                    crate::ui::LabelledField::link_label(
+                        &ui.text_edit_singleline(&mut self.reopen_reason),
+                        &field_label,
+                    );
                     if ui
                         .add_enabled(
                             !self.running() && !self.reopen_reason.trim().is_empty(),

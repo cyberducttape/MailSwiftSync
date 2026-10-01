@@ -41,7 +41,7 @@ fn secret_row(
             }
             password_reveal_allowed(editable, requested)
         });
-        ui.add(
+        let field = ui.add(
             egui::TextEdit::singleline(password.as_mut_string())
                 .password(!visible)
                 .desired_width((ui.available_width() - 64.0).max(80.0)),
@@ -53,6 +53,7 @@ fn secret_row(
             ui.ctx()
                 .data_mut(|data| data.insert_temp(visibility_id, !visible));
         }
+        field
     });
 }
 
@@ -386,7 +387,7 @@ impl App {
                             self.language.text(preset.display_name()),
                         );
                     }
-                });
+                })
         });
         if selected != current {
             if source {
@@ -427,12 +428,12 @@ impl App {
                     && !self.keyring_operation_pending();
                 ui.add_enabled_ui(editable, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(self.language.message("ui.source-id"));
-                        ui.text_edit_singleline(&mut self.form.profile.source_credential_id);
+                        let field_label = ui.label(self.language.message("ui.source-id"));
+                        crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.source_credential_id), &field_label);
                     });
                     ui.horizontal(|ui| {
-                        ui.label(self.language.message("ui.destination-id"));
-                        ui.text_edit_singleline(&mut self.form.profile.destination_credential_id);
+                        let field_label = ui.label(self.language.message("ui.destination-id"));
+                        crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.destination_credential_id), &field_label);
                     });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
@@ -524,48 +525,64 @@ impl App {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label(self.language.message("ui.provider"));
-                    egui::ComboBox::from_id_salt("oauth_authorization_provider")
-                        .selected_text(match self.oauth_authorization_provider.as_str() {
-                            "microsoft" => "Microsoft 365",
-                            _ => "Google Workspace",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.oauth_authorization_provider,
-                                "google".into(),
-                                "Google Workspace",
-                            );
-                            ui.selectable_value(
-                                &mut self.oauth_authorization_provider,
-                                "microsoft".into(),
-                                "Microsoft 365",
-                            );
-                        });
+                    let field_label = ui.label(self.language.message("ui.provider"));
+                    crate::ui::LabelledField::link_label(
+                        &egui::ComboBox::from_id_salt("oauth_authorization_provider")
+                            .selected_text(match self.oauth_authorization_provider.as_str() {
+                                "microsoft" => "Microsoft 365",
+                                _ => "Google Workspace",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut self.oauth_authorization_provider,
+                                    "google".into(),
+                                    "Google Workspace",
+                                );
+                                ui.selectable_value(
+                                    &mut self.oauth_authorization_provider,
+                                    "microsoft".into(),
+                                    "Microsoft 365",
+                                );
+                            }),
+                        &field_label,
+                    );
                 });
             }
             if self.oauth_authorization_provider == "microsoft" {
                 ui.horizontal(|ui| {
-                    ui.label(self.language.message("ui.microsoft-tenant"));
-                    ui.text_edit_singleline(&mut self.oauth_authorization_tenant);
+                    let field_label = ui.label(self.language.message("ui.microsoft-tenant"));
+                    crate::ui::LabelledField::link_label(
+                        &ui.text_edit_singleline(&mut self.oauth_authorization_tenant),
+                        &field_label,
+                    );
                 });
             }
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.oauth-client-id"));
-                ui.text_edit_singleline(&mut self.oauth_authorization_client_id);
-            });
-            ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.oauth-client-secret-optional"));
-                ui.add(
-                    egui::TextEdit::singleline(
-                        self.oauth_authorization_client_secret.as_mut_string(),
-                    )
-                    .password(true),
+                let field_label = ui.label(self.language.message("ui.oauth-client-id"));
+                crate::ui::LabelledField::link_label(
+                    &ui.text_edit_singleline(&mut self.oauth_authorization_client_id),
+                    &field_label,
                 );
             });
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.sign-in-hint-optional"));
-                ui.text_edit_singleline(&mut self.oauth_authorization_login_hint);
+                let field_label =
+                    ui.label(self.language.message("ui.oauth-client-secret-optional"));
+                crate::ui::LabelledField::link_label(
+                    &ui.add(
+                        egui::TextEdit::singleline(
+                            self.oauth_authorization_client_secret.as_mut_string(),
+                        )
+                        .password(true),
+                    ),
+                    &field_label,
+                );
+            });
+            ui.horizontal(|ui| {
+                let field_label = ui.label(self.language.message("ui.sign-in-hint-optional"));
+                crate::ui::LabelledField::link_label(
+                    &ui.text_edit_singleline(&mut self.oauth_authorization_login_hint),
+                    &field_label,
+                );
             });
             let keyring_id = if self.oauth_authorization_source {
                 &mut self.form.profile.source_oauth_refresh_credential_id
@@ -573,8 +590,11 @@ impl App {
                 &mut self.form.profile.destination_oauth_refresh_credential_id
             };
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.os-keyring-id"));
-                ui.text_edit_singleline(keyring_id);
+                let field_label = ui.label(self.language.message("ui.os-keyring-id"));
+                crate::ui::LabelledField::link_label(
+                    &ui.text_edit_singleline(keyring_id),
+                    &field_label,
+                );
             });
             let provider_label = if self.oauth_authorization_provider == "microsoft" {
                 "Microsoft 365"
@@ -992,41 +1012,41 @@ impl App {
         );
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.source-refresh-id"));
-                ui.text_edit_singleline(&mut self.form.profile.source_oauth_refresh_credential_id);
+                let field_label = ui.label(self.language.message("ui.source-refresh-id"));
+                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.form.profile.source_oauth_refresh_credential_id), &field_label);
             });
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.destination-refresh-id"));
-                ui.text_edit_singleline(
+                let field_label = ui.label(self.language.message("ui.destination-refresh-id"));
+                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(
                     &mut self.form.profile.destination_oauth_refresh_credential_id,
-                );
+                ), &field_label);
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.token-endpoint"));
-                ui.text_edit_singleline(&mut self.oauth_refresh_editor_endpoint);
+                let field_label = ui.label(self.language.message("ui.token-endpoint"));
+                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.oauth_refresh_editor_endpoint), &field_label);
             });
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.client-id"));
-                ui.text_edit_singleline(&mut self.oauth_refresh_editor_client_id);
+                let field_label = ui.label(self.language.message("ui.client-id"));
+                crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut self.oauth_refresh_editor_client_id), &field_label);
             });
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.client-secret-if-required"));
-                ui.add(
+                let field_label = ui.label(self.language.message("ui.client-secret-if-required"));
+                crate::ui::LabelledField::link_label(&ui.add(
                     egui::TextEdit::singleline(
                         self.oauth_refresh_editor_client_secret.as_mut_string(),
                     )
                     .password(true),
-                );
+                ), &field_label);
             });
             ui.horizontal(|ui| {
-                ui.label(self.language.message("ui.refresh-token"));
-                ui.add(
+                let field_label = ui.label(self.language.message("ui.refresh-token"));
+                crate::ui::LabelledField::link_label(&ui.add(
                     egui::TextEdit::singleline(
                         self.oauth_refresh_editor_refresh_token.as_mut_string(),
                     )
                     .password(true),
-                );
+                ), &field_label);
             });
             ui.label(
                 RichText::new(
@@ -1212,10 +1232,11 @@ impl App {
         let mut close = false;
         let response = egui::Modal::new(egui::Id::new("credential_delete_confirmation"))
             .show(ctx, |ui| {
-                ui.heading(
+                let modal_heading = ui.heading(
                     RichText::new(self.language.message("ui.delete-saved-credential-a75582b4"))
                         .color(self.theme_colors().danger),
                 );
+crate::ui::name_modal(ui, &modal_heading);
                 ui.label(
                     self.language
                         .text("{}: {} · keyring ID: {}")

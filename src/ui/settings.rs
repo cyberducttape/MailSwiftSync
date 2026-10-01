@@ -48,8 +48,8 @@ pub(crate) fn show(
             crate::ui::card(ui, |ui| {
                 ui.heading(language.message("ui.appearance"));
                 ui.horizontal(|ui| {
-                    ui.label(language.message("ui.color-pack"));
-                    egui::ComboBox::from_id_salt("appearance_theme")
+                    let field_label = ui.label(language.message("ui.color-pack"));
+                    crate::ui::LabelledField::link_label(&egui::ComboBox::from_id_salt("appearance_theme")
                         .selected_text(theme.label())
                         .show_ui(ui, |ui| {
                             for option in crate::ui::ThemeKind::recommended() {
@@ -64,7 +64,7 @@ pub(crate) fn show(
                                     error = Some(format!("{}: {value}", language.message("ui.could-not-save-appearance-preference")));
                                 }
                             }
-                        });
+                        }), &field_label);
                 });
                 ui.collapsing(language.message("ui.additional-themes"), |ui| {
                     for option in crate::ui::ThemeKind::additional() {
@@ -135,8 +135,8 @@ pub(crate) fn show(
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(language.message("ui.language"));
-                    egui::ComboBox::from_id_salt("appearance_language")
+                    let field_label = ui.label(language.message("ui.language"));
+                    crate::ui::LabelledField::link_label(&egui::ComboBox::from_id_salt("appearance_language")
                         .selected_text(language.label())
                         .show_ui(ui, |ui| {
                             for option in crate::ui::UiLanguage::all() {
@@ -151,7 +151,7 @@ pub(crate) fn show(
                                     error = Some(format!("{}: {value}", language.message("ui.could-not-save-appearance-preference")));
                                 }
                             }
-                        });
+                        }), &field_label);
                 });
             });
             ui.add_space(8.0);
@@ -159,12 +159,12 @@ pub(crate) fn show(
                 ui.heading(language.message("ui.report-branding"));
                 ui.label(RichText::new(language.message("ui.optional-applied-to-customer-proof-exports-as-an-issued-by-line-independent-90154a5591")).size(12.0).color(if ui.visuals().dark_mode { crate::ui::ThemeColors::dark().text_secondary } else { crate::ui::ThemeColors::light().text_secondary }));
                 ui.horizontal(|ui| {
-                    ui.label(language.message("ui.agency-operator-name"));
-                    ui.text_edit_singleline(&mut branding.name);
+                    let field_label = ui.label(language.message("ui.agency-operator-name"));
+                    crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut branding.name), &field_label);
                 });
                 ui.horizontal(|ui| {
-                    ui.label(language.message("ui.contact"));
-                    ui.text_edit_singleline(&mut branding.contact);
+                    let field_label = ui.label(language.message("ui.contact"));
+                    crate::ui::LabelledField::link_label(&ui.text_edit_singleline(&mut branding.contact), &field_label);
                 });
                 if ui.button(language.message("ui.save-report-branding")).clicked()
                     && let Err(value) = branding.save()

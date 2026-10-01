@@ -20,7 +20,7 @@ impl App {
             egui::Modal::new(egui::Id::new("live_migration_confirmation")).show(ctx, |ui| {
                 let policy = self.form.profile.destination_mutation_policy();
                 let removes = policy.may_remove_destination_state();
-                ui.heading(
+                let modal_heading = ui.heading(
                     RichText::new(self.language.message("ui.confirm-live-migration")).color(
                         if removes {
                             self.theme_colors().danger
@@ -29,6 +29,7 @@ impl App {
                         },
                     ),
                 );
+                crate::ui::name_modal(ui, &modal_heading);
                 ui.label(
                     self.language
                         .text("This will invoke {} with the current credentials and rules.")
@@ -487,22 +488,22 @@ impl App {
                                 .color(self.theme_colors().warning),
                             );
                             ui.horizontal(|ui| {
-                                ui.label(self.language.message("ui.maximum-body-bytes-per-message"));
-                                ui.add(
+                                let field_label = ui.label(self.language.message("ui.maximum-body-bytes-per-message"));
+                                crate::ui::LabelledField::link_label(&ui.add(
                                     egui::DragValue::new(
                                         &mut self.form.profile.body_hash_max_bytes,
                                     )
                                     .range(1..=64 * 1024 * 1024),
-                                );
+                                ), &field_label);
                             });
                             ui.horizontal(|ui| {
-                                ui.label(self.language.message("ui.maximum-body-bytes-per-verification"));
-                                ui.add(
+                                let field_label = ui.label(self.language.message("ui.maximum-body-bytes-per-verification"));
+                                crate::ui::LabelledField::link_label(&ui.add(
                                     egui::DragValue::new(
                                         &mut self.form.profile.body_hash_max_total_bytes,
                                     )
                                     .range(1..=8 * 1024 * 1024 * 1024_u64),
-                                );
+                                ), &field_label);
                             });
                         }
                     });
@@ -514,19 +515,19 @@ impl App {
                         ui.checkbox(&mut self.form.profile.fastio2, self.language.message("ui.fast-i-o-for-destination-fastio2"))
                             .on_hover_text(self.language.message("ui.uses-imapsync-s-faster-destination-i-o-path-provider-behavior-varies"));
                         ui.horizontal(|ui| {
-                            ui.label(self.language.message("ui.messages-second-target-0-unlimited"))
+                            let field_label = ui.label(self.language.message("ui.messages-second-target-0-unlimited"))
                                 .on_hover_text(self.language.message("ui.for-a-batch-this-is-an-aggregate-target-mailswiftsync-divides-it-across-con-0765baeed4"));
-                            ui.add(egui::DragValue::new(&mut self.form.profile.max_messages_per_second).range(0..=100_000));
+                            crate::ui::LabelledField::link_label(&ui.add(egui::DragValue::new(&mut self.form.profile.max_messages_per_second).range(0..=100_000)), &field_label);
                         });
                         ui.horizontal(|ui| {
-                            ui.label(self.language.message("ui.bytes-second-target-0-unlimited"))
+                            let field_label = ui.label(self.language.message("ui.bytes-second-target-0-unlimited"))
                                 .on_hover_text(self.language.message("ui.for-a-batch-this-is-an-aggregate-target-mailswiftsync-divides-it-across-con-0765baeed4"));
-                            ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX));
+                            crate::ui::LabelledField::link_label(&ui.add(egui::DragValue::new(&mut self.form.profile.max_bytes_per_second).range(0..=u64::MAX)), &field_label);
                         });
                         ui.horizontal(|ui| {
-                            ui.label(self.language.message("ui.process-timeout-hours"))
+                            let field_label = ui.label(self.language.message("ui.process-timeout-hours"))
                                 .on_hover_text(self.language.message("ui.maximum-wall-clock-time-for-one-engine-process-it-is-a-safety-bound-not-an-3b6f293e02"));
-                            ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720));
+                            crate::ui::LabelledField::link_label(&ui.add(egui::DragValue::new(&mut self.form.profile.migration_timeout_hours).range(1..=720)), &field_label);
                         });
                         ui.label(RichText::new(self.language.message("ui.batch-targets-are-divided-across-workers-and-process-starts-are-globally-pa-f1ee89a779")).size(12.0).color(self.theme_colors().text_secondary));
                     });

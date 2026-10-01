@@ -14,7 +14,8 @@ impl App {
         }
         let mut close_requested = false;
         let response = egui::Modal::new(egui::Id::new("stop_migration_confirmation")).show(ctx, |ui| {
-                ui.heading(RichText::new(self.language.message("ui.the-migration-will-stop-where-it-is")).color(self.theme_colors().danger));
+                let modal_heading = ui.heading(RichText::new(self.language.message("ui.the-migration-will-stop-where-it-is")).color(self.theme_colors().danger));
+crate::ui::name_modal(ui, &modal_heading);
                 ui.label(self.language.message("ui.the-destination-may-be-partially-migrated-a-later-preflight-delta-or-verifi-6f22cab9e0"));
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
@@ -217,14 +218,17 @@ impl App {
             20
         };
         ui.horizontal_wrapped(|ui| {
-            ui.label(self.language.message("ui.filter-history"));
-            ui.add(
-                egui::TextEdit::singleline(&mut self.activity_search)
-                    .hint_text(
-                        self.language
-                            .text("mailbox, phase, engine, run ID, or detail"),
-                    )
-                    .desired_width(280.0),
+            let field_label = ui.label(self.language.message("ui.filter-history"));
+            crate::ui::LabelledField::link_label(
+                &ui.add(
+                    egui::TextEdit::singleline(&mut self.activity_search)
+                        .hint_text(
+                            self.language
+                                .text("mailbox, phase, engine, run ID, or detail"),
+                        )
+                        .desired_width(280.0),
+                ),
+                &field_label,
             );
             egui::ComboBox::from_id_salt("activity_status_filter")
                 .selected_text(match self.activity_status_filter.as_str() {

@@ -345,13 +345,16 @@ impl App {
             ui.add_space(12.0);
             let mut selection_changed = false;
             ui.horizontal_wrapped(|ui| {
-                ui.label(self.language.message("ui.search"));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.bulk_search)
-                        .hint_text(self.language.message("ui.mailbox-host-or-user"))
-                        .desired_width(220.0),
+                let field_label = ui.label(self.language.message("ui.search"));
+                crate::ui::LabelledField::link_label(
+                    &ui.add(
+                        egui::TextEdit::singleline(&mut self.bulk_search)
+                            .hint_text(self.language.message("ui.mailbox-host-or-user"))
+                            .desired_width(220.0),
+                    ),
+                    &field_label,
                 );
-                egui::ComboBox::from_id_salt("mailbox_state_filter")
+                let state_filter = egui::ComboBox::from_id_salt("mailbox_state_filter")
                     .selected_text(self.language.text(match self.bulk_state_filter.as_str() {
                         "imported" => "Imported",
                         "attention" => "Attention",
@@ -379,6 +382,10 @@ impl App {
                             );
                         }
                     });
+                crate::ui::name_control(
+                    &state_filter.response,
+                    self.language.text("Mailbox state filter"),
+                );
                 if ui
                     .button(self.language.message("ui.select-visible"))
                     .clicked()
@@ -733,7 +740,7 @@ impl App {
             .id_salt("queue_settings")
             .show(ui, |ui| {
                 crate::ui::form_row(ui, self.language.message("ui.concurrent-workers"), |ui| {
-                    ui.add_enabled(
+                    let field = ui.add_enabled(
                         editable,
                         egui::DragValue::new(&mut self.form.profile.batch_concurrency).range(1..=16),
                     );
@@ -745,9 +752,10 @@ impl App {
                         .small()
                         .color(colors.text_secondary),
                     );
+                    field
                 });
                 crate::ui::form_row(ui, self.language.message("ui.transient-retries"), |ui| {
-                    ui.add_enabled(
+                    let field = ui.add_enabled(
                         editable,
                         egui::DragValue::new(&mut self.form.profile.batch_retry_count).range(0..=3),
                     );
@@ -758,6 +766,7 @@ impl App {
                         .small()
                         .color(colors.text_secondary),
                     );
+                    field
                 });
                 ui.add_space(8.0);
                 crate::ui::section_label(ui, self.language.message("ui.passwordless-queue-credentials"));
@@ -781,7 +790,7 @@ impl App {
                     ),
                 ] {
                     crate::ui::form_row(ui, self.language.text(label), |ui| {
-                        ui.add_enabled(
+                        let field = ui.add_enabled(
                             editable,
                             egui::TextEdit::singleline(value).desired_width(180.0),
                         );
@@ -791,6 +800,7 @@ impl App {
                         {
                             *flag = true;
                         }
+                        field
                     });
                 }
             });

@@ -26,7 +26,9 @@ impl App {
         let mut cancel = false;
         let mut checkbox = self.plaintext_import_dialog_acknowledged;
         let response = egui::Modal::new(modal_id).show(ctx, |ui| {
-            ui.heading(self.language.message("ui.plaintext-import-warning-title"));
+            let modal_heading =
+                ui.heading(self.language.message("ui.plaintext-import-warning-title"));
+            crate::ui::name_modal(ui, &modal_heading);
             ui.label(
                 self.language
                     .message("ui.plaintext-import-warning-body")
@@ -83,7 +85,8 @@ impl App {
         // A true modal: it blocks the page behind it, starts on the safe
         // choice, and Escape or a click outside keeps the queue.
         let response = egui::Modal::new(modal_id).show(ctx, |ui| {
-            ui.heading(self.language.message("ui.clear-mailbox-queue"));
+            let modal_heading = ui.heading(self.language.message("ui.clear-mailbox-queue"));
+crate::ui::name_modal(ui, &modal_heading);
             ui.label(
                 self.language
                     .text("This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.")
@@ -133,7 +136,8 @@ impl App {
         let mut close_requested = false;
         let mut replace = false;
         let response = egui::Modal::new(modal_id).show(ctx, |ui| {
-            ui.heading(self.language.message("ui.replace-mailbox-queue"));
+            let modal_heading = ui.heading(self.language.message("ui.replace-mailbox-queue"));
+crate::ui::name_modal(ui, &modal_heading);
             ui.label(
                 self.language
                     .text("Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.")
@@ -224,10 +228,11 @@ impl App {
         let mut close = false;
 
         let response = egui::Modal::new(egui::Id::new("live_batch_migration_confirmation")).show(ctx, |ui| {
-                ui.heading(
+                let modal_heading = ui.heading(
                     RichText::new(self.language.message("ui.this-will-change-destination-mailboxes"))
                         .color(self.theme_colors().danger),
                 );
+crate::ui::name_modal(ui, &modal_heading);
                 ui.label(
                     self.language
                         .text("{} eligible of {} explicitly selected · {} blocked")
