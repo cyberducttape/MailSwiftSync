@@ -38,6 +38,17 @@ fn headless_path_option_without_value_names_the_option() {
 }
 
 #[test]
+fn post_report_state_requires_state_and_output_paths() {
+    let output = run(&["post-report-state"]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Usage: mailswiftsync post-report-state <state.db> <output.json>"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn batch_headless_accepts_opt_in_diagnostic_directory() {
     let root = std::env::temp_dir().join(format!(
         "mailswiftsync-cli-batch-diagnostic-{}",

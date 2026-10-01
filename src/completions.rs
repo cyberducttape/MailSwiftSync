@@ -12,6 +12,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "runbook",
     "risk",
     "post-report",
+    "post-report-state",
     "backup",
     "restore",
     "status",

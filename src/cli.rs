@@ -425,6 +425,70 @@ pub(crate) fn run() -> eframe::Result<()> {
             }
         }
     }
+    if command == std::ffi::OsStr::new("post-report-state") {
+        let (Some(state), Some(output)) = (arguments.next(), arguments.next()) else {
+            eprintln!(
+                "Usage: mailswiftsync post-report-state <state.db> <output.json> [project-id]"
+            );
+            std::process::exit(2);
+        };
+        let project_id = arguments.next();
+        if arguments.next().is_some() {
+            eprintln!(
+                "Usage: mailswiftsync post-report-state <state.db> <output.json> [project-id]"
+            );
+            std::process::exit(2);
+        }
+        let state = std::path::PathBuf::from(state);
+        let output = std::path::PathBuf::from(output);
+        let store = match core::StateStore::open_readonly(&state) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!(
+                    "Post-migration report refused: durable SQLite state is unavailable: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let project_id = match project_id {
+            Some(project_id) => match project_id.to_str() {
+                Some(project_id) => project_id.to_owned(),
+                None => {
+                    eprintln!("Post-migration report refused: project ID must be valid UTF-8");
+                    std::process::exit(2);
+                }
+            },
+            None => match store.latest_project() {
+                Ok(Some(project)) => project.id,
+                Ok(None) => {
+                    eprintln!(
+                        "Post-migration report refused: no durable migration project is available"
+                    );
+                    std::process::exit(1);
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Post-migration report refused: could not select latest project: {error}"
+                    );
+                    std::process::exit(1);
+                }
+            },
+        };
+        match crate::reports::operator::build_post_migration_report_json(&store, &project_id)
+            .and_then(|report| {
+                crate::atomic_artifact::write_private_atomic(&output, &report)
+                    .map_err(|error| error.to_string())
+            }) {
+            Ok(()) => {
+                out!("Created post-migration report: {}", output.display());
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!("Post-migration report export failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if command == std::ffi::OsStr::new("recovery-guidance") {
         let Some(reason) = arguments.next() else {
             eprintln!("Usage: mailswiftsync recovery-guidance <reason>");
@@ -1160,6 +1224,9 @@ fn print_cli_help() {
     );
     out!(
         "\nOptions:\n  -h, --help                    Show this help\n  -V, --version                 Show the application version\n\nHeadless live operations fail nonzero for unresolved verification, delta, operator-attention, or durability states."
+    );
+    out!(
+        "\nReport export:\n  post-report-state <state> <output> [project-id]  Export a durable-snapshot post-migration report"
     );
     out!(
         "\nAdditional operator workflow command:\n  recovery-guidance <reason>     Emit fail-closed recovery guidance as JSON"
