@@ -149,6 +149,10 @@ source_host="${source_endpoint%:*}"
 source_port="${source_endpoint##*:}"
 dest_host="${dest_endpoint%:*}"
 dest_port="${dest_endpoint##*:}"
+if ! command -v imapsync >/dev/null 2>&1; then
+  echo "ERROR: imapsync is required for provider smoke testing; install the qualified engine or set up the packaged test image" >&2
+  exit 1
+fi
 imapsync_binary="$(command -v imapsync)"
 imapsync_version_output="$($imapsync_binary --version 2>&1)" || {
   echo "ERROR: could not query the imapsync binary version" >&2
@@ -162,6 +166,7 @@ if [[ -z "$imapsync_version" ]]; then
   exit 1
 fi
 imapsync_binary_sha256="$(sha256_file "$imapsync_binary")"
+doveadm_binary="$(command -v doveadm || true)"
 
 # Validate secret files are owner-only
 for secret_file in "${MAILSWIFTSYNC_PROVIDER_SOURCE_SECRET}" "${MAILSWIFTSYNC_PROVIDER_DEST_SECRET}"; do
@@ -213,7 +218,7 @@ destination_ca_bundle = ""
 destination_certificate_pin_sha256 = ""
 imapsync_path = "$imapsync_binary"
 engine = "ImapSync"
-doveadm_path = "$(command -v doveadm)"
+doveadm_path = "$doveadm_binary"
 dovecot_config = ""
 batch_concurrency = 1
 batch_retry_count = 0

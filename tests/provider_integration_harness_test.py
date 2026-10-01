@@ -23,6 +23,11 @@ class ProviderIntegrationHarnessTests(unittest.TestCase):
         self.assertIn('--scenario-ids "$live_scenario_ids"', SCRIPT)
         self.assertIn('--scenario-ids "$recovery_scenario_ids"', SCRIPT)
 
+    def test_missing_engine_is_reported_before_version_probe(self):
+        self.assertIn('command -v imapsync >/dev/null 2>&1', SCRIPT)
+        self.assertIn("imapsync is required for provider smoke testing", SCRIPT)
+        self.assertIn('doveadm_binary="$(command -v doveadm || true)"', SCRIPT)
+
 
 if __name__ == "__main__":
     unittest.main()
