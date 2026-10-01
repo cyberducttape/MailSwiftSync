@@ -19,6 +19,7 @@ documentation-check:
 	python3 scripts/verify-ui-localization.py
 
 shell-check:
+	shellcheck scripts/*.sh
 	bash -n scripts/*.sh
 
 script-check:

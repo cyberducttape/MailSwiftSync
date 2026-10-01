@@ -603,7 +603,8 @@ if [[ "$test_engine" == Dovecot ]]; then
   preservation_config="$app_runtime/preservation-config"
   preservation_profile_dir="$preservation_config/mailswiftsync"
   preservation_state="$app_runtime/preservation-state.db"
-  mkdir -m 0700 -p "$preservation_profile_dir"
+  mkdir -p "$preservation_profile_dir"
+  chmod 0700 "$preservation_config" "$preservation_profile_dir"
   sed 's/^dovecot_strategy = "initial_mirror"$/dovecot_strategy = "destination_already_active"/' \
     "$XDG_CONFIG_HOME/mailswiftsync/profile.toml" \
     > "$preservation_profile_dir/profile.toml"

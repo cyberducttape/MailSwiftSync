@@ -5,7 +5,7 @@ set -euo pipefail
 # The output contains package metadata only; it never reads profiles, keyring
 # values, mailbox data, or the SQLite ledger.
 output="${1:-dist/mailswiftsync-rust-sbom.cdx.json}"
-project_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+project_root="$(CDPATH="" cd -- "$(dirname -- "$0")/.." && pwd)"
 metadata="$(mktemp "${TMPDIR:-/tmp}/mailswiftsync-cargo-metadata.XXXXXX.json")"
 cleanup() { rm -f -- "$metadata"; }
 trap cleanup EXIT

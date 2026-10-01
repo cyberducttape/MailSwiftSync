@@ -6,7 +6,7 @@ set -euo pipefail
 # Cargo graph; generate-sbom.sh covers the Rust dependency graph separately.
 image="${1:?usage: generate-image-sbom.sh IMAGE [OUTPUT]}"
 output="${2:-dist/mailswiftsync-image-sbom.spdx.json}"
-project_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+project_root="$(CDPATH="" cd -- "$(dirname -- "$0")/.." && pwd)"
 packages="$(mktemp "${TMPDIR:-/tmp}/mailswiftsync-image-packages.XXXXXX")"
 cleanup() { rm -f -- "$packages"; }
 trap cleanup EXIT

@@ -233,8 +233,6 @@ delete2 = false
 extra_options = ""
 PROFILE
 
-project_name="Provider test: $provider"
-
 # 1. DRY PILOT
 echo "=== Starting dry pilot for $provider ==="
 "$binary" headless "$state" preflight \

@@ -4,8 +4,8 @@ set -euo pipefail
 # Build a deterministic Debian package from an already-built release binary.
 # The package contains only MailSwiftSync and operator documentation; it does
 # not silently install imapsync or Dovecot.
-script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-project_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
+script_dir="$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)"
+project_root="$(CDPATH="" cd -- "$script_dir/.." && pwd)"
 cd "$project_root"
 
 if ! command -v dpkg-deb >/dev/null 2>&1; then

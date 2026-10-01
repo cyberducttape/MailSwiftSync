@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Produces a deterministic portable host-native tarball and SHA-256 checksum.
 # Sign the checksum with the release key or CI signing service before distribution.
-script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-project_root="$(CDPATH= cd -- "$script_dir/.." && pwd)"
+script_dir="$(CDPATH="" cd -- "$(dirname -- "$0")" && pwd)"
+project_root="$(CDPATH="" cd -- "$script_dir/.." && pwd)"
 cd "$project_root"
 
 CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build --locked --release

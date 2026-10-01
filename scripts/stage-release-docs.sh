@@ -28,14 +28,15 @@ for document in "${root_documents[@]}"; do
   cp "$document" "$bundle_dir/"
 done
 
-for linked_artifact in capabilities.toml; do
+linked_artifact=capabilities.toml
+{
   if [[ ! -f "$linked_artifact" ]]; then
     echo "FAIL: release-linked artifact is missing from the repository: $linked_artifact" >&2
     exit 1
   fi
   mkdir -p "$bundle_dir/$(dirname "$linked_artifact")"
   cp "$linked_artifact" "$bundle_dir/$linked_artifact"
-done
+}
 
 distribution_documents=(
   docs/architecture.md
