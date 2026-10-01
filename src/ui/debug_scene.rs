@@ -59,7 +59,12 @@ pub(crate) fn telemetry_demo(app: &mut App) {
         demo_data(app);
     }
     let now = Instant::now();
-    let start = now - Duration::from_secs(20 * 60);
+    // `Instant` has a platform-defined epoch. On Windows a fresh process can
+    // have been alive for less than the requested demo history, and subtract
+    // would panic instead of producing a representable instant. Keeping the
+    // demo at the current instant is sufficient for the accessibility harness
+    // and still renders the full history once the process has enough uptime.
+    let start = now.checked_sub(Duration::from_secs(20 * 60)).unwrap_or(now);
     app.run_telemetry.reset(start, app.bulk_jobs.len());
     app.form.profile.batch_concurrency = 4;
     for (index, state) in [(1, "Running"), (2, "Running"), (7, "Running")] {
@@ -122,7 +127,7 @@ pub(crate) fn telemetry_demo(app: &mut App) {
         "demo-job-5",
         "failed",
         "[authentication] Destination rejected the credential: AUTHENTICATIONFAILED",
-        now - Duration::from_secs(240),
+        now.checked_sub(Duration::from_secs(240)).unwrap_or(start),
     );
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::mem::forget(sender);
