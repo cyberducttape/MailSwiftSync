@@ -71,16 +71,19 @@ impl FailureClass {
     }
 }
 
-pub(crate) fn classify_failure(error: &str) -> FailureClass {
-    // Controller-generated failures carry a stable machine-readable class.
-    // Prefer it over the diagnostic prose: retry and terminal-state policy
-    // must not change because an engine happened to mention another keyword.
-    if let Some(class) = error
+fn controller_failure_class(error: &str) -> Option<FailureClass> {
+    error
         .strip_prefix("[attention_reason=")
         .and_then(|value| value.split_once("] [class="))
         .and_then(|(_, value)| value.split_once(']'))
         .and_then(|(label, _)| FailureClass::parse_label(label))
-    {
+}
+
+pub(crate) fn classify_failure(error: &str) -> FailureClass {
+    // Controller-generated failures carry a stable machine-readable class.
+    // Prefer it over the diagnostic prose: retry and terminal-state policy
+    // must not change because an engine happened to mention another keyword.
+    if let Some(class) = controller_failure_class(error) {
         return class;
     }
 
@@ -279,10 +282,22 @@ pub(crate) fn classify_failure(error: &str) -> FailureClass {
 }
 
 pub(crate) fn is_transient_batch_error(error: &str) -> bool {
-    matches!(
-        classify_failure(error),
-        FailureClass::Transport | FailureClass::Capacity
-    )
+    use crate::core::provider_intelligence::{ProviderErrorClassifier, ProviderErrorType};
+    let class = classify_failure(error);
+    if class != FailureClass::Transport || controller_failure_class(error).is_some() {
+        return class == FailureClass::Capacity || class == FailureClass::Transport;
+    }
+    // The durable taxonomy folds several provider verdicts (tagged NO, BAD,
+    // engine exit, TLS, DNS) into Transport for attention reporting, but those
+    // verdicts carry their own retry contract: a tagged NO or BAD can be a
+    // permanent policy or configuration rejection. Retry only what the
+    // provider classifier itself declares retryable. Its fallback verdict
+    // (PermanentProviderFailure) means it recognized nothing, so the
+    // controller's own transport heuristics decided the class and stand.
+    match ProviderErrorClassifier::classify("generic", control_error_text(error)) {
+        ProviderErrorType::PermanentProviderFailure => true,
+        provider => provider.is_retryable(),
+    }
 }
 
 pub(crate) fn should_retry_batch_error(error: &str, attempt: usize, retry_count: usize) -> bool {

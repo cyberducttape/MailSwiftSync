@@ -44,8 +44,8 @@ pub enum ProviderErrorType {
 }
 
 impl ProviderErrorType {
-    /// Determine if retry is safe for this error.
-    #[allow(dead_code)]
+    /// Determine if retry is safe for this error. The batch controller's
+    /// retry policy defers to this for every Transport-class verdict.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,

@@ -1497,6 +1497,34 @@ mod tests {
     }
 
     #[test]
+    fn retry_policy_honors_provider_retry_contract_for_structured_verdicts() {
+        use crate::core::provider_intelligence::ProviderErrorClassifier;
+        for error in [
+            "[imap=tagged-no] a003 NO [CANNOT] folder name rejected by policy",
+            "[imap=bad] a004 BAD command syntax",
+            "[error=engine-exit] imapsync exited with status 16",
+            "[error=tls] certificate rejected",
+            "[error=dns] no such host",
+        ] {
+            assert_eq!(classify_failure(error), FailureClass::Transport, "{error}");
+            assert!(
+                !ProviderErrorClassifier::classify("generic", error).is_retryable(),
+                "{error}"
+            );
+            assert!(
+                !should_retry_batch_error(error, 0, 3),
+                "non-retryable provider verdict was retried: {error}"
+            );
+        }
+        for error in [
+            "[error=transport] connection reset",
+            "[imap=tagged-no] a003 NO [UNAVAILABLE] server busy",
+        ] {
+            assert!(should_retry_batch_error(error, 0, 3), "{error}");
+        }
+    }
+
+    #[test]
     fn prelaunch_credentials_and_trust_failures_remain_fail_fast() {
         for error in [
             "IMAP authentication failed: invalid credentials",
