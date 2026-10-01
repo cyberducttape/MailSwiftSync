@@ -47,6 +47,7 @@ integration:
 
 audit:
 	cargo audit
+	cargo audit --file fuzz/Cargo.lock
 
 # Local release-quality gate. CI additionally performs platform builds,
 # signing, SBOM generation, provenance, and packaged-container checks.
