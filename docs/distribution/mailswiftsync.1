@@ -25,6 +25,10 @@ Inspect and recover interrupted work conservatively.
 .B support-bundle STATE OUTPUT
 Write a sanitized diagnostic bundle.
 .TP
+.B post-report-state STATE OUTPUT [PROJECT]
+Write a fail-closed post-migration report from one consistent durable project
+snapshot. If PROJECT is omitted, use the latest project in the ledger.
+.TP
 .B runbook SOURCE DESTINATION
 Print provider setup guidance.
 .TP
