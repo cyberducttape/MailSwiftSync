@@ -24,6 +24,7 @@ shell-check:
 script-check:
 	bash tests/release-channel.sh
 	python3 tests/release_bundle_layout_test.py
+	python3 tests/provider_integration_harness_test.py
 
 evidence-check:
 	python3 tests/provider_evidence_generator_test.py
