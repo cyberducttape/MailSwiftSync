@@ -147,6 +147,16 @@ fn release_and_pull_request_ci_enforce_the_dependency_policy() {
         ci.contains("pull_request:"),
         "dependency policy must run in pull-request CI"
     );
+    assert!(
+        ci.contains("shellcheck scripts/*.sh"),
+        "pull-request CI must enforce shell-script linting"
+    );
+    let release =
+        fs::read_to_string(".github/workflows/release.yml").expect("release workflow should exist");
+    assert!(
+        release.contains("shellcheck scripts/*.sh"),
+        "tagged releases must enforce shell-script linting"
+    );
 }
 
 #[test]

@@ -41,6 +41,8 @@ jobs:
         run: python3 scripts/verify-markdown-links.py .
       - name: Verify UI localization coverage
         run: python3 scripts/verify-ui-localization.py
+      - name: Lint shell scripts
+        run: shellcheck scripts/*.sh
       - run: bash -n scripts/*.sh
       - name: Test release-channel classification
         run: bash tests/release-channel.sh
