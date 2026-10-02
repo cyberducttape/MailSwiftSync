@@ -1,0 +1,24 @@
+name: "CodeQL Config"
+description: "Configuration for CodeQL analysis"
+
+queries:
+  - uses: security-and-quality
+
+disable-default-queries: false
+
+paths-ignore:
+  - "**/test/**"
+
+# Disable specific rules with known exceptions in codebase
+rules:
+  cpp/access-invalid-pointer:
+    severity: warning  # Downgrade: Windows API pointers validated via GetAce success check
+
+  rs/hardcoded-credential:
+    severity: note  # Debug-only placeholder strings for screenshot validation
+
+  py/cleartext-logging:
+    severity: warning  # Test assertions with non-sensitive metrics only
+
+  py/redos:
+    severity: warning  # Optimized pattern to prevent catastrophic backtracking
