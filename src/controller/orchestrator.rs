@@ -153,6 +153,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     diagnostic_logger: diagnostic_logger.clone(),
                     attempt_number: 1,
                     live_transfer: !dry_run,
+                    launch_limiter: None,
                 })
             });
             if result.is_ok() && !destination_preflight.is_empty() {

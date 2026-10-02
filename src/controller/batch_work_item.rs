@@ -254,6 +254,7 @@ struct BatchAttemptContext<'a> {
     diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
     transfer_attempt_number: &'a mut u32,
     verification_failure: &'a mut Option<String>,
+    launch_limiter: &'a ProcessLaunchLimiter,
 }
 
 /// Prepare and execute a single engine attempt, then collect engine-specific
@@ -276,6 +277,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
         diagnostic_logger,
         transfer_attempt_number,
         verification_failure,
+        launch_limiter,
     } = context;
     let prepared = form.validated_plan().and_then(|plan| {
         plan.prepared_command_with_throttle_divisor_and_checkpoint(
@@ -339,6 +341,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     diagnostic_logger: diagnostic_logger.clone(),
                     attempt_number: *transfer_attempt_number,
                     live_transfer: live,
+                    launch_limiter: Some(launch_limiter),
                 })
             })
             .and_then(|stream| {
@@ -560,9 +563,6 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
         let mut transfer_attempt_number = 0_u32;
         let provider_key = provider_scope_key(&form);
         for attempt in 0..=retry_count {
-            if !launch_limiter.acquire(&cancel) {
-                break;
-            }
             if !provider_limiter.wait(&provider_key, &cancel) {
                 break;
             }
@@ -753,6 +753,7 @@ pub(crate) fn process_batch_work_items(context: BatchWorkerContext) {
                 diagnostic_logger: diagnostic_logger.clone(),
                 transfer_attempt_number: &mut transfer_attempt_number,
                 verification_failure: &mut verification_failure,
+                launch_limiter: &launch_limiter,
             });
             match result {
                 Ok(outcome) => {
@@ -1005,5 +1006,132 @@ mod tests {
         reply.send(Ok(())).unwrap();
         worker.join().unwrap();
         assert!(terminal_jobs.lock().unwrap().contains(&7));
+    }
+
+    /// Compose real batch workers with a provider cooldown that holds every
+    /// worker and then releases them together. Process starts the controller
+    /// records must still respect the shared launch rate: a start token taken
+    /// before admission would let the released workers spawn in one burst.
+    #[cfg(unix)]
+    #[test]
+    fn released_provider_cooldown_does_not_burst_process_starts() {
+        use std::os::unix::fs::PermissionsExt;
+        const WORKERS: usize = 4;
+        const STARTS_PER_SECOND: usize = 10;
+
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-launch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let engine = directory.join("fake-imapsync");
+        std::fs::write(&engine, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut form = crate::Form::default();
+        form.profile.engine = core::Engine::ImapSync;
+        form.profile.imapsync_path = engine.to_string_lossy().into_owned();
+        form.profile.source_host = "old.example".into();
+        form.profile.destination_host = "new.example".into();
+        form.source_password = String::from("source-secret").into();
+        form.destination_password = String::from("destination-secret").into();
+        form.dry_run = true;
+        let provider_key = provider_scope_key(&form);
+
+        let (job_tx, job_rx) = crossbeam_channel::unbounded();
+        for index in 0..WORKERS {
+            let mut row = form.clone();
+            row.profile.source_user = format!("user{index}");
+            row.profile.destination_user = format!("user{index}");
+            let job = BulkJob::from_form(format!("job {index}"), row, "Ready".into());
+            job_tx
+                .send((
+                    index,
+                    format!("job-{index}"),
+                    format!("run-{index}"),
+                    None,
+                    job,
+                ))
+                .unwrap();
+        }
+        drop(job_tx);
+
+        let launch_limiter = Arc::new(ProcessLaunchLimiter::new(STARTS_PER_SECOND));
+        let provider_limiter = Arc::new(AdaptiveProviderLimiter::new());
+        // Longer than the time the workers need to drain any start tokens
+        // they could bank while waiting for admission.
+        provider_limiter.hold_until(
+            &provider_key,
+            std::time::Instant::now() + Duration::from_millis(800),
+        );
+        let (tx, rx) = mpsc::sync_channel(64);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicBool::new(false));
+        let terminal_jobs = Arc::new(Mutex::new(HashSet::new()));
+        let workers = (0..WORKERS)
+            .map(|_| {
+                let context = BatchWorkerContext {
+                    concurrency: WORKERS,
+                    mode: BatchExecutionMode::Preflight,
+                    retry_count: 0,
+                    job_rx: job_rx.clone(),
+                    tx: tx.clone(),
+                    cancel: Arc::clone(&cancel),
+                    failed: Arc::clone(&failed),
+                    terminal_jobs: Arc::clone(&terminal_jobs),
+                    launch_limiter: Arc::clone(&launch_limiter),
+                    provider_limiter: Arc::clone(&provider_limiter),
+                    batch_project_id: "project".into(),
+                    batch_run_id: "batch".into(),
+                    resolved_imapsync: Arc::new(std::collections::HashMap::new()),
+                    oauth_refresh_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                    verification_state_path: None,
+                    diagnostic_logger: None,
+                };
+                thread::spawn(move || process_batch_work_items(context))
+            })
+            .collect::<Vec<_>>();
+        drop((tx, job_rx));
+
+        // Act as the durable reducer: acknowledge every request and record
+        // when each engine process start is reported.
+        let mut starts = Vec::new();
+        let mut finished = Vec::new();
+        while let Ok(event) = rx.recv() {
+            match event {
+                Event::ProcessStarted(_, _, _, _, _, _, _, reply) => {
+                    starts.push(std::time::Instant::now());
+                    let _ = reply.send(Ok(()));
+                }
+                Event::ClaimBatch { reply, .. }
+                | Event::EngineVersion { reply, .. }
+                | Event::TransferAttempt { reply, .. } => {
+                    let _ = reply.send(Ok(()));
+                }
+                Event::JobFinished {
+                    reply,
+                    state,
+                    detail,
+                    ..
+                } => {
+                    finished.push(format!("{state}: {detail}"));
+                    let _ = reply.send(Ok(()));
+                }
+                _ => {}
+            }
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+
+        assert_eq!(starts.len(), WORKERS, "jobs: {finished:?}");
+        let spacing = Duration::from_secs_f64(1.0 / STARTS_PER_SECOND as f64);
+        for pair in starts.windows(2) {
+            let gap = pair[1].duration_since(pair[0]);
+            // Allow scheduler jitter, never a burst.
+            assert!(
+                gap >= spacing.mul_f64(0.7),
+                "process starts {gap:?} apart exceed {STARTS_PER_SECOND}/s: {starts:?}"
+            );
+        }
     }
 }

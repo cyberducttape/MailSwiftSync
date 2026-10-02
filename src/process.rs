@@ -460,8 +460,12 @@ struct TokenBucketState {
 /// The external engine owns the IMAP connection, so the controller cannot
 /// meter individual messages directly. Batch command construction divides
 /// configured imapsync message/byte ceilings across workers; this bucket
-/// smooths process starts so a batch does not authenticate every mailbox at
-/// once. The limiter is intentionally shared by all workers.
+/// smooths engine process starts so a batch does not open every mailbox's
+/// engine sessions at once. The limiter is intentionally shared by all
+/// workers, and `run_streaming` takes the token immediately before `spawn`:
+/// a token taken earlier (before provider admission, OAuth refresh, the
+/// authentication probe, or the durable claim) would let workers that waited
+/// upstream spawn together in a burst once they were released.
 pub(crate) struct ProcessLaunchLimiter {
     rate_per_second: f64,
     state: Mutex<TokenBucketState>,

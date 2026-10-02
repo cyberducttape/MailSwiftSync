@@ -82,6 +82,21 @@ impl AdaptiveProviderLimiter {
         }
     }
 
+    /// Hold an endpoint pair closed until `until`, as an observed capacity
+    /// failure would, without depending on provider retry-delay tables.
+    #[cfg(all(test, unix))]
+    pub(crate) fn hold_until(&self, key: &str, until: Instant) {
+        let now = Instant::now();
+        self.state.lock().unwrap().insert(
+            key.to_owned(),
+            ProviderCooldown {
+                blocked_until: until,
+                last_capacity_failure: now,
+                consecutive_capacity_failures: 1,
+            },
+        );
+    }
+
     /// Record a failure; returns when the endpoint pair's cooldown ends if
     /// this was a capacity failure that (re)armed one.
     pub(crate) fn observe_failure(&self, key: &str, error: &str) -> Option<Instant> {

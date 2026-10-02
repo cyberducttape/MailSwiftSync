@@ -484,6 +484,10 @@ pub(crate) struct RunContext<'a> {
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
     pub(crate) attempt_number: u32,
     pub(crate) live_transfer: bool,
+    /// Shared process-start budget. The token is taken immediately before
+    /// `spawn`, after every admission, authentication, claim, and preparation
+    /// step, so time spent waiting upstream cannot bank tokens into a burst.
+    pub(crate) launch_limiter: Option<&'a crate::process::ProcessLaunchLimiter>,
 }
 
 pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, String> {
@@ -504,8 +508,18 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         diagnostic_logger,
         attempt_number,
         live_transfer,
+        launch_limiter,
     } = context;
     let mut command = execution_command(executable, args, env)?;
+    if let Some(limiter) = launch_limiter
+        && !limiter.acquire(cancel)
+    {
+        return Err(if cancel.load(Ordering::Relaxed) {
+            format!("{executable} launch cancelled before process start")
+        } else {
+            format!("{executable} launch refused: process-start limiter unavailable")
+        });
+    }
     let mut child = command
         .spawn()
         .map_err(|error| format!("could not start {executable}: {error}"))?;
@@ -1770,6 +1784,7 @@ mod tests {
             diagnostic_logger: None,
             attempt_number: 1,
             live_transfer: false,
+            launch_limiter: None,
         });
         drop(tx);
         let snapshots = controller.join().unwrap();

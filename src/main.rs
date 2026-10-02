@@ -1962,6 +1962,7 @@ mod tests {
             diagnostic_logger: None,
             attempt_number: 1,
             live_transfer: true,
+            launch_limiter: None,
         })
         .unwrap();
         drop(tx);
@@ -2016,6 +2017,7 @@ mod tests {
             diagnostic_logger: None,
             attempt_number: 1,
             live_transfer: true,
+            launch_limiter: None,
         })
         .unwrap();
         drop(tx);
@@ -2068,6 +2070,7 @@ mod tests {
             diagnostic_logger: None,
             attempt_number: 1,
             live_transfer: true,
+            launch_limiter: None,
         })
         .unwrap();
         drop(tx);
@@ -2115,6 +2118,7 @@ mod tests {
             diagnostic_logger: None,
             attempt_number: 1,
             live_transfer: false,
+            launch_limiter: None,
         });
         drop(tx);
         assert!(!acknowledger.join().unwrap());
@@ -2145,6 +2149,7 @@ mod tests {
             diagnostic_logger: None,
             attempt_number: 1,
             live_transfer: true,
+            launch_limiter: None,
         });
 
         let error = outcome.unwrap_err();
@@ -2180,6 +2185,7 @@ mod tests {
             diagnostic_logger: None,
             attempt_number: 1,
             live_transfer: true,
+            launch_limiter: None,
         });
         drop(tx);
         acknowledger.join().unwrap();
