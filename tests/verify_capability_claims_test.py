@@ -210,6 +210,24 @@ class CapabilityClaimTests(unittest.TestCase):
             with self.subTest(locale=path.name):
                 self.assertEqual(CHECKER.find_locale_level_violations(path, manifest), [])
 
+    def test_locale_level_check_reads_the_message_catalog(self):
+        import tempfile
+
+        manifest = self.repository_manifest()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "en.toml"
+            path.write_text(
+                "[messages]\n"
+                '"ui.verification-level-2" = "Level 2 — Message metadata reconciliation"\n'
+                '"ui.verification-level-4" = "Level 4 — Full proof"\n'
+                '"ui.verification-level-3" = "Level 2 — Bounded content fingerprints"\n',
+                encoding="utf-8",
+            )
+            violations = CHECKER.find_locale_level_violations(path, manifest)
+        self.assertTrue(any("ui.verification-level-4" in v for v in violations), violations)
+        self.assertTrue(any("ui.verification-level-3" in v for v in violations), violations)
+        self.assertFalse(any("ui.verification-level-2:" in v for v in violations), violations)
+
 
     def test_docs_cannot_deny_implemented_engine_install(self):
         claims = CHECKER.contradicting_claims(self.repository_manifest())

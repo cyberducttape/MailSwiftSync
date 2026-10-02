@@ -300,7 +300,7 @@ def find_locale_level_violations(path: Path, manifest: dict) -> list[str]:
     levels = verification_levels(manifest)
     english = path.stem == "en"
     with path.open("rb") as stream:
-        strings = tomllib.load(stream)
+        strings = tomllib.load(stream).get("messages", {})
     violations = []
     for key, value in strings.items():
         if not isinstance(value, str):
