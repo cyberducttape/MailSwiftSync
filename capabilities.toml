@@ -8,6 +8,36 @@ last_reviewed = "2026-09-30"
 # for the human-facing status layout.
 experimental_only_terms = ["native dovecot execution"]
 
+# Operator-facing verification tiers. This is the single vocabulary for
+# evidence levels: scripts/verify-capability-claims.py regenerates README's
+# level table from it and rejects any "Level N" in current docs, Rust labels,
+# or locale strings whose number, name, or limitation is not defined here.
+# `methods` are the `VerificationMethod` variants that src/core/evidence.rs
+# maps to the level; `aliases` are accepted shorter UI names.
+[[verification_levels]]
+level = 1
+name = "Aggregate evidence"
+limit = "individual messages not compared"
+compares = "Folder/message/byte totals and engine-reported counters."
+methods = ["AggregateEngine", "NativeDovecot"]
+aliases = []
+
+[[verification_levels]]
+level = 2
+name = "Per-message metadata reconciliation"
+limit = "bodies not compared"
+compares = "Message-ID, INTERNALDATE, and RFC822.SIZE, fetched independently from both sides."
+methods = ["MetadataReconciliation"]
+aliases = ["Message metadata reconciliation", "message metadata"]
+
+[[verification_levels]]
+level = 3
+name = "Bounded content fingerprints"
+limit = "not full byte-for-byte proof"
+compares = "SHA-256 fingerprints of bounded RFC822 body content on both sides (explicit forensic mode)."
+methods = ["BodyHash"]
+aliases = []
+
 # A capability's optional `manifest_rows` names the CAPABILITY_MANIFEST.md
 # table rows that describe it. scripts/verify-capability-claims.py checks
 # each named row's Code, Wired, and Live Provider cells against these

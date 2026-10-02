@@ -236,17 +236,21 @@ Dovecot mode configures the destination-side command using the selected migratio
 
 Verification is a primary product feature, not a process-exit decoration. After a live run, the project ledger records the available source/destination folder counts, message counts, virtual sizes, failures, warnings, and evidence level. A successful process with incomplete evidence remains pending review. Exact aggregate matches are labeled `Aggregate match — not message-body proof`; they are not message-level reconciliation and are intentionally not presented as 100% proof. Aggregate mismatches are surfaced for review rather than assigned a reassuring partial score. Export both human-readable Markdown and secret-free structured JSON project reports. Live execution is also bound to the exact secret-free plan captured by a successful dry preflight, so changing endpoints, users, engine, TLS, or controlled options requires preflight again.
 
-MailSwiftSync presents three verification levels. **Level 1 — Aggregate
-evidence** compares folder/message/byte totals and engine-reported counters;
-individual messages are not compared. Native Dovecot runs currently provide
-this level. **Level 2 — Per-message metadata reconciliation** independently
-compares Message-ID, INTERNALDATE, and RFC822.SIZE across selectable folders;
-message bodies are not compared. Encrypted imapsync runs use this by default
-when independent IMAP fetch succeeds. **Level 3 — Bounded content
-fingerprints** is an explicit forensic mode that hashes bounded RFC822 body
-content on both sides. It is not a complete byte-for-byte mailbox proof and is
-not yet provider-qualified. Incomplete or failed evidence has no verification
-level; process success alone never counts as verification.
+MailSwiftSync presents three verification levels:
+
+<!-- verification-levels:begin -->
+| Level | Compares | Limitation |
+|---|---|---|
+| **Level 1 — Aggregate evidence** | Folder/message/byte totals and engine-reported counters. | individual messages not compared |
+| **Level 2 — Per-message metadata reconciliation** | Message-ID, INTERNALDATE, and RFC822.SIZE, fetched independently from both sides. | bodies not compared |
+| **Level 3 — Bounded content fingerprints** | SHA-256 fingerprints of bounded RFC822 body content on both sides (explicit forensic mode). | not full byte-for-byte proof |
+<!-- verification-levels:end -->
+
+Native Dovecot runs currently provide Level 1. Encrypted imapsync runs use
+Level 2 by default when independent IMAP fetch succeeds. Level 3 is an
+explicit forensic mode; it is not a complete byte-for-byte mailbox proof and
+is not yet provider-qualified. Incomplete or failed evidence has no
+verification level; process success alone never counts as verification.
 The verifier fails closed for `--automap`, `--justfolders`, `--addheader`,
 disabled internal-date sync, or `--allowsizemismatch` plans until their
 semantics can be represented without overstating exact evidence. New profiles

@@ -57,7 +57,7 @@ capability in its `manifest_rows` are checked against these fields.
 |------------|------|-------|--------|---------------|-------|
 | **Aggregate evidence** (folder/message counts) | yes | yes | integration | generic-lab | Exercised by imapsync and native Dovecot against packaged local-server fixtures; live provider qualification remains pending |
 | **Message-level mismatch detection** | yes | yes (TLS imapsync path) | unit+scenario | pending | Folder-aware verifier is called after successful imapsync transfers; failures remain operator-reviewable and are never downgraded to aggregate success |
-| **Named message evidence levels** | yes | partial | unit+integration | pending | Metadata reconciliation is the default; explicit encrypted-imapsync body-hash runs emit a distinct Level 4-style bounded body-proof outcome after complete coverage |
+| **Named message evidence levels** | yes | partial | unit+integration | pending | Metadata reconciliation is the default; explicit encrypted-imapsync body-hash runs emit a distinct Level 3 — Bounded content fingerprints outcome after complete coverage |
 | **Checkpoint persistence** per message | no | no | none | no | Not implemented; Dovecot run-level checkpoints are now bound to a complete source/destination UIDVALIDITY digest, while evidence persists per run |
 | **Crash recovery** | partial | partial | unit | no | Run-level recovery works and verification staging resumes from snapshot-bound cursors; per-message transfer recovery is not implemented |
 | **Exception acceptance workflow** | yes | yes | unit | no | UI accepts exceptions, stored durably |

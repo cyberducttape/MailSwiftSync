@@ -132,5 +132,84 @@ class CapabilityClaimTests(unittest.TestCase):
         self.assertEqual(CHECKER.find_manifest_drift(content, manifest), [])
 
 
+    @staticmethod
+    def repository_manifest():
+        import tomllib
+
+        with CHECKER.MANIFEST.open("rb") as stream:
+            return tomllib.load(stream)
+
+    def test_undefined_evidence_tier_is_rejected(self):
+        manifest = self.repository_manifest()
+        # The exact stale manifest wording that the vocabulary check missed.
+        stale = (
+            "explicit encrypted-imapsync body-hash runs emit a distinct "
+            "Level 4-style bounded body-proof outcome after complete coverage"
+        )
+        violations = CHECKER.find_level_prose_violations(stale, manifest)
+        self.assertEqual(len(violations), 1)
+        self.assertIn("Level 4", violations[0])
+
+    def test_renamed_tier_and_wrong_tier_count_are_rejected(self):
+        manifest = self.repository_manifest()
+        self.assertEqual(
+            CHECKER.find_level_prose_violations(
+                "MailSwiftSync presents three verification levels. "
+                "**Level 3 — Bounded content fingerprints** hashes bodies.",
+                manifest,
+            ),
+            [],
+        )
+        renamed = CHECKER.find_level_prose_violations(
+            "**Level 3 — Full body proof** compares every byte.", manifest
+        )
+        self.assertEqual(len(renamed), 1)
+        self.assertIn("Bounded content fingerprints", renamed[0])
+        miscounted = CHECKER.find_level_prose_violations("We present four evidence levels.", manifest)
+        self.assertEqual(len(miscounted), 1)
+
+    def test_rust_labels_must_use_canonical_name_and_limitation(self):
+        manifest = self.repository_manifest()
+        good = '"Level 2 — Per-message metadata reconciliation — bodies not compared"'
+        self.assertEqual(CHECKER.find_rust_level_violations(good, manifest), [])
+        weakened = '"Level 3 — Bounded content fingerprints — complete proof"'
+        self.assertEqual(len(CHECKER.find_rust_level_violations(weakened, manifest)), 1)
+        self.assertEqual(
+            len(CHECKER.find_rust_level_violations('"Level 4 — Body proof"', manifest)), 1
+        )
+
+    def test_level_method_mapping_must_match_declared_methods(self):
+        manifest = self.repository_manifest()
+        source = CHECKER.EVIDENCE_RS.read_text(encoding="utf-8")
+        self.assertEqual(CHECKER.find_level_method_violations(source, manifest), [])
+        promoted = source.replace(
+            "VerificationMethod::AggregateEngine | VerificationMethod::NativeDovecot => {\n"
+            '                    "Level 1',
+            "VerificationMethod::AggregateEngine => {\n"
+            '                    "Level 1',
+        ).replace(
+            "VerificationMethod::BodyHash => {",
+            "VerificationMethod::BodyHash | VerificationMethod::NativeDovecot => {",
+        )
+        self.assertNotEqual(promoted, source)
+        self.assertEqual(len(CHECKER.find_level_method_violations(promoted, manifest)), 1)
+
+    def test_repository_level_table_is_generated_from_capabilities_toml(self):
+        manifest = self.repository_manifest()
+        readme = CHECKER.README_MD.read_text(encoding="utf-8")
+        self.assertEqual(
+            CHECKER.replace_block(
+                readme,
+                CHECKER.LEVELS_BEGIN,
+                CHECKER.LEVELS_END,
+                CHECKER.render_level_table(manifest),
+            ),
+            readme,
+        )
+        for path in sorted((CHECKER.ROOT / "locales").glob("*.toml")):
+            with self.subTest(locale=path.name):
+                self.assertEqual(CHECKER.find_locale_level_violations(path, manifest), [])
+
+
 if __name__ == "__main__":
     unittest.main()
