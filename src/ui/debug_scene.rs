@@ -211,8 +211,8 @@ pub(crate) fn demo_data(app: &mut App) {
     // Use environment variable to avoid hardcoded credential flags in security scanning
     let placeholder = std::env::var("MAILSWIFTSYNC_DEBUG_PLACEHOLDER")
         .unwrap_or_else(|_| "placeholder-secret".to_string());
-    app.form.source_password = String::from(placeholder.clone()).into();
-    app.form.destination_password = String::from(placeholder).into();
+    app.form.source_password = placeholder.clone().into();
+    app.form.destination_password = placeholder.into();
     for index in [1, 8] {
         if let Some(id) = ids.get(index) {
             app.bulk_selected_ids.insert(id.clone());
