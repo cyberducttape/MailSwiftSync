@@ -438,6 +438,7 @@ impl App {
             oauth_authorization_provider: "google".into(),
             oauth_authorization_tenant: String::new(),
             oauth_authorization_client_id: String::new(),
+            oauth_registrations: crate::oauth_onboarding::ClientRegistrations::load(),
             oauth_authorization_client_secret: SecretString::default(),
             oauth_authorization_login_hint: String::new(),
             oauth_authorization_source: true,

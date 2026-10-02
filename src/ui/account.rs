@@ -340,7 +340,12 @@ impl App {
             self.oauth_authorization_result = None;
         }
         self.oauth_authorization_source = source;
+        if self.oauth_authorization_provider != provider {
+            // A different provider's client ID never applies here.
+            self.oauth_authorization_client_id.clear();
+        }
         self.oauth_authorization_provider = provider.to_owned();
+        self.prefill_oauth_registration();
         if self.oauth_authorization_login_hint.trim().is_empty() {
             self.oauth_authorization_login_hint = user.trim().to_owned();
         }
@@ -354,6 +359,74 @@ impl App {
             self.plan_oauth_prefilled_id = Some((source, refresh_id.clone()));
         }
         self.plan_oauth_connect_side = Some(source);
+    }
+
+    /// Reuse the organization's registration from an earlier sign-in when
+    /// the panel opens or the provider changes, never while typing.
+    pub(crate) fn prefill_oauth_registration(&mut self) {
+        let Some(registration) = self
+            .oauth_registrations
+            .get(&self.oauth_authorization_provider)
+            .cloned()
+        else {
+            return;
+        };
+        if self.oauth_authorization_client_id.trim().is_empty() {
+            self.oauth_authorization_client_id = registration.client_id;
+        }
+        if self.oauth_authorization_provider == "microsoft"
+            && self.oauth_authorization_tenant.trim().is_empty()
+        {
+            self.oauth_authorization_tenant = registration.tenant;
+        }
+    }
+
+    /// One-time application registration steps and the exact values to
+    /// enter, open until a client ID has been supplied.
+    fn oauth_registration_guide(&mut self, ui: &mut egui::Ui) {
+        let Some(guide) =
+            crate::oauth_onboarding::registration_guide(&self.oauth_authorization_provider)
+        else {
+            return;
+        };
+        let colors = self.theme_colors();
+        egui::CollapsingHeader::new(self.language.message("ui.oauth-guide-heading"))
+            .id_salt((
+                "oauth_registration_guide",
+                self.oauth_authorization_provider.as_str(),
+            ))
+            .default_open(self.oauth_authorization_client_id.trim().is_empty())
+            .show(ui, |ui| {
+                ui.hyperlink_to(
+                    self.language.message("ui.oauth-guide-open-console"),
+                    guide.console_url,
+                );
+                for (number, step) in guide.steps.iter().enumerate() {
+                    ui.label(format!("{}. {}", number + 1, self.language.text(step)));
+                }
+                ui.add_space(4.0);
+                crate::ui::section_label(ui, self.language.message("ui.oauth-guide-values"));
+                for value in guide.values {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(self.language.text(value.label))
+                                .color(colors.text_secondary),
+                        );
+                        ui.monospace(value.value);
+                        let copy = ui.small_button(self.language.message("ui.oauth-guide-copy"));
+                        crate::ui::name_control(
+                            &copy,
+                            &self
+                                .language
+                                .message("ui.oauth-guide-copy-value")
+                                .replace("{}", value.value),
+                        );
+                        if copy.clicked() {
+                            ui.ctx().copy_text(value.value.to_owned());
+                        }
+                    });
+                }
+            });
     }
 
     pub(crate) fn effective_provider(&self, source: bool) -> crate::ProviderPreset {
@@ -507,6 +580,7 @@ impl App {
                 .size(12.0)
                 .color(self.theme_colors().text_secondary),
         );
+        self.oauth_registration_guide(ui);
         let mut start = false;
         let pending = self.oauth_authorization_receiver.is_some();
         ui.add_enabled_ui(editable, |ui| {
@@ -524,6 +598,7 @@ impl App {
                         self.language.message("ui.destination"),
                     );
                 });
+                let provider_before = self.oauth_authorization_provider.clone();
                 ui.horizontal(|ui| {
                     let field_label = ui.label(self.language.message("ui.provider"));
                     crate::ui::LabelledField::link_label(
@@ -547,6 +622,10 @@ impl App {
                         &field_label,
                     );
                 });
+                if self.oauth_authorization_provider != provider_before {
+                    self.oauth_authorization_client_id.clear();
+                    self.prefill_oauth_registration();
+                }
             }
             if self.oauth_authorization_provider == "microsoft" {
                 ui.horizontal(|ui| {
@@ -556,6 +635,15 @@ impl App {
                         &field_label,
                     );
                 });
+                if let Some(problem) =
+                    crate::oauth_onboarding::tenant_problem(&self.oauth_authorization_tenant)
+                {
+                    ui.label(
+                        RichText::new(self.language.text(problem))
+                            .small()
+                            .color(self.theme_colors().warning),
+                    );
+                }
             }
             ui.horizontal(|ui| {
                 let field_label = ui.label(self.language.message("ui.oauth-client-id"));
@@ -564,6 +652,16 @@ impl App {
                     &field_label,
                 );
             });
+            if let Some(problem) = crate::oauth_onboarding::client_id_problem(
+                &self.oauth_authorization_provider,
+                &self.oauth_authorization_client_id,
+            ) {
+                ui.label(
+                    RichText::new(self.language.text(problem))
+                        .small()
+                        .color(self.theme_colors().warning),
+                );
+            }
             ui.horizontal(|ui| {
                 let field_label =
                     ui.label(self.language.message("ui.oauth-client-secret-optional"));
@@ -605,11 +703,27 @@ impl App {
                 .language
                 .message("ui.connect-account-in-browser")
                 .replace("{}", provider_label);
+            // A malformed client ID or tenant would only fail in the browser.
+            let registration_valid = crate::oauth_onboarding::client_id_problem(
+                &self.oauth_authorization_provider,
+                &self.oauth_authorization_client_id,
+            )
+            .is_none()
+                && (self.oauth_authorization_provider != "microsoft"
+                    || crate::oauth_onboarding::tenant_problem(&self.oauth_authorization_tenant)
+                        .is_none());
             start = if fixed_side.is_some() && !pending {
-                crate::ui::primary_button(ui, &start_label).clicked()
+                ui.add_enabled_ui(registration_valid, |ui| {
+                    crate::ui::primary_button(ui, &start_label)
+                })
+                .inner
+                .clicked()
             } else {
-                ui.add_enabled(!pending, egui::Button::new(start_label))
-                    .clicked()
+                ui.add_enabled(
+                    !pending && registration_valid,
+                    egui::Button::new(start_label),
+                )
+                .clicked()
             };
         });
         if start {
@@ -971,6 +1085,19 @@ impl App {
             }
         }
         let successful = result.refresh_tested && result.imap_authenticated;
+        if successful && result.marker == current_marker {
+            // Later accounts of this organization reuse the registration.
+            self.oauth_registrations.remember(
+                &self.oauth_authorization_provider.clone(),
+                crate::oauth_onboarding::ClientRegistration {
+                    client_id: self.oauth_authorization_client_id.trim().to_owned(),
+                    tenant: tenant.trim().to_owned(),
+                },
+            );
+            if let Err(error) = self.oauth_registrations.save() {
+                eprintln!("could not remember the OAuth client registration: {error}");
+            }
+        }
         self.set_status(
             result.detail.clone().unwrap_or_else(|| {
                 if successful {

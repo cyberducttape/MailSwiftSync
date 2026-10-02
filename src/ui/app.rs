@@ -495,6 +495,7 @@ crate::ui::name_modal(ui, &modal_heading);
                         .clicked()
                     {
                         self.keyring_open = true;
+                        self.prefill_oauth_registration();
                     }
                     if ui
                         .button(format!(

@@ -166,6 +166,8 @@ pub(crate) struct App {
     pub(crate) oauth_authorization_provider: String,
     pub(crate) oauth_authorization_tenant: String,
     pub(crate) oauth_authorization_client_id: String,
+    /// Client IDs and tenants of earlier successful sign-ins (no secrets).
+    pub(crate) oauth_registrations: crate::oauth_onboarding::ClientRegistrations,
     pub(crate) oauth_authorization_client_secret: SecretString,
     pub(crate) oauth_authorization_login_hint: String,
     pub(crate) oauth_authorization_source: bool,

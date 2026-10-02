@@ -6,6 +6,14 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Guided Google Workspace and Microsoft 365 OAuth onboarding: the sign-in
+  panel shows the one-time application registration (console link, steps,
+  and the exact scope, redirect, and permission values with copy buttons,
+  checked in tests against what the authorizer requests), rejects client IDs
+  and tenants that do not have the shape the provider issues before opening
+  the browser, and remembers the client ID and tenant of a successful
+  sign-in (never secrets) in `oauth-clients.toml` for later accounts.
+  MailSwiftSync still ships no OAuth client of its own.
 - Failure classification now recognizes RFC 5530 IMAP response codes and
   documented provider responses: Exchange Online throttling with its
   suggested backoff (honored as a floor for retries and rate-domain
