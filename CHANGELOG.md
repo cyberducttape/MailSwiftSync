@@ -6,6 +6,29 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- The ledger now records durable provenance for every live engine attempt
+  (schema v15): mailbox pass and attempt, pass kind, executable identity,
+  the secret-free launched command and its digest, folder scope, source
+  range, outcome, delta requirement, engine completion counters, emitted
+  resume-state digest, and the verification method and outcome with each
+  verified folder's UIDVALIDITY/UIDNEXT/EXISTS snapshot and cursor (folder
+  names by digest only). The JSON project report carries it per run and the
+  Markdown report adds a Transfer passes table. This is still not a
+  per-message transfer checkpoint.
+- Batch scheduling no longer ties up workers: mailboxes in a provider
+  cooldown or retry backoff are parked in a timer queue, ready mailboxes are
+  served round-robin across tenants, and workers only run admitted attempts.
+- Provider throttling is attributed to hierarchical rate domains (mailbox,
+  credential, tenant, provider, global) with AIMD concurrency, escalating to
+  a broader domain only after distinct children are throttled, so one
+  tenant's throttling no longer pauses another on the same endpoints.
+- The batch process-start limiter now takes its token immediately before
+  spawn, so workers released together cannot start engines in a burst.
+- Startup no longer panics when neither durable nor temporary state can be
+  opened; it shows a fatal screen (or exits 1 headless) with both errors.
+- Verification levels and the `install-engine` capability are checked
+  against `capabilities.toml` by the documentation validator.
+
 - Redesigned the desktop GUI for a professional finish: a structured header,
   an icon sidebar with a clear selection state, raised rounded cards with
   consistent padding, a filled primary action per section, page headers,

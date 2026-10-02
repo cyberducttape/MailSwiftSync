@@ -123,6 +123,45 @@ pub(crate) fn build_project_report(
             }),
         ));
     }
+    let passes = snapshot
+        .runs
+        .iter()
+        .rev()
+        .take(20)
+        .flat_map(|report_run| report_run.transfer_passes.iter())
+        .collect::<Vec<_>>();
+    if !passes.is_empty() {
+        report.push_str("\n## Transfer passes\n\nEach row is one engine attempt: what MailSwiftSync asked the engine to do (secret-free command digest, folder scope, source range) and what was observed afterwards. Folder names are recorded only as digests.\n\n| Run | Pass | Attempt | Kind | Command SHA-256 | Folder scope | Source range | Outcome | Delta required | Verification | Verified folders | Incomplete folders |\n|---|---:|---:|---|---|---|---|---|---|---|---:|---:|\n");
+        for pass in passes {
+            report.push_str(&format!(
+                "| `{}` | {} | {} | `{}` | `{}` | `{}` | `{}` | `{}` | {} | {} | {} | {} |\n",
+                markdown_escape(&pass.run_id),
+                pass.pass_sequence,
+                pass.attempt,
+                markdown_escape(&pass.pass_kind),
+                markdown_escape(&pass.command_sha256),
+                markdown_escape(&pass.folder_scope),
+                markdown_escape(&pass.source_range),
+                markdown_escape(pass.outcome.as_deref().unwrap_or("unfinished")),
+                match pass.delta_required {
+                    Some(true) => "yes",
+                    Some(false) => "no",
+                    None => "unknown",
+                },
+                markdown_escape(
+                    &match (&pass.verification_method, &pass.verification_outcome) {
+                        (Some(method), Some(outcome)) => format!("{method}: {outcome}"),
+                        _ => "not recorded".to_owned(),
+                    }
+                ),
+                pass.folders.len(),
+                pass.folders
+                    .iter()
+                    .filter(|folder| !folder.complete)
+                    .count(),
+            ));
+        }
+    }
     report.push_str("\nEvidence levels describe what was actually established. Engine-confirmed output is not independent message-level reconciliation, and aggregate totals are not proof of message identity. Missing evidence or any state other than `verified` or `verified_with_exceptions` requires operator review before declaring the project complete.\n");
     Ok(report)
 }
@@ -210,6 +249,7 @@ pub(crate) fn build_project_json(
                 "engine_version": report_run.engine_version,
                 "transfer_attempt_count": report_run.transfer_attempt_count,
                 "unfinished_transfer_attempt_count": report_run.unfinished_transfer_attempt_count,
+                "transfer_passes": report_run.transfer_passes,
                 "phase_at_start": run.phase_at_start,
                 "destination_mutation_policy": run_destination_policy(&run.plan_snapshot),
                 "plan_snapshot_sha256": plan_snapshot_sha256(&run.plan_snapshot),

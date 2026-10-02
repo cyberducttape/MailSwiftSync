@@ -227,17 +227,54 @@ impl App {
                                 "ignored transfer-attempt record for unknown process {run_id}"
                             ))
                         } else {
-                            match status.durable_outcome() {
-                                Some(outcome) => self
+                            match &status {
+                                controller::TransferAttemptStatus::Finished {
+                                    outcome,
+                                    completion,
+                                } => self.store.record_transfer_attempt_finished(
+                                    &run_id,
+                                    attempt,
+                                    outcome.durable_outcome(),
+                                    completion,
+                                ),
+                                controller::TransferAttemptStatus::Started(intent) => self
                                     .store
-                                    .record_transfer_attempt_finished(&run_id, attempt, outcome),
-                                None => {
-                                    self.store.record_transfer_attempt_started(&run_id, attempt)
-                                }
+                                    .record_transfer_attempt_started(&run_id, attempt, intent),
                             }
                             .map_err(|error| {
                                 format!("could not persist transfer attempt {attempt}: {error}")
                             })
+                        };
+                        if let Err(error) = &result {
+                            durability_errors.push(error.clone());
+                        }
+                        let _ = reply.send(result);
+                    }
+                    Event::TransferPassVerified {
+                        run_id,
+                        job_id,
+                        attempt,
+                        method,
+                        outcome,
+                        folders,
+                        reply,
+                    } => {
+                        let result = if attempt == 0
+                            || !process_event_is_current(active_run.as_ref(), &run_id, &job_id)
+                        {
+                            Err(format!(
+                                "ignored transfer-pass verification for unknown run {run_id}"
+                            ))
+                        } else {
+                            self.store
+                                .record_transfer_pass_verified(
+                                    &run_id, attempt, &method, &outcome, &folders,
+                                )
+                                .map_err(|error| {
+                                    format!(
+                                        "could not persist verification of transfer attempt {attempt}: {error}"
+                                    )
+                                })
                         };
                         if let Err(error) = &result {
                             durability_errors.push(error.clone());

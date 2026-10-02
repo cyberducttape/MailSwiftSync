@@ -11,6 +11,7 @@ mod events;
 pub(crate) mod failure;
 mod operator_actions;
 mod orchestrator;
+pub(crate) mod pass_provenance;
 pub(crate) mod poll;
 mod poll_completion;
 mod poll_events;
@@ -35,8 +36,8 @@ pub(crate) use batch_admission::{
 pub(crate) use batch_completion::{BatchChildCompletion, finish_batch_child};
 pub(crate) use batch_worker::{BatchExecutionContext, launch_batch_worker};
 pub(crate) use events::{
-    Event, PendingDbEvent, StreamOutcome, TransferAttemptStatus, persist_pending_events,
-    process_event_is_current, run_line_is_current,
+    Event, PendingDbEvent, StreamOutcome, TransferAttemptOutcome, TransferAttemptStatus,
+    persist_pending_events, process_event_is_current, run_line_is_current,
 };
 pub(crate) use orchestrator::{SingleRunWorkerSpec, spawn_single_run_worker};
 pub(crate) use poll_events::PollEventState;

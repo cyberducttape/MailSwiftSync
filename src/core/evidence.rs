@@ -232,6 +232,9 @@ pub struct ReportRunSnapshot {
     /// Starts without a matching durable finish record, including an
     /// interruption before the engine result was durably recorded.
     pub unfinished_transfer_attempt_count: u64,
+    /// Durable provenance of each transfer attempt of this run (schema v15
+    /// and later; empty for earlier runs).
+    pub transfer_passes: Vec<super::TransferPassRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

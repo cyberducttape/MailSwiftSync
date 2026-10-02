@@ -596,6 +596,35 @@ if ! run_product status "$state" | grep -Eq '"state": "verified(_with_exceptions
 fi
 echo "PASS: durable ledger records a verified terminal state"
 
+# The ledger must say exactly what was asked of the engine in this pass and
+# what verification observed, and the support bundle must expose that only
+# as digests and classifications.
+support_bundle="$app_runtime/support-bundle.json"
+run_product support-bundle "$state" "$support_bundle" >/dev/null
+if [[ "$test_engine" == Dovecot ]]; then
+  expected_pass_kind='"pass_kind": "dovecot_'
+  expected_method='"verification_method": "native_dovecot"'
+else
+  expected_pass_kind='"pass_kind": "imapsync_sync"'
+  expected_method='"verification_method": "(metadata_reconciliation|body_hash)"'
+fi
+for pattern in "$expected_pass_kind" '"outcome": "completed"' '"command_sha256": "[0-9a-f]{64}"' "$expected_method" '"source_range": "(full_mailbox|resume_state:sha256=[0-9a-f]{64})"'; do
+  if ! grep -Eq "$pattern" "$support_bundle"; then
+    echo "FAIL: transfer-pass provenance is missing $pattern" >&2
+    exit 1
+  fi
+done
+if [[ "$test_engine" != Dovecot ]] && ! grep -Eq '"verified_folders": [1-9]' "$support_bundle"; then
+  echo "FAIL: transfer-pass provenance recorded no verified folder snapshots" >&2
+  exit 1
+fi
+if grep -qF -- "$(cat -- "$source_secret")" "$support_bundle" \
+  || grep -qF -- "$(cat -- "$destination_secret")" "$support_bundle"; then
+  echo "FAIL: support bundle contains a credential" >&2
+  exit 1
+fi
+echo "PASS: durable transfer-pass provenance records the pass, its command digest, and its verification"
+
 if [[ "$test_engine" == Dovecot ]]; then
   # Exercise the exact preservation command path (`doveadm sync -1`) against
   # an already-populated destination. Keep its plan/ledger separate from the

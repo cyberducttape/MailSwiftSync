@@ -537,10 +537,29 @@ mod tests {
                 "destination.internal",
             )
             .unwrap();
+        let mut first_job = None;
         for index in 0..2 {
             let mailbox = format!("user-{index}@example.test");
-            store.add_mailbox(&project.id, &mailbox, &mailbox).unwrap();
+            let job = store.add_mailbox(&project.id, &mailbox, &mailbox).unwrap();
+            first_job.get_or_insert(job);
         }
+        store
+            .insert_run_for_test(
+                &project.id,
+                first_job.as_deref(),
+                "run-provenance",
+                "imapsync",
+            )
+            .unwrap();
+        let mut intent = core::TransferPassIntent::for_test();
+        intent.command = vec![
+            "imapsync".into(),
+            "--host1".into(),
+            "source.internal".into(),
+        ];
+        store
+            .record_transfer_attempt_started("run-provenance", 1, &intent)
+            .unwrap();
         drop(store);
 
         headless::export_support_bundle_with_sample_limit(&state, &output, 1).unwrap();
@@ -554,6 +573,11 @@ mod tests {
         assert_eq!(value["redaction"]["project_names"], "excluded");
         assert_eq!(value["redaction"]["credentials"], "excluded");
         assert_eq!(value["redaction"]["diagnostic_text"], "excluded");
+        assert_eq!(value["redaction"]["transfer_commands"], "digest_only");
+        let pass = &value["projects"][0]["recent_runs"][0]["transfer_passes"][0];
+        assert_eq!(pass["pass_kind"], "imapsync_sync");
+        assert_eq!(pass["command_sha256"].as_str().unwrap().len(), 64);
+        assert!(pass.get("command").is_none());
         assert_eq!(value["projects"][0]["mailbox_count"], 2);
         assert_eq!(value["projects"][0]["mailbox_sample_limit"], 1);
         assert_eq!(value["projects"][0]["mailboxes_truncated"], true);
@@ -1961,7 +1985,7 @@ mod tests {
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
             attempt_number: 1,
-            live_transfer: true,
+            transfer_pass: Some(&core::TransferPassIntent::for_test()),
             launch_limiter: None,
         })
         .unwrap();
@@ -2016,18 +2040,37 @@ mod tests {
             imapsync_output_profile: verification::ImapsyncOutputProfile::Packaged2314,
             diagnostic_logger: None,
             attempt_number: 1,
-            live_transfer: true,
+            transfer_pass: Some(&core::TransferPassIntent::for_test()),
             launch_limiter: None,
         })
         .unwrap();
         drop(tx);
+        let attempts = acknowledger.join().unwrap();
+        assert_eq!(attempts.len(), 2, "{attempts:?}");
+        assert!(matches!(
+            &attempts[0],
+            (1, controller::TransferAttemptStatus::Started(intent))
+                if **intent == core::TransferPassIntent::for_test()
+        ));
+        // The finish carries the engine's own counters, never its output.
+        let (
+            1,
+            controller::TransferAttemptStatus::Finished {
+                outcome,
+                completion,
+            },
+        ) = &attempts[1]
+        else {
+            panic!("expected a finished attempt: {attempts:?}");
+        };
+        assert_eq!(*outcome, controller::TransferAttemptOutcome::Completed);
+        let counters = completion.engine_counters.as_ref().unwrap();
         assert_eq!(
-            acknowledger.join().unwrap(),
-            vec![
-                (1, controller::TransferAttemptStatus::Started),
-                (1, controller::TransferAttemptStatus::Completed),
-            ]
+            (counters.source_messages, counters.destination_messages),
+            (7, 7)
         );
+        assert_eq!((counters.source_folders, counters.source_bytes), (2, 100));
+        assert_eq!(completion.emitted_state_sha256, None);
         assert_eq!(result.outcome, StreamOutcome::Completed);
         let evidence = result.imapsync_evidence.unwrap();
         assert_eq!(evidence.source_messages, 7);
@@ -2069,7 +2112,7 @@ mod tests {
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
             attempt_number: 1,
-            live_transfer: true,
+            transfer_pass: Some(&core::TransferPassIntent::for_test()),
             launch_limiter: None,
         })
         .unwrap();
@@ -2117,7 +2160,7 @@ mod tests {
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
             attempt_number: 1,
-            live_transfer: false,
+            transfer_pass: None,
             launch_limiter: None,
         });
         drop(tx);
@@ -2148,7 +2191,7 @@ mod tests {
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
             attempt_number: 1,
-            live_transfer: true,
+            transfer_pass: Some(&core::TransferPassIntent::for_test()),
             launch_limiter: None,
         });
 
@@ -2184,7 +2227,7 @@ mod tests {
             imapsync_output_profile: verification::ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
             attempt_number: 1,
-            live_transfer: true,
+            transfer_pass: Some(&core::TransferPassIntent::for_test()),
             launch_limiter: None,
         });
         drop(tx);

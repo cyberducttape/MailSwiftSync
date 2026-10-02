@@ -265,7 +265,7 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v14 application schema, rather than treating
+    /// Validate the complete v15 application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
     /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
@@ -426,6 +426,47 @@ impl StateStore {
                     ("source_fingerprint", "TEXT", false, 0),
                     ("destination_fingerprint", "TEXT", false, 0),
                     ("recorded_at", "TEXT", true, 0),
+                ],
+            ),
+            (
+                "transfer_passes",
+                &[
+                    ("run_id", "TEXT", true, 1),
+                    ("attempt", "INTEGER", true, 2),
+                    ("project_id", "TEXT", true, 0),
+                    ("mailbox_digest", "TEXT", true, 0),
+                    ("pass_sequence", "INTEGER", true, 0),
+                    ("pass_kind", "TEXT", true, 0),
+                    ("engine", "TEXT", true, 0),
+                    ("executable_identity", "TEXT", true, 0),
+                    ("command_sha256", "TEXT", true, 0),
+                    ("command", "TEXT", true, 0),
+                    ("folder_scope", "TEXT", true, 0),
+                    ("source_range", "TEXT", true, 0),
+                    ("started_at", "TEXT", true, 0),
+                    ("finished_at", "TEXT", false, 0),
+                    ("outcome", "TEXT", false, 0),
+                    ("delta_required", "INTEGER", false, 0),
+                    ("completion_evidence", "TEXT", false, 0),
+                    ("emitted_state_sha256", "TEXT", false, 0),
+                    ("verification_method", "TEXT", false, 0),
+                    ("verification_outcome", "TEXT", false, 0),
+                    ("verified_at", "TEXT", false, 0),
+                ],
+            ),
+            (
+                "transfer_pass_folders",
+                &[
+                    ("run_id", "TEXT", true, 1),
+                    ("attempt", "INTEGER", true, 2),
+                    ("side", "INTEGER", true, 3),
+                    ("folder_digest", "TEXT", true, 4),
+                    ("uidvalidity", "INTEGER", true, 0),
+                    ("uidnext", "INTEGER", true, 0),
+                    ("exists_count", "INTEGER", true, 0),
+                    ("verified_through_uid", "INTEGER", true, 0),
+                    ("staged_messages", "INTEGER", true, 0),
+                    ("complete", "INTEGER", true, 0),
                 ],
             ),
         ];
@@ -601,6 +642,41 @@ impl StateStore {
                     ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
                 ],
             ),
+            (
+                "transfer_passes",
+                &[
+                    ("runs", "run_id", "id", "NO ACTION", "NO ACTION", "NONE"),
+                    (
+                        "projects",
+                        "project_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                ],
+            ),
+            (
+                "transfer_pass_folders",
+                &[
+                    (
+                        "transfer_passes",
+                        "run_id",
+                        "run_id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    (
+                        "transfer_passes",
+                        "attempt",
+                        "attempt",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                ],
+            ),
         ];
         for (table, expected) in FOREIGN_KEYS {
             let actual = connection
@@ -701,6 +777,12 @@ impl StateStore {
                 false,
                 false,
             ),
+            (
+                "idx_transfer_passes_mailbox",
+                &["project_id", "mailbox_digest", "pass_sequence"],
+                false,
+                false,
+            ),
             ("one_running_run_per_job", &["job_id"], true, true),
             ("one_active_run_per_job", &["job_id"], true, true),
         ];
@@ -720,6 +802,7 @@ impl StateStore {
             ("idx_engine_versions_captured", "engine_versions"),
             ("idx_message_mismatches_job_run", "message_mismatches"),
             ("idx_events_run_created", "events"),
+            ("idx_transfer_passes_mailbox", "transfer_passes"),
             ("one_running_run_per_job", "runs"),
             ("one_active_run_per_job", "runs"),
         ];
@@ -975,6 +1058,26 @@ impl StateStore {
                     "dest_size_bytesisnullordest_size_bytes>=0",
                     "source_uidvalidityisnullorsource_uidvalidity>=0",
                     "destination_uidvalidityisnullordestination_uidvalidity>=0",
+                ],
+            ),
+            (
+                "transfer_passes",
+                &[
+                    "attempt>0",
+                    "pass_sequence>0",
+                    "delta_requiredisnullordelta_requiredin(0,1)",
+                ],
+            ),
+            (
+                "transfer_pass_folders",
+                &[
+                    "sidein(0,1)",
+                    "uidvalidity>=0",
+                    "uidnext>=0",
+                    "exists_count>=0",
+                    "verified_through_uid>=0",
+                    "staged_messages>=0",
+                    "completein(0,1)",
                 ],
             ),
         ];
@@ -1246,7 +1349,8 @@ impl StateStore {
         // version 5 adds durable verification-exception acceptance records;
         // version 6 records observed engine-version metadata per run; version
         // 13 establishes destination identity policy v2; version 14 binds the
-        // current evidence projection directly to its run for report reads.
+        // current evidence projection directly to its run for report reads;
+        // version 15 adds durable per-attempt transfer-pass provenance.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1271,7 +1375,7 @@ impl StateStore {
             let current_schema_is_clean = Self::current_schema_is_clean(&self.connection)
                 && Self::validate_schema_layout(&self.connection).is_ok();
             if current_schema_is_clean {
-                // A clean v14 ledger needs no launch-time data rewrite. The
+                // A clean current ledger needs no launch-time data rewrite. The
                 // identity is calculated when a mailbox is created or its
                 // configuration changes; raw output cleanup belongs to the
                 // compatibility-repair path below.
@@ -1298,6 +1402,9 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_rowid ON mailbox_jobs(project_id);
                  CREATE INDEX IF NOT EXISTS idx_runs_project_started ON runs(project_id, started_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
+                 CREATE TABLE IF NOT EXISTS transfer_passes (run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL CHECK(attempt > 0), project_id TEXT NOT NULL REFERENCES projects(id), mailbox_digest TEXT NOT NULL, pass_sequence INTEGER NOT NULL CHECK(pass_sequence > 0), pass_kind TEXT NOT NULL, engine TEXT NOT NULL, executable_identity TEXT NOT NULL, command_sha256 TEXT NOT NULL, command TEXT NOT NULL, folder_scope TEXT NOT NULL, source_range TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, outcome TEXT, delta_required INTEGER CHECK(delta_required IS NULL OR delta_required IN (0,1)), completion_evidence TEXT, emitted_state_sha256 TEXT, verification_method TEXT, verification_outcome TEXT, verified_at TEXT, PRIMARY KEY(run_id, attempt));
+                 CREATE INDEX IF NOT EXISTS idx_transfer_passes_mailbox ON transfer_passes(project_id, mailbox_digest, pass_sequence);
+                 CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);
                  CREATE INDEX IF NOT EXISTS idx_evidence_history_job_captured ON evidence_history(job_id, captured_at DESC);

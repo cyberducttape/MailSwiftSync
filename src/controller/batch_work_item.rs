@@ -2,6 +2,7 @@
 
 use super::batch::BatchExecutionMode;
 use super::batch_worker::{OAuthRefreshLocks, rate_domain_path};
+use super::pass_provenance::{record_pass_verification, transfer_pass_intent, verified_folders};
 use super::rate_domains::{Admission, DomainKey, RateDomainLimiter, RateDomainPath};
 use crate::{
     Event, StreamOutcome,
@@ -15,10 +16,11 @@ use crate::{
     imap_probe::{SidedProbeError, fresh_dual_imaps_authentication},
     process::ProcessLaunchLimiter,
     runner::{
-        ResolvedImapsyncIdentity, RunContext, TerminalEvidenceSource, message_verification_enabled,
-        persist_engine_identity_before_launch, run_dovecot_destination_preflight,
-        run_dovecot_verification, run_imap_message_verification, run_streaming,
-        send_reliable_event, terminal_evidence_source, validate_dovecot_checkpoint_context,
+        MessageVerificationResult, ResolvedImapsyncIdentity, RunContext, TerminalEvidenceSource,
+        message_verification_enabled, persist_engine_identity_before_launch,
+        run_dovecot_destination_preflight, run_dovecot_verification, run_imap_message_verification,
+        run_streaming, send_reliable_event, terminal_evidence_source,
+        validate_dovecot_checkpoint_context,
     },
     verification::ImapsyncOutputProfile,
 };
@@ -357,6 +359,15 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
     });
     match prepared {
         Ok(command) => {
+            let transfer_pass = live.then(|| {
+                transfer_pass_intent(
+                    form,
+                    &command.executable,
+                    &command.args,
+                    &command.cleanup,
+                    checkpoint.as_deref(),
+                )
+            });
             let cleanup_guard = CleanupGuard::new(command.cleanup.clone());
             let verification = command.verification.clone();
             let prefix = format!("[{}] ", index + 1);
@@ -410,7 +421,7 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     imapsync_output_profile,
                     diagnostic_logger: diagnostic_logger.clone(),
                     attempt_number: *transfer_attempt_number,
-                    live_transfer: live,
+                    transfer_pass: transfer_pass.as_ref(),
                     launch_limiter: Some(launch_limiter),
                 })
             })
@@ -428,7 +439,20 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                             core::durable_stage_path(path, &job_id)
                         }).as_deref(),
                     ) {
-                        Ok((evidence, mismatches)) => {
+                        Ok(MessageVerificationResult {
+                            evidence,
+                            mismatches,
+                            folders,
+                        }) => {
+                            record_pass_verification(
+                                &tx,
+                                &child_run_id,
+                                &job_id,
+                                *transfer_attempt_number,
+                                &evidence,
+                                verified_folders(&project_id, &folders),
+                            )
+                            .map_err(|error| format!("pass verification record failed: {error}"))?;
                             send_reliable_event(&tx, Event::BatchEvidence {
                                 job_id: job_id.clone(),
                                 child_run_id: child_run_id.clone(),
@@ -460,6 +484,15 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                     ) == TerminalEvidenceSource::Engine
                     && let Some(evidence) = stream.imapsync_evidence
                 {
+                    record_pass_verification(
+                        &tx,
+                        &child_run_id,
+                        &job_id,
+                        *transfer_attempt_number,
+                        &evidence,
+                        Vec::new(),
+                    )
+                    .map_err(|error| format!("pass verification record failed: {error}"))?;
                     send_reliable_event(&tx, Event::BatchEvidence {
                         job_id: job_id.clone(),
                         child_run_id: child_run_id.clone(),
@@ -499,6 +532,15 @@ fn run_prepared_batch_attempt(context: BatchAttemptContext<'_>) -> Result<Stream
                             },
                         )?;
                     }
+                    record_pass_verification(
+                        &tx,
+                        &child_run_id,
+                        &job_id,
+                        *transfer_attempt_number,
+                        &verification_result.evidence,
+                        Vec::new(),
+                    )
+                    .map_err(|error| format!("pass verification record failed: {error}"))?;
                     send_reliable_event(
                         &tx,
                         Event::BatchEvidence {

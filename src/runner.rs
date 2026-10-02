@@ -164,7 +164,7 @@ pub(crate) fn run_imap_message_verification(
     run_id: &str,
     cancel: &AtomicBool,
     durable_stage_path: Option<&Path>,
-) -> Result<(core::MailboxEvidence, Vec<core::MessageMismatch>), String> {
+) -> Result<MessageVerificationResult, String> {
     if !message_verification_enabled(form) {
         return Err(
             "message-level verification is unavailable for this migration plan; refusing to claim exact evidence for automap without an immutable engine mapping, justfolders, addheader, disabled internal-date sync, or allowed size mismatches"
@@ -362,10 +362,27 @@ pub(crate) fn run_imap_message_verification(
         modified_messages: summary.changed_count,
         probable_messages: summary.probable_matches,
     };
+    // Capture each folder's cursor before a durable stage is removed; the
+    // caller records them (by folder digest) as the pass's verified ranges.
+    let folders = stage
+        .folder_cursors()
+        .map_err(|error| format!("could not read verification folder cursors: {error}"))?;
     if durable_stage_path.is_some() {
         stage.finish()?;
     }
-    Ok((evidence, mismatches))
+    Ok(MessageVerificationResult {
+        evidence,
+        mismatches,
+        folders,
+    })
+}
+
+/// Outcome of independent message-level verification of one mailbox.
+pub(crate) struct MessageVerificationResult {
+    pub(crate) evidence: core::MailboxEvidence,
+    pub(crate) mismatches: Vec<core::MessageMismatch>,
+    /// Per-folder verification cursors; folder names never leave the process.
+    pub(crate) folders: Vec<core::FolderCursor>,
 }
 
 fn validate_destination_folder_policy(
@@ -483,7 +500,9 @@ pub(crate) struct RunContext<'a> {
     pub(crate) imapsync_output_profile: verification::ImapsyncOutputProfile,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
     pub(crate) attempt_number: u32,
-    pub(crate) live_transfer: bool,
+    /// Provenance of a live transfer attempt. `Some` exactly when this
+    /// process is a live transfer whose attempt boundaries must be durable.
+    pub(crate) transfer_pass: Option<&'a core::TransferPassIntent>,
     /// Shared process-start budget. The token is taken immediately before
     /// `spawn`, after every admission, authentication, claim, and preparation
     /// step, so time spent waiting upstream cannot bank tokens into a burst.
@@ -507,7 +526,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
         imapsync_output_profile,
         diagnostic_logger,
         attempt_number,
-        live_transfer,
+        transfer_pass,
         launch_limiter,
     } = context;
     let mut command = execution_command(executable, args, env)?;
@@ -727,13 +746,13 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             Err(format!(
                 "process registration failed; child cancelled: {error}"
             ))
-        } else if live_transfer
+        } else if let Some(intent) = transfer_pass
             && let Err(error) = record_transfer_attempt(
                 tx,
                 run_id,
                 job_id,
                 attempt_number,
-                crate::controller::TransferAttemptStatus::Started,
+                crate::controller::TransferAttemptStatus::Started(Box::new(intent.clone())),
             )
         {
             cancel.store(true, Ordering::Relaxed);
@@ -742,7 +761,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
                 "transfer attempt could not be durably recorded: {error}"
             ))
         } else {
-            transfer_attempt_started = live_transfer;
+            transfer_attempt_started = transfer_pass.is_some();
             if let Err(error) = release_engine(&mut release_stdin) {
                 cancel.store(true, Ordering::Relaxed);
                 let _ = wait_with_timeout(&mut child, timeout.min(Duration::from_secs(5)), cancel);
@@ -872,23 +891,55 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             },
         );
     }
-    let attempt_status = if let Some(error) = reader_error.as_deref() {
-        crate::controller::TransferAttemptStatus::Failed {
+    let attempt_outcome = if let Some(error) = reader_error.as_deref() {
+        crate::controller::TransferAttemptOutcome::Failed {
             failure_class: crate::controller::failure::classify_failure(error).label(),
         }
     } else {
         match &result {
-            Ok(StreamOutcome::Completed) => crate::controller::TransferAttemptStatus::Completed,
+            Ok(StreamOutcome::Completed) => crate::controller::TransferAttemptOutcome::Completed,
             Ok(StreamOutcome::DeltaRequired) => {
-                crate::controller::TransferAttemptStatus::DeltaRequired
+                crate::controller::TransferAttemptOutcome::DeltaRequired
             }
-            Err(error) => crate::controller::TransferAttemptStatus::Failed {
+            Err(error) => crate::controller::TransferAttemptOutcome::Failed {
                 failure_class: crate::controller::failure::classify_failure(error).label(),
             },
         }
     };
     let attempt_record_error = if transfer_attempt_started {
-        record_transfer_attempt(tx, run_id, job_id, attempt_number, attempt_status).err()
+        // Counts only: what the engine itself reported, and the digest of
+        // any new resume state it emitted. Neither carries mailbox content.
+        let completion = core::TransferPassCompletion {
+            engine_counters: evidence
+                .lock()
+                .ok()
+                .and_then(|collector| collector.evidence(imapsync_output_profile))
+                .map(|evidence| core::EngineCompletionCounters {
+                    source_folders: evidence.source_folders,
+                    destination_folders: evidence.destination_folders,
+                    source_messages: evidence.source_messages,
+                    destination_messages: evidence.destination_messages,
+                    source_bytes: evidence.source_bytes,
+                    destination_bytes: evidence.destination_bytes,
+                    unmatched_messages: evidence.unmatched_messages,
+                }),
+            emitted_state_sha256: dovecot_checkpoint
+                .lock()
+                .ok()
+                .and_then(|state| state.clone())
+                .map(|state| core::sha256_hex(state.as_bytes())),
+        };
+        record_transfer_attempt(
+            tx,
+            run_id,
+            job_id,
+            attempt_number,
+            crate::controller::TransferAttemptStatus::Finished {
+                outcome: attempt_outcome,
+                completion,
+            },
+        )
+        .err()
     } else {
         None
     };
@@ -1783,7 +1834,7 @@ mod tests {
             imapsync_output_profile: ImapsyncOutputProfile::Unknown,
             diagnostic_logger: None,
             attempt_number: 1,
-            live_transfer: false,
+            transfer_pass: None,
             launch_limiter: None,
         });
         drop(tx);

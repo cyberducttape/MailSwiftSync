@@ -43,6 +43,7 @@ mod reports;
 mod run_queries;
 mod runs;
 mod state;
+mod transfer_passes;
 pub use capabilities::{NamespaceEntry, NamespaceInfo, ServerCapabilities};
 pub use engine::Engine;
 #[allow(unused_imports)]
@@ -53,7 +54,7 @@ pub use evidence::{
 };
 pub(crate) use message_extraction::{ExtractedMessage, ExtractedMessages, MailboxMessageKey};
 pub(crate) use message_staging::{
-    FolderSnapshot, MessageMetadataStage, StagedMessageSide, durable_stage_path,
+    FolderCursor, FolderSnapshot, MessageMetadataStage, StagedMessageSide, durable_stage_path,
 };
 pub(crate) use message_verification::{MessageMismatch, MessageVerification, MismatchType};
 pub use models::{
@@ -61,8 +62,12 @@ pub use models::{
     MailboxStateCounts, MailboxStatusPage, Project, ProjectListItem, RunListItem, RunSummary,
 };
 pub use state::{AttentionReason, MailboxState, Phase};
+pub use transfer_passes::{
+    EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
+    TransferPassIntent, TransferPassRecord, folder_digest, sha256_hex,
+};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 14;
+pub const CURRENT_SCHEMA_VERSION: i64 = 15;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 

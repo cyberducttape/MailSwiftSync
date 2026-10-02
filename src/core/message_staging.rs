@@ -144,6 +144,17 @@ impl FolderSnapshot {
     }
 }
 
+/// One folder's verification cursor and how many rows it staged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FolderCursor {
+    pub(crate) side: StagedMessageSide,
+    pub(crate) mailbox: String,
+    pub(crate) snapshot: FolderSnapshot,
+    pub(crate) last_uid: u64,
+    pub(crate) completed: bool,
+    pub(crate) staged: u64,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct StagedMessage {
     pub(crate) rowid: i64,
@@ -682,6 +693,40 @@ impl MessageMetadataStage {
     /// Mark a folder fully staged. The staged population must equal the
     /// snapshot's EXISTS; anything else means rows from another snapshot
     /// survived and the folder cannot be trusted on a later resume.
+    /// Every folder's verification cursor with its staged row count. Folder
+    /// names stay in process; callers persist only digests of them.
+    pub(crate) fn folder_cursors(&self) -> rusqlite::Result<Vec<FolderCursor>> {
+        let mut statement = self.connection_ref().prepare(
+            "SELECT c.side,c.mailbox,c.uidvalidity,c.uidnext,c.exists_count,c.last_uid,c.completed,(SELECT COUNT(*) FROM staged_messages m WHERE m.side=c.side AND m.mailbox=c.mailbox AND m.uidvalidity=c.uidvalidity) FROM stage_cursors c ORDER BY c.side,c.mailbox",
+        )?;
+        statement
+            .query_map([], |row| {
+                let side = match row.get::<_, i64>(0)? {
+                    0 => StagedMessageSide::Source,
+                    1 => StagedMessageSide::Destination,
+                    value => return Err(rusqlite::Error::IntegralValueOutOfRange(0, value)),
+                };
+                let unsigned = |index| -> rusqlite::Result<u64> {
+                    let value: i64 = row.get(index)?;
+                    u64::try_from(value)
+                        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+                };
+                Ok(FolderCursor {
+                    side,
+                    mailbox: row.get(1)?,
+                    snapshot: FolderSnapshot {
+                        uidvalidity: unsigned(2)?,
+                        uidnext: unsigned(3)?,
+                        exists: unsigned(4)?,
+                    },
+                    last_uid: unsigned(5)?,
+                    completed: row.get(6)?,
+                    staged: unsigned(7)?,
+                })
+            })?
+            .collect()
+    }
+
     pub(crate) fn complete_mailbox(
         &mut self,
         side: StagedMessageSide,
@@ -1098,6 +1143,57 @@ mod tests {
         assert_eq!(stage.resume_mailbox(side, "INBOX", folder).unwrap(), None);
         drop(stage);
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn folder_cursors_report_snapshot_progress_and_staged_rows() {
+        let mut stage = MessageMetadataStage::open_in_memory().unwrap();
+        let source = StagedMessageSide::Source;
+        let destination = StagedMessageSide::Destination;
+        let inbox = snapshot(42, 9, 2);
+        stage.resume_mailbox(source, "INBOX", inbox).unwrap();
+        stage.insert_messages(source, &page(42, [7, 8])).unwrap();
+        stage.complete_mailbox(source, "INBOX", inbox, 8).unwrap();
+        let archive = snapshot(5, 30, 3);
+        stage
+            .resume_mailbox(destination, "Archive", archive)
+            .unwrap();
+        let archive_page = page(5, [10])
+            .into_values()
+            .map(|message| {
+                (
+                    MailboxMessageKey::with_uidvalidity("Archive", 5, "10".to_owned()),
+                    message,
+                )
+            })
+            .collect();
+        stage.insert_messages(destination, &archive_page).unwrap();
+        stage
+            .checkpoint_page(destination, "Archive", archive, 10)
+            .unwrap();
+
+        let cursors = stage.folder_cursors().unwrap();
+        assert_eq!(
+            cursors,
+            [
+                FolderCursor {
+                    side: source,
+                    mailbox: "INBOX".into(),
+                    snapshot: inbox,
+                    last_uid: 8,
+                    completed: true,
+                    staged: 2,
+                },
+                FolderCursor {
+                    side: destination,
+                    mailbox: "Archive".into(),
+                    snapshot: archive,
+                    last_uid: 10,
+                    completed: false,
+                    staged: 1,
+                },
+            ]
+        );
     }
 
     #[test]

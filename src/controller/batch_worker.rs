@@ -24,7 +24,7 @@ const MAX_BATCH_PENDING_EVENTS: usize = 4_096;
 
 pub(crate) type OAuthRefreshLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
 
-fn source_endpoint(form: &crate::Form) -> String {
+pub(crate) fn source_endpoint(form: &crate::Form) -> String {
     canonical_provider_endpoint(
         &form.profile.source_host,
         &form.profile.source_port,
@@ -32,7 +32,7 @@ fn source_endpoint(form: &crate::Form) -> String {
     )
 }
 
-fn destination_endpoint(form: &crate::Form) -> String {
+pub(crate) fn destination_endpoint(form: &crate::Form) -> String {
     canonical_provider_endpoint(
         &form.profile.destination_host,
         &form.profile.destination_port,

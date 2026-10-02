@@ -160,11 +160,15 @@ impl StateStore {
                     count => Some(count as u64),
                 },
                 unfinished_transfer_attempt_count: row.get::<_, i64>(13)? as u64,
+                transfer_passes: Vec::new(),
             })
         })? {
             runs.push(row?);
         }
         runs.reverse();
+        for report_run in &mut runs {
+            report_run.transfer_passes = self.transfer_passes(&report_run.run.id)?;
+        }
 
         let mailboxes = jobs
             .into_iter()

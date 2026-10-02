@@ -402,7 +402,11 @@ mod tests {
             .record_events_for_runs_batch(&[("diagnostic-run", "diagnostic_lines_dropped", "3284")])
             .unwrap();
         store
-            .record_transfer_attempt_started("diagnostic-run", 1)
+            .record_transfer_attempt_started(
+                "diagnostic-run",
+                1,
+                &crate::core::TransferPassIntent::for_test(),
+            )
             .unwrap();
         store
             .finish_run("diagnostic-run", "completed", "ok")

@@ -2001,7 +2001,7 @@ fn writable_open_backups_and_repairs_current_schema_with_wrong_run_index_predica
             entry
                 .file_name()
                 .to_string_lossy()
-                .contains("state.db.pre-migrate-v14.")
+                .contains(&format!("state.db.pre-migrate-v{CURRENT_SCHEMA_VERSION}."))
         })
         .count();
     assert_eq!(migration_backups, 1);
@@ -2303,7 +2303,7 @@ fn writable_open_repairs_unconstrained_current_schema_with_backup() {
             entry
                 .file_name()
                 .to_string_lossy()
-                .contains("state.db.pre-migrate-v14.")
+                .contains(&format!("state.db.pre-migrate-v{CURRENT_SCHEMA_VERSION}."))
         })
         .count();
     assert_eq!(backup_count, 1);
@@ -3054,11 +3054,16 @@ fn diagnostic_drop_accounting_survives_database_reopen_and_enters_report_snapsho
             .unwrap();
         db.record_events_for_runs_batch(&[("run-accounting", "diagnostic_lines_dropped", "3284")])
             .unwrap();
-        db.record_transfer_attempt_started("run-accounting", 1)
+        db.record_transfer_attempt_started("run-accounting", 1, &test_pass_intent())
             .unwrap();
-        db.record_transfer_attempt_finished("run-accounting", 1, "completed")
-            .unwrap();
-        db.record_transfer_attempt_started("run-accounting", 2)
+        db.record_transfer_attempt_finished(
+            "run-accounting",
+            1,
+            "completed",
+            &TransferPassCompletion::default(),
+        )
+        .unwrap();
+        db.record_transfer_attempt_started("run-accounting", 2, &test_pass_intent())
             .unwrap();
         db.finish_run("run-accounting", "completed", "ok").unwrap();
         (project.id, job)
@@ -3087,28 +3092,48 @@ fn transfer_attempt_ledger_rejects_duplicates_and_unmatched_completions() {
         .unwrap();
 
     assert!(
-        db.record_transfer_attempt_finished("run-attempts", 1, "completed")
-            .is_err()
+        db.record_transfer_attempt_finished(
+            "run-attempts",
+            1,
+            "completed",
+            &TransferPassCompletion::default()
+        )
+        .is_err()
     );
     assert!(
-        db.record_transfer_attempt_started("run-attempts", 0)
+        db.record_transfer_attempt_started("run-attempts", 0, &test_pass_intent())
             .is_err()
     );
-    db.record_transfer_attempt_started("run-attempts", 1)
+    db.record_transfer_attempt_started("run-attempts", 1, &test_pass_intent())
         .unwrap();
     assert!(
-        db.record_transfer_attempt_started("run-attempts", 1)
+        db.record_transfer_attempt_started("run-attempts", 1, &test_pass_intent())
             .is_err()
     );
     assert!(
-        db.record_transfer_attempt_finished("run-attempts", 1, "arbitrary output")
-            .is_err()
+        db.record_transfer_attempt_finished(
+            "run-attempts",
+            1,
+            "arbitrary output",
+            &TransferPassCompletion::default()
+        )
+        .is_err()
     );
-    db.record_transfer_attempt_finished("run-attempts", 1, "failed:capacity")
-        .unwrap();
+    db.record_transfer_attempt_finished(
+        "run-attempts",
+        1,
+        "failed:capacity",
+        &TransferPassCompletion::default(),
+    )
+    .unwrap();
     assert!(
-        db.record_transfer_attempt_finished("run-attempts", 1, "completed")
-            .is_err()
+        db.record_transfer_attempt_finished(
+            "run-attempts",
+            1,
+            "completed",
+            &TransferPassCompletion::default()
+        )
+        .is_err()
     );
 }
 
@@ -4843,4 +4868,247 @@ fn project_read_model_revision_ignores_unrelated_projects() {
         db.project_read_model_revision(&first.id).unwrap(),
         first_revision
     );
+}
+
+fn test_pass_intent() -> TransferPassIntent {
+    TransferPassIntent {
+        mailbox_digest: sha256_hex(b"mailbox"),
+        pass_kind: "imapsync_sync".into(),
+        engine: "imapsync".into(),
+        executable_identity: "sha256:test".into(),
+        command: vec!["imapsync".into(), "--user1".into(), "alice".into()],
+        folder_scope: "all_selectable_folders;mapping=identity".into(),
+        source_range: "full_mailbox".into(),
+    }
+}
+
+fn pass_folder(side: PassSide, name: &str, complete: bool) -> TransferPassFolder {
+    TransferPassFolder {
+        side,
+        folder_digest: folder_digest("project", name),
+        uidvalidity: 7,
+        uidnext: 120,
+        exists: 100,
+        verified_through_uid: 119,
+        staged_messages: 100,
+        complete,
+    }
+}
+
+#[test]
+fn transfer_pass_provenance_records_intent_completion_and_verification() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("passes", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.insert_run_for_test(&project.id, Some(&job), "run-1", "imapsync")
+        .unwrap();
+
+    let intent = test_pass_intent();
+    db.record_transfer_attempt_started("run-1", 1, &intent)
+        .unwrap();
+    db.record_transfer_attempt_finished(
+        "run-1",
+        1,
+        "failed:transport",
+        &TransferPassCompletion::default(),
+    )
+    .unwrap();
+    // A failed attempt has no transfer to verify.
+    assert!(
+        db.record_transfer_pass_verified(
+            "run-1",
+            1,
+            "metadata_reconciliation",
+            "exact_metadata_match",
+            &[]
+        )
+        .is_err()
+    );
+    db.record_transfer_attempt_started("run-1", 2, &intent)
+        .unwrap();
+    let counters = EngineCompletionCounters {
+        source_folders: 2,
+        destination_folders: 2,
+        source_messages: 100,
+        destination_messages: 100,
+        source_bytes: 4096,
+        destination_bytes: 4096,
+        unmatched_messages: Some(0),
+    };
+    let state_digest = sha256_hex(b"state");
+    db.record_transfer_attempt_finished(
+        "run-1",
+        2,
+        "delta_required",
+        &TransferPassCompletion {
+            engine_counters: Some(counters.clone()),
+            emitted_state_sha256: Some(state_digest.clone()),
+        },
+    )
+    .unwrap();
+    let folders = [
+        pass_folder(PassSide::Source, "INBOX", true),
+        pass_folder(PassSide::Destination, "INBOX", false),
+    ];
+    db.record_transfer_pass_verified(
+        "run-1",
+        2,
+        "metadata_reconciliation",
+        "incomplete",
+        &folders,
+    )
+    .unwrap();
+    // Verification attaches once.
+    assert!(
+        db.record_transfer_pass_verified("run-1", 2, "metadata_reconciliation", "incomplete", &[])
+            .is_err()
+    );
+
+    let passes = db.transfer_passes("run-1").unwrap();
+    assert_eq!(passes.len(), 2);
+    // Retries inside one run are attempts of the same pass.
+    assert_eq!((passes[0].pass_sequence, passes[1].pass_sequence), (1, 1));
+    assert_eq!(passes[0].outcome.as_deref(), Some("failed:transport"));
+    assert_eq!(passes[0].delta_required, Some(false));
+    let verified = &passes[1];
+    assert_eq!(verified.command, intent.command);
+    assert_eq!(verified.command_sha256.len(), 64);
+    assert_eq!(verified.source_range, "full_mailbox");
+    assert_eq!(verified.delta_required, Some(true));
+    assert_eq!(verified.engine_counters.as_ref(), Some(&counters));
+    assert_eq!(
+        verified.emitted_state_sha256.as_deref(),
+        Some(state_digest.as_str())
+    );
+    assert_eq!(verified.verification_outcome.as_deref(), Some("incomplete"));
+    assert!(verified.verified_at.is_some());
+    assert_eq!(verified.folders.len(), 2);
+    assert_eq!(verified.folders[0].side, PassSide::Source);
+    assert!(!verified.folders[1].complete);
+    assert_eq!(
+        verified.folders[0].folder_digest, verified.folders[1].folder_digest,
+        "equal names on both sides share a digest"
+    );
+
+    // A later run of the same mailbox is the next pass.
+    db.finish_run("run-1", "completed", "ok").unwrap();
+    db.insert_run_for_test(&project.id, Some(&job), "run-2", "imapsync")
+        .unwrap();
+    db.record_transfer_attempt_started("run-2", 1, &intent)
+        .unwrap();
+    assert_eq!(db.transfer_passes("run-2").unwrap()[0].pass_sequence, 2);
+
+    let snapshot = db.project_report_snapshot(&project.id).unwrap().unwrap();
+    let run_1 = snapshot
+        .runs
+        .iter()
+        .find(|run| run.run.id == "run-1")
+        .unwrap();
+    assert_eq!(run_1.transfer_passes.len(), 2);
+}
+
+#[test]
+fn transfer_pass_provenance_rejects_malformed_records() {
+    let db = StateStore::in_memory().unwrap();
+    let project = db
+        .create_project("passes", "source", "destination")
+        .unwrap();
+    let job = db
+        .add_mailbox(&project.id, "source", "destination")
+        .unwrap();
+    db.insert_run_for_test(&project.id, Some(&job), "run-1", "imapsync")
+        .unwrap();
+    let mut bad = test_pass_intent();
+    bad.mailbox_digest = "not-a-digest".into();
+    assert!(
+        db.record_transfer_attempt_started("run-1", 1, &bad)
+            .is_err()
+    );
+    // The rejected start left neither an event nor a pass row behind.
+    assert!(db.transfer_passes("run-1").unwrap().is_empty());
+    db.record_transfer_attempt_started("run-1", 1, &test_pass_intent())
+        .unwrap();
+    assert!(
+        db.record_transfer_attempt_finished(
+            "run-1",
+            1,
+            "completed",
+            &TransferPassCompletion {
+                engine_counters: None,
+                emitted_state_sha256: Some("raw-state-token".into()),
+            },
+        )
+        .is_err()
+    );
+    db.record_transfer_attempt_finished(
+        "run-1",
+        1,
+        "completed",
+        &TransferPassCompletion::default(),
+    )
+    .unwrap();
+    let mut raw_name = pass_folder(PassSide::Source, "INBOX", true);
+    raw_name.folder_digest = "INBOX".into();
+    assert!(
+        db.record_transfer_pass_verified(
+            "run-1",
+            1,
+            "metadata_reconciliation",
+            "exact_metadata_match",
+            &[raw_name]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn schema_v14_ledger_upgrades_to_transfer_pass_provenance_with_backup() {
+    let directory = std::env::temp_dir().join(format!(
+        "mailswiftsync-schema-v15-upgrade-{}",
+        Uuid::new_v4()
+    ));
+    let path = directory.join("state.db");
+    create_private_test_directory(&directory);
+    let store = StateStore::open(&path).unwrap();
+    let project = store
+        .create_project("upgrade", "source", "destination")
+        .unwrap();
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE transfer_pass_folders; DROP TABLE transfer_passes; PRAGMA user_version=14;",
+        )
+        .unwrap();
+    drop(store);
+
+    let upgraded = StateStore::open(&path).unwrap();
+    let version: i64 = upgraded
+        .connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    assert!(upgraded.transfer_passes("none").unwrap().is_empty());
+    assert!(
+        upgraded
+            .project_report_snapshot(&project.id)
+            .unwrap()
+            .is_some()
+    );
+    drop(upgraded);
+    let backups = std::fs::read_dir(&directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("state.db.pre-migrate-v14.")
+        })
+        .count();
+    assert_eq!(backups, 1);
+    std::fs::remove_dir_all(directory).unwrap();
 }

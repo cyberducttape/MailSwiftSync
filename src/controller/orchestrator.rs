@@ -69,6 +69,17 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             dovecot_checkpoint,
             verification_stage_path,
         } = spec;
+        // Single runs make one transfer attempt; its provenance is recorded
+        // with that attempt's durable start.
+        let transfer_pass = (!dry_run).then(|| {
+            crate::controller::pass_provenance::transfer_pass_intent(
+                &form,
+                &executable,
+                &args,
+                &cleanup,
+                dovecot_checkpoint.as_deref(),
+            )
+        });
         let _cleanup_guard = CleanupGuard::new(cleanup);
         // Resolve the executable before launch. Imapsync's result selects the
         // only parser grammar permitted to create verification evidence.
@@ -152,7 +163,7 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                     imapsync_output_profile,
                     diagnostic_logger: diagnostic_logger.clone(),
                     attempt_number: 1,
-                    live_transfer: !dry_run,
+                    transfer_pass: transfer_pass.as_ref(),
                     launch_limiter: None,
                 })
             });
@@ -184,6 +195,14 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                         &job_id,
                     )
                     .and_then(|verification_result| {
+                        crate::controller::pass_provenance::record_pass_verification(
+                            &tx,
+                            &run_id,
+                            &job_id,
+                            1,
+                            &verification_result.evidence,
+                            Vec::new(),
+                        )?;
                         if let (Some(state), Some(context)) = (
                             stream.dovecot_checkpoint.as_deref(),
                             verification_result.checkpoint_context.as_deref(),
@@ -229,7 +248,22 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
                         &cancel,
                         verification_stage_path.as_deref(),
                     ) {
-                        Ok((evidence, mismatches)) => {
+                        Ok(crate::runner::MessageVerificationResult {
+                            evidence,
+                            mismatches,
+                            folders,
+                        }) => {
+                            crate::controller::pass_provenance::record_pass_verification(
+                                &tx,
+                                &run_id,
+                                &job_id,
+                                1,
+                                &evidence,
+                                crate::controller::pass_provenance::verified_folders(
+                                    &project_id,
+                                    &folders,
+                                ),
+                            )?;
                             send_reliable_event(
                                 &tx,
                                 Event::MessageMismatches {
@@ -269,7 +303,19 @@ pub(crate) fn spawn_single_run_worker(spec: SingleRunWorkerSpec) {
             ) == TerminalEvidenceSource::Engine
                 && let Ok(stream) = &result
                 && let Some(evidence) = stream.imapsync_evidence.clone()
-                && let Err(error) = send_reliable_event(&tx, Event::Evidence(evidence))
+                && let Err(error) = (if dry_run {
+                    Ok(())
+                } else {
+                    crate::controller::pass_provenance::record_pass_verification(
+                        &tx,
+                        &run_id,
+                        &job_id,
+                        1,
+                        &evidence,
+                        Vec::new(),
+                    )
+                })
+                .and_then(|()| send_reliable_event(&tx, Event::Evidence(evidence)))
             {
                 result = Err(format!("terminal evidence delivery failed: {error}"));
             }

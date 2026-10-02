@@ -163,21 +163,40 @@ pub(crate) enum Event {
         domain: String,
         until: std::time::Instant,
     },
+    /// Verification results for the transfer attempt they examined.
+    TransferPassVerified {
+        run_id: String,
+        job_id: String,
+        attempt: u32,
+        method: String,
+        outcome: String,
+        folders: Vec<core::TransferPassFolder>,
+        reply: mpsc::SyncSender<Result<(), String>>,
+    },
     Finished(Result<StreamOutcome, String>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A durable transfer-attempt boundary, with the provenance that belongs to
+/// it: what the engine was asked to do at start, what it reported at finish.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TransferAttemptStatus {
-    Started,
+    Started(Box<core::TransferPassIntent>),
+    Finished {
+        outcome: TransferAttemptOutcome,
+        completion: core::TransferPassCompletion,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransferAttemptOutcome {
     Completed,
     DeltaRequired,
     Failed { failure_class: &'static str },
 }
 
-impl TransferAttemptStatus {
-    pub(crate) fn durable_outcome(self) -> Option<&'static str> {
-        Some(match self {
-            Self::Started => return None,
+impl TransferAttemptOutcome {
+    pub(crate) fn durable_outcome(self) -> &'static str {
+        match self {
             Self::Completed => "completed",
             Self::DeltaRequired => "delta_required",
             Self::Failed { failure_class } => match failure_class {
@@ -192,7 +211,7 @@ impl TransferAttemptStatus {
                 "unknown" => "failed:unknown",
                 _ => "failed:other",
             },
-        })
+        }
     }
 }
 
@@ -204,7 +223,7 @@ pub(crate) enum StreamOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{TransferAttemptStatus, process_event_is_current, run_line_is_current};
+    use super::{TransferAttemptOutcome, process_event_is_current, run_line_is_current};
     use crate::controller::run::{ActiveRunContext, RunKind};
     use std::collections::{HashMap, HashSet};
 
@@ -259,20 +278,19 @@ mod tests {
 
     #[test]
     fn transfer_attempt_status_is_bounded_and_excludes_engine_output() {
-        assert_eq!(TransferAttemptStatus::Started.durable_outcome(), None);
         assert_eq!(
-            TransferAttemptStatus::Failed {
+            TransferAttemptOutcome::Failed {
                 failure_class: "capacity",
             }
             .durable_outcome(),
-            Some("failed:capacity")
+            "failed:capacity"
         );
         assert_eq!(
-            TransferAttemptStatus::Failed {
+            TransferAttemptOutcome::Failed {
                 failure_class: "arbitrary raw engine output",
             }
             .durable_outcome(),
-            Some("failed:other")
+            "failed:other"
         );
     }
 }

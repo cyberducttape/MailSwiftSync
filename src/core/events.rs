@@ -1,29 +1,42 @@
 use super::*;
 
 impl StateStore {
+    /// Durably record that a live engine attempt started, together with the
+    /// provenance of what it was asked to do.
     pub fn record_transfer_attempt_started(
         &self,
         run_id: &str,
         attempt: u32,
+        intent: &super::TransferPassIntent,
     ) -> rusqlite::Result<()> {
-        self.record_transfer_attempt(run_id, attempt, None)
+        self.record_transfer_attempt(run_id, attempt, TransferAttemptRecord::Started(intent))
     }
 
+    /// Durably record how a live engine attempt ended and what it reported.
     pub fn record_transfer_attempt_finished(
         &self,
         run_id: &str,
         attempt: u32,
         outcome: &str,
+        completion: &super::TransferPassCompletion,
     ) -> rusqlite::Result<()> {
-        self.record_transfer_attempt(run_id, attempt, Some(outcome))
+        self.record_transfer_attempt(
+            run_id,
+            attempt,
+            TransferAttemptRecord::Finished(outcome, completion),
+        )
     }
 
     fn record_transfer_attempt(
         &self,
         run_id: &str,
         attempt: u32,
-        outcome: Option<&str>,
+        record: TransferAttemptRecord<'_>,
     ) -> rusqlite::Result<()> {
+        let outcome = match record {
+            TransferAttemptRecord::Started(_) => None,
+            TransferAttemptRecord::Finished(outcome, _) => Some(outcome),
+        };
         if attempt == 0
             || outcome.is_some_and(|value| {
                 !matches!(
@@ -62,12 +75,18 @@ impl StateStore {
             rusqlite::params![run_id, format!("attempt={attempt};outcome=%")],
             |row| row.get(0),
         )?;
-        let (kind, detail) = match outcome {
-            None if !started && !finished => ("transfer_attempt_started", start_detail),
-            Some(outcome) if started && !finished => (
-                "transfer_attempt_finished",
-                format!("attempt={attempt};outcome={outcome}"),
-            ),
+        let (kind, detail) = match record {
+            TransferAttemptRecord::Started(intent) if !started && !finished => {
+                Self::insert_transfer_pass(&tx, &project_id, run_id, attempt, intent)?;
+                ("transfer_attempt_started", start_detail)
+            }
+            TransferAttemptRecord::Finished(outcome, completion) if started && !finished => {
+                Self::finish_transfer_pass(&tx, run_id, attempt, outcome, completion)?;
+                (
+                    "transfer_attempt_finished",
+                    format!("attempt={attempt};outcome={outcome}"),
+                )
+            }
             _ => return Err(rusqlite::Error::InvalidQuery),
         };
         tx.execute(
@@ -187,4 +206,10 @@ impl StateStore {
         )?;
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+enum TransferAttemptRecord<'a> {
+    Started(&'a super::TransferPassIntent),
+    Finished(&'a str, &'a super::TransferPassCompletion),
 }

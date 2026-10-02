@@ -144,6 +144,27 @@ pub(crate) fn export_support_bundle_with_sample_limit(
                     "started_at": run.started_at,
                     "finished_at": run.finished_at,
                     "has_detail": !run.detail.is_empty(),
+                    // Digests and classifications only: the launched
+                    // command names endpoints and users, so it stays out.
+                    "transfer_passes": store
+                        .transfer_passes(&run.id)
+                        .map_err(|error| error.to_string())?
+                        .into_iter()
+                        .map(|pass| serde_json::json!({
+                            "attempt": pass.attempt,
+                            "pass_sequence": pass.pass_sequence,
+                            "pass_kind": pass.pass_kind,
+                            "command_sha256": pass.command_sha256,
+                            "folder_scope": pass.folder_scope,
+                            "source_range": pass.source_range,
+                            "outcome": pass.outcome,
+                            "delta_required": pass.delta_required,
+                            "verification_method": pass.verification_method,
+                            "verification_outcome": pass.verification_outcome,
+                            "verified_folders": pass.folders.len(),
+                            "incomplete_folders": pass.folders.iter().filter(|folder| !folder.complete).count(),
+                        }))
+                        .collect::<Vec<_>>(),
                 }))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -194,6 +215,7 @@ pub(crate) fn export_support_bundle_with_sample_limit(
             "project_names": "excluded",
             "plan_snapshots": "excluded",
             "command_paths": "excluded",
+            "transfer_commands": "digest_only",
             "mail_content": "excluded",
             "diagnostic_text": "excluded",
         },
