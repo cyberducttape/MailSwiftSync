@@ -8,6 +8,7 @@
 //! lookup that another account could redirect.
 
 use std::{
+    ffi::c_void,
     fs, io,
     os::windows::{
         fs::{MetadataExt, OpenOptionsExt},
