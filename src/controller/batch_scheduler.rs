@@ -774,9 +774,12 @@ mod tests {
         assert_eq!(order.len(), 6, "{order:?}");
         let first_retry = started[3].1.duration_since(began);
         assert!(first_retry >= backoff, "retried after {first_retry:?}");
+        // Serialized behind one worker, three 600 ms backoffs plus six 50 ms
+        // attempts take about 2.1 s; overlapped, about 0.9 s. Three backoffs
+        // separates the two with room for slow CI hosts.
         let total = began.elapsed();
         assert!(
-            total < backoff * 2,
+            total < backoff * 3,
             "three overlapping backoffs took {total:?}; they were serialized"
         );
     }

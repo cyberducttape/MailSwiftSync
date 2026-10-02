@@ -388,12 +388,18 @@ impl RateDomainLimiter {
         if classify_failure(error) != FailureClass::Capacity {
             return Vec::new();
         }
-        let base = crate::core::provider_intelligence::ProviderErrorClassifier::classify(
-            "generic",
-            control_error_text(error),
-        )
-        .suggested_retry_delay()
-        .unwrap_or(DEFAULT_CAPACITY_DELAY);
+        let text = control_error_text(error);
+        let server_requested = crate::core::provider_intelligence::provider_signal(text)
+            .and_then(|signal| signal.retry_after);
+        let base = server_requested
+            .or_else(|| {
+                crate::core::provider_intelligence::ProviderErrorClassifier::classify(
+                    "generic", text,
+                )
+                .suggested_retry_delay()
+            })
+            .unwrap_or(DEFAULT_CAPACITY_DELAY);
+        let floor = server_requested.unwrap_or_default();
         let Ok(mut state) = self.state.lock() else {
             return Vec::new();
         };
@@ -409,7 +415,7 @@ impl RateDomainLimiter {
             if self.penalize(
                 &mut state,
                 lineage[mailbox],
-                base,
+                (base, floor),
                 admission.admitted_at,
                 now,
             ) {
@@ -437,7 +443,13 @@ impl RateDomainLimiter {
                     .retain(|(key, at)| *key != child && *at + ESCALATION_WINDOW > now);
                 parent.child_failures.push((child, now));
                 if parent.child_failures.len() >= ESCALATION_DISTINCT_CHILDREN
-                    && self.penalize(&mut state, lineage[index], base, admission.admitted_at, now)
+                    && self.penalize(
+                        &mut state,
+                        lineage[index],
+                        (base, floor),
+                        admission.admitted_at,
+                        now,
+                    )
                     && !penalized.contains(lineage[index])
                 {
                     penalized.push(lineage[index].clone());
@@ -457,7 +469,7 @@ impl RateDomainLimiter {
         &self,
         state: &mut HashMap<DomainKey, DomainState>,
         key: &DomainKey,
-        base: Duration,
+        (base, floor): (Duration, Duration),
         admitted_at: Instant,
         now: Instant,
     ) -> bool {
@@ -474,7 +486,8 @@ impl RateDomainLimiter {
             domain.limit = (domain.limit / 2.0).max(1.0);
         }
         let multiplier = 1u32 << domain.consecutive_capacity_failures.min(5);
-        let cooldown = base.saturating_mul(multiplier).min(MAX_COOLDOWN);
+        // Escalation is capped, but never below a delay the server asked for.
+        let cooldown = base.saturating_mul(multiplier).min(MAX_COOLDOWN).max(floor);
         domain.blocked_until = domain.blocked_until.max(now + cooldown);
         domain.consecutive_capacity_failures =
             domain.consecutive_capacity_failures.saturating_add(1);
@@ -812,6 +825,25 @@ mod tests {
             mailbox_cooldown("connection closed by remote host")
                 .is_none_or(|remaining| remaining.is_zero())
         );
+    }
+
+    #[test]
+    fn server_requested_backoff_sets_the_cooldown_floor() {
+        let remaining = mailbox_cooldown(
+            "Host2 BAD Request is throttled. Suggested Backoff Time: 299961 milliseconds",
+        )
+        .unwrap_or_default();
+        // The source-side mailbox is untouched; check the destination side.
+        let limiter = Arc::new(RateDomainLimiter::new(4));
+        let job = path("alice@a.example", "alice@a.example");
+        let admission = admit(&limiter, &job);
+        let penalized = limiter.observe_failure(
+            &admission,
+            "Host2 BAD Request is throttled. Suggested Backoff Time: 299961 milliseconds",
+        );
+        let until = penalized[0].1;
+        assert!(until.saturating_duration_since(Instant::now()) > Duration::from_secs(290));
+        assert!(remaining.is_zero());
     }
 
     #[test]

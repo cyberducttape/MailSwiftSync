@@ -6,6 +6,16 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Failure classification now recognizes RFC 5530 IMAP response codes and
+  documented provider responses: Exchange Online throttling with its
+  suggested backoff (honored as a floor for retries and rate-domain
+  cooldowns) and the IMAP-disabled `User is authenticated but not connected`
+  response, Gmail's connection, bandwidth, web-login, and app-password
+  responses, and Dovecot's connection limit. Gmail's "Too many simultaneous
+  connections" was previously treated as a permanent failure and is now a
+  retryable capacity signal. Recognized signals and their next step appear in
+  the durable failure detail. These are documented, not live-qualified,
+  behaviors.
 - Added a Recovery workspace. It groups every mailbox that needs an operator
   decision (attention, failed, cancelled, verification difference, delta
   required) by durable attention reason, shows the recommended action and

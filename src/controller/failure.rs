@@ -310,16 +310,23 @@ pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
     let error = control_error_text(error);
     let provider_error =
         crate::core::provider_intelligence::ProviderErrorClassifier::classify("generic", error);
-    let base_millis = provider_error.suggested_retry_delay().map_or_else(
-        || {
-            if classify_failure(error) == FailureClass::Capacity {
-                5_000_u64
-            } else {
-                1_000_u64
-            }
-        },
-        |delay| delay.as_millis().min(u128::from(u64::MAX)) as u64,
-    );
+    // A delay the server itself requested (for example Exchange Online's
+    // suggested backoff) is honored as the base, capped by the provider
+    // module; otherwise the class default applies.
+    let server_requested = crate::core::provider_intelligence::provider_signal(error)
+        .and_then(|signal| signal.retry_after);
+    let base_millis = server_requested
+        .or(provider_error.suggested_retry_delay())
+        .map_or_else(
+            || {
+                if classify_failure(error) == FailureClass::Capacity {
+                    5_000_u64
+                } else {
+                    1_000_u64
+                }
+            },
+            |delay| delay.as_millis().min(u128::from(u64::MAX)) as u64,
+        );
     let multiplier = 1_u64 << attempt.min(5);
     let exponential = base_millis.saturating_mul(multiplier).min(120_000);
     // Add per-attempt entropy so concurrent workers do not wake on the same
@@ -335,7 +342,9 @@ pub(crate) fn transient_retry_delay(error: &str, attempt: usize) -> Duration {
     } else {
         entropy % (exponential / 2 + 1)
     };
+    // Never retry sooner than the server asked, even past the usual cap.
     Duration::from_millis(exponential.saturating_add(jitter).min(120_000))
+        .max(server_requested.unwrap_or_default())
 }
 
 /// Return only the primary failure, excluding untrusted diagnostic text added
@@ -348,15 +357,71 @@ pub(crate) fn control_error_text(error: &str) -> &str {
 
 pub(crate) fn classified_failure_detail(error: &str) -> String {
     let class = classify_failure(error);
+    // A recognized documented response names its source and, when the
+    // failure needs a person, what to check. The tag follows the class so
+    // the durable prefix parse is unchanged.
+    let signal = crate::core::provider_intelligence::provider_signal(control_error_text(error))
+        .map(|signal| {
+            let remediation = if signal.remediation.is_empty() {
+                String::new()
+            } else {
+                format!(" Next step: {}.", signal.remediation)
+            };
+            (
+                format!("[signal={}:{}] ", signal.source, signal.name),
+                remediation,
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "[attention_reason={}] [class={}] {error}",
+        "[attention_reason={}] [class={}] {}{error}{}",
         class.attention_reason().as_str(),
-        class.label()
+        class.label(),
+        signal.0,
+        signal.1
     )
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failure_detail_names_a_recognized_signal_and_its_next_step() {
+        let detail =
+            super::classified_failure_detail("BAD User is authenticated but not connected.");
+        assert!(
+            detail.starts_with("[attention_reason=authentication_failed] [class=authentication] [signal=microsoft365:authenticated_not_connected] "),
+            "{detail}"
+        );
+        assert!(detail.contains("Next step: Enable IMAP"), "{detail}");
+        assert_eq!(
+            super::classify_failure(&detail),
+            super::FailureClass::Authentication
+        );
+        // Unrecognized failures keep the existing format.
+        assert_eq!(
+            super::classified_failure_detail("too many requests"),
+            "[attention_reason=capacity_limited] [class=capacity] too many requests"
+        );
+    }
+
+    #[test]
+    fn server_requested_backoff_is_a_floor_for_the_retry_delay() {
+        let delay = super::transient_retry_delay(
+            "BAD Request is throttled. Suggested Backoff Time: 299961 milliseconds",
+            0,
+        );
+        assert!(
+            delay >= std::time::Duration::from_millis(299_961),
+            "{delay:?}"
+        );
+        assert!(super::is_transient_batch_error(
+            "* BYE [ALERT] Too many simultaneous connections. (Failure)"
+        ));
+        assert!(!super::is_transient_batch_error(
+            "BAD User is authenticated but not connected."
+        ));
+    }
+
     use super::{FailureClass, classify_failure, should_retry_batch_error, transient_retry_delay};
 
     #[test]
