@@ -20,7 +20,7 @@ impl App {
             profile_available: self.profile_available,
             read_only_project: self.workspace_read_only,
             process_review_required: self.process_review_required,
-            has_jobs: !self.bulk_jobs.is_empty(),
+            has_jobs: !self.queue.is_empty(),
             live_confirmed: self.bulk_live_confirmed,
             persistence_available: self.persistence_available,
         }) {
@@ -39,14 +39,14 @@ impl App {
         }
         if live {
             self.bulk_live_confirmed = false;
-            if self.bulk_project_id.is_none() || self.bulk_job_ids.len() != self.bulk_jobs.len() {
-                self.bulk_message = self
-                    .language
-                    .text("Run a successful preflight for this queue before starting live migrations.")
-                    .into();
-                return;
-            }
         }
+        let Some(project_id) = self.queue.project_id().map(str::to_owned) else {
+            self.bulk_message = self
+                .language
+                .text("Import a mailbox file before running a batch.")
+                .into();
+            return;
+        };
         self.durability_error = false;
         self.durability_recovery_pending = false;
         self.pending_batch_evidence.clear();
@@ -54,16 +54,31 @@ impl App {
         self.pending_batch_checkpoints.clear();
         let run_id = uuid::Uuid::new_v4().to_string();
         let selection_scope = self.bulk_selection_scope();
+        let loader = match crate::controller::queue::ledger_job_loader(
+            &self.store,
+            self.state_path
+                .clone()
+                .filter(|_| self.persistence_available),
+            &project_id,
+            self.form.profile.extra_options.clone(),
+            self.queue.session_secrets.clone(),
+            mode.is_preflight(),
+        ) {
+            Ok(loader) => loader,
+            Err(error) => {
+                self.bulk_message = error;
+                return;
+            }
+        };
         let admission = match admit_batch_launch(BatchLaunchRequest {
             store: &self.store,
-            requested_project_id: self.bulk_project_id.as_deref(),
-            source_jobs: &self.bulk_jobs,
-            queue_job_ids: &self.bulk_job_ids,
+            project_id: &project_id,
             selection_scope: &selection_scope,
             retry_scope: self.bulk_retry_scope,
             mode,
             fallback_profile: &self.form.profile,
-            expected_credential_fingerprints: &self.bulk_preflight_credential_fingerprints,
+            expected_credential_fingerprints: &self.queue.preflight_credentials,
+            session_secrets: &self.queue.session_secrets,
             expected_action_plan_hash: self
                 .bulk_confirmation_summary
                 .as_ref()
@@ -77,57 +92,17 @@ impl App {
                 return;
             }
         };
-        let selected_indices = admission
-            .selected_jobs
-            .iter()
-            .map(|selected| selected.queue_index)
-            .collect::<Vec<_>>();
-        let jobs = admission
-            .selected_jobs
-            .iter()
-            .map(|selected| selected.job.clone())
-            .collect::<Vec<_>>();
-        if live
-            && jobs
-                .iter()
-                .any(|job| crate::runner::automap_blocks_live_certification(&job.form()))
-        {
-            self.bulk_message = self.language.text("Live batch blocked: one or more selected imapsync plans use automapping, which cannot currently be independently verified. Disable automap and rerun preflight for those mailboxes.").into();
-            return;
-        }
-        let project_id = admission.project_id;
-        let job_ids = admission.job_ids;
         let prepared = admission.prepared;
-        let active_run = admission.active_run;
         let selected_job_ids = prepared.selected_job_ids.clone();
-        let queue_checkpoints = prepared.queue_checkpoints;
-        let job_count = jobs.len();
+        let job_count = selected_job_ids.len();
         let concurrency = self.form.profile.batch_concurrency.clamp(1, 16);
-        self.bulk_project_id = Some(project_id.clone());
         self.selected_project_id = Some(project_id.clone());
-        self.bulk_job_ids = job_ids;
-        // Admission may have replaced a stale durable project. Keep the
-        // in-memory selection in the same durable ID space as the admitted
-        // run; otherwise headless completion filtering can turn a real run
-        // into an empty, apparently successful result.
-        if self.bulk_all_selected
-            && self.bulk_selected_ids.is_empty()
-            && selected_job_ids.len() == self.bulk_jobs.len()
-        {
-            self.select_all_bulk_rows();
-        } else {
-            self.bulk_all_selected = false;
-            self.bulk_selected_ids = selected_job_ids.iter().cloned().collect();
-        }
-        self.rebuild_bulk_job_index();
         self.bulk_live_run = live;
         self.run_id = Some(run_id.clone());
         self.locked_profile = Some(self.form.profile.clone());
-        self.active_run = Some(active_run);
-        for &index in &selected_indices {
-            self.set_bulk_job_state(index, "Queued".into());
-        }
-        self.mark_bulk_state_changed();
+        self.active_run = Some(admission.active_run);
+        // Admission recorded the children as durably queued.
+        self.mark_bulk_jobs_changed();
         let worker = launch_batch_worker(BatchExecutionContext {
             concurrency,
             mode,
@@ -139,10 +114,11 @@ impl App {
                 .as_ref()
                 .map(|run| run.batch_child_run_ids.clone())
                 .unwrap_or_default(),
-            queue_checkpoints,
+            queue_checkpoints: prepared.queue_checkpoints,
             batch_project_id: project_id,
             batch_run_id: run_id,
-            jobs,
+            loader,
+            imapsync_executables: prepared.imapsync_executables,
             verification_state_path: self.state_path.clone(),
             diagnostic_logger: self.diagnostic_logger.clone(),
         });

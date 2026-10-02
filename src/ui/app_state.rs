@@ -61,7 +61,9 @@ pub(crate) struct App {
     pub(crate) receiver: Option<Receiver<Event>>,
     pub(crate) status: StatusMessage,
     pub(crate) preview: bool,
-    pub(crate) bulk_jobs: Vec<BulkJob>,
+    /// The batch queue: durable rows in SQLite, read through a bounded
+    /// presentation model.
+    pub(crate) queue: crate::ui::queue_model::MailboxQueue,
     pub(crate) settings_open: bool,
     pub(crate) bulk_search: String,
     pub(crate) bulk_state_filter: String,
@@ -75,28 +77,13 @@ pub(crate) struct App {
     /// Set by the shell for the current frame so the mailbox page knows
     /// whether the inspector is already being rendered in a right panel.
     pub(crate) bulk_inspector_side_panel: bool,
-    /// Reused filtered-row index storage. Large batch views must not allocate
-    /// a fresh index vector on every repaint.
-    pub(crate) bulk_visible_indices: Vec<usize>,
     /// Per-frame selection projection shared by the drawer and page counts.
     pub(crate) bulk_selection_view: crate::ui::batch::SelectionView,
     /// Rebuild the selected-row projection only after queue/state/selection changes.
     pub(crate) bulk_selection_view_dirty: bool,
-    /// Lowercase searchable mailbox fields, rebuilt only when queue rows are
-    /// imported or otherwise structurally changed.
-    pub(crate) bulk_search_values: Vec<String>,
-    /// State membership is maintained incrementally so a state-only filter
-    /// does not scan every mailbox after each worker transition.
-    pub(crate) bulk_state_indices: HashMap<String, HashSet<usize>>,
-    /// Search matches are independent of durable state. Keeping this index
-    /// separate means a worker state transition only intersects the changed
-    /// state bucket instead of rescanning every searchable mailbox.
-    pub(crate) bulk_search_match_indices: Vec<usize>,
-    pub(crate) bulk_search_matches_valid: bool,
-    pub(crate) bulk_filter_cache_search: String,
-    pub(crate) bulk_filter_cache_state: String,
-    pub(crate) bulk_filter_cache_generation: u64,
-    pub(crate) bulk_jobs_generation: u64,
+    /// Table positions drawn last frame, used to prefetch the next frame's
+    /// rows from the ledger.
+    pub(crate) bulk_rendered_range: (usize, usize),
     pub(crate) bulk_message: String,
     /// OS-keyring IDs typed on the Mailboxes page for rows without credentials.
     pub(crate) bulk_source_keyring_apply: String,
@@ -153,12 +140,6 @@ pub(crate) struct App {
     /// the plan presented to the operator or the next retry.
     pub(crate) locked_profile: Option<Profile>,
     pub(crate) cancel_requested: Option<Arc<AtomicBool>>,
-    pub(crate) bulk_project_id: Option<String>,
-    pub(crate) bulk_job_ids: Vec<String>,
-    pub(crate) bulk_job_index_by_id: HashMap<String, usize>,
-    /// Process-local credential material from the last successful dry
-    /// validation for each durable queue row. Restored queues start empty.
-    pub(crate) bulk_preflight_credential_fingerprints: Vec<Option<String>>,
     pub(crate) preflight: Vec<(String, String, bool)>,
     pub(crate) capability_receiver: Option<Receiver<CapabilityProbeResult>>,
     pub(crate) capability_probe_request_id: Option<String>,
@@ -261,7 +242,6 @@ pub(crate) struct App {
     /// Proof of what the operator saw when they opened the confirmation dialog.
     /// Must match exactly when they click "Confirm" or the dialog re-opens.
     pub(crate) bulk_confirmation_identity: Option<BatchConfirmationIdentity>,
-    pub(crate) bulk_summary: Option<(u64, BulkQueueSummary)>,
     pub(crate) bulk_mode: BatchExecutionMode,
     pub(crate) bulk_clear_confirm_open: bool,
     pub(crate) pending_bulk_import: Option<std::path::PathBuf>,
@@ -316,7 +296,7 @@ pub(crate) struct App {
 impl App {
     pub(crate) fn bulk_selection_count(&self) -> usize {
         if self.bulk_all_selected {
-            self.bulk_jobs
+            self.queue
                 .len()
                 .saturating_sub(self.bulk_selected_ids.len())
         } else {
@@ -501,7 +481,7 @@ impl App {
         self.active_run
             .as_ref()
             .map(|run| run.project_id.as_str())
-            .or(self.bulk_project_id.as_deref())
+            .or(self.queue.project_id())
             .or(self.project_id.as_deref())
     }
 
@@ -546,7 +526,7 @@ impl App {
         preferred_project_id(
             self.active_run.as_ref().map(|run| run.project_id.as_str()),
             self.selected_project_id.as_deref(),
-            self.bulk_project_id.as_deref(),
+            self.queue.project_id(),
             self.project_id.as_deref(),
         )
     }

@@ -170,18 +170,84 @@ enum WorkerReport {
     Panicked,
 }
 
-/// Unscheduled jobs, materialized into tasks only as the queues need them.
+/// Resolves a page of admitted job IDs to executable jobs, in order. A job
+/// whose plan or credentials cannot be prepared is an `Err` for that job
+/// alone; an `Err` for the whole page means the source itself failed.
+pub(crate) type JobLoader =
+    Box<dyn FnMut(&[String]) -> Result<Vec<Result<BulkJob, String>>, String> + Send>;
+
+/// Jobs to load per page. Small pages keep only a bounded number of
+/// executable plans (and loaded credentials) in memory ahead of the workers.
+const LOAD_PAGE: usize = 64;
+
+/// Unscheduled jobs, read from their source only as the queues need them.
 pub(crate) struct JobSource {
-    pub(crate) jobs: std::iter::Enumerate<std::vec::IntoIter<BulkJob>>,
     pub(crate) job_ids: Vec<String>,
     pub(crate) child_run_ids: Vec<String>,
     pub(crate) checkpoints: Vec<Option<String>>,
+    pub(crate) loader: JobLoader,
+    next: usize,
+    page: std::collections::VecDeque<(usize, Result<BulkJob, String>)>,
 }
 
 impl JobSource {
-    /// The next task, or `Err(())` if a job has no durable identity.
+    pub(crate) fn new(
+        job_ids: Vec<String>,
+        child_run_ids: Vec<String>,
+        checkpoints: Vec<Option<String>>,
+        loader: JobLoader,
+    ) -> Self {
+        Self {
+            job_ids,
+            child_run_ids,
+            checkpoints,
+            loader,
+            next: 0,
+            page: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// A source over jobs already in memory.
+    #[cfg(test)]
+    pub(crate) fn from_jobs(
+        jobs: Vec<BulkJob>,
+        job_ids: Vec<String>,
+        child_run_ids: Vec<String>,
+        checkpoints: Vec<Option<String>>,
+    ) -> Self {
+        let mut jobs = jobs.into_iter();
+        Self::new(
+            job_ids,
+            child_run_ids,
+            checkpoints,
+            Box::new(move |ids| {
+                Ok(ids
+                    .iter()
+                    .map(|_| jobs.next().ok_or_else(|| "missing job".to_owned()))
+                    .collect())
+            }),
+        )
+    }
+
+    /// The next task, or `Err(())` if the source failed or a job has no
+    /// durable identity.
     fn next_task(&mut self) -> Option<Result<MailboxTask, ()>> {
-        let (index, job) = self.jobs.next()?;
+        if self.page.is_empty() {
+            if self.next >= self.job_ids.len() {
+                return None;
+            }
+            let end = (self.next + LOAD_PAGE).min(self.job_ids.len());
+            let loaded = match (self.loader)(&self.job_ids[self.next..end]) {
+                Ok(loaded) if loaded.len() == end - self.next => loaded,
+                _ => {
+                    self.next = self.job_ids.len();
+                    return Some(Err(()));
+                }
+            };
+            self.page = (self.next..end).zip(loaded).collect();
+            self.next = end;
+        }
+        let (index, job) = self.page.pop_front()?;
         let (Some(job_id), Some(child_run_id)) = (
             self.job_ids.get(index).cloned(),
             self.child_run_ids.get(index).cloned(),
@@ -189,13 +255,10 @@ impl JobSource {
             return Some(Err(()));
         };
         let checkpoint = self.checkpoints.get(index).cloned().unwrap_or_default();
-        Some(Ok(MailboxTask::new(
-            index,
-            job_id,
-            child_run_id,
-            checkpoint,
-            &job,
-        )))
+        Some(Ok(match job {
+            Ok(job) => MailboxTask::new(index, job_id, child_run_id, checkpoint, &job),
+            Err(error) => MailboxTask::unpreparable(index, job_id, child_run_id, error),
+        }))
     }
 }
 
@@ -444,7 +507,7 @@ mod tests {
                 .map(|(index, form)| {
                     BulkJob::from_form(format!("job {index}"), form, "Ready".into())
                 })
-                .collect();
+                .collect::<Vec<_>>();
             let (tx, rx) = mpsc::sync_channel(256);
             let began = Instant::now();
             let coordinator = spawn_batch_worker_with(
@@ -458,7 +521,23 @@ mod tests {
                     queue_checkpoints: vec![None; count],
                     batch_project_id: "project".into(),
                     batch_run_id: "batch".into(),
-                    jobs,
+                    imapsync_executables: {
+                        let mut executables = jobs
+                            .iter()
+                            .map(|job: &BulkJob| job.profile().imapsync_path)
+                            .collect::<Vec<_>>();
+                        executables.dedup();
+                        executables
+                    },
+                    loader: {
+                        let mut jobs = jobs.into_iter();
+                        Box::new(move |ids: &[String]| {
+                            Ok(ids
+                                .iter()
+                                .map(|_| jobs.next().ok_or_else(|| "missing job".to_owned()))
+                                .collect())
+                        })
+                    },
                     verification_state_path: None,
                     diagnostic_logger: None,
                 },
@@ -679,12 +758,12 @@ mod tests {
         let result = super::run_batch_schedule(
             std::sync::Arc::clone(&executor),
             1,
-            super::JobSource {
-                jobs: jobs.into_iter().enumerate(),
-                job_ids: (0..3).map(|index| format!("job-{index}")).collect(),
-                child_run_ids: (0..3).map(|index| format!("run-{index}")).collect(),
-                checkpoints: vec![None; 3],
-            },
+            super::JobSource::from_jobs(
+                jobs,
+                (0..3).map(|index| format!("job-{index}")).collect(),
+                (0..3).map(|index| format!("run-{index}")).collect(),
+                vec![None; 3],
+            ),
         );
         assert!(!result.worker_panicked && !result.enqueue_failed);
         let started = executor.started.lock().unwrap().clone();
@@ -777,12 +856,12 @@ mod tests {
         super::run_batch_schedule(
             std::sync::Arc::clone(&executor),
             1,
-            super::JobSource {
-                jobs: jobs.into_iter().enumerate(),
-                job_ids: (0..count).map(|index| format!("job-{index}")).collect(),
-                child_run_ids: (0..count).map(|index| format!("run-{index}")).collect(),
-                checkpoints: vec![None; count],
-            },
+            super::JobSource::from_jobs(
+                jobs,
+                (0..count).map(|index| format!("job-{index}")).collect(),
+                (0..count).map(|index| format!("run-{index}")).collect(),
+                vec![None; count],
+            ),
         );
         assert!(began.elapsed() < std::time::Duration::from_secs(5));
         assert_eq!(

@@ -264,15 +264,14 @@ screen-reader checklist are recorded in
 - **100k-row desktop scale gate:** the importer accepts up to 100,000 rows.
   Imported rows now retain only mailbox identity/credential deltas and share
   immutable batch defaults through an `Arc`; a full `Form` is hydrated only at
-  admission or worker execution. Restored rows reuse identical default-plan
-  objects after durable reload. The default unfiltered mailbox view avoids a
-  full predicate scan after state updates, while search filtering remains
-  linear in the in-memory working set. The durable ledger already provides
-  bounded SQLite paging for restart/read behavior. The remaining scale
-  limitation is that the live GUI queue itself is still an in-memory working
-  set rather than a fully SQLite-backed virtualized row store. The importer,
-  UI, and reload gates are reproducible with the three benchmark scripts below
-  and must be repeated on each supported release host class.
+  admission or worker execution. Since 2026-10-02 the queue itself is
+  SQLite-backed: an import is written to the ledger as a batch project, the
+  Mailboxes view renders virtual rows from a filtered row-ID index plus a
+  bounded row cache, search and state filters run as SQL over a narrow facts
+  table, and admission and the scheduler read rows from the ledger instead of
+  an in-memory job list. The importer, UI, and reload gates are reproducible
+  with the three benchmark scripts below and must be repeated on each
+  supported release host class.
 
   The latest local release-mode baseline on 2026-09-30 (Linux x86_64, the
   cases run sequentially in one process) was:
@@ -298,17 +297,20 @@ screen-reader checklist are recorded in
   runner, so the documented budgets are release gates rather than an
   unexecuted local benchmark recipe.
 
-  The pure cached-filter/selection path has a companion command,
-  `scripts/benchmark-ui-scale.sh`. It measures 100k-row filter keystroke,
-  explicit selection-all, a 1,000-row state-update refresh, and a real
-  virtualized egui first frame. The current local release baseline measured 4 ms
-  for filtering, 11 ms for selecting all 100,000 IDs, 3 ms for refreshing a
-  1,000-row state update, and 2 ms for the virtualized first frame. The same
-  script now renders the complete application shell with 100,000 rows; the
-  current baseline is 34 ms for that first frame. These are release-mode host
+  The queue read path has a companion command,
+  `scripts/benchmark-ui-scale.sh`. Against a file-backed 100,000-row durable
+  queue it measures a SQL filter keystroke, select-all with its selection and
+  queue-health accounting, a 1,000-row durable state change, the first
+  Mailboxes frame through the real App, and the off-thread write of a parsed
+  import to the ledger. The 2026-10-02 local release baseline was 25 ms for
+  filtering, 69 ms for select-all, 22 ms for the state change, 79 ms for the
+  Mailboxes first frame, and 2.6 s to write the import; the complete shell's
+  first frame was 71 ms. These are slower than the earlier in-memory
+  baselines (single-digit milliseconds) in exchange for bounded memory and a
+  queue that survives restarts unchanged. These are release-mode host
   baselines. The script enforces default budgets of 100 ms for filtering, 250
   ms for selection-all, 100 ms for state refresh, 100 ms for the virtualized
-  first frame, and 500 ms for the full shell; qualified host classes may
+  first frame, 5,000 ms for writing the import, and 500 ms for the full shell; qualified host classes may
   override these with the documented `MAILSWIFTSYNC_UI_*_BUDGET_MS`
   environment variables. This is a first-frame render gate; native window
   startup and GPU initialization remain separate platform-release measurements.

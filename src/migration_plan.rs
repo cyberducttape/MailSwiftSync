@@ -1,6 +1,5 @@
 mod credential_identity;
 mod profile;
-#[cfg(test)]
 pub(crate) use profile::DestinationMutationPolicy;
 
 use crate::atomic_artifact::write_private_atomic;

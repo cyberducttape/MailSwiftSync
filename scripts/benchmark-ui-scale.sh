@@ -45,6 +45,9 @@ check_budget filter_ms "${MAILSWIFTSYNC_UI_FILTER_BUDGET_MS:-100}"
 check_budget selection_all_ms "${MAILSWIFTSYNC_UI_SELECTION_BUDGET_MS:-250}"
 check_budget state_update_ms "${MAILSWIFTSYNC_UI_STATE_UPDATE_BUDGET_MS:-100}"
 check_budget first_frame_ms "${MAILSWIFTSYNC_UI_FIRST_FRAME_BUDGET_MS:-100}"
+# Writing a parsed 100k-row import to the ledger runs on a worker thread,
+# not in a frame; this bounds how long the queue takes to appear.
+check_budget persist_ms "${MAILSWIFTSYNC_UI_PERSIST_BUDGET_MS:-5000}"
 
 full_shell_line=$(printf '%s\n' "$output" | awk '/scale-ui-full rows=100000 / { print; exit }')
 if [[ -z "$full_shell_line" ]]; then

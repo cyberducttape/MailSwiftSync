@@ -147,6 +147,8 @@ pub(crate) struct PendingSheetImport {
 pub(crate) enum BulkImportResult {
     #[allow(dead_code)]
     Jobs(Vec<BulkJob>),
+    /// The parsed rows were written to the ledger as a new batch queue.
+    Persisted(crate::controller::queue::ImportedQueue),
     #[allow(dead_code)]
     Workbook {
         path: PathBuf,

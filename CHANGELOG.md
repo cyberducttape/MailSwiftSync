@@ -6,8 +6,19 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- The batch queue is now durable SQLite state instead of an in-memory job
+  list (schema v16). An import is written to the ledger as a batch project
+  on a worker thread; the Mailboxes view renders virtual rows from a
+  filtered row-ID index and a bounded row cache; search and state filters
+  run as SQL over a narrow per-mailbox facts table; and admission and the
+  batch scheduler read rows from the ledger, loading each job only when it
+  is about to run. A restart restores the queue exactly, including row
+  labels. Keyring references applied on the Mailboxes page now update the
+  durable plans (and require a new preflight) instead of an in-memory copy.
+  Selected rows hidden by the current filter no longer make a confirmed
+  live run look stale.
 - The ledger now records durable provenance for every live engine attempt
-  (schema v15): mailbox pass and attempt, pass kind, executable identity,
+  (ledger version 15): mailbox pass and attempt, pass kind, executable identity,
   the secret-free launched command and its digest, folder scope, source
   range, outcome, delta requirement, engine completion counters, emitted
   resume-state digest, and the verification method and outcome with each

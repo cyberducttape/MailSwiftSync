@@ -55,9 +55,15 @@ pub(crate) fn apply(app: &mut App) {
 pub(crate) fn telemetry_demo(app: &mut App) {
     use crate::progress::TransferProgress;
     use std::time::{Duration, Instant};
-    if app.bulk_jobs.is_empty() {
+    if app.queue.is_empty() {
         demo_data(app);
     }
+    let ids = app
+        .queue
+        .project_id()
+        .and_then(|project_id| app.store.mailbox_ids(project_id).ok())
+        .unwrap_or_default();
+    let demo_id = |index: usize| ids.get(index).cloned().unwrap_or_default();
     let now = Instant::now();
     // `Instant` has a platform-defined epoch. On Windows a fresh process can
     // have been alive for less than the requested demo history, and subtract
@@ -65,39 +71,35 @@ pub(crate) fn telemetry_demo(app: &mut App) {
     // demo at the current instant is sufficient for the accessibility harness
     // and still renders the full history once the process has enough uptime.
     let start = now.checked_sub(Duration::from_secs(20 * 60)).unwrap_or(now);
-    app.run_telemetry.reset(start, app.bulk_jobs.len());
+    app.run_telemetry.reset(start, app.queue.len());
     app.form.profile.batch_concurrency = 4;
-    for (index, state) in [(1, "Running"), (2, "Running"), (7, "Running")] {
-        app.bulk_jobs[index].state = state.into();
-    }
-    for (job, finished_at) in [
-        ("demo-job-3", 300),
-        ("demo-job-4", 520),
-        ("demo-job-9", 900),
-    ] {
+    // A retry wait is the one presentation-only state; durable states come
+    // from the demo ledger.
+    app.queue.set_transient(&demo_id(11), "retrying");
+    for (job, finished_at) in [(demo_id(3), 300), (demo_id(4), 520), (demo_id(9), 900)] {
         app.run_telemetry.record_job_finished(
-            job,
+            &job,
             "verified",
             "",
             start + Duration::from_secs(finished_at),
         );
     }
     let jobs = [
-        ("demo-job-1", 1_900_000_000_u64, 120_000_000_u64),
-        ("demo-job-2", 850_000_000, 40_000_000),
-        ("demo-job-7", 3_200_000_000, 900_000_000),
+        (demo_id(1), 1_900_000_000_u64, 120_000_000_u64),
+        (demo_id(2), 850_000_000, 40_000_000),
+        (demo_id(7), 3_200_000_000, 900_000_000),
     ];
     let mut copied_so_far = [0_u64; 3];
     for step in 0..=40_u64 {
         let at = start + Duration::from_secs(step * 30);
         let wave = 0.75 + 0.25 * ((step as f64) / 4.0).sin();
-        for (slot, (job, source_bytes, existing)) in jobs.into_iter().enumerate() {
+        for (slot, (job, source_bytes, existing)) in jobs.iter().cloned().enumerate() {
             if step > 0 {
                 copied_so_far[slot] += (source_bytes as f64 * 0.012 * wave) as u64;
             }
             let copied = copied_so_far[slot];
             app.run_telemetry.record_progress(
-                job,
+                &job,
                 TransferProgress {
                     messages_copied: copied / 48_000,
                     bytes_copied: copied,
@@ -112,7 +114,7 @@ pub(crate) fn telemetry_demo(app: &mut App) {
         }
     }
     app.run_telemetry.record_retry(
-        "demo-job-11",
+        &demo_id(11),
         crate::controller::telemetry::RetryNote {
             attempt: 2,
             retry_at: now + Duration::from_secs(47),
@@ -124,7 +126,7 @@ pub(crate) fn telemetry_demo(app: &mut App) {
         now + Duration::from_secs(95),
     );
     app.run_telemetry.record_job_finished(
-        "demo-job-5",
+        &demo_id(5),
         "failed",
         "[authentication] Destination rejected the credential: AUTHENTICATIONFAILED",
         now.checked_sub(Duration::from_secs(240)).unwrap_or(start),
@@ -157,7 +159,6 @@ pub(crate) fn demo_data(app: &mut App) {
     profile.source_user = "alex@source.example".into();
     profile.destination_host = "imap.destination.example".into();
     profile.destination_user = "alex@destination.example".into();
-    let defaults = BulkJob::defaults_from_form(&app.form);
     let states = [
         "queued",
         "ready",
@@ -172,26 +173,37 @@ pub(crate) fn demo_data(app: &mut App) {
         "delta_required",
         "queued",
     ];
-    for (index, state) in states.iter().enumerate() {
-        let mut form = app.form.clone();
-        form.profile.source_user = format!("user{index:02}@source.example");
-        form.profile.destination_user = format!("user{index:02}@destination.example");
-        app.bulk_jobs.push(BulkJob::from_form_with_defaults(
-            format!("Mailbox {:02}", index + 1),
-            form,
-            (*state).into(),
-            std::sync::Arc::clone(&defaults),
-        ));
-        app.bulk_job_ids.push(format!("demo-job-{index}"));
+    let jobs = states
+        .iter()
+        .enumerate()
+        .map(|(index, state)| {
+            let mut form = app.form.clone();
+            form.profile.source_user = format!("user{index:02}@source.example");
+            form.profile.destination_user = format!("user{index:02}@destination.example");
+            BulkJob::from_form(format!("Mailbox {:02}", index + 1), form, (*state).into())
+        })
+        .collect::<Vec<_>>();
+    let Ok(imported) =
+        crate::controller::queue::persist_imported_queue(&app.store, jobs, &app.form.profile)
+    else {
+        return;
+    };
+    let ids = app
+        .store
+        .mailbox_ids(&imported.project_id)
+        .unwrap_or_default();
+    for (id, state) in ids.iter().zip(states) {
+        let _ = app.store.force_mailbox_state(id, state);
     }
-    app.rebuild_bulk_job_index();
-    app.bulk_jobs_generation = app.bulk_jobs_generation.wrapping_add(1);
+    app.queue.attach(imported.project_id, imported.len);
     // Masked session placeholders so screenshots show a configured plan
     // rather than "password is required" validation.
     app.form.source_password = String::from("placeholder-secret").into();
     app.form.destination_password = String::from("placeholder-secret").into();
-    for id in ["demo-job-1", "demo-job-8"] {
-        app.bulk_selected_ids.insert(id.to_owned());
+    for index in [1, 8] {
+        if let Some(id) = ids.get(index) {
+            app.bulk_selected_ids.insert(id.clone());
+        }
     }
 }
 

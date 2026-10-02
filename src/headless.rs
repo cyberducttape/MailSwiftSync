@@ -7,12 +7,7 @@ use crate::{
     recorded_process_matches, secret_runtime_base, terminate_recorded_process_group,
 };
 use serde::Serialize;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::atomic::Ordering,
-    thread,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::atomic::Ordering, thread, time::Duration};
 
 const SUPPORT_MAILBOX_SAMPLE_LIMIT: u32 = 1_000;
 const MAX_SUPPORT_MAILBOX_ROWS_TOTAL: usize = 100_000;
@@ -619,7 +614,7 @@ pub(crate) fn headless_execute_with_credentials(
                 .into(),
         );
     }
-    if !app.bulk_job_ids.is_empty() {
+    if !app.queue.is_empty() {
         return Err(
             "headless single-mailbox execution refuses a restored batch queue; use the GUI for batch admission or an explicit batch supervisor"
                 .into(),
@@ -803,25 +798,27 @@ pub(crate) fn headless_batch_execute_selected(
                 .into(),
         );
     }
-    if app.bulk_jobs.is_empty() {
+    let Some(project_id) = app.queue.project_id().map(str::to_owned) else {
         return Err(
             "no durable batch queue was restored; import and validate the batch in the GUI before using headless batch execution"
                 .into(),
         );
-    }
-    if app.bulk_job_ids.len() != app.bulk_jobs.len() || app.bulk_project_id.is_none() {
-        return Err(
-            "the restored batch queue has no complete durable identity; refusing ambiguous headless admission"
-                .into(),
-        );
-    }
+    };
     if requested_ids.is_some_and(HashSet::is_empty) {
         return Err("selective remediation requested zero mailbox IDs; refusing success".into());
     }
+    let mut queue_rows = Vec::new();
+    app.store
+        .queue_durable_scan(&project_id, |row| queue_rows.push(row))
+        .map_err(|error| error.to_string())?;
     if let Some(requested_ids) = requested_ids {
+        let known = queue_rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<HashSet<_>>();
         let unknown = requested_ids
             .iter()
-            .filter(|job_id| !app.bulk_job_index_by_id.contains_key(*job_id))
+            .filter(|job_id| !known.contains(job_id.as_str()))
             .cloned()
             .collect::<Vec<_>>();
         if !unknown.is_empty() {
@@ -832,40 +829,20 @@ pub(crate) fn headless_batch_execute_selected(
         }
     }
     app.bulk_retry_scope = BulkRetryScope::Automation;
-    let project_id = app
-        .bulk_project_id
-        .as_deref()
-        .ok_or_else(|| "restored batch has no durable project identity".to_owned())?;
-    let durable_states = app
-        .store
-        .batch_admission_states(project_id, &app.bulk_job_ids)
-        .map_err(|error| error.to_string())?;
-    let states_by_id = durable_states
-        .into_iter()
-        .map(|state| (state.job_id.clone(), state))
-        .collect::<HashMap<_, _>>();
-    if states_by_id.len() != app.bulk_job_ids.len() {
-        return Err(
-            "restored batch is missing durable mailbox admission state; refusing partial retry selection"
-                .into(),
-        );
-    }
     let attention_reasons = app
         .store
-        .mailbox_attention_reasons(project_id)
+        .mailbox_attention_reasons(&project_id)
         .map_err(|error| error.to_string())?;
-    let eligible_ids: HashSet<String> = app
-        .bulk_job_ids
+    let eligible_ids: HashSet<String> = queue_rows
         .iter()
-        .filter_map(|job_id| {
-            if requested_ids.is_some_and(|ids| !ids.contains(job_id)) {
+        .filter_map(|row| {
+            if requested_ids.is_some_and(|ids| !ids.contains(&row.id)) {
                 return None;
             }
-            let state = states_by_id.get(job_id)?.state.as_str();
-            let reason = attention_reasons.get(job_id).copied();
+            let reason = attention_reasons.get(&row.id).copied();
             app.bulk_retry_scope
-                .includes_automation(state, reason)
-                .then_some(job_id.clone())
+                .includes_automation(&row.durable_state, reason)
+                .then_some(row.id.clone())
         })
         .collect();
     if let Some(requested_ids) = requested_ids {
@@ -883,18 +860,9 @@ pub(crate) fn headless_batch_execute_selected(
     }
     app.bulk_selected_ids = eligible_ids;
     if live {
-        let removing = app
-            .bulk_jobs
+        let removing = queue_rows
             .iter()
-            .zip(&app.bulk_job_ids)
-            .filter(|(job, id)| {
-                app.bulk_selected_ids.contains(*id)
-                    && job
-                        .defaults
-                        .profile
-                        .destination_mutation_policy()
-                        .may_remove_destination_state()
-            })
+            .filter(|row| app.bulk_selected_ids.contains(&row.id) && row.destructive)
             .count();
         if removing > 0 {
             eprintln!(
@@ -923,21 +891,16 @@ pub(crate) fn headless_batch_execute_selected(
         ));
     }
     wait_for_headless_controller(&mut app)?;
-    let project_id = app
-        .bulk_project_id
-        .as_deref()
-        .ok_or_else(|| {
-            format!(
-                "batch preflight lost its durable project: {}",
-                app.bulk_message
-            )
-        })?
-        .to_owned();
-    let job_ids = app
-        .bulk_job_ids
+    if app.queue.project_id() != Some(project_id.as_str()) {
+        return Err(format!(
+            "batch preflight lost its durable project: {}",
+            app.bulk_message
+        ));
+    }
+    let job_ids = queue_rows
         .iter()
-        .filter(|job_id| app.bulk_selected_ids.contains(*job_id))
-        .cloned()
+        .filter(|row| app.bulk_selected_ids.contains(&row.id))
+        .map(|row| row.id.clone())
         .collect::<Vec<_>>();
     if job_ids.is_empty() {
         return Err(
@@ -975,7 +938,7 @@ pub(crate) fn headless_batch_execute_selected(
             app.bulk_message
         ));
     }
-    let live_project_id = app.bulk_project_id.as_deref().ok_or_else(|| {
+    let live_project_id = app.queue.project_id().ok_or_else(|| {
         "batch live execution lost its durable project; refusing success".to_owned()
     })?;
     if live_project_id != project_id {

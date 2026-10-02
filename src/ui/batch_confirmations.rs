@@ -2,7 +2,7 @@
 
 use crate::App;
 use crate::atomic_artifact::write_private_atomic;
-use crate::controller::batch_admission::{apply_keyring_id, selection_value};
+use crate::controller::batch_admission::selection_value;
 use eframe::egui::{self, Color32, RichText};
 
 impl App {
@@ -90,7 +90,7 @@ crate::ui::name_modal(ui, &modal_heading);
             ui.label(
                 self.language
                     .text("This removes {} mailbox row(s), selection, in-memory passwords, and the durable batch association from this workspace.")
-                    .replace("{}", &self.bulk_jobs.len().to_string()),
+                    .replace("{}", &self.queue.len().to_string()),
             );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -142,7 +142,7 @@ crate::ui::name_modal(ui, &modal_heading);
                 self.language
                     .text("Importing {} will replace {} current mailbox row(s), selection, in-memory passwords, and the durable batch association.")
                     .replace("{}", &path_label)
-                    .replacen("{}", &self.bulk_jobs.len().to_string(), 1),
+                    .replacen("{}", &self.queue.len().to_string(), 1),
             );
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -201,28 +201,29 @@ crate::ui::name_modal(ui, &modal_heading);
             .expect("confirmation summary is initialized above");
         let selected_count = self.bulk_selection_count();
         let selected_samples = self
-            .bulk_jobs
-            .iter()
-            .zip(&self.bulk_job_ids)
-            .filter(|(_, id)| self.bulk_is_selected(id))
-            .take(5)
-            .map(|(job, _)| {
-                (
-                    job.label.clone(),
-                    job.source_user.clone(),
-                    job.destination_user.clone(),
+            .queue
+            .project_id()
+            .and_then(|project_id| {
+                crate::controller::queue::selected_rows(
+                    &self.store,
+                    project_id,
+                    |id| self.bulk_is_selected(id),
+                    5,
                 )
+                .ok()
             })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|row| (row.label, row.source_user, row.destination_user))
             .collect::<Vec<_>>();
-        let ambiguous_case_collision =
-            crate::controller::batch_admission::has_ambiguous_destination_casefold_collision(
-                self.bulk_jobs
-                    .iter()
-                    .zip(&self.bulk_job_ids)
-                    .filter(|(_, id)| self.bulk_is_selected(id))
-                    .map(|(job, _)| job),
-            )
-            .unwrap_or(false);
+        // Fail safe: an unreadable queue is treated as a possible collision
+        // so the acknowledgement is still requested.
+        let ambiguous_case_collision = self.queue.project_id().is_none_or(|project_id| {
+            crate::controller::queue::selected_case_collision(&self.store, project_id, |id| {
+                self.bulk_is_selected(id)
+            })
+            .unwrap_or(true)
+        });
 
         let stored_identity = self.bulk_confirmation_identity.clone();
         let mut close = false;
@@ -421,8 +422,16 @@ crate::ui::name_modal(ui, &modal_heading);
                 .text("Select one or more rows to export.")
                 .into());
         }
-        let scope = self.bulk_selection_scope();
-        let value = selection_value(&self.bulk_jobs, &scope, &self.bulk_job_ids);
+        let rows = match self.queue.project_id() {
+            Some(project_id) => crate::controller::queue::selected_rows(
+                &self.store,
+                project_id,
+                |id| self.bulk_is_selected(id),
+                usize::MAX,
+            )?,
+            None => Vec::new(),
+        };
+        let value = selection_value(&rows);
         let path = rfd::FileDialog::new()
             .set_file_name("mailswiftsync-batch-selection.json")
             .save_file()
@@ -451,11 +460,24 @@ crate::ui::name_modal(ui, &modal_heading);
                 .to_owned();
             return;
         }
-        let applied = apply_keyring_id(&mut self.bulk_jobs, &value, source);
-        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
-        self.bulk_message = self
-            .language
-            .text("Applied the keyring ID to {} row(s) without a credential reference.")
-            .replace("{}", &applied.to_string());
+        let Some(project_id) = self.queue.project_id().map(str::to_owned) else {
+            return;
+        };
+        match crate::controller::queue::apply_keyring_to_queue(
+            &self.store,
+            &project_id,
+            &value,
+            source,
+            &self.queue.session_secrets,
+        ) {
+            Ok(applied) => {
+                self.mark_bulk_jobs_changed();
+                self.bulk_message = self
+                    .language
+                    .text("Applied the keyring ID to {} row(s) without a credential reference.")
+                    .replace("{}", &applied.to_string());
+            }
+            Err(error) => self.bulk_message = error,
+        }
     }
 }

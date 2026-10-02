@@ -1,4 +1,5 @@
 use crate::Profile;
+#[cfg(test)]
 use crate::bulk_import::BulkJob;
 use crate::core;
 use sha2::{Digest, Sha256};
@@ -86,10 +87,6 @@ impl SelectionScope {
             }
             Self::Explicit(ids) => job_id.is_some_and(|id| ids.contains(id)),
         }
-    }
-
-    pub(crate) fn is_explicit(&self) -> bool {
-        matches!(self, Self::Explicit(_))
     }
 }
 
@@ -222,6 +219,35 @@ pub(crate) struct BulkQueueSummary {
 }
 
 impl BulkQueueSummary {
+    /// Summarize per-state row counts (`imported` for never-admitted rows).
+    pub(crate) fn from_state_counts<'a>(counts: impl Iterator<Item = (&'a str, usize)>) -> Self {
+        let mut summary = Self::default();
+        for (state, count) in counts {
+            summary.total += count;
+            if state.eq_ignore_ascii_case("imported") {
+                summary.imported += count;
+                continue;
+            }
+            match core::MailboxState::parse_ascii_case_insensitive(state) {
+                Some(core::MailboxState::Queued) => summary.queued += count,
+                Some(core::MailboxState::Preflight) => summary.preflight += count,
+                Some(core::MailboxState::Ready) => summary.ready += count,
+                Some(core::MailboxState::Running) => summary.running += count,
+                Some(state) if state.is_verified() => summary.verified += count,
+                Some(core::MailboxState::Failed) => summary.failed += count,
+                Some(core::MailboxState::Attention) => summary.attention += count,
+                Some(core::MailboxState::Cancelled) => summary.cancelled += count,
+                Some(core::MailboxState::DeltaRequired) => summary.delta_required += count,
+                Some(core::MailboxState::VerificationDifference) => {
+                    summary.verification_difference += count;
+                }
+                _ => {}
+            }
+        }
+        summary
+    }
+
+    #[cfg(test)]
     pub(crate) fn from_jobs(jobs: &[BulkJob]) -> Self {
         let mut summary = Self {
             total: jobs.len(),
@@ -260,26 +286,16 @@ impl BulkQueueSummary {
     }
 }
 
-/// Select queue rows from durable state without coupling the policy to egui
-/// storage or widget state. Missing durable state is allowed for a first
-/// preflight; live admission performs its separate durable-fingerprint gate.
-pub(crate) fn selected_batch_indices(
-    job_count: usize,
-    job_ids: &[String],
-    durable_states: &[Option<String>],
+/// Whether a queue row is admitted: explicitly selected and, by its durable
+/// state, inside the retry scope. Kept apart from egui storage and widget
+/// state; live admission performs its separate durable-fingerprint gate.
+pub(crate) fn batch_row_admitted(
     selection_scope: &SelectionScope,
     retry_scope: BulkRetryScope,
-) -> Vec<usize> {
-    (0..job_count)
-        .filter(|index| {
-            let selected = selection_scope.contains(job_ids.get(*index).map(String::as_str));
-            selected
-                && durable_states
-                    .get(*index)
-                    .and_then(Option::as_deref)
-                    .is_none_or(|state| retry_scope.includes(state))
-        })
-        .collect()
+    job_id: &str,
+    durable_state: &str,
+) -> bool {
+    selection_scope.contains(Some(job_id)) && retry_scope.includes(durable_state)
 }
 
 #[cfg(test)]
@@ -287,7 +303,7 @@ mod tests {
     use super::{
         BatchActionRow, BatchExecutionMode, BatchStartBlock, BatchStartContext, BatchStartDecision,
         BulkJob, BulkQueueSummary, BulkRetryScope, SelectionScope, batch_mailbox_state,
-        batch_run_status, batch_start_decision, build_batch_action_plan, selected_batch_indices,
+        batch_row_admitted, batch_run_status, batch_start_decision, build_batch_action_plan,
         suggested_batch_project_name,
     };
     use crate::core::{MailboxEvidence, VerificationMethod};
@@ -447,52 +463,33 @@ mod tests {
     }
 
     #[test]
-    fn selected_indices_apply_ids_and_durable_retry_scope() {
-        let ids = vec!["one".into(), "two".into(), "three".into()];
-        let states = vec![Some("failed".into()), Some("verified".into()), None];
-        let selected = HashSet::from(["one".into(), "two".into()]);
-
+    fn admitted_rows_apply_ids_and_durable_retry_scope() {
+        let rows = [("one", "failed"), ("two", "verified"), ("three", "queued")];
+        let admitted = |scope: &SelectionScope, retry: BulkRetryScope| {
+            rows.iter()
+                .filter(|(id, state)| batch_row_admitted(scope, retry, id, state))
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>()
+        };
+        let selected = SelectionScope::Explicit(HashSet::from(["one".into(), "two".into()]));
+        assert_eq!(admitted(&selected, BulkRetryScope::Unresolved), ["one"]);
         assert_eq!(
-            selected_batch_indices(
-                3,
-                &ids,
-                &states,
-                &SelectionScope::Explicit(selected),
-                BulkRetryScope::Unresolved,
-            ),
-            vec![0]
+            admitted(&SelectionScope::all_matching(), BulkRetryScope::All),
+            ["one", "two", "three"]
         );
+        let excluding_three = SelectionScope::AllMatching {
+            filter: String::new(),
+            state: "all".into(),
+            excluded_ids: HashSet::from(["three".into()]),
+        };
         assert_eq!(
-            selected_batch_indices(
-                3,
-                &ids,
-                &states,
-                &SelectionScope::all_matching(),
-                BulkRetryScope::All,
-            ),
-            vec![0, 1, 2]
-        );
-        assert_eq!(
-            selected_batch_indices(
-                3,
-                &ids,
-                &states,
-                &SelectionScope::AllMatching {
-                    filter: String::new(),
-                    state: "all".into(),
-                    excluded_ids: HashSet::from(["three".into()]),
-                },
-                BulkRetryScope::All,
-            ),
-            vec![0, 1]
+            admitted(&excluding_three, BulkRetryScope::All),
+            ["one", "two"]
         );
         assert!(
-            selected_batch_indices(
-                3,
-                &ids,
-                &states,
+            admitted(
                 &SelectionScope::Explicit(HashSet::new()),
-                BulkRetryScope::All,
+                BulkRetryScope::All
             )
             .is_empty()
         );
@@ -716,33 +713,74 @@ pub(crate) struct BatchActionRow<'a> {
     pub(crate) destructive: bool,
 }
 
+#[cfg(test)]
 pub(crate) fn build_batch_action_plan<'a>(
     rows: impl Iterator<Item = BatchActionRow<'a>>,
     retry_scope: BulkRetryScope,
     concurrency: usize,
     execution_mode: BatchExecutionMode,
 ) -> BatchActionPlan {
-    let mut explicit_selection_count = 0_usize;
-    let mut hidden_selection_count = 0_usize;
-    let mut eligible_count = 0_usize;
-    let mut destructive_count = 0_usize;
-    let mut missing_durable_state = false;
-    let mut outside_retry_scope = false;
+    let mut builder = BatchActionPlanBuilder::new(retry_scope, concurrency, execution_mode);
+    for row in rows {
+        builder.add(row);
+    }
+    builder.finish()
+}
+
+/// Streaming form of `build_batch_action_plan`, for selections scanned
+/// from the durable queue one row at a time.
+pub(crate) struct BatchActionPlanBuilder {
+    retry_scope: BulkRetryScope,
+    concurrency: usize,
+    execution_mode: BatchExecutionMode,
+    explicit_selection_count: usize,
+    hidden_selection_count: usize,
+    eligible_count: usize,
+    destructive_count: usize,
+    missing_durable_state: bool,
+    outside_retry_scope: bool,
     // Order-independent multiset digest: action review can stream arbitrarily
     // large selections without materializing selected-row or sorted-ID vecs.
-    let mut digest_xor = [0_u8; 32];
-    let mut digest_sum = [0_u8; 32];
-    for row in rows.filter(|row| row.selected) {
-        explicit_selection_count += 1;
-        hidden_selection_count += usize::from(!row.visible);
-        let eligible = execution_mode == BatchExecutionMode::Preflight
+    digest_xor: [u8; 32],
+    digest_sum: [u8; 32],
+}
+
+impl BatchActionPlanBuilder {
+    pub(crate) fn new(
+        retry_scope: BulkRetryScope,
+        concurrency: usize,
+        execution_mode: BatchExecutionMode,
+    ) -> Self {
+        Self {
+            retry_scope,
+            concurrency,
+            execution_mode,
+            explicit_selection_count: 0,
+            hidden_selection_count: 0,
+            eligible_count: 0,
+            destructive_count: 0,
+            missing_durable_state: false,
+            outside_retry_scope: false,
+            digest_xor: [0; 32],
+            digest_sum: [0; 32],
+        }
+    }
+
+    pub(crate) fn add(&mut self, row: BatchActionRow<'_>) {
+        if !row.selected {
+            return;
+        }
+        let retry_scope = self.retry_scope;
+        self.explicit_selection_count += 1;
+        self.hidden_selection_count += usize::from(!row.visible);
+        let eligible = self.execution_mode == BatchExecutionMode::Preflight
             || row
                 .durable_state
                 .is_some_and(|state| retry_scope.includes(state));
-        eligible_count += usize::from(eligible);
-        destructive_count += usize::from(eligible && row.destructive);
-        missing_durable_state |= row.durable_state.is_none();
-        outside_retry_scope |= row
+        self.eligible_count += usize::from(eligible);
+        self.destructive_count += usize::from(eligible && row.destructive);
+        self.missing_durable_state |= row.durable_state.is_none();
+        self.outside_retry_scope |= row
             .durable_state
             .is_some_and(|state| !retry_scope.includes(state));
         let mut row_hasher = Sha256::new();
@@ -755,41 +793,58 @@ pub(crate) fn build_batch_action_plan<'a>(
         let row_digest = row_hasher.finalize();
         let mut carry = 0_u16;
         for index in (0..32).rev() {
-            digest_xor[index] ^= row_digest[index];
-            let value = u16::from(digest_sum[index]) + u16::from(row_digest[index]) + carry;
-            digest_sum[index] = value as u8;
+            self.digest_xor[index] ^= row_digest[index];
+            let value = u16::from(self.digest_sum[index]) + u16::from(row_digest[index]) + carry;
+            self.digest_sum[index] = value as u8;
             carry = value >> 8;
         }
     }
-    let blocked_count = explicit_selection_count.saturating_sub(eligible_count);
-    let mut blocked_reasons = Vec::new();
-    if execution_mode == BatchExecutionMode::Live && missing_durable_state {
-        blocked_reasons
-            .push("Durable mailbox state is unavailable for one or more selected rows".to_owned());
-    }
-    if execution_mode == BatchExecutionMode::Live && outside_retry_scope {
-        blocked_reasons
-            .push("One or more selected rows are outside the selected retry scope".to_owned());
-    }
-    let concurrency = concurrency.clamp(1, 16);
-    let identity_input = format!(
-        "mode={execution_mode:?}\nscope={retry_scope:?}\nconcurrency={concurrency}\ndestructive_count={destructive_count}\nselected_count={explicit_selection_count}\nhidden_count={hidden_selection_count}\nxor={digest_xor:02x?}\nsum={digest_sum:02x?}"
-    );
-    let identity_hash = Sha256::digest(identity_input.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    BatchActionPlan {
-        explicit_selection_count,
-        hidden_selection_count,
-        eligible_count,
-        blocked_count,
-        blocked_reasons,
-        destructive_count,
-        retry_scope,
-        concurrency,
-        execution_mode,
-        identity_hash,
+
+    pub(crate) fn finish(self) -> BatchActionPlan {
+        let Self {
+            retry_scope,
+            concurrency,
+            execution_mode,
+            explicit_selection_count,
+            hidden_selection_count,
+            eligible_count,
+            destructive_count,
+            missing_durable_state,
+            outside_retry_scope,
+            digest_xor,
+            digest_sum,
+        } = self;
+        let blocked_count = explicit_selection_count.saturating_sub(eligible_count);
+        let mut blocked_reasons = Vec::new();
+        if execution_mode == BatchExecutionMode::Live && missing_durable_state {
+            blocked_reasons.push(
+                "Durable mailbox state is unavailable for one or more selected rows".to_owned(),
+            );
+        }
+        if execution_mode == BatchExecutionMode::Live && outside_retry_scope {
+            blocked_reasons
+                .push("One or more selected rows are outside the selected retry scope".to_owned());
+        }
+        let concurrency = concurrency.clamp(1, 16);
+        let identity_input = format!(
+            "mode={execution_mode:?}\nscope={retry_scope:?}\nconcurrency={concurrency}\ndestructive_count={destructive_count}\nselected_count={explicit_selection_count}\nxor={digest_xor:02x?}\nsum={digest_sum:02x?}"
+        );
+        let identity_hash = Sha256::digest(identity_input.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        BatchActionPlan {
+            explicit_selection_count,
+            hidden_selection_count,
+            eligible_count,
+            blocked_count,
+            blocked_reasons,
+            destructive_count,
+            retry_scope,
+            concurrency,
+            execution_mode,
+            identity_hash,
+        }
     }
 }
 

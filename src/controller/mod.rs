@@ -17,6 +17,7 @@ mod poll_completion;
 mod poll_events;
 mod preflight;
 pub(crate) mod probe;
+pub(crate) mod queue;
 mod rate_domains;
 mod run;
 mod single_admission;
@@ -24,9 +25,9 @@ mod single_start;
 pub(crate) mod telemetry;
 
 pub(crate) use batch::{
-    BatchActionPlan, BatchActionRow, BatchConfirmationIdentity, BatchExecutionMode,
-    BatchStartContext, BatchStartDecision, BulkQueueSummary, BulkRetryScope, BulkStateSet,
-    SelectionScope, batch_mailbox_state, batch_start_decision, build_batch_action_plan,
+    BatchActionPlan, BatchActionPlanBuilder, BatchActionRow, BatchConfirmationIdentity,
+    BatchExecutionMode, BatchStartContext, BatchStartDecision, BulkQueueSummary, BulkRetryScope,
+    BulkStateSet, SelectionScope, batch_mailbox_state, batch_start_decision,
     is_verified_terminal_state,
 };
 pub(crate) use batch_admission::{

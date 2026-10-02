@@ -1,249 +1,158 @@
 //! Search and state filtering for the batch mailbox cockpit.
+//!
+//! Filtering runs as SQL against the durable queue (`core::queue`); the
+//! view keeps only the matching row IDs and renders rows on demand.
 
 use crate::App;
-use crate::ui::{display_state_key, fold_search_text};
-
-/// Filter the cached row projection without touching the owned queue forms.
-/// Keeping this pure makes the large-batch cost measurable independently from
-/// egui repainting and prevents accidental per-widget allocations.
-#[cfg(test)]
-pub(crate) fn filter_batch_indices<'a, I>(
-    search_values: &[String],
-    states: I,
-    search: &str,
-    state_filter: &str,
-    visible_indices: &mut Vec<usize>,
-) where
-    I: Iterator<Item = &'a str>,
-{
-    let normalized_search = fold_search_text(search.trim());
-    visible_indices.clear();
-    for (index, (value, raw_state)) in search_values.iter().zip(states).enumerate() {
-        let state = display_state_key(raw_state);
-        let state_matches = state_filter.is_empty()
-            || state_filter == "all"
-            || state == state_filter
-            || (state_filter == "delta_required" && state.contains("delta"))
-            || (state_filter == "verification_difference" && state.contains("verification"));
-        let search_matches = normalized_search.is_empty() || value.contains(&normalized_search);
-        if state_matches && search_matches {
-            visible_indices.push(index);
-        }
-    }
-}
 
 impl App {
-    pub(crate) fn rebuild_bulk_search_values(&mut self) {
-        self.bulk_state_indices.clear();
-        self.bulk_search_values = self
-            .bulk_jobs
-            .iter()
-            .enumerate()
-            .map(|(index, job)| {
-                self.bulk_state_indices
-                    .entry(display_state_key(&job.state))
-                    .or_default()
-                    .insert(index);
-                fold_search_text(
-                    &[
-                        job.label.as_str(),
-                        job.source_host.as_str(),
-                        job.source_user.as_str(),
-                        job.destination_host.as_str(),
-                        job.destination_user.as_str(),
-                    ]
-                    .join(" "),
-                )
-            })
-            .collect();
-    }
-
-    /// Bring the filtered row list up to date. Returns whether it changed.
+    /// Bring the filtered row index up to date. Returns whether it changed.
     pub(crate) fn refresh_bulk_filter_cache(&mut self) -> bool {
-        let raw_search = self.bulk_search.trim().to_owned();
-        let cache_is_current = self.bulk_filter_cache_search == raw_search
-            && self.bulk_filter_cache_state == self.bulk_state_filter
-            && self.bulk_filter_cache_generation == self.bulk_jobs_generation
-            && self.bulk_search_values.len() == self.bulk_jobs.len();
-        if cache_is_current {
-            return false;
-        }
-        if self.bulk_search_values.len() != self.bulk_jobs.len() {
-            self.rebuild_bulk_search_values();
-            self.bulk_search_matches_valid = false;
-        }
-        let normalized_search = fold_search_text(&raw_search);
-        self.bulk_visible_indices.clear();
-        if !self.bulk_search_matches_valid || self.bulk_filter_cache_search != raw_search {
-            self.bulk_search_match_indices.clear();
-            if normalized_search.is_empty() {
-                self.bulk_search_match_indices
-                    .extend(0..self.bulk_jobs.len());
-            } else {
-                filter_batch_search_indices(
-                    &self.bulk_search_values,
-                    &normalized_search,
-                    &mut self.bulk_search_match_indices,
-                );
+        match self
+            .queue
+            .refresh_filter(&self.store, &self.bulk_search, &self.bulk_state_filter)
+        {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.bulk_message = error;
+                false
             }
-            self.bulk_search_matches_valid = true;
         }
-        // The default mailbox view is already the complete queue. Avoid
-        // walking and re-evaluating every row after each durable state update
-        // while a large batch is running; egui still virtualizes the table.
-        if self.bulk_state_filter.is_empty() || self.bulk_state_filter == "all" {
-            self.bulk_visible_indices
-                .extend(self.bulk_search_match_indices.iter().copied());
-        } else {
-            let candidates = self
-                .bulk_state_indices
-                .iter()
-                .filter(|(state, _)| {
-                    state.as_str() == self.bulk_state_filter
-                        || (self.bulk_state_filter == "delta_required" && state.contains("delta"))
-                        || (self.bulk_state_filter == "verification_difference"
-                            && state.contains("verification"))
-                })
-                .flat_map(|(_, indices)| indices.iter().copied())
-                .collect::<Vec<_>>();
-            let mut candidates = candidates;
-            candidates.sort_unstable();
-            self.bulk_visible_indices.extend(
-                candidates
-                    .into_iter()
-                    .filter(|index| self.bulk_search_match_indices.binary_search(index).is_ok()),
-            );
-        }
-        self.bulk_filter_cache_search = raw_search;
-        self.bulk_filter_cache_state = self.bulk_state_filter.clone();
-        self.bulk_filter_cache_generation = self.bulk_jobs_generation;
-        true
     }
-}
-
-fn filter_batch_search_indices(
-    search_values: &[String],
-    normalized_search: &str,
-    matches: &mut Vec<usize>,
-) {
-    matches.extend(
-        search_values
-            .iter()
-            .enumerate()
-            .filter_map(|(index, value)| value.contains(normalized_search).then_some(index)),
-    );
 }
 
 #[cfg(test)]
-mod tests {
-    use super::filter_batch_indices;
-    use std::collections::HashSet;
+pub(crate) mod tests {
     use std::path::PathBuf;
     use std::time::Instant;
 
-    #[test]
-    fn cached_filter_matches_state_and_search_semantics() {
-        let values = vec![
-            "alice@source.example destination.example".to_owned(),
-            "bob@source.example destination.example".to_owned(),
-        ];
-        let states = ["ready".to_owned(), "attention".to_owned()];
-        let mut visible = Vec::new();
-        filter_batch_indices(
-            &values,
-            states.iter().map(String::as_str),
-            "alice",
-            "ready",
-            &mut visible,
-        );
-        assert_eq!(visible, vec![0]);
-        filter_batch_indices(
-            &values,
-            states.iter().map(String::as_str),
-            "",
-            "attention",
-            &mut visible,
-        );
-        assert_eq!(visible, vec![1]);
+    /// Import `rows` mailboxes (label, source user) through the durable
+    /// import path, as the GUI does after parsing a file.
+    pub(crate) fn import_rows(
+        app: &mut crate::App,
+        rows: impl IntoIterator<Item = (String, String)>,
+    ) {
+        use crate::bulk_import::{BulkImportResult, BulkJob};
+        let base = crate::Form::default();
+        let defaults = BulkJob::defaults_from_form(&base);
+        let jobs = rows
+            .into_iter()
+            .map(|(label, user)| {
+                let mut form = base.clone();
+                form.profile.source_host = "source.example".into();
+                form.profile.destination_host = "destination.example".into();
+                form.profile.source_user = user.clone();
+                form.profile.destination_user = user.replace("source", "destination");
+                BulkJob::from_form_with_defaults(
+                    label,
+                    form,
+                    "imported".into(),
+                    std::sync::Arc::clone(&defaults),
+                )
+            })
+            .collect::<Vec<_>>();
+        app.apply_bulk_import_result(Ok(BulkImportResult::Jobs(jobs)));
+        assert!(app.queue.project_id().is_some(), "{}", app.bulk_message);
+    }
+
+    fn visible_labels(app: &mut crate::App) -> Vec<String> {
+        app.refresh_bulk_filter_cache();
+        let visible = app.queue.visible().to_vec();
+        app.queue.load(&app.store, &visible).unwrap();
+        visible
+            .iter()
+            .map(|rowid| app.queue.cached(*rowid).unwrap().label.clone())
+            .collect()
+    }
+
+    /// A ledger path inside a fresh owner-only directory, so the session is
+    /// durable (a ledger directly under a shared temp directory is refused).
+    fn temp_state(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("mailswiftsync-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        directory.join("state.db")
     }
 
     #[test]
     fn batch_search_folds_unicode_case() {
-        use crate::bulk_import::BulkJob;
-        use crate::{App, Form};
-
-        let state_path = std::env::temp_dir().join(format!(
-            "mailswiftsync-unicode-search-{}.db",
-            uuid::Uuid::new_v4()
-        ));
-        let mut app = App::from_state_path(Some(&state_path));
-        for (label, user) in [
-            ("Jürgen Müller", "j.mueller@source.example"),
-            ("Straße Archiv", "archiv@source.example"),
-            ("Ascii Only", "plain@source.example"),
-        ] {
-            let mut form = Form::default();
-            form.profile.source_user = user.into();
-            app.bulk_jobs
-                .push(BulkJob::from_form(label.into(), form, "ready".into()));
-        }
-        app.bulk_jobs_generation = 1;
+        let state_path = temp_state("unicode-search");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        import_rows(
+            &mut app,
+            [
+                ("Jürgen Müller", "j.mueller@source.example"),
+                ("Straße Archiv", "archiv@source.example"),
+                ("Ascii Only", "plain@source.example"),
+            ]
+            .map(|(label, user)| (label.to_owned(), user.to_owned())),
+        );
         for (search, expected) in [
-            ("MÜLLER", vec![0]),
-            ("strasse", vec![1]),
-            ("STRAẞE", vec![1]),
-            ("ASCII", vec![2]),
+            ("MÜLLER", vec!["Jürgen Müller"]),
+            ("strasse", vec!["Straße Archiv"]),
+            ("STRAẞE", vec!["Straße Archiv"]),
+            ("ASCII", vec!["Ascii Only"]),
         ] {
             app.bulk_search = search.into();
-            app.refresh_bulk_filter_cache();
-            assert_eq!(app.bulk_visible_indices, expected, "search {search:?}");
+            assert_eq!(visible_labels(&mut app), expected, "search {search:?}");
         }
+        app.bulk_search.clear();
+        app.bulk_state_filter = "imported".into();
+        assert_eq!(visible_labels(&mut app).len(), 3);
+        app.bulk_state_filter = "ready".into();
+        assert!(visible_labels(&mut app).is_empty());
         drop(app);
-        let _ = std::fs::remove_file(&state_path);
-        let _ = std::fs::remove_file(state_path.with_extension("lock"));
+        remove_benchmark_state_files(state_path);
     }
 
     #[test]
     fn selection_view_counts_selected_rows_not_all_visible_rows() {
-        use crate::bulk_import::BulkJob;
-        use crate::{App, Form};
-
-        let state_path = std::env::temp_dir().join(format!(
-            "mailswiftsync-selection-view-{}.db",
-            uuid::Uuid::new_v4()
-        ));
-        let mut app = App::from_state_path(Some(&state_path));
-        for index in 0..100 {
-            let mut form = Form::default();
-            form.profile.source_user = format!("user{index:03}@source.example");
+        let state_path = temp_state("selection-view");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        import_rows(
+            &mut app,
+            (0..100).map(|index| {
+                (
+                    format!("Mailbox {index}"),
+                    format!("user{index:03}@source.example"),
+                )
+            }),
+        );
+        let ids = app
+            .store
+            .mailbox_ids(app.queue.project_id().unwrap())
+            .unwrap();
+        for (index, id) in ids.iter().enumerate() {
             let state = if index % 10 == 0 {
                 "delta_required"
             } else {
                 "ready"
             };
-            app.bulk_jobs.push(BulkJob::from_form(
-                format!("Mailbox {index}"),
-                form,
-                state.into(),
-            ));
-            app.bulk_job_ids.push(format!("job-{index}"));
+            app.store.force_mailbox_state(id, state).unwrap();
         }
-        app.rebuild_bulk_job_index();
-        app.bulk_jobs_generation = 1;
+        app.mark_bulk_jobs_changed();
         // Rows 0..37 plus one ID no longer in the queue.
-        app.bulk_selected_ids = (0..37)
-            .map(|index| format!("job-{index}"))
+        app.bulk_selected_ids = ids[..37]
+            .iter()
+            .cloned()
             .chain(["job-gone".to_owned()])
-            .collect::<HashSet<_>>();
+            .collect();
         // Show rows 0..=9 only.
         app.bulk_search = "user00".into();
 
         app.refresh_bulk_selection_view();
         let view = &app.bulk_selection_view;
-        assert_eq!(view.rows, (0..37).collect::<Vec<_>>());
+        assert_eq!(view.rows.len(), 37);
+        assert_eq!(view.selected_loaded, 37);
         assert_eq!(view.visible, 10);
         assert_eq!(view.delta_eligible, 4); // rows 0, 10, 20, 30
         assert_eq!(view.live_eligible, 37);
+        assert_eq!(view.ready, 33);
 
         app.select_all_bulk_rows();
         app.refresh_bulk_selection_view();
@@ -251,124 +160,217 @@ mod tests {
         assert_eq!(app.bulk_selection_count(), 100);
         assert!(app.bulk_selection_view.rows.is_empty());
         assert_eq!(app.bulk_selection_view.selected_loaded, 100);
-        app.bulk_selected_ids.insert("job-5".into());
+        app.bulk_selected_ids.insert(ids[5].clone());
         assert_eq!(app.bulk_selection_count(), 99);
-        assert!(!app.bulk_is_selected("job-5"));
+        assert!(!app.bulk_is_selected(&ids[5]));
 
         drop(app);
         remove_benchmark_state_files(state_path);
     }
 
+    /// A fresh import is durable at once: its rows render and are
+    /// explicitly selectable before any preflight has run.
+    #[test]
+    fn imported_rows_are_durable_and_selectable_before_first_admission() {
+        let state_path = temp_state("import-ids");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        import_rows(
+            &mut app,
+            (0..3).map(|index| {
+                (
+                    format!("Mailbox {index}"),
+                    format!("user{index}@source.example"),
+                )
+            }),
+        );
+        let project_id = app.queue.project_id().unwrap().to_owned();
+        assert_eq!(app.store.queue_len(&project_id).unwrap(), 3);
+        assert_eq!(
+            visible_labels(&mut app),
+            ["Mailbox 0", "Mailbox 1", "Mailbox 2"]
+        );
+        let plan = app.current_batch_action_plan(
+            crate::controller::BatchExecutionMode::Preflight,
+            crate::controller::BulkRetryScope::All,
+        );
+        assert_eq!(plan.explicit_selection_count, 0);
+        app.bulk_selected_ids = app
+            .store
+            .mailbox_ids(&project_id)
+            .unwrap()
+            .into_iter()
+            .collect();
+        let plan = app.current_batch_action_plan(
+            crate::controller::BatchExecutionMode::Preflight,
+            crate::controller::BulkRetryScope::All,
+        );
+        assert_eq!(plan.explicit_selection_count, 3);
+        assert_eq!(plan.eligible_count, 3);
+        assert_eq!(plan.hidden_selection_count, 0);
+        drop(app);
+
+        // A restart restores the same queue from the ledger.
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        assert_eq!(app.queue.project_id(), Some(project_id.as_str()));
+        assert_eq!(
+            visible_labels(&mut app),
+            ["Mailbox 0", "Mailbox 1", "Mailbox 2"]
+        );
+        drop(app);
+        remove_benchmark_state_files(state_path);
+    }
+
+    /// End to end through the GUI start path: a durable import with session
+    /// passwords, a batch preflight that the scheduler executes from the
+    /// ledger (on its own read-only connection) against a fake engine, and
+    /// durable ready states the restored queue then presents.
+    #[cfg(unix)]
+    #[test]
+    fn batch_preflight_runs_from_the_durable_queue() {
+        use crate::bulk_import::{BulkImportResult, BulkJob};
+        use std::os::unix::fs::PermissionsExt;
+        let state_path = temp_state("queue-preflight");
+        let engine = state_path.parent().unwrap().join("fake-imapsync");
+        std::fs::write(&engine, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        app.form.profile.engine = crate::core::Engine::ImapSync;
+        app.form.profile.imapsync_path = engine.to_string_lossy().into_owned();
+        let jobs = (0..3)
+            .map(|index| {
+                let mut form = app.form.clone_without_credentials();
+                form.profile.source_host = "source.example".into();
+                form.profile.destination_host = "destination.example".into();
+                form.profile.source_user = format!("user{index}@source.example");
+                form.profile.destination_user = format!("user{index}@destination.example");
+                form.source_password = String::from("source-secret").into();
+                form.destination_password = String::from("destination-secret").into();
+                BulkJob::from_form(format!("Mailbox {index}"), form, "imported".into())
+            })
+            .collect::<Vec<_>>();
+        app.apply_bulk_import_result(Ok(BulkImportResult::Jobs(jobs)));
+        let project_id = app.queue.project_id().unwrap().to_owned();
+        assert_eq!(app.queue.session_secrets.len(), 3);
+        app.select_all_bulk_rows();
+        app.bulk_mode = crate::controller::BatchExecutionMode::Preflight;
+        app.bulk_retry_scope = crate::controller::BulkRetryScope::All;
+        app.start_bulk();
+        assert!(app.receiver.is_some(), "{}", app.bulk_message);
+        crate::headless::wait_for_headless_controller(&mut app).unwrap();
+        let mut states = Vec::new();
+        app.store
+            .queue_durable_scan(&project_id, |row| states.push(row.durable_state))
+            .unwrap();
+        assert_eq!(states, ["ready", "ready", "ready"], "{}", app.bulk_message);
+        // A successful dry run records each row's credential binding for the
+        // live gate, in this session only.
+        assert_eq!(app.queue.preflight_credentials.len(), 3);
+        assert_eq!(app.bulk_queue_summary().ready, 3);
+        drop(app);
+
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        assert_eq!(app.queue.project_id(), Some(project_id.as_str()));
+        assert_eq!(app.bulk_queue_summary().ready, 3);
+        assert!(app.queue.session_secrets.is_empty());
+        drop(app);
+        remove_benchmark_state_files(state_path);
+    }
+
+    /// The release benchmark seeds a 100,000-row durable queue and measures
+    /// SQL filtering, select-all accounting, a 1,000-row state change, and
+    /// the first Mailboxes frame through the real App.
     #[test]
     #[ignore = "opt-in release UI scale benchmark; run scripts/benchmark-ui-scale.sh"]
     fn scale_ui_benchmark() {
+        use eframe::App as EframeApp;
+        use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
         let rows = 100_000;
-        let values = (0..rows)
-            .map(|index| {
-                format!("row {index} user{index}@source.example user{index}@destination.example")
-            })
-            .collect::<Vec<_>>();
-        let mut states = vec!["ready".to_owned(); rows];
-        let ids = (0..rows)
-            .map(|index| format!("job-{index}"))
-            .collect::<Vec<_>>();
-        let mut visible = Vec::with_capacity(rows);
+        let state_path = temp_state("ui-scale");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        // Parsing is measured by the import benchmark; this is the durable
+        // write of the parsed rows as a new batch queue.
         let started = Instant::now();
-        filter_batch_indices(
-            &values,
-            states.iter().map(String::as_str),
-            "user50000",
-            "all",
-            &mut visible,
+        import_rows(
+            &mut app,
+            (0..rows).map(|index| {
+                (
+                    format!("Mailbox {index}"),
+                    format!("user{index}@source.example"),
+                )
+            }),
         );
+        let persist_ms = started.elapsed().as_millis();
+
+        app.bulk_search = "user50000@".into();
+        let started = Instant::now();
+        app.refresh_bulk_filter_cache();
         let filter_ms = started.elapsed().as_millis();
-        assert_eq!(visible, vec![50_000]);
+        assert_eq!(app.queue.visible().len(), 1);
+        app.bulk_search.clear();
 
         let started = Instant::now();
-        let selected = ids.iter().cloned().collect::<HashSet<_>>();
+        app.select_all_bulk_rows();
+        app.refresh_bulk_selection_view();
         let selection_all_ms = started.elapsed().as_millis();
-        assert_eq!(selected.len(), rows);
+        assert_eq!(app.bulk_selection_view.selected_loaded, rows);
 
-        for state in states.iter_mut().take(1_000) {
-            *state = "attention".into();
+        let ids = app
+            .store
+            .mailbox_ids(app.queue.project_id().unwrap())
+            .unwrap();
+        for id in ids.iter().take(1_000) {
+            app.store.force_mailbox_state(id, "attention").unwrap();
         }
+        app.bulk_state_filter = "attention".into();
         let started = Instant::now();
-        filter_batch_indices(
-            &values,
-            states.iter().map(String::as_str),
-            "",
-            "attention",
-            &mut visible,
-        );
+        app.mark_bulk_jobs_changed();
+        app.refresh_bulk_filter_cache();
         let state_update_ms = started.elapsed().as_millis();
-        assert_eq!(visible.len(), 1_000);
+        assert_eq!(app.queue.visible().len(), 1_000);
+        app.bulk_state_filter = "all".into();
 
-        let context = eframe::egui::Context::default();
+        app.active_view = crate::ui::WorkspaceView::Mailboxes;
+        let context = Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
         let first_frame_started = Instant::now();
         let output = context.run_ui(
-            eframe::egui::RawInput {
-                screen_rect: Some(eframe::egui::Rect::from_min_size(
-                    eframe::egui::Pos2::ZERO,
-                    eframe::egui::vec2(1_280.0, 800.0),
-                )),
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1_280.0, 800.0))),
                 ..Default::default()
             },
-            |ui| {
-                eframe::egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    42.0,
-                    rows,
-                    |ui, row_range| {
-                        for row in row_range {
-                            ui.label(format!(
-                                "Mailbox {row}: user{row}@source.example → user{row}@destination.example"
-                            ));
-                        }
-                    },
-                );
-            },
+            |ui| EframeApp::ui(&mut app, ui, &mut frame),
         );
         let first_frame_ms = first_frame_started.elapsed().as_millis();
         assert!(!output.shapes.is_empty());
         eprintln!(
-            "scale-ui rows={rows} filter_ms={filter_ms} selection_all_ms={selection_all_ms} state_update_ms={state_update_ms} first_frame_ms={first_frame_ms}"
+            "scale-ui rows={rows} filter_ms={filter_ms} selection_all_ms={selection_all_ms} state_update_ms={state_update_ms} first_frame_ms={first_frame_ms} persist_ms={persist_ms}"
         );
+        drop(app);
+        remove_benchmark_state_files(state_path);
     }
 
     #[test]
     #[ignore = "opt-in release full-shell benchmark; run scripts/benchmark-ui-scale.sh"]
     fn full_shell_ui_benchmark() {
-        use crate::bulk_import::BulkJob;
-        use crate::{App, Form};
         use eframe::App as EframeApp;
         use eframe::egui::{Context, Pos2, RawInput, Rect, vec2};
         let rows = 100_000;
-        let state_path = std::env::temp_dir().join(format!(
-            "mailswiftsync-ui-scale-{}.db",
-            uuid::Uuid::new_v4()
-        ));
-        let mut app = App::from_state_path(Some(&state_path));
-        let base = Form::default();
-        let defaults = BulkJob::defaults_from_form(&base);
-        for index in 0..rows {
-            let mut form = base.clone();
-            form.profile.source_user = format!("user{index}@source.example");
-            form.profile.destination_user = format!("user{index}@destination.example");
-            app.bulk_jobs.push(BulkJob::from_form_with_defaults(
-                format!("Mailbox {index}"),
-                form,
-                "queued".into(),
-                std::sync::Arc::clone(&defaults),
-            ));
-            app.bulk_job_ids.push(format!("job-{index}"));
-        }
-        app.rebuild_bulk_job_index();
-        app.bulk_jobs_generation = 1;
+        let state_path = temp_state("ui-shell-scale");
+        let mut app = crate::App::from_state_path(Some(&state_path));
+        import_rows(
+            &mut app,
+            (0..rows).map(|index| {
+                (
+                    format!("Mailbox {index}"),
+                    format!("user{index}@source.example"),
+                )
+            }),
+        );
         app.active_view = crate::ui::WorkspaceView::Mailboxes;
 
         let context = Context::default();
         let mut frame = eframe::Frame::_new_kittest();
-        let mut timed_frame = |app: &mut App| {
+        let mut timed_frame = |app: &mut crate::App| {
             let started = Instant::now();
             let output = context.run_ui(
                 RawInput {
@@ -389,8 +391,8 @@ mod tests {
         app.select_all_bulk_rows();
         timed_frame(&mut app);
         let selected_frame_ms = timed_frame(&mut app);
-        // One search keystroke: rebuilds the filter cache inside the frame.
-        app.bulk_search = "user99999".into();
+        // One search keystroke: re-filters in SQL inside the frame.
+        app.bulk_search = "user99999@".into();
         let search_frame_ms = timed_frame(&mut app);
         eprintln!(
             "scale-ui-full rows={rows} first_frame_ms={first_frame_ms} selected_frame_ms={selected_frame_ms} search_frame_ms={search_frame_ms}"
@@ -430,50 +432,6 @@ mod tests {
             );
             assert!(!output.shapes.is_empty());
         }
-        drop(app);
-        remove_benchmark_state_files(state_path);
-    }
-
-    /// A fresh import has no durable project yet, but its rows must still be
-    /// renderable and explicitly selectable, or no batch can ever start.
-    #[test]
-    fn imported_rows_are_selectable_before_first_admission() {
-        use crate::bulk_import::{BulkImportResult, BulkJob};
-        use crate::{App, Form};
-
-        let state_path = std::env::temp_dir().join(format!(
-            "mailswiftsync-import-ids-{}.db",
-            uuid::Uuid::new_v4()
-        ));
-        let mut app = App::from_state_path(Some(&state_path));
-        let jobs = (0..3)
-            .map(|index| {
-                let mut form = Form::default();
-                form.profile.source_user = format!("user{index}@source.example");
-                BulkJob::from_form(format!("Mailbox {index}"), form, "imported".into())
-            })
-            .collect::<Vec<_>>();
-        app.apply_bulk_import_result(Ok(BulkImportResult::Jobs(jobs)));
-
-        assert!(app.bulk_project_id.is_none());
-        assert_eq!(app.bulk_job_ids.len(), 3);
-        assert_eq!(app.bulk_job_index_by_id.len(), 3);
-        app.refresh_bulk_filter_cache();
-        assert_eq!(app.bulk_visible_indices, vec![0, 1, 2]);
-        let plan = app.current_batch_action_plan(
-            crate::controller::BatchExecutionMode::Preflight,
-            crate::controller::BulkRetryScope::All,
-        );
-        assert_eq!(plan.explicit_selection_count, 0);
-        app.bulk_selected_ids = app.bulk_job_ids.iter().cloned().collect();
-        let plan = app.current_batch_action_plan(
-            crate::controller::BatchExecutionMode::Preflight,
-            crate::controller::BulkRetryScope::All,
-        );
-        assert_eq!(plan.explicit_selection_count, 3);
-        assert_eq!(plan.eligible_count, 3);
-        assert_eq!(plan.hidden_selection_count, 0);
-
         drop(app);
         remove_benchmark_state_files(state_path);
     }
@@ -524,5 +482,11 @@ mod tests {
     fn remove_benchmark_state_files(state_path: PathBuf) {
         let _ = std::fs::remove_file(&state_path);
         let _ = std::fs::remove_file(state_path.with_extension("lock"));
+        if let Some(directory) = state_path.parent()
+            && directory.starts_with(std::env::temp_dir())
+            && directory != std::env::temp_dir()
+        {
+            let _ = std::fs::remove_dir_all(directory);
+        }
     }
 }

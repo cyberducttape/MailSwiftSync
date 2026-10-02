@@ -345,21 +345,14 @@ impl App {
                             && matches!(run.kind, RunKind::Batch)
                             && let Some(index) = run.batch_child_index(&job_id, &child_run_id)
                         {
-                            let bulk_index = self
-                                .bulk_job_index_by_id
-                                .get(&job_id)
-                                .copied()
-                                .unwrap_or(index);
-                            let old_key =
-                                crate::ui::display_state_key(&self.bulk_jobs[bulk_index].state);
-                            if let Some(indices) = self.bulk_state_indices.get_mut(&old_key) {
-                                indices.remove(&bulk_index);
+                            let _ = index;
+                            // Claims and terminal states are durable; only a
+                            // retry wait is presentation-only state.
+                            if crate::ui::display_state_key(&state) == "retrying" {
+                                self.queue.set_transient(&job_id, "retrying");
+                            } else {
+                                self.queue.clear_transient(&job_id);
                             }
-                            self.bulk_state_indices
-                                .entry(crate::ui::display_state_key(&state))
-                                .or_default()
-                                .insert(bulk_index);
-                            self.bulk_jobs[bulk_index].state = state.clone();
                             *bulk_state_changed = true;
                             // JobState is deliberately presentation-only. The
                             // worker has already received an acknowledged
@@ -451,22 +444,10 @@ impl App {
                             // Durable state is authoritative. Do not show a
                             // terminal child state in the editable queue until
                             // the run/mailbox transaction has committed.
-                            if completion_persisted
-                                && let Some(bulk_index) =
-                                    self.bulk_job_index_by_id.get(&job_id).copied()
-                                && self.bulk_jobs.get(bulk_index).is_some()
-                            {
-                                let state = display_job_state(&final_state).to_owned();
-                                let old_key =
-                                    crate::ui::display_state_key(&self.bulk_jobs[bulk_index].state);
-                                if let Some(indices) = self.bulk_state_indices.get_mut(&old_key) {
-                                    indices.remove(&bulk_index);
-                                }
-                                self.bulk_state_indices
-                                    .entry(crate::ui::display_state_key(&state))
-                                    .or_default()
-                                    .insert(bulk_index);
-                                self.bulk_jobs[bulk_index].state = state;
+                            if completion_persisted {
+                                // The durable row now carries the terminal
+                                // state; drop the in-run presentation state.
+                                self.queue.clear_transient(&job_id);
                                 *bulk_state_changed = true;
                             }
                             if let Err(error) = result {
@@ -508,13 +489,10 @@ impl App {
                                 && !self.bulk_live_run
                                 && state == "ready"
                                 && let Some(fingerprint) = credential_fingerprint
-                                && let Some(bulk_index) =
-                                    self.bulk_job_index_by_id.get(&job_id).copied()
-                                && let Some(saved) = self
-                                    .bulk_preflight_credential_fingerprints
-                                    .get_mut(bulk_index)
                             {
-                                *saved = Some(fingerprint);
+                                self.queue
+                                    .preflight_credentials
+                                    .insert(job_id.clone(), fingerprint);
                             }
                         } else {
                             let _ = reply

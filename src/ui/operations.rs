@@ -68,10 +68,10 @@ struct RunScope {
 
 impl App {
     fn job_label(&self, job_id: &str) -> String {
-        self.bulk_job_index_by_id
-            .get(job_id)
-            .and_then(|index| self.bulk_jobs.get(*index))
-            .map(|job| job.label.clone())
+        self.queue
+            .project_id()
+            .and_then(|project_id| self.store.queue_row(project_id, job_id).ok().flatten())
+            .map(|job| job.label)
             .unwrap_or_else(|| {
                 let user = self.form.profile.source_user.trim();
                 if user.is_empty() {
@@ -95,15 +95,10 @@ impl App {
         {
             run.batch_job_ids
                 .iter()
-                .filter_map(|id| self.bulk_job_index_by_id.get(id))
-                .filter_map(|index| self.bulk_jobs.get(*index))
-                .filter(|job| crate::ui::display_state_key(&job.state) == "running")
+                .filter(|id| self.queue.transient_state(id) == Some("running"))
                 .count()
         } else if telemetry.scope() > 1 {
-            self.bulk_jobs
-                .iter()
-                .filter(|job| crate::ui::display_state_key(&job.state) == "running")
-                .count()
+            self.queue.transient_count("running")
         } else {
             1
         };
@@ -518,10 +513,9 @@ impl App {
             };
             if ui.button(label).clicked() {
                 if let Some(job_id) = failure.job_id.as_deref()
-                    && let Some(index) = self.bulk_job_index_by_id.get(job_id)
-                    && let Some(job) = self.bulk_jobs.get(*index)
+                    && let Some(job) = self.queue.row_by_id(&self.store, job_id)
                 {
-                    self.bulk_search = job.label.clone();
+                    self.bulk_search = job.label;
                 }
                 self.active_view = view;
             }

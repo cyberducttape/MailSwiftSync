@@ -108,6 +108,7 @@ impl StateStore {
         tx.commit()?;
         Ok((project, ids))
     }
+    #[cfg(test)]
     pub fn create_project_with_mailbox_configs(
         &self,
         name: &str,

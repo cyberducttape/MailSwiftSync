@@ -6,8 +6,8 @@
 
 use crate::App;
 use crate::controller::{
-    BatchActionPlan, BatchActionRow, BatchExecutionMode, BulkRetryScope, BulkStateSet,
-    build_batch_action_plan,
+    BatchActionPlan, BatchActionPlanBuilder, BatchActionRow, BatchExecutionMode, BulkRetryScope,
+    BulkStateSet,
 };
 use crate::ui::WorkspaceView;
 use crate::ui::job_state_badge;
@@ -20,71 +20,61 @@ impl App {
         execution_mode: BatchExecutionMode,
         retry_scope: BulkRetryScope,
     ) -> BatchActionPlan {
-        // The plan only describes selected rows, so project the selection
-        // instead of the whole queue. Selected IDs missing from the queue
-        // stay in the plan with no durable state so they cannot disappear
-        // from a safety confirmation.
-        let rows: Box<dyn Iterator<Item = BatchActionRow<'_>> + '_> = if self.bulk_all_selected {
-            Box::new(
-                self.bulk_job_ids
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, id)| self.bulk_is_selected(id))
-                    .map(|(index, id)| BatchActionRow {
-                        id,
-                        selected: true,
-                        visible: self.bulk_visible_indices.binary_search(&index).is_ok(),
-                        durable_state: Some(self.bulk_jobs[index].state.as_str()),
-                        destructive: self.bulk_jobs[index]
-                            .defaults
-                            .profile
-                            .destination_mutation_policy()
-                            .may_remove_destination_state(),
-                    }),
-            )
-        } else {
-            Box::new(self.bulk_selected_ids.iter().map(|id| {
-                match self.bulk_job_index(id) {
-                    Some(index) => BatchActionRow {
-                        id,
-                        selected: true,
-                        visible: self.bulk_visible_indices.binary_search(&index).is_ok(),
-                        durable_state: Some(self.bulk_jobs[index].state.as_str()),
-                        destructive: self.bulk_jobs[index]
-                            .defaults
-                            .profile
-                            .destination_mutation_policy()
-                            .may_remove_destination_state(),
-                    },
-                    None => BatchActionRow {
-                        id,
-                        selected: true,
-                        visible: false,
-                        durable_state: None,
-                        destructive: false,
-                    },
-                }
-            }))
-        };
-        build_batch_action_plan(
-            rows,
+        // Stream the durable queue; only selected rows enter the plan. The
+        // durable state (not the presented one) is what admission evaluates,
+        // so both compute the same identity. Selected IDs missing from the
+        // queue stay in the plan with no durable state so they cannot
+        // disappear from a safety confirmation.
+        let mut builder = BatchActionPlanBuilder::new(
             retry_scope,
             self.form.profile.batch_concurrency,
             execution_mode,
-        )
-    }
-
-    /// Queue position of a job ID, if it belongs to the current queue.
-    pub(crate) fn bulk_job_index(&self, id: &str) -> Option<usize> {
-        self.bulk_job_index_by_id
-            .get(id)
-            .copied()
-            .filter(|&index| index < self.bulk_jobs.len())
+        );
+        let mut seen_explicit = 0_usize;
+        if let Some(project_id) = self.queue.project_id() {
+            let _ = self.store.queue_scan(project_id, |row| {
+                if !self.bulk_is_selected(&row.id) {
+                    return;
+                }
+                seen_explicit += usize::from(!self.bulk_all_selected);
+                builder.add(BatchActionRow {
+                    id: &row.id,
+                    selected: true,
+                    visible: self.queue.is_visible(row.rowid),
+                    durable_state: Some(&row.durable_state),
+                    destructive: row.destructive,
+                });
+            });
+        }
+        if !self.bulk_all_selected && seen_explicit < self.bulk_selected_ids.len() {
+            let mut known = std::collections::HashSet::new();
+            if let Some(project_id) = self.queue.project_id() {
+                let _ = self.store.queue_scan(project_id, |row| {
+                    if self.bulk_selected_ids.contains(&row.id) {
+                        known.insert(row.id);
+                    }
+                });
+            }
+            for id in self
+                .bulk_selected_ids
+                .iter()
+                .filter(|id| !known.contains(*id))
+            {
+                builder.add(BatchActionRow {
+                    id,
+                    selected: true,
+                    visible: false,
+                    durable_state: None,
+                    destructive: false,
+                });
+            }
+        }
+        builder.finish()
     }
 
     /// Recompute the cached selection projection after selection, queue, or
     /// state changes. Selections can cover all 100k rows, so the drawer and
-    /// the Overview share this instead of each walking the selection.
+    /// the Overview share this instead of each scanning the selection.
     pub(crate) fn refresh_bulk_selection_view(&mut self) {
         if !self.bulk_selection_view_dirty {
             return;
@@ -98,38 +88,59 @@ impl App {
         view.ready = 0;
         view.review = 0;
         view.selected_loaded = 0;
+        // Compact select-all keeps no per-row list.
         let compact_all = self.bulk_all_selected && self.bulk_selection_count() > 1;
-        if self.bulk_all_selected {
-            for (index, id) in self.bulk_job_ids.iter().enumerate() {
-                if self.bulk_is_selected(id) {
-                    self.accumulate_selection_row(&mut view, index, compact_all);
+        // The same pass yields queue health counts for every row.
+        let mut presented_counts = std::collections::HashMap::<String, usize>::new();
+        let mut scanned = false;
+        if let Some(project_id) = self.queue.project_id() {
+            let result = self.store.queue_scan(project_id, |row| {
+                let presented = self.queue.presented_state_of(&row.id, &row.state);
+                if let Some(count) = presented_counts.get_mut(presented) {
+                    *count += 1;
+                } else {
+                    presented_counts.insert(presented.to_owned(), 1);
                 }
-            }
-        } else {
-            for id in &self.bulk_selected_ids {
-                if let Some(index) = self.bulk_job_index(id) {
-                    self.accumulate_selection_row(&mut view, index, false);
+                if !self.bulk_is_selected(&row.id) {
+                    return;
+                }
+                if !compact_all {
+                    view.rows.push(row.rowid);
+                }
+                view.selected_loaded += 1;
+                let presented = self.queue.presented_state_of(&row.id, &row.state);
+                view.ready += usize::from(presented == "ready");
+                view.review += usize::from(crate::ui::needs_operator_review(presented));
+                // Same eligibility rule as `build_batch_action_plan`.
+                view.live_eligible += usize::from(BulkRetryScope::All.includes(&row.durable_state));
+                view.delta_eligible +=
+                    usize::from(BulkRetryScope::DeltaRequired.includes(&row.durable_state));
+                view.visible += usize::from(self.queue.is_visible(row.rowid));
+            });
+            match result {
+                Ok(()) => scanned = true,
+                Err(error) => {
+                    self.bulk_message = format!("Could not read the mailbox queue: {error}");
                 }
             }
         }
-        view.rows.sort_unstable();
+        if scanned {
+            self.queue.store_summary(&presented_counts);
+        }
         self.bulk_selection_view = view;
         self.bulk_selection_view_dirty = false;
     }
 
-    fn accumulate_selection_row(&self, view: &mut SelectionView, index: usize, omit_index: bool) {
-        if !omit_index {
-            view.rows.push(index);
-        }
-        view.selected_loaded += 1;
-        let job = &self.bulk_jobs[index];
-        view.ready += usize::from(job.state == "ready");
-        view.review += usize::from(crate::ui::needs_operator_review(&job.state));
-        let state = job.state.as_str();
-        // Same eligibility rule as `build_batch_action_plan`.
-        view.live_eligible += usize::from(BulkRetryScope::All.includes(state));
-        view.delta_eligible += usize::from(BulkRetryScope::DeltaRequired.includes(state));
-        view.visible += usize::from(self.bulk_visible_indices.binary_search(&index).is_ok());
+    /// The first selected job ID in queue order.
+    pub(crate) fn first_selected_job_id(&self) -> Option<String> {
+        let project_id = self.queue.project_id()?;
+        let mut first = None;
+        let _ = self.store.queue_scan(project_id, |row| {
+            if first.is_none() && self.bulk_is_selected(&row.id) {
+                first = Some(row.id);
+            }
+        });
+        first
     }
 
     pub(crate) fn mailbox_view(&mut self, ui: &mut egui::Ui) {
@@ -166,7 +177,7 @@ impl App {
             });
             ui.add_space(8.0);
         }
-        if self.bulk_jobs.is_empty() {
+        if self.queue.is_empty() {
             ui.label(
                 RichText::new(
                     self.language
@@ -227,7 +238,7 @@ impl App {
                     RichText::new(
                         self.language
                             .text("{} mailbox jobs in scope")
-                            .replace("{}", &self.bulk_jobs.len().to_string()),
+                            .replace("{}", &self.queue.len().to_string()),
                     )
                     .strong(),
                 );
@@ -274,6 +285,8 @@ impl App {
                     self.bulk_clear_confirm_open = true;
                 }
             });
+            // One queue scan serves the selection counts and queue health.
+            self.refresh_bulk_selection_view();
             let summary = self.bulk_queue_summary();
             crate::ui::card(ui, |ui| {
                 crate::ui::section_label(ui, self.language.message("ui.queue-health"));
@@ -393,15 +406,20 @@ impl App {
                     // Use the same cached filter the table renders, so the
                     // selection is exactly the rows on screen.
                     self.refresh_bulk_filter_cache();
-                    if self.bulk_visible_indices.len() == self.bulk_jobs.len() {
+                    if self.queue.visible().len() == self.queue.len() {
                         self.select_all_bulk_rows();
                     } else {
                         self.bulk_all_selected = false;
-                        self.bulk_selected_ids = self
-                            .bulk_visible_indices
-                            .iter()
-                            .filter_map(|&index| self.bulk_job_ids.get(index).cloned())
-                            .collect();
+                        let mut selected = std::collections::HashSet::new();
+                        if let Some(project_id) = self.queue.project_id() {
+                            let queue = &self.queue;
+                            let _ = self.store.queue_scan(project_id, |row| {
+                                if queue.is_visible(row.rowid) {
+                                    selected.insert(row.id);
+                                }
+                            });
+                        }
+                        self.bulk_selected_ids = selected;
                         self.bulk_selection_view_dirty = true;
                     }
                     selection_changed = true;
@@ -439,7 +457,7 @@ impl App {
                 self.refresh_bulk_selection_view();
                 ui.ctx().request_repaint();
             }
-            let visible_indices = std::mem::take(&mut self.bulk_visible_indices);
+            let visible_rowids = self.queue.visible().to_vec();
             let visible_and_selected = self.bulk_selection_view.visible;
             // Selected IDs no longer in the queue count as hidden too.
             let hidden_selected = self
@@ -538,9 +556,9 @@ impl App {
                     }
                     if ui
                         .add_enabled(
-                            // Rows only have durable verification records once a
-                            // preflight has admitted the queue into a project.
-                            self.bulk_selection_count() == 1 && self.bulk_project_id.is_some(),
+                            // Rows only have verification records once a run
+                            // has examined them.
+                            self.bulk_selection_count() == 1 && self.queue.project_id().is_some(),
                             egui::Button::new(self.language.message("ui.review-verification")),
                         )
                         .clicked()
@@ -583,13 +601,8 @@ impl App {
                 self.bulk_mode = BatchExecutionMode::Live;
                 self.bulk_retry_scope = BulkRetryScope::DeltaRequired;
                 self.start_bulk();
-            } else if review_selected
-                && let Some(job_id) = self
-                    .bulk_job_ids
-                    .iter()
-                    .find(|id| self.bulk_is_selected(id))
-            {
-                self.job_id = Some(job_id.clone());
+            } else if review_selected && let Some(job_id) = self.first_selected_job_id() {
+                self.job_id = Some(job_id);
                 self.active_view = WorkspaceView::Verification;
             }
             if let Some(job_id) = open_assessment {
@@ -597,6 +610,23 @@ impl App {
                 self.active_view = WorkspaceView::Verification;
             }
             ui.add_space(8.0);
+            // Rows are read from the ledger on demand. Prefetch around the
+            // range shown last frame; rows scrolled into view for the first
+            // time are fetched after this frame and drawn on the next.
+            let prefetch = {
+                let (start, end) = self.bulk_rendered_range;
+                let start = start.saturating_sub(64).min(visible_rowids.len());
+                let end = end
+                    .saturating_add(64)
+                    .max(start + 64)
+                    .min(visible_rowids.len());
+                visible_rowids[start..end].to_vec()
+            };
+            if let Err(error) = self.queue.load(&self.store, &prefetch) {
+                self.bulk_message = error;
+            }
+            let rendered = std::cell::Cell::new((usize::MAX, 0_usize));
+            let missing = std::cell::RefCell::new(Vec::new());
             let table_width = ui.available_width();
             let show_endpoints = table_width >= 760.0;
             let show_operator_action = table_width >= 1100.0;
@@ -632,12 +662,20 @@ impl App {
                     }
                 })
                 .body(|body| {
-                    body.rows(42.0, visible_indices.len(), |mut row| {
-                        let index = visible_indices[row.index()];
-                        let job = &self.bulk_jobs[index];
-                        let Some(job_id) = self.bulk_job_ids.get(index) else {
+                    body.rows(42.0, visible_rowids.len(), |mut row| {
+                        let position = row.index();
+                        let (start, end) = rendered.get();
+                        rendered.set((start.min(position), end.max(position + 1)));
+                        let rowid = visible_rowids[position];
+                        let Some(job) = self.queue.cached(rowid) else {
+                            missing.borrow_mut().push(rowid);
+                            row.col(|ui| {
+                                ui.spinner();
+                            });
                             return;
                         };
+                        let job_id = &job.id;
+                        let job_state = self.queue.presented_state(job);
                         let mut selected = self.bulk_is_selected(job_id);
                         let all_selected = self.bulk_all_selected;
                         row.col(|ui| {
@@ -688,16 +726,13 @@ impl App {
                             });
                         }
                         row.col(|ui| {
-                            let (badge, color) = job_state_badge(&job.state, colors);
+                            let (badge, color) = job_state_badge(job_state, colors);
                             ui.label(RichText::new(self.language.text(badge)).color(color));
                         });
                         if show_operator_action {
                             row.col(|ui| {
-                                if job.state == "attention" {
-                                    if let Some(reason) = self
-                                        .cached_report_mailbox(job_id)
-                                        .and_then(|mailbox| mailbox.attention_reason.as_ref())
-                                    {
+                                if job_state == "attention" {
+                                    if let Some(reason) = job.attention_reason.as_ref() {
                                         ui.label(
                                             RichText::new(
                                                 self.language.text(reason.recommended_action()),
@@ -718,7 +753,17 @@ impl App {
                         }
                     });
                 });
-            self.bulk_visible_indices = visible_indices;
+            let (start, end) = rendered.get();
+            if start != usize::MAX {
+                self.bulk_rendered_range = (start, end);
+            }
+            let missing = missing.into_inner();
+            if !missing.is_empty() {
+                if let Err(error) = self.queue.load(&self.store, &missing) {
+                    self.bulk_message = error;
+                }
+                ui.ctx().request_repaint();
+            }
             ui.label(
                 RichText::new(self.language.message("ui.batch-actions-apply-only-to-explicitly-selected-rows-use-select-unresolved-a54ac35192"))
                     .color(self.theme_colors().text_secondary),
@@ -845,8 +890,11 @@ impl App {
         }
         let mut open_assessment = None;
         if self.bulk_selection_count() == 1 {
-            if let Some(&index) = self.bulk_selection_view.rows.first() {
-                open_assessment = self.review_card(ui, index);
+            if let Some(&rowid) = self.bulk_selection_view.rows.first() {
+                if let Err(error) = self.queue.load(&self.store, &[rowid]) {
+                    self.bulk_message = error;
+                }
+                open_assessment = self.review_card(ui, rowid);
             } else {
                 ui.label(
                     self.language
@@ -920,7 +968,7 @@ impl App {
         // cards in view. Every card has the same six single-line rows, which
         // gives `show_rows` a uniform height; long values truncate and show
         // the full text on hover.
-        let selected = &self.bulk_selection_view.rows;
+        let selected = std::mem::take(&mut self.bulk_selection_view.rows);
         let line = ui.text_style_height(&egui::TextStyle::Body);
         let spacing = ui.spacing().item_spacing.y;
         // Six lines, five gaps between them, the card's 12 px vertical
@@ -929,15 +977,22 @@ impl App {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show_rows(ui, card_height, selected.len(), |ui, rows| {
-                for &index in &selected[rows] {
-                    self.review_summary_card(ui, &self.bulk_jobs[index]);
+                let rowids = &selected[rows];
+                if let Err(error) = self.queue.load(&self.store, rowids) {
+                    self.bulk_message = error;
+                }
+                for rowid in rowids {
+                    if let Some(job) = self.queue.cached(*rowid) {
+                        self.review_summary_card(ui, job);
+                    }
                 }
             });
+        self.bulk_selection_view.rows = selected;
         open_assessment
     }
 
-    fn review_summary_card(&self, ui: &mut egui::Ui, job: &crate::bulk_import::BulkJob) {
-        let policy = job.defaults.profile.destination_mutation_policy();
+    fn review_summary_card(&self, ui: &mut egui::Ui, job: &crate::core::QueueRow) {
+        let policy = row_policy(job);
         let line = |ui: &mut egui::Ui, text: RichText| {
             let full = text.text().to_owned();
             ui.add(egui::Label::new(text).truncate())
@@ -949,7 +1004,8 @@ impl App {
             line(ui, RichText::new(&job.destination_user));
             line(ui, RichText::new(format!("{} →", job.source_host)));
             line(ui, RichText::new(&job.destination_host));
-            let (badge, color) = job_state_badge(&job.state, self.theme_colors());
+            let (badge, color) =
+                job_state_badge(self.queue.presented_state(job), self.theme_colors());
             ui.horizontal(|ui| {
                 ui.label(RichText::new(self.language.text(badge)).color(color));
                 ui.separator();
@@ -968,11 +1024,11 @@ impl App {
         });
     }
 
-    fn review_card(&self, ui: &mut egui::Ui, index: usize) -> Option<String> {
-        let job = &self.bulk_jobs[index];
-        let job_id = self.bulk_job_ids.get(index)?;
+    fn review_card(&self, ui: &mut egui::Ui, rowid: i64) -> Option<String> {
+        let job = self.queue.cached(rowid)?;
+        let job_id = &job.id;
         // The same derived policy the batch plan counts and confirms.
-        let policy = job.defaults.profile.destination_mutation_policy();
+        let policy = row_policy(job);
         let removes = policy.may_remove_destination_state();
         let line = |ui: &mut egui::Ui, text: RichText| {
             let full = text.text().to_owned();
@@ -989,7 +1045,8 @@ impl App {
         crate::ui::card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.heading(&job.label);
-                let (badge, color) = job_state_badge(&job.state, self.theme_colors());
+                let (badge, color) =
+                    job_state_badge(self.queue.presented_state(job), self.theme_colors());
                 crate::ui::pill(ui, self.language.text(badge), color);
             });
             ui.separator();
@@ -1063,6 +1120,18 @@ impl App {
     }
 }
 
+/// A row's stored destination-mutation policy. A row without one (never
+/// indexed) is shown with the most cautious applicable policy.
+fn row_policy(job: &crate::core::QueueRow) -> crate::migration_plan::DestinationMutationPolicy {
+    crate::migration_plan::DestinationMutationPolicy::parse(&job.policy).unwrap_or(
+        if job.destructive {
+            crate::migration_plan::DestinationMutationPolicy::MirrorMayRemoveDestinationState
+        } else {
+            crate::migration_plan::DestinationMutationPolicy::Additive
+        },
+    )
+}
+
 fn format_data_size(bytes: u64) -> String {
     const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
     const MIB: f64 = 1024.0 * 1024.0;
@@ -1081,9 +1150,9 @@ fn format_data_size(bytes: u64) -> String {
 /// One frame's projection of the explicit selection onto the queue.
 #[derive(Default)]
 pub(crate) struct SelectionView {
-    /// Queue indices of selected rows, ascending. Compact select-all keeps
-    /// only the one-row inspection index rather than materializing the set.
-    pub(crate) rows: Vec<usize>,
+    /// Queue row IDs of selected rows, ascending. Compact select-all keeps
+    /// no list rather than materializing the set.
+    pub(crate) rows: Vec<i64>,
     /// Selected rows that the current filter shows.
     pub(crate) visible: usize,
     /// Selected rows a live run (all scope) would include.

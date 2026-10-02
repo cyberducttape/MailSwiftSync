@@ -29,14 +29,29 @@ pub(crate) fn normalized_destination_identity(
             let port = value
                 .get("destination_port")
                 .and_then(toml::Value::as_str)
-                .map(str::trim)
                 .unwrap_or_default();
-            if let Ok(identity) =
-                crate::endpoint::canonical_destination_identity(user, host, tls, port)
-            {
-                return identity;
-            }
+            return destination_identity_from_parts(destination_mailbox, user, host, tls, port);
         }
+    }
+    crate::endpoint::mailbox_identity(destination_mailbox)
+}
+
+/// `normalized_destination_identity` for a plan whose destination fields
+/// are already known, so a bulk insert need not re-parse every plan.
+pub fn destination_identity_from_parts(
+    destination_mailbox: &str,
+    user: &str,
+    host: &str,
+    tls: &str,
+    port: &str,
+) -> String {
+    let (user, host) = (user.trim(), host.trim());
+    if !user.is_empty()
+        && !host.is_empty()
+        && let Ok(identity) =
+            crate::endpoint::canonical_destination_identity(user, host, tls, port.trim())
+    {
+        return identity;
     }
     crate::endpoint::mailbox_identity(destination_mailbox)
 }

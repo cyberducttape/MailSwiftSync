@@ -185,6 +185,8 @@ pub(crate) struct MailboxTask {
     claimed: bool,
     transfer_attempt_number: u32,
     verification_failure: Option<String>,
+    /// Why the job could not be prepared from its durable plan.
+    preparation_error: Option<String>,
 }
 
 impl MailboxTask {
@@ -211,6 +213,35 @@ impl MailboxTask {
             claimed: false,
             transfer_attempt_number: 0,
             verification_failure: None,
+            preparation_error: None,
+        }
+    }
+
+    /// A job whose plan or credentials could not be prepared. Its first
+    /// attempt settles it as failed without contacting any server.
+    pub(crate) fn unpreparable(
+        index: usize,
+        job_id: String,
+        child_run_id: String,
+        error: String,
+    ) -> Self {
+        let form = crate::Form::default();
+        let rate_path = rate_domain_path(&form);
+        Self {
+            index,
+            job_id,
+            child_run_id,
+            checkpoint: None,
+            label: String::new(),
+            form,
+            rate_path,
+            attempt: 0,
+            introduced: false,
+            imapsync_output_profile: ImapsyncOutputProfile::Unknown,
+            claimed: false,
+            transfer_attempt_number: 0,
+            verification_failure: None,
+            preparation_error: Some(error),
         }
     }
 }
@@ -735,6 +766,19 @@ impl BatchAttemptRunner {
         if self.cancel.load(Ordering::Relaxed) {
             drop(admission);
             self.cancel_waiting(task);
+            return AttemptOutcome::Finished;
+        }
+        if let Some(error) = task.preparation_error.take() {
+            drop(admission);
+            self.failed.store(true, Ordering::Relaxed);
+            self.line(&task, format!("[{}] {error}", task.index + 1));
+            self.terminal(
+                &task,
+                "Failed",
+                "failed",
+                classified_failure_detail(&redact_child_text(&task.form, &error)),
+                None,
+            );
             return AttemptOutcome::Finished;
         }
         if !task.introduced {

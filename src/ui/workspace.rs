@@ -427,12 +427,8 @@ impl App {
         self.workspace_read_only = false;
         self.project_id = None;
         self.job_id = None;
-        self.bulk_project_id = None;
-        self.bulk_job_ids.clear();
-        self.bulk_job_index_by_id.clear();
+        self.queue.detach();
         self.clear_bulk_selection();
-        self.bulk_preflight_credential_fingerprints.clear();
-        self.bulk_jobs.clear();
         self.mark_bulk_jobs_changed();
         self.preflight.clear();
         self.capability_receiver = None;

@@ -37,6 +37,7 @@ mod projects;
 pub(crate) mod provider_intelligence;
 pub(crate) mod provider_runbooks;
 mod queries;
+mod queue;
 mod recovery;
 pub(crate) mod recovery_dashboard;
 mod reports;
@@ -61,13 +62,15 @@ pub use models::{
     ActiveProcess, BatchAdmissionState, BatchChildPlan, MailboxJob, MailboxPage,
     MailboxStateCounts, MailboxStatusPage, Project, ProjectListItem, RunListItem, RunSummary,
 };
+pub use policy::destination_identity_from_parts;
+pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts};
 pub use state::{AttentionReason, MailboxState, Phase};
 pub use transfer_passes::{
     EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
     TransferPassIntent, TransferPassRecord, folder_digest, sha256_hex,
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 15;
+pub const CURRENT_SCHEMA_VERSION: i64 = 16;
 pub(crate) const DESTINATION_IDENTITY_SCHEMA_VERSION: i64 = 13;
 pub(crate) const MAX_DURABLE_MAILBOX_ROWS: usize = 100_000;
 
@@ -206,3 +209,8 @@ fn restrict_database_sidecars(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 #[path = "core/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub fn normalized_destination_identity_for_test(destination: &str, config: Option<&str>) -> String {
+    policy::normalized_destination_identity(destination, config)
+}

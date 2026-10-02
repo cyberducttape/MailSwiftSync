@@ -42,15 +42,9 @@ use atomic_artifact::write_private_atomic;
 #[cfg(test)]
 use command::{parse_shell_words, remove_option};
 #[cfg(test)]
-use controller::SelectionScope;
-#[cfg(test)]
-use controller::batch_admission::apply_keyring_id;
-#[cfg(test)]
 use controller::batch_admission::canonical_destination_identity;
 #[cfg(test)]
 use controller::batch_admission::duplicate_destination;
-#[cfg(test)]
-use controller::batch_admission::matches_queue;
 #[cfg(test)]
 use controller::batch_admission::selection_value;
 #[cfg(test)]
@@ -63,13 +57,12 @@ use controller::failure::{
     is_transient_batch_error, should_retry_batch_error, transient_retry_delay,
 };
 use controller::{
-    ActiveRunContext, BatchExecutionMode, BulkQueueSummary, BulkRetryScope, CapabilityProbeResult,
-    LiveAuthProof, PendingDbEvent, RunKind, SingleRunAdmission, SingleRunWorkerSpec,
-    SingleStartContext, SingleStartDecision, admit_single_run, batch_mailbox_state,
-    capability_probe_result_matches, decode_persisted_batch_profile,
-    durable_single_identity_matches, finish_batch_child, is_verified_terminal_state,
-    persist_pending_events, process_event_is_current, run_line_is_current, single_start_decision,
-    spawn_single_run_worker,
+    ActiveRunContext, BatchExecutionMode, BulkRetryScope, CapabilityProbeResult, LiveAuthProof,
+    PendingDbEvent, RunKind, SingleRunAdmission, SingleRunWorkerSpec, SingleStartContext,
+    SingleStartDecision, admit_single_run, batch_mailbox_state, capability_probe_result_matches,
+    decode_persisted_batch_profile, durable_single_identity_matches, finish_batch_child,
+    is_verified_terminal_state, persist_pending_events, process_event_is_current,
+    run_line_is_current, single_start_decision, spawn_single_run_worker,
 };
 pub(crate) use controller::{Event, StreamOutcome};
 #[cfg(test)]
@@ -147,9 +140,8 @@ use ui::job_state_badge;
 use ui::recommended_next_action;
 use ui::{
     AppearancePreferences, ThemeColors, ThemeKind, UiLanguage, WorkspaceSnapshot, WorkspaceView,
-    display_job_state, markdown_escape, needs_operator_review, preferred_project_id,
-    project_health_state_counts, push_visible_output, successful_run_severity,
-    successful_run_status, truncate_utf8,
+    markdown_escape, needs_operator_review, preferred_project_id, project_health_state_counts,
+    push_visible_output, successful_run_severity, successful_run_status, truncate_utf8,
 };
 use ui::{StatusMessage, StatusSeverity};
 #[cfg(test)]
@@ -184,7 +176,9 @@ pub(crate) fn is_github_hosted_runner(environment: Option<&str>) -> bool {
     environment == Some("github-hosted")
 }
 
-use bulk_import::{BulkImportResult, BulkJob, PendingSheetImport};
+#[cfg(test)]
+use bulk_import::BulkJob;
+use bulk_import::{BulkImportResult, PendingSheetImport};
 
 fn main() -> eframe::Result<()> {
     cli::run()
@@ -1312,8 +1306,15 @@ mod tests {
         form.source_password = "source-secret".to_owned().into();
         form.destination_password = "destination-secret".to_owned().into();
         form.profile.source_credential_id = "source-key".into();
+        let store = core::StateStore::in_memory().unwrap();
         let jobs = vec![BulkJob::from_form("mailbox".into(), form, "failed".into())];
-        let value = selection_value(&jobs, &SelectionScope::all_matching(), &[]);
+        let imported =
+            controller::queue::persist_imported_queue(&store, jobs, &Profile::default()).unwrap();
+        let ids = store.mailbox_ids(&imported.project_id).unwrap();
+        store.set_mailbox_state(&ids[0], "failed").unwrap();
+        let rows =
+            controller::queue::selected_rows(&store, &imported.project_id, |_| true, 10).unwrap();
+        let value = selection_value(&rows);
         let text = serde_json::to_string(&value).unwrap();
         assert!(text.contains("source@example"));
         assert!(text.contains("failed"));
@@ -1381,20 +1382,49 @@ mod tests {
 
     #[test]
     fn bulk_keyring_apply_fills_only_missing_source_references() {
-        let password_form = Form {
-            source_password: String::from("already-present").into(),
-            ..Form::default()
+        let row = |label: &str, user: &str, credential: &str, password: &str| {
+            let mut form = Form::default();
+            form.profile.destination_host = "destination.example".into();
+            form.profile.destination_user = format!("{user}@destination.example");
+            form.profile.source_credential_id = credential.into();
+            form.source_password = String::from(password).into();
+            BulkJob::from_form(label.into(), form, "Ready".into())
         };
-        let with_password = BulkJob::from_form("password".into(), password_form, "Ready".into());
-        let mut reference_form = Form::default();
-        reference_form.profile.source_credential_id = "existing".into();
-        let with_reference = BulkJob::from_form("reference".into(), reference_form, "Ready".into());
-        let empty = BulkJob::from_form("empty".into(), Form::default(), "Ready".into());
-        let mut jobs = vec![with_password, with_reference, empty];
-        assert_eq!(apply_keyring_id(&mut jobs, "shared-source", true), 1);
-        assert!(jobs[0].form().profile.source_credential_id.is_empty());
-        assert_eq!(jobs[1].form().profile.source_credential_id, "existing");
-        assert_eq!(jobs[2].form().profile.source_credential_id, "shared-source");
+        let store = core::StateStore::in_memory().unwrap();
+        let imported = controller::queue::persist_imported_queue(
+            &store,
+            vec![
+                row("password", "a", "", "already-present"),
+                row("reference", "b", "existing", ""),
+                row("empty", "c", "", ""),
+            ],
+            &Profile::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            controller::queue::apply_keyring_to_queue(
+                &store,
+                &imported.project_id,
+                "shared-source",
+                true,
+                &imported.session_secrets,
+            )
+            .unwrap(),
+            1
+        );
+        let ids = store.mailbox_ids(&imported.project_id).unwrap();
+        let references = store
+            .queue_plans(&imported.project_id, &ids)
+            .unwrap()
+            .iter()
+            .map(|plan| {
+                controller::queue::job_from_plan(plan, "", None, true)
+                    .unwrap()
+                    .profile()
+                    .source_credential_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(references, ["", "existing", "shared-source"]);
     }
 
     #[test]
@@ -1802,30 +1832,6 @@ mod tests {
             canonical_destination_identity(&first.profile).unwrap(),
             "endpoint:mail.example:993:User@example"
         );
-    }
-
-    #[test]
-    fn edited_batch_identity_cannot_reuse_old_durable_queue() {
-        let stored = vec![core::MailboxJob {
-            id: "job-1".into(),
-            source_mailbox: "alice@example.com".into(),
-            destination_mailbox: "alice@example.net".into(),
-            state: "ready".into(),
-            config: Some("engine = 'imapsync'".into()),
-        }];
-        let same = vec![(
-            "alice@example.com".into(),
-            "alice@example.net".into(),
-            "engine = 'imapsync'".into(),
-        )];
-        let edited = vec![(
-            "bob@example.com".into(),
-            "bob@example.net".into(),
-            "engine = 'imapsync'".into(),
-        )];
-
-        assert!(matches_queue(&stored, &same));
-        assert!(!matches_queue(&stored, &edited));
     }
 
     #[test]

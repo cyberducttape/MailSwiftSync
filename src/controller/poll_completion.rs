@@ -301,12 +301,10 @@ impl App {
             // Keep the durable queue after completion so a validated batch
             // can be promoted to live execution, and failed/live jobs can be
             // deliberately retried or run through another delta pass.
-            if !was_bulk_run {
-                if self.selected_project_id == self.bulk_project_id {
-                    self.selected_project_id = None;
-                }
-                self.detach_bulk_queue_identity();
+            if !was_bulk_run && self.selected_project_id.as_deref() == self.queue.project_id() {
+                self.selected_project_id = None;
             }
+            self.queue.clear_all_transient();
             self.bulk_live_run = false;
             self.live_confirmed = false;
         }

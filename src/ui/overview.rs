@@ -77,7 +77,7 @@ impl App {
             proof_ready,
         );
 
-        let first_run = project.is_none() && self.bulk_jobs.is_empty();
+        let first_run = project.is_none() && self.queue.is_empty();
         let (configured, total) = plan_completeness(&self.form.profile);
         let primary = overview_primary(OverviewPrimaryInputs {
             running: self.running(),
@@ -177,7 +177,7 @@ impl App {
         });
         ui.add_space(16.0);
 
-        if !self.bulk_jobs.is_empty() && self.bulk_selection_view_dirty {
+        if !self.queue.is_empty() && self.bulk_selection_view_dirty {
             self.refresh_bulk_selection_view();
         }
         self.operator_cockpit(ui, phase, workspace_attention_count, has_bulk_jobs);
@@ -559,7 +559,7 @@ impl App {
     fn overview_operational_notices(&mut self, ui: &mut egui::Ui) {
         if self.active_view != WorkspaceView::Overview
             && self.active_project_id().is_none()
-            && self.bulk_jobs.is_empty()
+            && self.queue.is_empty()
         {
             let colors = self.theme_colors();
             crate::ui::card(ui, |ui| {

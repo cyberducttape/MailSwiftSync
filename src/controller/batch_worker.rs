@@ -1,11 +1,9 @@
 use super::batch::BatchExecutionMode;
-use super::batch_scheduler::{JobSource, run_batch_schedule};
+use super::batch_scheduler::{JobLoader, JobSource, run_batch_schedule};
 use super::batch_work_item::{BatchAttemptRunner, send_job_finished};
 use super::rate_domains::{RateDomainLimiter, RateDomainPath, SideIdentity};
 use crate::{
     Event, StreamOutcome,
-    bulk_import::BulkJob,
-    core,
     process::ProcessLaunchLimiter,
     runner::{ResolvedImapsyncIdentity, resolve_imapsync_identity, send_reliable_event},
 };
@@ -136,7 +134,9 @@ pub(crate) struct BatchExecutionContext {
     pub(crate) queue_checkpoints: Vec<Option<String>>,
     pub(crate) batch_project_id: String,
     pub(crate) batch_run_id: String,
-    pub(crate) jobs: Vec<BulkJob>,
+    /// Resolves admitted job IDs to executable jobs, page by page.
+    pub(crate) loader: JobLoader,
+    pub(crate) imapsync_executables: Vec<String>,
     pub(crate) verification_state_path: Option<std::path::PathBuf>,
     pub(crate) diagnostic_logger: Option<Arc<crate::DiagnosticLogger>>,
 }
@@ -186,7 +186,8 @@ pub(crate) fn spawn_batch_worker_with(
         queue_checkpoints,
         batch_project_id,
         batch_run_id,
-        jobs,
+        loader,
+        imapsync_executables,
         verification_state_path,
         diagnostic_logger,
     } = context;
@@ -197,16 +198,13 @@ pub(crate) fn spawn_batch_worker_with(
         // Resolve each distinct imapsync executable once before any mailbox
         // process starts. Every child receives the same immutable identity;
         // there is no first-wave subscriber race and no lossy metadata send.
-        let mut resolved_imapsync = HashMap::<String, ResolvedImapsyncIdentity>::new();
-        for job in &jobs {
-            let form = job.form();
-            if form.engine() == core::Engine::ImapSync {
-                let executable = form.profile.imapsync_path.clone();
-                resolved_imapsync
-                    .entry(executable.clone())
-                    .or_insert_with(|| resolve_imapsync_identity(&executable));
-            }
-        }
+        let resolved_imapsync = imapsync_executables
+            .into_iter()
+            .map(|executable| {
+                let identity = resolve_imapsync_identity(&executable);
+                (executable, identity)
+            })
+            .collect::<HashMap<String, ResolvedImapsyncIdentity>>();
         let runner = Arc::new(BatchAttemptRunner {
             concurrency,
             mode,
@@ -227,12 +225,12 @@ pub(crate) fn spawn_batch_worker_with(
         let schedule = run_batch_schedule(
             runner,
             concurrency,
-            JobSource {
-                jobs: jobs.into_iter().enumerate(),
-                job_ids: queue_job_ids.clone(),
-                child_run_ids: child_run_ids.clone(),
-                checkpoints: queue_checkpoints,
-            },
+            JobSource::new(
+                queue_job_ids.clone(),
+                child_run_ids.clone(),
+                queue_checkpoints,
+                loader,
+            ),
         );
         if schedule.enqueue_failed {
             let _ = tx.send(Event::Line(

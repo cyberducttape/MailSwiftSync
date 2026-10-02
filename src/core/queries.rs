@@ -4,6 +4,7 @@ const MAX_PROJECT_LIST_ROWS: usize = 10_000;
 const MAX_MAILBOX_PAGE_ROWS: u32 = 1_000;
 const MAX_MAILBOX_STATUS_ROWS: u32 = 100_000;
 
+#[cfg(any(test, debug_assertions))]
 fn durable_mailbox_limit_error() -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -91,7 +92,7 @@ impl StateStore {
     pub fn first_mailbox(&self, project_id: &str) -> rusqlite::Result<Option<String>> {
         self.connection
             .query_row(
-                "SELECT id FROM mailbox_jobs WHERE project_id=?1 LIMIT 1",
+                "SELECT id FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT 1",
                 [project_id],
                 |r| r.get(0),
             )
@@ -109,6 +110,7 @@ impl StateStore {
             )
             .optional()
     }
+    #[cfg(test)]
     pub fn mailboxes(&self, project_id: &str) -> rusqlite::Result<Vec<MailboxJob>> {
         let mut statement = self.connection.prepare(
             "SELECT id,source_mailbox,destination_mailbox,state,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid LIMIT ?2",
@@ -133,35 +135,7 @@ impl StateStore {
         Ok(rows)
     }
 
-    /// Compare a complete imported queue without materializing its durable
-    /// profiles. Queue order is part of the batch identity, so stream the
-    /// rows in rowid order and compare each one with the admitted input.
-    pub fn mailbox_queue_matches(
-        &self,
-        project_id: &str,
-        desired: &[(String, String, String)],
-    ) -> rusqlite::Result<bool> {
-        let mut statement = self.connection.prepare(
-            "SELECT source_mailbox,destination_mailbox,config FROM mailbox_jobs WHERE project_id=?1 ORDER BY rowid",
-        )?;
-        let mut rows = statement.query([project_id])?;
-        for (source_mailbox, destination_mailbox, config) in desired {
-            let Some(row) = rows.next()? else {
-                return Ok(false);
-            };
-            let stored_source: String = row.get(0)?;
-            let stored_destination: String = row.get(1)?;
-            let stored_config: Option<String> = row.get(2)?;
-            if stored_source != *source_mailbox
-                || stored_destination != *destination_mailbox
-                || stored_config.as_deref() != Some(config.as_str())
-            {
-                return Ok(false);
-            }
-        }
-        Ok(rows.next()?.is_none())
-    }
-
+    #[cfg(any(test, debug_assertions))]
     pub fn mailbox_ids(&self, project_id: &str) -> rusqlite::Result<Vec<String>> {
         let mut statement = self
             .connection

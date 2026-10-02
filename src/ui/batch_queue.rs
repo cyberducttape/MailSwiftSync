@@ -21,13 +21,21 @@ impl App {
 
     pub(crate) fn select_bulk_state_set(&mut self, set: BulkStateSet) {
         self.bulk_all_selected = false;
-        self.bulk_selected_ids = self
-            .bulk_jobs
-            .iter()
-            .enumerate()
-            .filter(|(_, job)| set.matches(&display_state_key(&job.state)))
-            .filter_map(|(index, _)| self.bulk_job_ids.get(index).cloned())
-            .collect();
+        let mut selected = std::collections::HashSet::new();
+        if let Some(project_id) = self.queue.project_id().map(str::to_owned) {
+            let queue = &self.queue;
+            let result = self.store.queue_scan(&project_id, |row| {
+                let presented = queue.presented_state_of(&row.id, &row.state);
+                if set.matches(&display_state_key(presented)) {
+                    selected.insert(row.id);
+                }
+            });
+            if let Err(error) = result {
+                self.bulk_message = format!("Could not read the mailbox queue: {error}");
+                return;
+            }
+        }
+        self.bulk_selected_ids = selected;
         self.bulk_selection_view_dirty = true;
         self.bulk_state_filter = "all".into();
         self.bulk_message = self
@@ -37,23 +45,14 @@ impl App {
     }
 
     pub(crate) fn apply_bulk_import_result(&mut self, result: Result<BulkImportResult, String>) {
-        match result {
-            Ok(BulkImportResult::Jobs(jobs)) => {
-                self.bulk_message = self
-                    .language
-                    .text(
-                        "Imported {} mailbox rows. Review them and run preflight before migration.",
-                    )
-                    .replace("{}", &jobs.len().to_string());
-                if self.selected_project_id == self.bulk_project_id {
-                    self.selected_project_id = None;
-                }
-                self.bulk_retry_scope = BulkRetryScope::default();
-                self.bulk_preflight_credential_fingerprints = vec![None; jobs.len()];
-                self.bulk_jobs = jobs;
-                self.detach_bulk_queue_identity();
-                self.mark_bulk_jobs_changed();
-            }
+        let imported = match result {
+            Ok(BulkImportResult::Persisted(imported)) => Ok(imported),
+            // No durable ledger file: the session's own store holds the queue.
+            Ok(BulkImportResult::Jobs(jobs)) => crate::controller::queue::persist_imported_queue(
+                &self.store,
+                jobs,
+                &self.form.profile,
+            ),
             Ok(BulkImportResult::Workbook {
                 path,
                 sheets,
@@ -69,6 +68,25 @@ impl App {
                     .language
                     .text("Choose the worksheet containing the migration rows before importing.")
                     .into();
+                return;
+            }
+            Err(error) => Err(error),
+        };
+        match imported {
+            Ok(imported) => {
+                self.bulk_message = self
+                    .language
+                    .text(
+                        "Imported {} mailbox rows. Review them and run preflight before migration.",
+                    )
+                    .replace("{}", &imported.len.to_string());
+                self.bulk_retry_scope = BulkRetryScope::default();
+                self.clear_bulk_selection();
+                self.queue.attach(imported.project_id.clone(), imported.len);
+                self.queue.session_secrets = imported.session_secrets;
+                self.selected_project_id = Some(imported.project_id);
+                self.mark_bulk_jobs_changed();
+                self.refresh_ui_snapshot_now();
             }
             Err(error) => self.bulk_message = error,
         }
@@ -91,11 +109,12 @@ impl App {
                     .and_then(|name| name.to_str())
                     .unwrap_or("mailbox file"),
             );
-        self.bulk_import_receiver = Some(crate::bulk_import::spawn_import(
+        let parsed = crate::bulk_import::spawn_import(
             path,
             self.form.clone_without_credentials(),
             std::mem::take(&mut self.bulk_plaintext_import_acknowledged),
-        ));
+        );
+        self.bulk_import_receiver = Some(self.persist_import_off_thread(parsed));
     }
 
     pub(crate) fn begin_sheet_import(
@@ -115,12 +134,13 @@ impl App {
             .language
             .text("Importing the selected worksheet in the background…")
             .into();
-        self.bulk_import_receiver = Some(crate::bulk_import::spawn_sheet_import(
+        let parsed = crate::bulk_import::spawn_sheet_import(
             path,
             self.form.clone_without_credentials(),
             sheet_index,
             plaintext_acknowledged,
-        ));
+        );
+        self.bulk_import_receiver = Some(self.persist_import_off_thread(parsed));
     }
 
     pub(crate) fn import_bulk(&mut self, path: &std::path::Path) {
@@ -136,8 +156,46 @@ impl App {
         self.request_bulk_import_after_ack(path);
     }
 
+    /// Write parsed rows to the ledger on a worker with its own connection,
+    /// so a 100,000-row import never blocks a frame. Without a ledger file
+    /// the parsed rows are returned for the session store instead.
+    fn persist_import_off_thread(
+        &self,
+        parsed: std::sync::mpsc::Receiver<Result<BulkImportResult, String>>,
+    ) -> std::sync::mpsc::Receiver<Result<BulkImportResult, String>> {
+        let Some(state_path) = self
+            .state_path
+            .clone()
+            .filter(|_| self.persistence_available)
+        else {
+            return parsed;
+        };
+        let fallback_profile = self.form.profile.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = match parsed.recv() {
+                Ok(Ok(BulkImportResult::Jobs(jobs))) => crate::core::StateStore::open(&state_path)
+                    .map_err(|error| {
+                        format!("Could not open the ledger to record the import: {error}")
+                    })
+                    .and_then(|store| {
+                        crate::controller::queue::persist_imported_queue(
+                            &store,
+                            jobs,
+                            &fallback_profile,
+                        )
+                    })
+                    .map(BulkImportResult::Persisted),
+                Ok(other) => other,
+                Err(_) => Err("The mailbox import worker stopped unexpectedly.".into()),
+            };
+            let _ = sender.send(result);
+        });
+        receiver
+    }
+
     pub(crate) fn request_bulk_import_after_ack(&mut self, path: std::path::PathBuf) {
-        if self.bulk_jobs.is_empty() {
+        if self.queue.is_empty() {
             self.import_bulk(&path);
         } else {
             self.pending_bulk_import = Some(path);
@@ -145,17 +203,13 @@ impl App {
     }
 
     pub(crate) fn clear_bulk_queue(&mut self) {
-        self.bulk_jobs.clear();
-        self.mark_bulk_jobs_changed();
-        self.clear_bulk_selection();
-        if self.selected_project_id == self.bulk_project_id {
+        if self.selected_project_id.as_deref() == self.queue.project_id() {
             self.selected_project_id = None;
         }
-        self.bulk_project_id = None;
-        self.bulk_job_ids.clear();
-        self.bulk_job_index_by_id.clear();
+        self.queue.detach();
+        self.mark_bulk_jobs_changed();
+        self.clear_bulk_selection();
         self.bulk_retry_scope = BulkRetryScope::default();
-        self.bulk_preflight_credential_fingerprints.clear();
         self.bulk_message = self
             .language
             .text("Queue cleared; its durable batch association was discarded.")
@@ -164,71 +218,15 @@ impl App {
 
     pub(crate) fn mark_bulk_jobs_changed(&mut self) {
         self.bulk_selection_view_dirty = true;
-        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
-        self.bulk_summary = None;
-        self.bulk_search_values.clear();
-        self.bulk_state_indices.clear();
-        self.bulk_search_match_indices.clear();
-        self.bulk_search_matches_valid = false;
-        self.bulk_filter_cache_generation = u64::MAX;
-    }
-
-    /// Drop the queue's durable project association and give every row a
-    /// provisional in-memory ID. Rows need IDs to be rendered and explicitly
-    /// selected before a preflight (re)creates the durable project; admission
-    /// maps them to durable job IDs by position, and `start_bulk` replaces
-    /// them together with the selection.
-    pub(crate) fn detach_bulk_queue_identity(&mut self) {
-        self.bulk_project_id = None;
-        self.clear_bulk_selection();
-        self.bulk_job_ids = (0..self.bulk_jobs.len())
-            .map(|_| format!("unadmitted-{}", uuid::Uuid::new_v4()))
-            .collect();
-        self.rebuild_bulk_job_index();
-    }
-
-    pub(crate) fn rebuild_bulk_job_index(&mut self) {
-        self.bulk_job_index_by_id = self
-            .bulk_job_ids
-            .iter()
-            .enumerate()
-            .map(|(index, job_id)| (job_id.clone(), index))
-            .collect();
+        self.queue.invalidate();
     }
 
     pub(crate) fn mark_bulk_state_changed(&mut self) {
         self.bulk_selection_view_dirty = true;
-        self.bulk_jobs_generation = self.bulk_jobs_generation.wrapping_add(1);
-        self.bulk_summary = None;
-        self.bulk_filter_cache_generation = u64::MAX;
-    }
-
-    pub(crate) fn set_bulk_job_state(&mut self, index: usize, state: String) {
-        if let Some(job) = self.bulk_jobs.get(index) {
-            let old_key = crate::ui::display_state_key(&job.state);
-            if let Some(indices) = self.bulk_state_indices.get_mut(&old_key) {
-                indices.remove(&index);
-            }
-        }
-        let new_key = crate::ui::display_state_key(&state);
-        self.bulk_state_indices
-            .entry(new_key)
-            .or_default()
-            .insert(index);
-        if let Some(job) = self.bulk_jobs.get_mut(index) {
-            job.state = state;
-        }
     }
 
     pub(crate) fn bulk_queue_summary(&mut self) -> crate::controller::BulkQueueSummary {
-        if let Some((generation, summary)) = self.bulk_summary
-            && generation == self.bulk_jobs_generation
-        {
-            return summary;
-        }
-        let summary = crate::controller::BulkQueueSummary::from_jobs(&self.bulk_jobs);
-        self.bulk_summary = Some((self.bulk_jobs_generation, summary));
-        summary
+        self.queue.summary(&self.store)
     }
 }
 

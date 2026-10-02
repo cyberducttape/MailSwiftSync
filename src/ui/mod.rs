@@ -25,6 +25,7 @@ mod output;
 mod overview;
 mod plan;
 mod qualification;
+pub(crate) mod queue_model;
 mod reports;
 mod settings;
 mod snapshot_worker;

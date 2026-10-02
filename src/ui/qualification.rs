@@ -194,7 +194,7 @@ impl App {
                 .text("Message count and data volume are not known yet")
                 .to_owned()
         };
-        let scope = if self.bulk_jobs.is_empty() {
+        let scope = if self.queue.is_empty() {
             self.language
                 .message("ui.one-mailbox-plan-template")
                 .to_owned()
@@ -202,7 +202,7 @@ impl App {
             self.language
                 .text("{} selected of {} queued mailbox(es)")
                 .replacen("{}", &self.bulk_selection_count().to_string(), 1)
-                .replacen("{}", &self.bulk_jobs.len().to_string(), 1)
+                .replacen("{}", &self.queue.len().to_string(), 1)
         };
 
         crate::ui::card(ui, |ui| {

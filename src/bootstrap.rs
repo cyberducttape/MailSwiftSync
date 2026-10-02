@@ -302,59 +302,42 @@ impl App {
                 (Some(project.id.clone()), job_id)
             })
             .unwrap_or((None, None));
-        let mut restored_bulk_jobs = Vec::new();
-        let mut restored_bulk_job_ids = Vec::new();
-        let restored_bulk_project_id = restored_project.as_ref().and_then(|project| {
+        // A batch project's rows are the queue; restoring it means showing
+        // that project. Rows written before queue facts were stored are
+        // indexed once here, and every row's plan must still decode so a
+        // corrupt queue blocks execution instead of being silently skipped.
+        let restored_queue = restored_project.as_ref().and_then(|project| {
             if project.name.trim().is_empty() || !restored_project_is_batch {
                 return None;
             }
-            let jobs = match store.mailboxes(&project.id) {
-                Ok(jobs) => jobs,
+            if let Err(error) = crate::controller::queue::backfill_queue_facts(&store) {
+                persistence_warning = Some(format!(
+                    "Persistent batch restore failed; execution is blocked: {error}"
+                ));
+                return None;
+            }
+            let decoded = store.queue_plan_scan(&project.id, |row| {
+                decode_persisted_batch_profile(row.config.as_deref(), &row.id).map(|_| ())
+            });
+            if let Err(error) = decoded {
+                persistence_warning = Some(format!("{error}; execution is blocked"));
+                return None;
+            }
+            match store.queue_len(&project.id) {
+                Ok(len) => Some((project.id.clone(), len)),
                 Err(error) => {
                     persistence_warning = Some(format!(
                         "Persistent batch restore failed; execution is blocked: {error}"
                     ));
-                    return None;
+                    None
                 }
-            };
-            let mut defaults_by_profile = std::collections::HashMap::<
-                String,
-                std::sync::Arc<crate::bulk_import::BatchPlanDefaults>,
-            >::new();
-            for job in jobs {
-                let profile = match decode_persisted_batch_profile(job.config.as_deref(), &job.id) {
-                    Ok(profile) => profile,
-                    Err(error) => {
-                        persistence_warning = Some(format!("{error}; execution is blocked"));
-                        return None;
-                    }
-                };
-                let mut profile = profile;
-                if profile.destination_tls.is_empty() {
-                    profile.destination_tls = default_destination_tls();
-                }
-                let form = Form {
-                    profile,
-                    source_password: SecretString::default(),
-                    destination_password: SecretString::default(),
-                    dry_run: true,
-                };
-                let defaults = BulkJob::defaults_from_form(&form);
-                let defaults_key = toml::to_string(defaults.profile.as_ref()).unwrap_or_default();
-                let defaults = defaults_by_profile
-                    .entry(defaults_key)
-                    .or_insert(defaults)
-                    .clone();
-                restored_bulk_jobs.push(BulkJob::from_form_with_defaults(
-                    format!("{} → {}", job.source_mailbox, job.destination_mailbox),
-                    form,
-                    display_job_state(&job.state).into(),
-                    defaults,
-                ));
-                restored_bulk_job_ids.push(job.id);
             }
-            Some(project.id.clone())
         });
+        let restored_bulk_project_id = restored_queue.as_ref().map(|(id, _)| id.clone());
+        let mut queue = crate::ui::queue_model::MailboxQueue::default();
+        if let Some((project_id, len)) = restored_queue {
+            queue.attach(project_id, len);
+        }
         if let Some(warning) = persistence_warning.as_ref()
             && !initial_output.iter().any(|line| line == warning)
         {
@@ -369,12 +352,6 @@ impl App {
                     .into(),
             );
         }
-        let restored_bulk_preflight_credential_fingerprints = vec![None; restored_bulk_jobs.len()];
-        let restored_bulk_job_index_by_id = restored_bulk_job_ids
-            .iter()
-            .enumerate()
-            .map(|(index, job_id)| (job_id.clone(), index))
-            .collect();
         Ok(Self {
             form,
             output: initial_output,
@@ -393,7 +370,7 @@ impl App {
                 },
             ),
             preview: false,
-            bulk_jobs: restored_bulk_jobs,
+            queue,
             settings_open: false,
             bulk_search: String::new(),
             bulk_state_filter: "all".into(),
@@ -403,17 +380,9 @@ impl App {
             bulk_inspector_side_panel: false,
             bulk_source_keyring_apply: String::new(),
             bulk_destination_keyring_apply: String::new(),
-            bulk_visible_indices: Vec::new(),
             bulk_selection_view: Default::default(),
             bulk_selection_view_dirty: true,
-            bulk_search_values: Vec::new(),
-            bulk_state_indices: HashMap::new(),
-            bulk_search_match_indices: Vec::new(),
-            bulk_search_matches_valid: false,
-            bulk_filter_cache_search: String::new(),
-            bulk_filter_cache_state: String::new(),
-            bulk_filter_cache_generation: u64::MAX,
-            bulk_jobs_generation: 0,
+            bulk_rendered_range: (0, 0),
             bulk_message: if restored_bulk_project_id.is_some() {
                 "Restored durable batch queue; credentials must be entered again before validation."
                     .into()
@@ -450,10 +419,6 @@ impl App {
             diagnostic_logger: None,
             locked_profile: None,
             cancel_requested: None,
-            bulk_project_id: restored_bulk_project_id,
-            bulk_job_ids: restored_bulk_job_ids,
-            bulk_job_index_by_id: restored_bulk_job_index_by_id,
-            bulk_preflight_credential_fingerprints: restored_bulk_preflight_credential_fingerprints,
             preflight: Vec::new(),
             capability_receiver: None,
             capability_probe_request_id: None,
@@ -526,7 +491,6 @@ impl App {
             live_destination_loss_acknowledged: false,
             bulk_confirmation_summary: None,
             bulk_confirmation_identity: None,
-            bulk_summary: None,
             bulk_mode: BatchExecutionMode::Preflight,
             bulk_clear_confirm_open: false,
             pending_bulk_import: None,

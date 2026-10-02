@@ -129,29 +129,34 @@ impl App {
                             ),
                             &field_label,
                         );
-                        egui::ComboBox::from_id_salt("verification_result_filter")
-                            .selected_text(self.language.text(
-                                match self.verification_filter.as_str() {
-                                    "review" => "Needs review",
-                                    "verified" => "Verified",
-                                    "difference" => "Differences",
-                                    _ => "All results",
-                                },
-                            ))
-                            .show_ui(ui, |ui| {
-                                for (value, label) in [
-                                    ("all", "All results"),
-                                    ("review", "Needs review"),
-                                    ("verified", "Verified"),
-                                    ("difference", "Differences"),
-                                ] {
-                                    ui.selectable_value(
-                                        &mut self.verification_filter,
-                                        value.into(),
-                                        self.language.text(label),
-                                    );
-                                }
-                            });
+                        let result_filter =
+                            egui::ComboBox::from_id_salt("verification_result_filter")
+                                .selected_text(self.language.text(
+                                    match self.verification_filter.as_str() {
+                                        "review" => "Needs review",
+                                        "verified" => "Verified",
+                                        "difference" => "Differences",
+                                        _ => "All results",
+                                    },
+                                ))
+                                .show_ui(ui, |ui| {
+                                    for (value, label) in [
+                                        ("all", "All results"),
+                                        ("review", "Needs review"),
+                                        ("verified", "Verified"),
+                                        ("difference", "Differences"),
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut self.verification_filter,
+                                            value.into(),
+                                            self.language.text(label),
+                                        );
+                                    }
+                                });
+                        crate::ui::name_control(
+                            &result_filter.response,
+                            self.language.message("ui.verification-result-filter"),
+                        );
                         let previous_reason = self.verification_attention_reason;
                         let selected_reason = self
                             .verification_attention_reason
@@ -159,34 +164,39 @@ impl App {
                             .unwrap_or_else(|| {
                                 self.language.message("ui.all-attention-reasons").to_owned()
                             });
-                        egui::ComboBox::from_id_salt("verification_attention_reason_filter")
-                            .selected_text(selected_reason)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.verification_attention_reason,
-                                    None,
-                                    self.language.message("ui.all-attention-reasons"),
-                                );
-                                for reason in [
-                                    crate::core::AttentionReason::Interrupted,
-                                    crate::core::AttentionReason::VerificationIncomplete,
-                                    crate::core::AttentionReason::VerificationDifference,
-                                    crate::core::AttentionReason::ProcessIdentityUnverified,
-                                    crate::core::AttentionReason::AuthenticationFailed,
-                                    crate::core::AttentionReason::TransportFailed,
-                                    crate::core::AttentionReason::PolicyBlocked,
-                                    crate::core::AttentionReason::ConfigurationInvalid,
-                                    crate::core::AttentionReason::CapacityLimited,
-                                    crate::core::AttentionReason::MessageRejected,
-                                    crate::core::AttentionReason::Unknown,
-                                ] {
+                        let reason_filter =
+                            egui::ComboBox::from_id_salt("verification_attention_reason_filter")
+                                .selected_text(selected_reason)
+                                .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut self.verification_attention_reason,
-                                        Some(reason),
-                                        self.language.text(reason.label()),
+                                        None,
+                                        self.language.message("ui.all-attention-reasons"),
                                     );
-                                }
-                            });
+                                    for reason in [
+                                        crate::core::AttentionReason::Interrupted,
+                                        crate::core::AttentionReason::VerificationIncomplete,
+                                        crate::core::AttentionReason::VerificationDifference,
+                                        crate::core::AttentionReason::ProcessIdentityUnverified,
+                                        crate::core::AttentionReason::AuthenticationFailed,
+                                        crate::core::AttentionReason::TransportFailed,
+                                        crate::core::AttentionReason::PolicyBlocked,
+                                        crate::core::AttentionReason::ConfigurationInvalid,
+                                        crate::core::AttentionReason::CapacityLimited,
+                                        crate::core::AttentionReason::MessageRejected,
+                                        crate::core::AttentionReason::Unknown,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut self.verification_attention_reason,
+                                            Some(reason),
+                                            self.language.text(reason.label()),
+                                        );
+                                    }
+                                });
+                        crate::ui::name_control(
+                            &reason_filter.response,
+                            self.language.message("ui.attention-reason-filter"),
+                        );
                         if previous_reason != self.verification_attention_reason {
                             self.verification_offset = 0;
                             self.verification_cursor = None;

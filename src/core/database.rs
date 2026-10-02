@@ -265,7 +265,7 @@ impl StateStore {
         Ok(store)
     }
 
-    /// Validate the complete v15 application schema, rather than treating
+    /// Validate the complete v16 application schema, rather than treating
     /// SQLite's user_version as a schema proof. Keep this signature close to
     /// the current CREATE TABLE statements in migrate(): a stamped database with
     /// missing, extra, or weakened structure must not pass recovery validation.
@@ -452,6 +452,21 @@ impl StateStore {
                     ("verification_method", "TEXT", false, 0),
                     ("verification_outcome", "TEXT", false, 0),
                     ("verified_at", "TEXT", false, 0),
+                ],
+            ),
+            (
+                "mailbox_queue_facts",
+                &[
+                    ("job_rowid", "INTEGER", false, 1),
+                    ("job_id", "TEXT", true, 0),
+                    ("project_id", "TEXT", true, 0),
+                    ("label", "TEXT", true, 0),
+                    ("source_host", "TEXT", true, 0),
+                    ("destination_host", "TEXT", true, 0),
+                    ("search_key", "TEXT", true, 0),
+                    ("destructive", "INTEGER", true, 0),
+                    ("policy", "TEXT", true, 0),
+                    ("state", "TEXT", true, 0),
                 ],
             ),
             (
@@ -657,6 +672,27 @@ impl StateStore {
                 ],
             ),
             (
+                "mailbox_queue_facts",
+                &[
+                    (
+                        "mailbox_jobs",
+                        "job_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                    (
+                        "projects",
+                        "project_id",
+                        "id",
+                        "NO ACTION",
+                        "NO ACTION",
+                        "NONE",
+                    ),
+                ],
+            ),
+            (
                 "transfer_pass_folders",
                 &[
                     (
@@ -678,6 +714,24 @@ impl StateStore {
                 ],
             ),
         ];
+        // The facts table's state copy is kept current only by this trigger;
+        // a ledger without it would present stale queue states.
+        let trigger: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='mailbox_queue_facts_state' AND tbl_name='mailbox_jobs'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if !trigger.is_some_and(|sql| {
+            let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+            sql.contains("AFTER UPDATE OF state ON mailbox_jobs")
+                && sql.contains(
+                    "UPDATE mailbox_queue_facts SET state=NEW.state WHERE job_rowid=NEW.rowid",
+                )
+        }) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         for (table, expected) in FOREIGN_KEYS {
             let actual = connection
                 .prepare(&format!("PRAGMA foreign_key_list({table})"))?
@@ -783,6 +837,18 @@ impl StateStore {
                 false,
                 false,
             ),
+            (
+                "idx_mailbox_queue_facts_project",
+                &["project_id", "job_rowid"],
+                false,
+                false,
+            ),
+            (
+                "idx_mailbox_jobs_project_queue",
+                &["project_id", "id", "state"],
+                false,
+                false,
+            ),
             ("one_running_run_per_job", &["job_id"], true, true),
             ("one_active_run_per_job", &["job_id"], true, true),
         ];
@@ -803,6 +869,8 @@ impl StateStore {
             ("idx_message_mismatches_job_run", "message_mismatches"),
             ("idx_events_run_created", "events"),
             ("idx_transfer_passes_mailbox", "transfer_passes"),
+            ("idx_mailbox_queue_facts_project", "mailbox_queue_facts"),
+            ("idx_mailbox_jobs_project_queue", "mailbox_jobs"),
             ("one_running_run_per_job", "runs"),
             ("one_active_run_per_job", "runs"),
         ];
@@ -1068,6 +1136,7 @@ impl StateStore {
                     "delta_requiredisnullordelta_requiredin(0,1)",
                 ],
             ),
+            ("mailbox_queue_facts", &["destructivein(0,1)"]),
             (
                 "transfer_pass_folders",
                 &[
@@ -1350,7 +1419,8 @@ impl StateStore {
         // version 6 records observed engine-version metadata per run; version
         // 13 establishes destination identity policy v2; version 14 binds the
         // current evidence projection directly to its run for report reads;
-        // version 15 adds durable per-attempt transfer-pass provenance.
+        // version 15 adds durable per-attempt transfer-pass provenance;
+        // version 16 adds narrow per-mailbox queue presentation facts.
         // Keep the compatibility column checks below for pre-versioned alpha
         // databases, then stamp the completed layout explicitly.
         let stored_schema_version: i64 =
@@ -1404,6 +1474,10 @@ impl StateStore {
                  CREATE INDEX IF NOT EXISTS idx_runs_job_started ON runs(job_id, started_at DESC);
                  CREATE TABLE IF NOT EXISTS transfer_passes (run_id TEXT NOT NULL REFERENCES runs(id), attempt INTEGER NOT NULL CHECK(attempt > 0), project_id TEXT NOT NULL REFERENCES projects(id), mailbox_digest TEXT NOT NULL, pass_sequence INTEGER NOT NULL CHECK(pass_sequence > 0), pass_kind TEXT NOT NULL, engine TEXT NOT NULL, executable_identity TEXT NOT NULL, command_sha256 TEXT NOT NULL, command TEXT NOT NULL, folder_scope TEXT NOT NULL, source_range TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, finished_at TEXT, outcome TEXT, delta_required INTEGER CHECK(delta_required IS NULL OR delta_required IN (0,1)), completion_evidence TEXT, emitted_state_sha256 TEXT, verification_method TEXT, verification_outcome TEXT, verified_at TEXT, PRIMARY KEY(run_id, attempt));
                  CREATE INDEX IF NOT EXISTS idx_transfer_passes_mailbox ON transfer_passes(project_id, mailbox_digest, pass_sequence);
+                 CREATE TABLE IF NOT EXISTS mailbox_queue_facts (job_rowid INTEGER PRIMARY KEY, job_id TEXT NOT NULL UNIQUE REFERENCES mailbox_jobs(id), project_id TEXT NOT NULL REFERENCES projects(id), label TEXT NOT NULL, source_host TEXT NOT NULL, destination_host TEXT NOT NULL, search_key TEXT NOT NULL, destructive INTEGER NOT NULL CHECK(destructive IN (0,1)), policy TEXT NOT NULL, state TEXT NOT NULL);
+                 CREATE TRIGGER IF NOT EXISTS mailbox_queue_facts_state AFTER UPDATE OF state ON mailbox_jobs BEGIN UPDATE mailbox_queue_facts SET state=NEW.state WHERE job_rowid=NEW.rowid; END;
+                 CREATE INDEX IF NOT EXISTS idx_mailbox_queue_facts_project ON mailbox_queue_facts(project_id, job_rowid);
+                 CREATE INDEX IF NOT EXISTS idx_mailbox_jobs_project_queue ON mailbox_jobs(project_id, id, state);
                  CREATE TABLE IF NOT EXISTS transfer_pass_folders (run_id TEXT NOT NULL, attempt INTEGER NOT NULL, side INTEGER NOT NULL CHECK(side IN (0,1)), folder_digest TEXT NOT NULL, uidvalidity INTEGER NOT NULL CHECK(uidvalidity >= 0), uidnext INTEGER NOT NULL CHECK(uidnext >= 0), exists_count INTEGER NOT NULL CHECK(exists_count >= 0), verified_through_uid INTEGER NOT NULL CHECK(verified_through_uid >= 0), staged_messages INTEGER NOT NULL CHECK(staged_messages >= 0), complete INTEGER NOT NULL CHECK(complete IN (0,1)), PRIMARY KEY(run_id, attempt, side, folder_digest), FOREIGN KEY(run_id, attempt) REFERENCES transfer_passes(run_id, attempt));
                  CREATE INDEX IF NOT EXISTS idx_events_project_created ON events(project_id, created_at DESC);
                  CREATE INDEX IF NOT EXISTS idx_events_project_kind_id ON events(project_id, kind, id DESC);

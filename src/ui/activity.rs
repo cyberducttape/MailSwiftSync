@@ -230,7 +230,7 @@ crate::ui::name_modal(ui, &modal_heading);
                 ),
                 &field_label,
             );
-            egui::ComboBox::from_id_salt("activity_status_filter")
+            let status_filter = egui::ComboBox::from_id_salt("activity_status_filter")
                 .selected_text(match self.activity_status_filter.as_str() {
                     "errors" => self.language.message("ui.errors-and-attention"),
                     "running" => self.language.message("ui.running-f4ccae29"),
@@ -247,6 +247,10 @@ crate::ui::name_modal(ui, &modal_heading);
                         ui.selectable_value(&mut self.activity_status_filter, value.into(), label);
                     }
                 });
+            crate::ui::name_control(
+                &status_filter.response,
+                self.language.message("ui.run-status-filter"),
+            );
         });
         let runs = self
             .ui_snapshot
