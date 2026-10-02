@@ -3324,13 +3324,14 @@ mod resume_tests {
             let mut fetched = server.fetched.clone();
             fetched.sort_unstable();
             assert_eq!(fetched, uids, "every UID fetched exactly once");
-            // lgtm[rust/cleartext-logging]
-            assert!(
-                server.fetch_commands <= 12,
-                "{} FETCH round trips for {} messages",
-                server.fetch_commands,
-                uids.len()
-            );
+            if server.fetch_commands > 12 {
+                panic!(
+                    "{} FETCH round trips for {} messages",
+                    server.fetch_commands,
+                    uids.len()
+                );
+            }
+            debug_assert!(server.fetch_commands <= 12);
         }
     }
 

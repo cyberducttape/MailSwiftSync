@@ -124,16 +124,20 @@ pub(crate) fn verify_private_handle(file: &fs::File, label: &str) -> io::Result<
     }
     let ace_count = unsafe { (*dacl).AceCount };
     for index in 0..u32::from(ace_count) {
-        let mut ace_pointer = ptr::null_mut();
-        if unsafe { GetAce(dacl, index, &mut ace_pointer) } == 0 || ace_pointer.is_null() {
+        let mut ace_pointer: *mut c_void = ptr::null_mut();
+        if unsafe { GetAce(dacl, index, &mut ace_pointer) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        // lgtm[cpp/access-invalid-pointer]
-        let header = unsafe { &*(ace_pointer as *const ACE_HEADER) };
+        let ace_pointer = match std::ptr::NonNull::new(ace_pointer) {
+            Some(ptr) => ptr,
+            None => return Err(io::Error::last_os_error()),
+        };
+        // SAFETY: GetAce succeeded and pointer is non-null; Windows ACE structure is valid
+        let header = unsafe { &*(ace_pointer.as_ptr() as *const ACE_HEADER) };
         let ace_type = u32::from(header.AceType);
         if ace_type == ACCESS_ALLOWED_ACE_TYPE {
-            // lgtm[cpp/access-invalid-pointer]
-            let ace = unsafe { &*(ace_pointer as *const ACCESS_ALLOWED_ACE) };
+            // SAFETY: GetAce succeeded and pointer is non-null; Windows ACE structure is valid
+            let ace = unsafe { &*(ace_pointer.as_ptr() as *const ACCESS_ALLOWED_ACE) };
             let sid = (&ace.SidStart as *const u32).cast_mut().cast();
             if ace.Mask & WRITE_LIKE_RIGHTS != 0 && !trusted.trusts(sid) {
                 return Err(denied(format!(
