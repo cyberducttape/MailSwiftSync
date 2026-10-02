@@ -539,8 +539,7 @@ pub(crate) fn run_streaming(context: RunContext<'_>) -> Result<StreamResult, Str
             format!("{executable} launch refused: process-start limiter unavailable")
         });
     }
-    let mut child = command
-        .spawn()
+    let mut child = spawn_retrying_busy_executable(&mut command)
         .map_err(|error| format!("could not start {executable}: {error}"))?;
     let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
@@ -1226,6 +1225,37 @@ impl Drop for ProcessRegistrationGuard<'_> {
     }
 }
 
+/// Spawn, retrying briefly while the kernel reports the executable busy
+/// (ETXTBSY). A file that was just written can still be open for writing
+/// in a child another thread forked but has not yet exec'd, for example an
+/// engine installed moments ago. The window is microseconds; a few short
+/// retries are enough and every other error is returned at once.
+#[cfg(unix)]
+fn spawn_retrying_busy_executable(
+    command: &mut std::process::Command,
+) -> std::io::Result<std::process::Child> {
+    const ATTEMPTS: u32 = 20;
+    const ETXTBSY: i32 = 26;
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.raw_os_error() == Some(ETXTBSY) && attempt + 1 < ATTEMPTS => {
+                attempt += 1;
+                thread::sleep(Duration::from_millis(5 * u64::from(attempt)));
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Windows has no ETXTBSY race of this kind; spawn directly.
+#[cfg(not(unix))]
+fn spawn_retrying_busy_executable(
+    command: &mut std::process::Command,
+) -> std::io::Result<std::process::Child> {
+    command.spawn()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_capture_lines(
     executable: &str,
@@ -1238,8 +1268,7 @@ pub(crate) fn run_capture_lines(
     durable: Option<(&mpsc::SyncSender<crate::Event>, &str, &str)>,
 ) -> Result<(ProcessOutcome, Vec<String>, bool), String> {
     let mut command = execution_command(executable, args, env)?;
-    let mut child = command
-        .spawn()
+    let mut child = spawn_retrying_busy_executable(&mut command)
         .map_err(|error| format!("could not start {executable}: {error}"))?;
     let mut release_stdin = child.stdin.take();
     let _child_supervisor = match attach_child_supervisor(&child) {
