@@ -18,6 +18,7 @@ capability in its `manifest_rows` are checked against these fields.
 | Capability | code | controller | ui | generic_lab | gmail_live | m365_live | production_supported |
 |---|---|---|---|---|---|---|---|
 | `aggregate_evidence` | implemented | wired | wired | passed | no | no | no |
+| `imapsync_engine_install` | implemented | wired | wired | not_run | no | no | no |
 | `message_body_proof` | bounded_opt_in | wired | wired | not_run | no | no | no |
 | `message_level_metadata_reconciliation` | implemented | wired | partial | passed | no | no | no |
 | `provider_live_validation` | available | wired | partial | passed | no | no | no |

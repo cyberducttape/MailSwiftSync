@@ -72,6 +72,21 @@ gmail_live = false
 m365_live = false
 production_supported = false
 
+[capabilities.imapsync_engine_install]
+code = "implemented"
+controller = "wired"
+ui = "wired"
+generic_lab = "not_run"
+gmail_live = false
+m365_live = false
+production_supported = false
+# Current docs must not deny this implemented behavior. Each pattern is a
+# case-insensitive regex matched against rendered Markdown lines.
+contradicted_by = [
+    'does not (?:download|install)[^.]*\b(?:imapsync|either engine|engines?)\b',
+    'imapsync[^.]*\bmust be installed manually\b',
+]
+
 [capabilities.provider_oauth_refresh]
 code = "implemented"
 controller = "wired"

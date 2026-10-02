@@ -76,20 +76,33 @@ gpg --verify mailswiftsync_*.deb.sha256.asc mailswiftsync_*.deb.sha256
 sudo dpkg -i mailswiftsync_*.deb
 ```
 
-The package installs the MailSwiftSync binary, documentation, and man page. It
-does not install or configure imapsync or Dovecot; follow the engine steps
-below. APT repository metadata, RPM packages, and cross-architecture Debian
+The package installs the MailSwiftSync binary, documentation, and man page.
+It does not bundle imapsync or Dovecot; follow the engine steps below. APT repository metadata, RPM packages, and cross-architecture Debian
 builds remain release work.
 
 ## Configure the migration engine
 
 5. Install the engine required by the migration:
-   - arbitrary IMAP-to-IMAP: install `imapsync` from its official distribution;
+   - arbitrary IMAP-to-IMAP on Debian/Ubuntu or Windows: run
+     `mailswiftsync install-engine` (or **Install qualified imapsync 2.314** in
+     **Choose migration engine**). It downloads imapsync 2.314 from the
+     official distribution over HTTPS, refuses it unless its SHA-256 matches
+     the digest pinned in MailSwiftSync, installs it (`apt-get` via `sudo`, or
+     `pkexec` from the desktop, on Debian/Ubuntu; MailSwiftSync's private
+     per-user `engines` directory on Windows), and confirms the version. It
+     asks for confirmation first; pass `--yes` for a non-interactive install.
+   - arbitrary IMAP-to-IMAP on macOS or other platforms: install imapsync 2.314
+     manually from the official distribution
+     (<https://imapsync.lamiral.info/dist2/>) following its `INSTALL.d`
+     instructions, or use the pinned container image. `install-engine` prints
+     this guidance on these platforms and changes nothing.
    - Dovecot destination: install `doveadm` on the destination host.
+     MailSwiftSync never installs, updates, or configures Dovecot.
 
 6. Verify the engine in a terminal (`imapsync --version` or
-   `doveadm --version`). MailSwiftSync does not download, update, or configure
-   either engine for you.
+   `doveadm --version`), or run `mailswiftsync doctor`. MailSwiftSync never
+   updates an installed engine on its own; trusted verification evidence is
+   qualified only for imapsync 2.314.
 
 7. Run the extracted `mailswiftsync` binary. On Windows, run
    `mailswiftsync-x86_64-pc-windows-msvc.exe`.

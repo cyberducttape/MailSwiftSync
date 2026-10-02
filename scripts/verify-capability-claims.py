@@ -320,6 +320,44 @@ def find_locale_level_violations(path: Path, manifest: dict) -> list[str]:
     return violations
 
 
+def contradicting_claims(manifest: dict) -> list[tuple[str, re.Pattern]]:
+    """Patterns that deny an implemented capability, keyed by capability."""
+    return [
+        (name, re.compile(pattern, re.I))
+        for name, capability in sorted(manifest.get("capabilities", {}).items())
+        if capability.get("code") in CODE_PRESENT
+        for pattern in capability.get("contradicted_by", [])
+    ]
+
+
+def find_contradicted_capability_claims(line: str, claims: list[tuple[str, re.Pattern]]) -> list[str]:
+    normalized = strip_markup(line)
+    return [
+        f"denies implemented capability {name!r}: {pattern.search(normalized).group(0)!r}"
+        for name, pattern in claims
+        if pattern.search(normalized)
+    ]
+
+
+def markdown_paragraphs(content: str) -> list[tuple[int, str]]:
+    """Yield (first line number, joined text) for blank-line separated blocks.
+
+    Hard-wrapped prose splits sentences across lines, so claim checks that
+    span a sentence must see the whole paragraph.
+    """
+    paragraphs, start, lines = [], None, []
+    for line_number, line in enumerate(content.splitlines(), 1):
+        if line.strip():
+            start = start or line_number
+            lines.append(line.strip())
+        elif lines:
+            paragraphs.append((start, " ".join(lines)))
+            start, lines = None, []
+    if lines:
+        paragraphs.append((start, " ".join(lines)))
+    return paragraphs
+
+
 def get_schema_version() -> int:
     """Extract CURRENT_SCHEMA_VERSION from src/core.rs."""
     if not CORE_RS.exists():
@@ -398,6 +436,7 @@ def main(argv: list[str]) -> int:
             for violation in find_locale_level_violations(path, manifest)
         )
 
+    claims = contradicting_claims(manifest)
     for path in sorted(ROOT.rglob("*.md")):
         relative = path.relative_to(ROOT)
         if relative.parts[:2] == ("docs", "history"):
@@ -410,6 +449,12 @@ def main(argv: list[str]) -> int:
             content = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
+
+        for line_number, paragraph in markdown_paragraphs(content):
+            violations.extend(
+                f"{relative}:{line_number}: CAPABILITY CONTRADICTION: {violation}"
+                for violation in find_contradicted_capability_claims(paragraph, claims)
+            )
 
         for line_number, line in enumerate(content.splitlines(), 1):
             violations.extend(

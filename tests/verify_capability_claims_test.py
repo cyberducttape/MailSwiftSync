@@ -211,5 +211,29 @@ class CapabilityClaimTests(unittest.TestCase):
                 self.assertEqual(CHECKER.find_locale_level_violations(path, manifest), [])
 
 
+    def test_docs_cannot_deny_implemented_engine_install(self):
+        claims = CHECKER.contradicting_claims(self.repository_manifest())
+        # The stale INSTALL.md wording that contradicted install-engine.
+        stale = (
+            "6. Verify the engine in a terminal (`imapsync --version` or\n"
+            "   `doveadm --version`). MailSwiftSync does not download, update, or configure\n"
+            "   either engine for you.\n"
+        )
+        paragraphs = CHECKER.markdown_paragraphs(stale)
+        self.assertEqual(len(paragraphs), 1)
+        self.assertEqual(
+            len(CHECKER.find_contradicted_capability_claims(paragraphs[0][1], claims)), 1
+        )
+        for accurate in (
+            "It does not bundle imapsync or Dovecot; follow the engine steps below.",
+            "MailSwiftSync never installs, updates, or configures Dovecot.",
+            "`mailswiftsync install-engine` downloads imapsync 2.314.",
+        ):
+            with self.subTest(line=accurate):
+                self.assertEqual(CHECKER.find_contradicted_capability_claims(accurate, claims), [])
+        unimplemented = {"capabilities": {"x": {"code": "planned", "contradicted_by": ["anything"]}}}
+        self.assertEqual(CHECKER.contradicting_claims(unimplemented), [])
+
+
 if __name__ == "__main__":
     unittest.main()
