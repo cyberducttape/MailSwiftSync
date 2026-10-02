@@ -509,6 +509,17 @@ impl StateStore {
         )
     }
 
+    /// Record a durable attention reason directly, for tests and the debug
+    /// demo scene.
+    #[cfg(any(test, debug_assertions))]
+    pub fn force_attention_reason(&self, job_id: &str, reason: &str) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE mailbox_jobs SET attention_reason=?2 WHERE id=?1",
+            params![job_id, reason],
+        )?;
+        Ok(())
+    }
+
     /// Write a mailbox's durable state without the transition rules, for
     /// tests and the debug demo scene that need rows in a given state.
     #[cfg(any(test, debug_assertions))]

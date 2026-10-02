@@ -64,6 +64,8 @@ pub(crate) struct App {
     /// The batch queue: durable rows in SQLite, read through a bounded
     /// presentation model.
     pub(crate) queue: crate::ui::queue_model::MailboxQueue,
+    /// Recovery workspace view state (groups, open group, page).
+    pub(crate) recovery: crate::ui::recovery::RecoveryState,
     pub(crate) settings_open: bool,
     pub(crate) bulk_search: String,
     pub(crate) bulk_state_filter: String,

@@ -26,6 +26,7 @@ mod overview;
 mod plan;
 mod qualification;
 pub(crate) mod queue_model;
+mod recovery;
 mod reports;
 mod settings;
 mod snapshot_worker;
@@ -123,6 +124,7 @@ pub(crate) enum WorkspaceIcon {
     Mailboxes,
     Activity,
     Verification,
+    Recovery,
     Projects,
     Settings,
 }
@@ -197,6 +199,22 @@ fn paint_workspace_icon(
                 p(0.0, -7.0),
             ]);
             line(&[p(-3.0, 0.0), p(-1.0, 2.0), p(3.0, -2.0)]);
+        }
+        WorkspaceIcon::Recovery => {
+            // A circular arrow: recovery and retry.
+            line(&[
+                p(5.5, -3.5),
+                p(3.5, -6.0),
+                p(0.0, -7.0),
+                p(-4.5, -5.5),
+                p(-7.0, -1.0),
+                p(-6.0, 3.5),
+                p(-2.5, 6.5),
+                p(2.0, 6.5),
+                p(5.5, 4.0),
+                p(7.0, 0.0),
+            ]);
+            line(&[p(7.0, -6.5), p(5.5, -3.5), p(2.5, -4.0)]);
         }
         WorkspaceIcon::Projects => {
             painter.circle_stroke(p(0.0, -5.0), 6.0 * s / 16.0, stroke);

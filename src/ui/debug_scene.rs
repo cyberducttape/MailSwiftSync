@@ -32,6 +32,7 @@ pub(crate) fn apply(app: &mut App) {
             "mailboxes" => WorkspaceView::Mailboxes,
             "activity" => WorkspaceView::Activity,
             "verification" => WorkspaceView::Verification,
+            "recovery" => WorkspaceView::Recovery,
             _ => WorkspaceView::Overview,
         };
     }
@@ -194,6 +195,15 @@ pub(crate) fn demo_data(app: &mut App) {
         .unwrap_or_default();
     for (id, state) in ids.iter().zip(states) {
         let _ = app.store.force_mailbox_state(id, state);
+        // Realistic durable reasons, so recovery shows reason checklists.
+        let reason = match state {
+            "attention" => Some("transport_failed"),
+            "failed" => Some("authentication_failed"),
+            _ => None,
+        };
+        if let Some(reason) = reason {
+            let _ = app.store.force_attention_reason(id, reason);
+        }
     }
     app.queue.attach(imported.project_id, imported.len);
     // Masked session placeholders so screenshots show a configured plan

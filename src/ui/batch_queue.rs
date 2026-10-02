@@ -219,10 +219,12 @@ impl App {
     pub(crate) fn mark_bulk_jobs_changed(&mut self) {
         self.bulk_selection_view_dirty = true;
         self.queue.invalidate();
+        self.recovery.invalidate();
     }
 
     pub(crate) fn mark_bulk_state_changed(&mut self) {
         self.bulk_selection_view_dirty = true;
+        self.recovery.invalidate();
     }
 
     pub(crate) fn bulk_queue_summary(&mut self) -> crate::controller::BulkQueueSummary {

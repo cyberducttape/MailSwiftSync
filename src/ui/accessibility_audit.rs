@@ -223,6 +223,10 @@ fn scenes() -> Vec<(&'static str, Setup)> {
             crate::ui::debug_scene::demo_data(app);
             view(app, WorkspaceView::Verification);
         }),
+        ("recovery", |app| {
+            crate::ui::debug_scene::demo_data(app);
+            view(app, WorkspaceView::Recovery);
+        }),
         ("settings dialog", |app| app.settings_open = true),
         ("projects dialog", |app| app.projects_open = true),
         ("credentials dialog", |app| app.keyring_open = true),

@@ -129,7 +129,7 @@ manifest_rows = ["Provider-specific runbooks"]
 [capabilities.recovery_guidance]
 code = "implemented"
 controller = "wired"
-ui = "partial"
+ui = "wired"
 generic_lab = "passed"
 gmail_live = false
 m365_live = false

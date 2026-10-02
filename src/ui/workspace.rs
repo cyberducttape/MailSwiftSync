@@ -21,6 +21,7 @@ pub(crate) enum WorkspaceView {
     Mailboxes,
     Activity,
     Verification,
+    Recovery,
 }
 
 pub(crate) struct WorkspaceRefreshOptions<'a> {

@@ -421,6 +421,7 @@ pub(crate) mod tests {
             WorkspaceView::Mailboxes,
             WorkspaceView::Activity,
             WorkspaceView::Verification,
+            WorkspaceView::Recovery,
         ] {
             app.active_view = view;
             let output = context.run_ui(

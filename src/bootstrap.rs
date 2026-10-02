@@ -371,6 +371,7 @@ impl App {
             ),
             preview: false,
             queue,
+            recovery: Default::default(),
             settings_open: false,
             bulk_search: String::new(),
             bulk_state_filter: "all".into(),

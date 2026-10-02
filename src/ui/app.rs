@@ -183,6 +183,11 @@ impl eframe::App for App {
                         crate::ui::WorkspaceIcon::Verification,
                         "Verification",
                     ),
+                    (
+                        WorkspaceView::Recovery,
+                        crate::ui::WorkspaceIcon::Recovery,
+                        "Recovery",
+                    ),
                 ] {
                     let item = if compact_navigation {
                         crate::ui::nav_icon_item(
@@ -319,6 +324,7 @@ impl eframe::App for App {
                             WorkspaceView::Mailboxes => self.mailbox_view(ui),
                             WorkspaceView::Activity => self.activity_view(ui),
                             WorkspaceView::Verification => self.verification_view(ui),
+                            WorkspaceView::Recovery => self.recovery_view(ui),
                         }
                     });
             });

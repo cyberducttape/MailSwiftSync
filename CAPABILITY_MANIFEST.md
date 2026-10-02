@@ -25,7 +25,7 @@ capability in its `manifest_rows` are checked against these fields.
 | `provider_oauth_authorization` | implemented | wired | wired | passed | no | no | no |
 | `provider_oauth_refresh` | implemented | wired | partial | passed | no | no | no |
 | `provider_runbooks` | implemented | wired | partial | passed | no | no | no |
-| `recovery_guidance` | implemented | wired | partial | passed | no | no | no |
+| `recovery_guidance` | implemented | wired | wired | passed | no | no | no |
 | `uidvalidity_delta_checkpoints` | implemented | wired | not_claimed | not_run | no | no | no |
 <!-- capabilities:end -->
 
@@ -100,7 +100,7 @@ capability in its `manifest_rows` are checked against these fields.
 | **Pre-migration risk report** | yes | partial | unit | no | Scale report is available through the headless `risk` command; automatic GUI/live gating remains pending |
 | **Post-migration exception report** | yes | partial | unit | no | Report is available through the headless `post-report` command; automatic generation from durable live evidence remains pending |
 | **Provider-specific runbooks** | yes | partial | unit | no | Exposed through the headless `runbook` command and as read-only guidance for the selected source/destination presets on the GUI Plan page; the runbook does not sequence or gate the workflow |
-| **Recovery guidance** (7 scenarios) | yes | partial | unit+integration | no | Fail-closed guidance is exposed through the headless `recovery-guidance` command and rendered in the Activity workspace for interruption, transport, and throttling attention states |
+| **Recovery guidance** (7 scenarios) | yes | yes | unit+integration | no | The Recovery workspace groups every mailbox needing an operator decision by state and durable attention reason, with the recommended action, the fail-closed checklist for interruption, transport, and throttling reasons, the affected mailboxes and their latest run and transfer attempt, and hand-offs to explicit selection or evidence review; also exposed through the headless `recovery-guidance` command |
 | **Resume/recovery dashboard** | yes | partial | unit+integration | no | Activity exposes durable run state and selected recovery guidance; a dedicated multi-run recovery dashboard remains future work |
 | **Live throughput, progress, and ETA** | yes | yes | unit | no | Activity derives rolling throughput, transferred totals, per-mailbox progress, retry countdowns, endpoint cooldowns, and an estimated finish (checked against an optional maintenance window) from content-free counters parsed from imapsync output; values are estimates and Dovecot runs report no progress |
 
@@ -200,7 +200,7 @@ particular target.
 
 4. **Operator guidance is split between CLI and GUI**
    - Runbooks are exposed through `runbook` and shown read-only on the Plan page for the selected presets; they do not drive the workflow
-   - Recovery guidance is exposed through `recovery-guidance` and is presented in Activity for the supported interruption, transport, and throttling attention states
+   - Recovery guidance is exposed through `recovery-guidance`, presented in Activity for the selected mailbox, and organized in the Recovery workspace by state and durable attention reason
    - The scale risk report is CLI-only (`risk`); the GUI's **Assess plan** checks plan readiness, not scale risk
 
 ---

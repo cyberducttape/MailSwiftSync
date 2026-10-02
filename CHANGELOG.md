@@ -6,6 +6,14 @@ operator distribution archives.
 
 ## [Unreleased]
 
+- Added a Recovery workspace. It groups every mailbox that needs an operator
+  decision (attention, failed, cancelled, verification difference, delta
+  required) by durable attention reason, shows the recommended action and
+  the fail-closed checklist, lists the affected mailboxes with their latest
+  run detail and transfer-attempt outcome (keyset-paged), and hands a group
+  to the Mailboxes page as an explicit selection or opens evidence review.
+  It never starts work itself. Recorded processes whose ownership could not
+  be verified are surfaced there as a blocking notice.
 - The batch queue is now durable SQLite state instead of an in-memory job
   list (schema v16). An import is written to the ledger as a batch project
   on a worker thread; the Mailboxes view renders virtual rows from a

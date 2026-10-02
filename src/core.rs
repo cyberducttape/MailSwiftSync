@@ -40,6 +40,7 @@ mod queries;
 mod queue;
 mod recovery;
 pub(crate) mod recovery_dashboard;
+mod recovery_queue;
 mod reports;
 mod run_queries;
 mod runs;
@@ -64,6 +65,7 @@ pub use models::{
 };
 pub use policy::destination_identity_from_parts;
 pub use queue::{QueueInsert, QueuePlanRow, QueueRow, QueueRowFacts};
+pub use recovery_queue::{RecoveryGroup, RecoveryRow};
 pub use state::{AttentionReason, MailboxState, Phase};
 pub use transfer_passes::{
     EngineCompletionCounters, PassSide, TransferPassCompletion, TransferPassFolder,
